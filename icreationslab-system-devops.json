@@ -1,0 +1,400 @@
+{
+  "picture": {
+    "hidden": true,
+    "url": "",
+    "size": 80,
+    "rotation": 0,
+    "aspectRatio": 1,
+    "borderRadius": 0,
+    "borderColor": "rgba(0, 0, 0, 0.5)",
+    "borderWidth": 0,
+    "shadowColor": "rgba(0, 0, 0, 0.5)",
+    "shadowWidth": 0
+  },
+  "basics": {
+    "name": "Vinh Nguyen Phuc",
+    "headline": "System Engineer / DevOps Engineer",
+    "email": "npvinh0507@gmail.com",
+    "phone": "0373395726",
+    "location": "Ho Chi Minh City, Vietnam",
+    "website": {
+      "url": "",
+      "label": "Github"
+    },
+    "customFields": [
+      {
+        "id": "019da17b-3c1b-7118-b0a4-35799504983b",
+        "icon": "github-logo",
+        "text": "phucvinh57",
+        "link": "https://github.com/phucvinh57"
+      },
+      {
+        "id": "019da17b-edf4-757a-980b-d7232b6d0d61",
+        "icon": "linkedin-logo",
+        "text": "npvinh57",
+        "link": "https://www.linkedin.com/in/npvinh57/"
+      }
+    ]
+  },
+  "summary": {
+    "title": "",
+    "columns": 1,
+    "hidden": false,
+    "content": "<ul><li><p>Software engineer with 2+ years of devops-related experience operating Linux VPS/Cloud servers for web products and internal platforms.</p></li><li><p>Hands-on with Nginx, MySQL/PostgreSQL, DNS, SSL, SSH, backup/migration, and server hardening.</p></li><li><p>Experienced in troubleshooting website downtime, slow performance, malware/security risks, and database-related issues with a reliability-first mindset.</p></li><li><p>Familiar with Docker, Git-based deployment/CI-CD, K8s, Cloudflare, and English communication for cross-border collaboration.</p></li></ul><p></p>"
+  },
+  "sections": {
+    "profiles": {
+      "title": "",
+      "columns": 6,
+      "hidden": true,
+      "items": []
+    },
+    "experience": {
+      "title": "",
+      "columns": 1,
+      "hidden": false,
+      "items": [
+        {
+          "id": "019da6f4-be3e-72d1-906b-4f08c43f6a90",
+          "hidden": false,
+          "company": "ST Engineering",
+          "position": "Software Engineer",
+          "location": "HCMC, Vietnam",
+          "period": "Aug 2025 - present",
+          "website": {
+            "url": "https://www.stengg.com/",
+            "label": "",
+            "inlineLink": true
+          },
+          "description": "<ul><li><p>Operated and secured Linux servers/VMs across mixed environments; automated provisioning and baseline configuration with cloud-init and monitoring integrations.</p></li><li><p>Built and maintained hardening/compliance scripts, plus controlled harden/unharden workflows for audit, testing, and incident response.</p></li><li><p>Troubleshot production issues (service instability, performance bottlenecks, security findings) and improved uptime through preventive checks.</p></li><li><p>Collaborated with cross-functional teams in English to deliver stable, secure infrastructure support for internal products.</p></li></ul><p></p>",
+          "roles": []
+        },
+        {
+          "id": "019da701-ad87-77d6-93d9-120f7e733490",
+          "hidden": false,
+          "company": "LFG Incorporated",
+          "position": "Software Engineer",
+          "location": "Remote",
+          "period": "Jun 2024 - Aug 2025",
+          "website": {
+            "url": "https://lfg.inc",
+            "label": "",
+            "inlineLink": true
+          },
+          "description": "<ul><li><p>Built CI/CD workflows to automate testing, packaging, and deployment across multiple projects.</p></li><li><p>Authored shared reusable GitHub Actions steps/workflows to standardize pipelines and reduce duplicated CI logic.</p></li></ul><p></p>",
+          "roles": []
+        },
+        {
+          "id": "019da3b2-d920-718b-94d9-ebc5d25e830f",
+          "hidden": false,
+          "company": "ConcreteAI",
+          "position": "Backend Engineer",
+          "location": "Remote, Singapore",
+          "period": "Oct 2022 - Nov 2023",
+          "website": {
+            "url": "https://concreateai.io",
+            "label": "",
+            "inlineLink": true
+          },
+          "description": "<ul><li><p>Owned CI/CD pipelines for automated test execution, packaging, and deployment to improve release reliability.</p></li><li><p>Integrated monitoring/observability checks into delivery workflows for faster issue detection after releases.</p></li></ul><p></p>",
+          "roles": []
+        }
+      ]
+    },
+    "education": {
+      "title": "",
+      "columns": 1,
+      "hidden": false,
+      "items": [
+        {
+          "id": "019da3b7-1452-76fd-aeb3-5f97b3bf22ee",
+          "hidden": false,
+          "school": "Ho Chi Minh University of Technology",
+          "degree": "Bachelor",
+          "area": "Computer Science",
+          "grade": "",
+          "location": "",
+          "period": "Oct 2019 - Apr 2024",
+          "website": {
+            "url": "",
+            "label": "",
+            "inlineLink": false
+          },
+          "description": ""
+        }
+      ]
+    },
+    "projects": {
+      "title": "Projects",
+      "columns": 1,
+      "hidden": false,
+      "items": [
+        {
+          "id": "icr-proj-homelab-1",
+          "hidden": false,
+          "name": "Home Server Infrastructure (Proxmox Cluster)",
+          "period": "2024 - Present",
+          "website": {
+            "url": "",
+            "label": "",
+            "inlineLink": false
+          },
+          "description": "<ul><li><p>Built and operated a 2-node Proxmox cluster from two home machines (20 vCPU, 96GB RAM, 5TB storage, 2 GPUs) for self-hosting and hands-on infrastructure practice.</p></li><li><p>Configured physical networking: router NAT port forwarding, DHCP reservation, switching, and Wi-Fi mesh setup.</p></li><li><p>Provisioned reusable VM/LXC templates and provided VPS environments with access control for student club members.</p></li><li><p>Set up domain and DNS management with Cloudflare, and deployed Nginx Proxy Manager for reverse proxy routing.</p></li><li><p>Hosted internal databases (MongoDB, PostgreSQL) and ran a 3-VM Kubernetes cluster for educational workloads.</p></li></ul><p></p>"
+        },
+        {
+          "id": "019da6ea-3a21-77fd-a83d-111f21ad56a1",
+          "hidden": true,
+          "name": "Biopass",
+          "period": "Feb 2025 - present",
+          "website": {
+            "url": "https://github.com/TickLabVN/biopass",
+            "label": "",
+            "inlineLink": true
+          },
+          "description": "<p></p><p>Core Maintainer of Biopass (Linux Biometric Authentication System) with 150+ stars. It is used by real users and actively maintained as an alternative to existing Linux authentication solutions (e.g., <a target=\"_blank\" rel=\"noopener nofollow\" href=\"https://github.com/boltgolt/howdy\">Howdy</a>).</p><ul><li><p>Architected a pluggable authentication system integrating with Linux PAM stack</p></li><li><p>Built biometric authentication workflows (face + fingerprint) with unified UX similar to Windows Hello</p></li><li><p>Implemented IR-based anti-spoofing pipeline with on-device AI inference</p></li><li><p>Designed lightweight runtime (~13MB) with minimal dependencies, significantly smaller than alternatives (e.g., Howdy's size is from 1GB to 2GB, including dependencies)</p></li><li><p>Worked at OS level: login managers, PAM modules, credential propagation</p></li><li><p>Packaged and distributed across APT, RPM, and AUR ecosystems</p></li><li><p>Led project direction, code reviews, and community contributions</p></li></ul><p></p>"
+        }
+      ]
+    },
+    "skills": {
+      "title": "",
+      "columns": 2,
+      "hidden": true,
+      "items": [
+        {
+          "id": "icr-skill-1",
+          "hidden": false,
+          "icon": "acorn",
+          "iconColor": "",
+          "name": "Linux & Server Ops",
+          "proficiency": "",
+          "level": 0,
+          "keywords": [
+            "Linux",
+            "VPS",
+            "Cloud Server",
+            "SSH",
+            "System Hardening",
+            "Monitoring",
+            "Proxmox"
+          ]
+        },
+        {
+          "id": "icr-skill-2",
+          "hidden": false,
+          "icon": "acorn",
+          "iconColor": "",
+          "name": "Web Hosting Stack",
+          "proficiency": "",
+          "level": 0,
+          "keywords": [
+            "Nginx",
+            "Apache",
+            "PHP",
+            "MySQL",
+            "DNS",
+            "SSL/TLS"
+          ]
+        },
+        {
+          "id": "icr-skill-3",
+          "hidden": false,
+          "icon": "acorn",
+          "iconColor": "",
+          "name": "Troubleshooting",
+          "proficiency": "",
+          "level": 0,
+          "keywords": [
+            "Website Downtime",
+            "Performance Tuning",
+            "Database Incidents",
+            "Log Analysis",
+            "Root Cause Analysis"
+          ]
+        },
+        {
+          "id": "icr-skill-4",
+          "hidden": false,
+          "icon": "acorn",
+          "iconColor": "",
+          "name": "DevOps & Platform",
+          "proficiency": "",
+          "level": 0,
+          "keywords": [
+            "Docker",
+            "Git Deployment",
+            "CI/CD",
+            "GitHub Actions",
+            "Cloudflare",
+            "Email Hosting Basics"
+          ]
+        },
+        {
+          "id": "icr-skill-5",
+          "hidden": false,
+          "icon": "acorn",
+          "iconColor": "",
+          "name": "Control Panels & Migration",
+          "proficiency": "",
+          "level": 0,
+          "keywords": [
+            "cPanel",
+            "HestiaCP",
+            "Backup Strategy",
+            "Data Migration",
+            "Disaster Recovery"
+          ]
+        }
+      ]
+    },
+    "languages": {
+      "title": "",
+      "columns": 1,
+      "hidden": false,
+      "items": [
+        {
+          "id": "icr-lang-1",
+          "hidden": false,
+          "language": "English",
+          "fluency": "Basic working proficiency",
+          "level": 0
+        }
+      ]
+    },
+    "interests": {
+      "title": "",
+      "columns": 1,
+      "hidden": true,
+      "items": []
+    },
+    "awards": {
+      "title": "",
+      "columns": 1,
+      "hidden": true,
+      "items": []
+    },
+    "certifications": {
+      "title": "",
+      "columns": 1,
+      "hidden": true,
+      "items": []
+    },
+    "publications": {
+      "title": "",
+      "columns": 1,
+      "hidden": true,
+      "items": []
+    },
+    "volunteer": {
+      "title": "",
+      "columns": 1,
+      "hidden": true,
+      "items": []
+    },
+    "references": {
+      "title": "",
+      "columns": 1,
+      "hidden": true,
+      "items": []
+    }
+  },
+  "customSections": [
+    {
+      "title": "",
+      "columns": 1,
+      "hidden": false,
+      "id": "019da6e6-2a62-74bb-a442-6fc0091127fd",
+      "type": "experience",
+      "items": [
+        {
+          "id": "019da6e1-697c-732b-8b91-12215204ace5",
+          "hidden": true,
+          "company": "GEEK Up",
+          "position": "Summer Intern",
+          "location": "HCMC, Vietnam",
+          "period": "Jun 2022 - Aug 2022",
+          "website": {
+            "url": "https://geekup.vn",
+            "label": "",
+            "inlineLink": true
+          },
+          "description": "<p></p>",
+          "roles": []
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "template": "azurill",
+    "layout": {
+      "sidebarWidth": 26.95,
+      "pages": [
+        {
+          "fullWidth": true,
+          "main": [
+            "profiles",
+            "summary",
+            "skills",
+            "projects",
+            "experience",
+            "volunteer",
+            "references",
+            "certifications",
+            "awards",
+            "languages",
+            "interests",
+            "publications",
+            "education"
+          ],
+          "sidebar": []
+        },
+        {
+          "fullWidth": true,
+          "main": [
+            "019da6e6-2a62-74bb-a442-6fc0091127fd"
+          ],
+          "sidebar": []
+        }
+      ]
+    },
+    "page": {
+      "gapX": 4,
+      "gapY": 2,
+      "marginX": 14,
+      "marginY": 14,
+      "format": "a4",
+      "locale": "en-US",
+      "hideIcons": false
+    },
+    "design": {
+      "level": {
+        "icon": "star",
+        "type": "circle"
+      },
+      "colors": {
+        "primary": "rgba(0, 146, 184, 1)",
+        "text": "rgba(0, 0, 0, 1)",
+        "background": "rgba(255, 255, 255, 1)"
+      }
+    },
+    "typography": {
+      "body": {
+        "fontFamily": "IBM Plex Serif",
+        "fontWeights": [
+          "400",
+          "500"
+        ],
+        "fontSize": 10,
+        "lineHeight": 1.3
+      },
+      "heading": {
+        "fontFamily": "IBM Plex Serif",
+        "fontWeights": [
+          "600"
+        ],
+        "fontSize": 14,
+        "lineHeight": 1.5
+      }
+    },
+    "notes": ""
+  }
+}
