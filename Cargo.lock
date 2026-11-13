@@ -3812,6 +3812,7 @@ dependencies = [
  "chrono",
  "dirs 6.0.0",
  "dom_smoothie",
+ "encoding_rs",
  "futures",
  "html2text",
  "jsonschema",

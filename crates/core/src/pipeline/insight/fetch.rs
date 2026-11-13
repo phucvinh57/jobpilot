@@ -1,6 +1,6 @@
 //! The fetch of one company page, with rules of its own: the address comes from code, but a
 //! redirect (or a DNS answer) can still lead somewhere that must not be read, so every hop is
-//! checked, not only the first.
+//! checked, not only the first. A redirect from https to http is refused as well.
 //!
 //! A page is fetched only when its scheme is http(s) and its host is a public DNS name: no IP
 //! literal, `localhost`, single-label or `.local`-style name. The same check runs on every
@@ -53,6 +53,8 @@ impl Policy {
 /// A DNS name on the public internet, as far as its spelling tells.
 fn is_public_name(host: &str) -> bool {
     const PRIVATE_SUFFIXES: &[&str] = &[".local", ".localhost", ".internal", ".lan", ".home", ".corp", ".intranet"];
+    // `localhost.` and `a.local.` are the same names as without the root dot.
+    let host = host.trim_end_matches('.');
     host.contains('.')
         && host != "localhost"
         && !PRIVATE_SUFFIXES.iter().any(|s| host.ends_with(s))
@@ -78,8 +80,26 @@ fn is_public_ip(ip: IpAddr) -> bool {
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
             Some(v4) => is_public_ip(IpAddr::V4(v4)),
             None => {
-                let first = v6.segments()[0];
+                let seg = v6.segments();
+                let first = seg[0];
+                let embedded = |hi: u16, lo: u16| {
+                    let [a, b] = hi.to_be_bytes();
+                    let [c, d] = lo.to_be_bytes();
+                    is_public_ip(IpAddr::V4(std::net::Ipv4Addr::new(a, b, c, d)))
+                };
+                // NAT64 (64:ff9b::/96), 6to4 (2002::/16) and IPv4-compatible (::/96) addresses carry
+                // an IPv4 address that decides where they lead; 2001:db8::/32 is documentation.
+                if first == 0x64 && seg[1] == 0xff9b && seg[2..6] == [0; 4] {
+                    return embedded(seg[6], seg[7]);
+                }
+                if first == 0x2002 {
+                    return embedded(seg[1], seg[2]);
+                }
+                if seg[..6] == [0; 6] {
+                    return embedded(seg[6], seg[7]);
+                }
                 !(v6.is_loopback()
+                    || (first == 0x2001 && seg[1] == 0x0db8)
                     || v6.is_unspecified()
                     || v6.is_multicast()
                     || (first & 0xfe00) == 0xfc00 // fc00::/7, unique local
@@ -108,13 +128,21 @@ impl Resolve for PublicOnly {
     }
 }
 
+/// May the fetch follow a redirect from the URLs in `previous` (oldest first) to `next`? Not past
+/// [`MAX_REDIRECTS`], not to an address the policy refuses, and not from https down to http.
+fn follow_redirect(previous: &[Url], next: &Url, policy: Policy) -> bool {
+    previous.len() < MAX_REDIRECTS
+        && policy.allows(next)
+        && !(next.scheme() == "http" && previous.iter().any(|u| u.scheme() == "https"))
+}
+
 fn client(policy: Policy) -> Result<reqwest::Client> {
     let redirects = reqwest::redirect::Policy::custom(move |attempt| {
-        if attempt.previous().len() >= MAX_REDIRECTS || !policy.allows(attempt.url()) {
+        if follow_redirect(attempt.previous(), attempt.url(), policy) {
+            attempt.follow()
+        } else {
             // The redirect answer itself comes back and is not a page.
             attempt.stop()
-        } else {
-            attempt.follow()
         }
     });
     reqwest::Client::builder()
@@ -159,9 +187,19 @@ async fn get(url: Url, policy: Policy) -> Result<Option<String>> {
         }
     }
     let base = response.url().to_string();
-    let html = String::from_utf8_lossy(&body).into_owned();
+    let html = decode(&body, &content_type);
     let text = tokio::task::spawn_blocking(move || extract_html(&html, Some(&base))).await?;
     Ok((text.chars().count() >= MIN_PAGE_CHARS).then_some(text))
+}
+
+/// The body as text in the charset the `Content-Type` declares (a byte order mark wins), else UTF-8;
+/// bytes that do not fit become U+FFFD. A `<meta charset>` is not looked at.
+fn decode(body: &[u8], content_type: &str) -> String {
+    let declared = content_type
+        .split(';')
+        .filter_map(|part| part.trim().strip_prefix("charset="))
+        .find_map(|label| encoding_rs::Encoding::for_label(label.trim_matches(['"', '\'']).trim().as_bytes()));
+    declared.unwrap_or(encoding_rs::UTF_8).decode(body).0.into_owned()
 }
 
 #[cfg(test)]
@@ -196,6 +234,8 @@ mod tests {
             "http://wiki.corp/x",
             "http://printer.local/",
             "http://db.internal/",
+            "http://localhost./x",
+            "http://printer.local./",
         ] {
             assert!(!allowed(Policy::PUBLIC, refused), "{refused}");
         }
@@ -230,6 +270,11 @@ mod tests {
             "ff02::1",
             "::ffff:10.0.0.1",
             "::ffff:127.0.0.1",
+            "64:ff9b::a00:1",
+            "64:ff9b::a9fe:a9fe",
+            "2002:7f00:1::",
+            "::10.0.0.1",
+            "2001:db8::1",
         ] {
             assert!(!is_public_ip(ip(private)), "{private}");
         }
@@ -243,5 +288,42 @@ mod tests {
         // `localhost` is in /etc/hosts, so this needs no network.
         let err = public_addrs("localhost").await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+    }
+
+    #[test]
+    fn a_redirect_never_goes_from_https_down_to_http() {
+        let url = |s: &str| Url::parse(s).unwrap();
+        let ok = |previous: &[&str], next: &str| {
+            let previous: Vec<Url> = previous.iter().map(|u| url(u)).collect();
+            follow_redirect(&previous, &url(next), Policy::PUBLIC)
+        };
+        assert!(ok(&["https://acme.com/"], "https://www.acme.com/"));
+        assert!(ok(&["http://acme.com/"], "https://acme.com/"), "upgrades are fine");
+        assert!(ok(&["http://acme.com/"], "http://www.acme.com/"));
+        assert!(!ok(&["https://acme.com/"], "http://acme.com/"), "downgrade");
+        assert!(!ok(&["https://acme.com/", "https://www.acme.com/"], "http://cdn.acme.com/"));
+        // Once the chain has been https, a later http hop is a downgrade even through another http one.
+        assert!(!ok(&["https://acme.com/", "http://a.example.com/"], "http://b.example.com/"));
+        // The other rules still apply: refused hosts and the hop limit.
+        assert!(!ok(&["https://acme.com/"], "https://localhost/"));
+        let long: Vec<String> = (0..MAX_REDIRECTS).map(|i| format!("https://acme.com/{i}")).collect();
+        let long: Vec<&str> = long.iter().map(String::as_str).collect();
+        assert!(!ok(&long, "https://acme.com/next"));
+        assert!(ok(&long[1..], "https://acme.com/next"));
+    }
+
+    #[test]
+    fn bodies_are_decoded_with_their_declared_charset() {
+        assert_eq!(decode("café – ünï".as_bytes(), "text/html"), "café – ünï");
+        assert_eq!(decode("café".as_bytes(), "text/html; charset=utf-8"), "café");
+        assert_eq!(decode(b"caf\xe9", "text/html; charset=iso-8859-1"), "café");
+        assert_eq!(decode(b"caf\xe9", "text/html; charset=\"ISO-8859-1\""), "café");
+        assert_eq!(decode(b"\x93quoted\x94", "text/html; charset=windows-1252"), "\u{201c}quoted\u{201d}");
+        assert_eq!(decode(b"\x82\xb1\x82\xf1", "text/html;charset=shift_jis"), "こん");
+        // A BOM wins over the declaration.
+        assert_eq!(decode(b"\xef\xbb\xbfcaf\xc3\xa9", "text/html; charset=iso-8859-1"), "café");
+        // No or unknown charset: UTF-8, with bad bytes replaced.
+        assert_eq!(decode(b"caf\xe9", "text/html"), "caf\u{fffd}");
+        assert_eq!(decode(b"caf\xe9", "text/html; charset=nonsense"), "caf\u{fffd}");
     }
 }

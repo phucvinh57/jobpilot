@@ -24,12 +24,15 @@
 //! Which pages are read is decided by code from one address only: the posting URL the user gave
 //! (an application's `source`, a lead's URL). The registrable domain of its host is the company
 //! site; an ATS board or job site (greenhouse, lever, linkedin, ...) encodes a slug, not a domain,
-//! so for those no page is read. JD text, the analysis (`apply_url`) and the model never choose a
+//! so for those no page is read. The same goes for a site-hosting platform's own address
+//! (`vercel.app`, `github.com`, `medium.com/@acme`); a tenant on one (`acme.vercel.app`) is read on
+//! its exact host only, never on the platform's root. JD text, the analysis (`apply_url`) and the model never choose a
 //! URL. Every fetch, redirects included, follows the rules in `fetch.rs`.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -144,20 +147,54 @@ impl Core {
     /// Research the company behind application `app_id` (JD from `jd.md`, skills from the stored
     /// analysis, pages from its `source` URL) and store the brief in `applications.insight_json`.
     pub async fn compute_insight(&self, app_id: i64, llm: Arc<dyn Llm>) -> Result<Insight> {
+        let _claim = Claim::new(&self.paths.db, app_id)
+            .with_context(|| format!("the brief of application {app_id} is already being written"))?;
         store_insight(&Env::of(self), app_id, llm).await
     }
 }
 
 /// [`Core::compute_insight`] in the background: the caller does not wait, a failure is only
-/// logged, and the brief lands in `applications.insight_json` when it is done.
+/// logged, and the brief lands in `applications.insight_json` when it is done. At most one brief
+/// per application runs at a time: while one is running, this does nothing (a retry of the CV
+/// must not start a second one).
 pub(crate) fn spawn_compute(core: &Core, app_id: i64, llm: Arc<dyn Llm>) {
+    let Some(claim) = Claim::new(&core.paths.db, app_id) else {
+        tracing::debug!(app = app_id, "insight: already running, not started again");
+        return;
+    };
     let env = Env::of(core);
-    // Dropping the receiver detaches the task; it still runs to the end.
+    // Dropping the receiver detaches the task; it still runs to the end, and `claim` with it.
     drop(runtime::spawn(async move {
+        let _claim = claim;
         if let Err(e) = store_insight(&env, app_id, llm).await {
             tracing::warn!(app = app_id, "insight: failed: {e:#}");
         }
     }));
+}
+
+/// Applications whose brief is being written in this process, as (database file, id): ids repeat
+/// across databases (tests), never within one.
+static RUNNING: Mutex<Vec<(PathBuf, i64)>> = Mutex::new(Vec::new());
+
+/// The right to write one application's brief; released on drop (also when the task is dropped).
+struct Claim(PathBuf, i64);
+
+impl Claim {
+    /// `None` when a brief of `app_id` (of the database `db`) is already being written.
+    fn new(db: &Path, app_id: i64) -> Option<Claim> {
+        let mut running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        if running.iter().any(|(d, id)| d == db && *id == app_id) {
+            return None;
+        }
+        running.push((db.to_path_buf(), app_id));
+        Some(Claim(db.to_path_buf(), app_id))
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).retain(|(d, id)| !(*d == self.0 && *id == self.1));
+    }
 }
 
 /// What a run needs of the app: the graph runtime and the store (cheap handles, so a run can be
@@ -290,19 +327,66 @@ impl Drop for Forget {
 /// Pages of a company site worth reading, after its root.
 const COMPANY_PATHS: &[&str] = &["about", "careers"];
 
+/// Site-hosting platforms: their customers live on subdomains (`acme.vercel.app`) or in a path
+/// (`github.com/acme`), so the registrable domain is the platform, not the company.
+const PLATFORMS: &[&str] = &[
+    "notion.site",
+    "notion.so",
+    "vercel.app",
+    "github.io",
+    "github.com",
+    "gitlab.io",
+    "gitlab.com",
+    "bitbucket.org",
+    "netlify.app",
+    "herokuapp.com",
+    "pages.dev",
+    "workers.dev",
+    "webflow.io",
+    "wixsite.com",
+    "squarespace.com",
+    "wordpress.com",
+    "blogspot.com",
+    "medium.com",
+    "substack.com",
+    "carrd.co",
+    "framer.website",
+    "framer.app",
+    "glitch.me",
+    "onrender.com",
+    "fly.dev",
+    "web.app",
+    "firebaseapp.com",
+    "azurewebsites.net",
+    "amazonaws.com",
+    "cloudfront.net",
+    "sites.google.com",
+    "docs.google.com",
+];
+
 /// The company pages to read: the root of the posting's company domain, `/about` and `/careers`
-/// (same scheme as the posting). Empty when the posting is missing, is not an http(s) address the
-/// `policy` allows, or is on an ATS board or job site, whose URLs carry a company slug and no
-/// domain. A subdomain such as `careers.acme.com` maps to `acme.com`.
+/// (same scheme as the posting). A subdomain such as `careers.acme.com` maps to `acme.com`.
+/// Empty when the posting is missing, is not an http(s) address the `policy` allows, is on an ATS
+/// board or job site (their URLs carry a company slug and no domain), or is a hosting platform's own
+/// address (`vercel.app`, `github.com/acme`). A tenant of a platform (`acme.vercel.app`) is the
+/// company's own site on that exact host, so its pages are read there and not on the platform's root.
 fn company_urls(posting_url: Option<&str>, policy: Policy) -> Vec<String> {
     let Some(url) = posting_url.and_then(|u| url::Url::parse(u.trim()).ok()).filter(|u| policy.allows(u)) else {
         return Vec::new();
     };
     let root = match url.host() {
-        Some(url::Host::Domain(_)) => match url_company_domain(url.as_str()) {
-            Some(domain) => format!("{}://{domain}/", url.scheme()),
-            None => return Vec::new(),
-        },
+        Some(url::Host::Domain(name)) => {
+            let host = name.trim_end_matches('.');
+            let host = host.strip_prefix("www.").unwrap_or(host);
+            match PLATFORMS.iter().find(|p| host == **p || host.ends_with(&format!(".{p}"))) {
+                Some(platform) if host == *platform => return Vec::new(),
+                Some(_) => format!("{}://{host}/", url.scheme()),
+                None => match url_company_domain(url.as_str()) {
+                    Some(domain) => format!("{}://{domain}/", url.scheme()),
+                    None => return Vec::new(),
+                },
+            }
+        }
         // An IP literal gets this far only under the test policy: fixtures serve all pages on one port.
         Some(_) => match (url.host_str(), url.port()) {
             (Some(host), Some(port)) => format!("{}://{host}:{port}/", url.scheme()),

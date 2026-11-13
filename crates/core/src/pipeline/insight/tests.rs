@@ -115,6 +115,49 @@ fn no_posting_or_one_that_may_not_be_fetched_gives_nothing() {
 }
 
 #[test]
+fn hosting_platforms_never_map_to_their_root() {
+    // A tenant is read on its own exact host...
+    for (posting, host) in [
+        ("https://acme.notion.site/Jobs-123", "acme.notion.site"),
+        ("https://acme.vercel.app/jobs/1", "acme.vercel.app"),
+        ("https://acme.github.io/careers", "acme.github.io"),
+        ("https://acme.netlify.app/", "acme.netlify.app"),
+        ("https://acme.herokuapp.com/jobs", "acme.herokuapp.com"),
+        ("https://acme.pages.dev/", "acme.pages.dev"),
+        ("https://acme.webflow.io/", "acme.webflow.io"),
+        ("https://acme.wixsite.com/site", "acme.wixsite.com"),
+        ("https://acme.medium.com/we-are-hiring", "acme.medium.com"),
+        ("https://acme.substack.com/p/hiring", "acme.substack.com"),
+        ("https://www.acme.github.io/x", "acme.github.io"),
+        ("https://a.b.vercel.app/x", "a.b.vercel.app"),
+    ] {
+        assert_eq!(
+            urls(Some(posting)),
+            [format!("https://{host}/"), format!("https://{host}/about"), format!("https://{host}/careers")],
+            "{posting}"
+        );
+    }
+    // ...and the platform itself, whose customers are in the path, names no company.
+    for platform in [
+        "https://notion.site/x",
+        "https://vercel.app/",
+        "https://github.io/",
+        "https://github.com/acme/jobs",
+        "https://gitlab.com/acme/jobs",
+        "https://medium.com/@acme/we-are-hiring",
+        "https://substack.com/@acme",
+        "https://www.medium.com/@acme/post",
+        "https://sites.google.com/view/acme-jobs",
+        "https://docs.google.com/document/d/1/edit",
+        "https://notion.so/acme/jobs-1",
+    ] {
+        assert!(urls(Some(platform)).is_empty(), "{platform}");
+    }
+    // A name that only ends like a platform is an ordinary company.
+    assert_eq!(urls(Some("https://notgithub.io/x"))[0], "https://notgithub.io/");
+}
+
+#[test]
 fn the_company_site_comes_from_the_source_the_user_gave_never_from_the_apply_link() {
     let (_dir, core) = core();
     let with = |source: Option<&str>, apply: Option<&str>| {
@@ -580,4 +623,100 @@ async fn compute_insight_stores_the_brief_of_an_application() {
         .unwrap();
     assert!(store_insight(&env(&core), app.id, Arc::new(FakeLlm::with_replies([]))).await.is_err());
     assert!(core.compute_insight(9999, Arc::new(FakeLlm::with_replies([]))).await.is_err());
+}
+
+// ---------------------------------------------------------------- one brief per application
+
+/// A model that answers only once its gate is opened.
+struct Gated {
+    gate: Arc<tokio::sync::Notify>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl Gated {
+    fn new() -> Arc<Self> {
+        Arc::new(Self { gate: Arc::new(tokio::sync::Notify::new()), calls: Default::default() })
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Llm for Gated {
+    fn complete_json<'a>(&'a self, _: &'a str, _: &'a str, _: &'a Value) -> crate::llm::LlmFuture<'a, Value> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            self.gate.notified().await;
+            Ok(reply())
+        })
+    }
+
+    fn list_models(&self) -> crate::llm::LlmFuture<'_, Vec<String>> {
+        Box::pin(std::future::ready(Ok(Vec::new())))
+    }
+}
+
+/// The brief runs detached on the global runtime: wait (up to 5 s) until `done` holds.
+async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[tokio::test]
+async fn at_most_one_brief_per_application_runs_at_a_time() {
+    let (_dir, core) = core();
+    let app = core
+        .store
+        .create_application(&NewApplication {
+            slug: "acme-rust-engineer".into(),
+            company: "Acme Robotics".into(),
+            role: "Senior Rust Engineer".into(),
+            // An ATS posting names no company site, so these runs read no page (and need no network).
+            source: Some("https://boards.greenhouse.io/acme/jobs/1".into()),
+            apply_url: None,
+            dir: core.paths.application_dir("acme-rust-engineer"),
+        })
+        .unwrap();
+    std::fs::create_dir_all(&app.dir).unwrap();
+    std::fs::write(app.jd_path(), format!("# Acme — Rust\n\n{JD}\n")).unwrap();
+    let stored = || core.store.get_application(app.id).unwrap().unwrap().insight_json.is_some();
+
+    let first = Gated::new();
+    spawn_compute(&core, app.id, first.clone());
+    eventually("the first brief to start", || first.calls() == 1).await;
+
+    // A second start (a retry of the CV, say) does nothing while the first runs, and neither does
+    // the awaited entry: it says so.
+    let second = Gated::new();
+    spawn_compute(&core, app.id, second.clone());
+    let err = core.compute_insight(app.id, second.clone()).await.unwrap_err();
+    assert!(err.to_string().contains("already being written"), "{err:#}");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!((second.calls(), first.calls()), (0, 1));
+    assert!(!stored());
+    // Another application (or the same id in another database) is not held up.
+    assert!(Claim::new(&core.paths.db, app.id + 1).is_some());
+    let (_other_dir, other_core) = self::core();
+    assert!(Claim::new(&other_core.paths.db, app.id).is_some());
+
+    // When the first one is done the claim is free again.
+    first.gate.notify_one();
+    eventually("the brief to be stored", stored).await;
+    eventually("the claim to be released", || Claim::new(&core.paths.db, app.id).is_some()).await;
+    let third = Gated::new();
+    third.gate.notify_one();
+    core.compute_insight(app.id, third.clone()).await.unwrap();
+    assert_eq!(third.calls(), 1);
+
+    // A brief that fails (the task ends in an error) frees the claim too.
+    let down = Arc::new(FakeLlm::with_error("HTTP 503 Service Unavailable"));
+    spawn_compute(&core, app.id, down.clone());
+    eventually("the failing brief to run", || down.calls().len() == 1).await;
+    eventually("the claim to be released", || Claim::new(&core.paths.db, app.id).is_some()).await;
 }

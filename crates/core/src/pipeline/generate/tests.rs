@@ -387,6 +387,13 @@ async fn the_company_brief_runs_detached_and_never_delays_the_cv() {
     eventually("the brief to start", || brief_llm.calls.load(std::sync::atomic::Ordering::SeqCst) == 1).await;
     assert!(stored_brief(&core, app.id).is_none());
 
+    // Generating again while that brief runs (a retry) does not start a second one.
+    let llm = FakeLlm::with_replies([reply(EXAMPLE, &[])]);
+    let second = Arc::new(Gated { gate: gate.clone(), calls: Default::default() });
+    Pipeline::new(&core, &llm).with_insight(second.clone()).regenerate(app.id, |_| {}).await.unwrap();
+    assert_eq!(second.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(brief_llm.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
     gate.notify_one();
     eventually("the brief to be stored", || stored_brief(&core, app.id).is_some()).await;
     let brief = stored_brief(&core, app.id).unwrap();
