@@ -7,7 +7,7 @@ use rusqlite::{params, OptionalExtension, Row};
 use super::{events, now, Status, Store};
 
 const COLS: &str =
-    "id, slug, company, role, source, apply_url, status, dir, analysis_json, gaps_json, created_at, updated_at";
+    "id, slug, company, role, source, apply_url, status, dir, analysis_json, gaps_json, created_at, updated_at, insight_json";
 
 #[derive(Clone, Debug)]
 pub struct Application {
@@ -28,6 +28,8 @@ pub struct Application {
     pub gaps_json: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Job insight (domain, company, skills, interview process) as JSON text (P11).
+    pub insight_json: Option<String>,
 }
 
 impl Application {
@@ -45,6 +47,7 @@ impl Application {
             gaps_json: r.get(9)?,
             created_at: r.get(10)?,
             updated_at: r.get(11)?,
+            insight_json: r.get(12)?,
         })
     }
 
@@ -120,7 +123,8 @@ impl Store {
         })
     }
 
-    /// Save everything except `slug`, `status` (use `set_status`) and timestamps; bumps `updated_at`.
+    /// Save everything except `slug`, `status` (use `set_status`), `insight_json` (use `set_insight_json`)
+    /// and timestamps; bumps `updated_at`.
     pub fn save_application(&self, app: &Application) -> Result<()> {
         self.with_conn(|c| {
             let n = c.execute(
@@ -139,6 +143,18 @@ impl Store {
                 ],
             )?;
             anyhow::ensure!(n == 1, "application {} not found", app.id);
+            Ok(())
+        })
+    }
+
+    /// Store (or clear) the job insight JSON; bumps `updated_at`.
+    pub fn set_insight_json(&self, id: i64, insight_json: Option<&str>) -> Result<()> {
+        self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE applications SET insight_json = ?1, updated_at = ?2 WHERE id = ?3",
+                params![insight_json, now(), id],
+            )?;
+            anyhow::ensure!(n == 1, "application {id} not found");
             Ok(())
         })
     }

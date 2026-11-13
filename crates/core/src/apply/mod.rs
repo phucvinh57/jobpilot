@@ -270,6 +270,7 @@ mod tests {
             gaps_json: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            insight_json: None,
         };
         assert_eq!(resolve_apply_url(&app), None);
         app.analysis_json = Some(r#"{"apply_url": "https://jobs.lever.co/acme/1"}"#.into());

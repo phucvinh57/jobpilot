@@ -17,14 +17,24 @@ use jobpilot_core::{mail, runtime, Core};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use crate::detail::Detail;
+use crate::prefs::PreferencesView;
+use crate::queue::QueueView;
 use crate::settings::SettingsView;
 use crate::sidebar::Sidebar;
+use crate::trends::TrendsView;
 use jobs::{generate_plan, progress_label, GeneratePlan};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
+    /// The selected application.
     Detail,
     Settings,
+    /// Found jobs sorted by match (P12).
+    Queue,
+    /// The job-search chat and saved preferences (P9).
+    Preferences,
+    /// Market trends and reports (P13).
+    Trends,
 }
 
 /// What to run again when a job failed and the user presses Retry.
@@ -425,12 +435,15 @@ pub fn status_color(status: Status, theme: &Theme) -> Hsla {
     }
 }
 
-/// Root view: sidebar on the left, detail or settings on the right.
+/// Root view: sidebar on the left, the current [`Screen`] on the right.
 pub struct JobPilot {
     state: Entity<AppState>,
     sidebar: Entity<Sidebar>,
     detail: Entity<Detail>,
     settings: Entity<SettingsView>,
+    queue: Entity<QueueView>,
+    prefs: Entity<PreferencesView>,
+    trends: Entity<TrendsView>,
 }
 
 impl JobPilot {
@@ -445,6 +458,9 @@ impl JobPilot {
             sidebar: cx.new(|cx| Sidebar::new(state.clone(), window, cx)),
             detail: cx.new(|cx| Detail::new(state.clone(), window, cx)),
             settings: cx.new(|cx| SettingsView::new(state.clone(), cx)),
+            queue: cx.new(|_| QueueView::new(state.clone())),
+            prefs: cx.new(|_| PreferencesView::new(state.clone())),
+            trends: cx.new(|_| TrendsView::new(state.clone())),
             state,
         }
     }
@@ -455,6 +471,9 @@ impl Render for JobPilot {
         let main = match self.state.read(cx).screen {
             Screen::Detail => self.detail.clone().into_any_element(),
             Screen::Settings => self.settings.clone().into_any_element(),
+            Screen::Queue => self.queue.clone().into_any_element(),
+            Screen::Preferences => self.prefs.clone().into_any_element(),
+            Screen::Trends => self.trends.clone().into_any_element(),
         };
         let theme = cx.theme();
         let highlight = theme.accent;

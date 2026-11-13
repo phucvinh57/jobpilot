@@ -13,6 +13,7 @@
 pub mod anthropic;
 pub mod fake;
 mod http;
+pub mod message;
 pub mod openai;
 pub mod schema;
 
@@ -29,6 +30,7 @@ use crate::store::{NewProvider, Provider, ProviderKind};
 use crate::Core;
 
 pub use anthropic::AnthropicClient;
+pub use message::{Message, Role};
 pub use openai::OpenAiClient;
 
 /// Boxed future returned by [`Llm`] methods (keeps the trait object-safe without `async-trait`).
@@ -40,6 +42,14 @@ pub trait Llm: Send + Sync {
     /// Ask for one JSON document that conforms to `schema` (plain JSON Schema). The result is
     /// validated against `schema`; on a mismatch the call is retried once with the errors.
     fn complete_json<'a>(&'a self, system: &'a str, user: &'a str, schema: &'a Value) -> LlmFuture<'a, Value>;
+
+    /// Like [`complete_json`](Llm::complete_json) for a conversation: `messages` is the history
+    /// (oldest first, normally ending with a user message). The default folds it into one user text
+    /// with `[user]` / `[assistant]` labels, so providers need no change; one can override it with
+    /// a native multi-turn call.
+    fn chat_json<'a>(&'a self, system: &'a str, messages: &'a [Message], schema: &'a Value) -> LlmFuture<'a, Value> {
+        Box::pin(async move { self.complete_json(system, &message::fold(messages), schema).await })
+    }
 
     /// Model ids offered by the provider (for the model picker).
     fn list_models(&self) -> LlmFuture<'_, Vec<String>>;

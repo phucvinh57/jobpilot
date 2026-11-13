@@ -1,7 +1,8 @@
 //! Shared "something is missing or failed" pieces: what to do about it, and the buttons that do it.
 //!
-//! The classification (no AI provider, no Chrome, no typst, network) lives in `jobpilot_core::health`;
-//! this file turns it into call-to-action rows so every screen points the user to the same fixes.
+//! The classification (no AI provider, no Chrome, no typst, network, a site that needs the user) lives in
+//! `jobpilot_core::health`; this file turns it into call-to-action rows so every screen points the user
+//! to the same fixes.
 
 use std::rc::Rc;
 
@@ -19,6 +20,20 @@ pub type RetryFn = Rc<dyn Fn(&mut Window, &mut App)>;
 /// Advice and buttons for `problem`: Settings shortcut, "Check again" for a missing typst, Retry for
 /// network errors. `None` when there is nothing useful to offer (a plain error).
 pub fn help(id: &str, problem: Problem, state: &Entity<AppState>, retry: Option<RetryFn>, cx: &App) -> Option<Div> {
+    help_with(id, problem, state, retry, None, cx)
+}
+
+/// [`help`] plus the handler of "Open browser", shown for `Problem::NeedsHuman` (a login, captcha or
+/// block page the user must deal with in the visible browser). The paused run that knows the page
+/// supplies `open_browser`; without one the button opens Settings > Browser sessions.
+pub fn help_with(
+    id: &str,
+    problem: Problem,
+    state: &Entity<AppState>,
+    retry: Option<RetryFn>,
+    open_browser: Option<RetryFn>,
+    cx: &App,
+) -> Option<Div> {
     let advice = problem.advice()?;
     let muted = cx.theme().muted_foreground;
     let mut buttons: Vec<AnyElement> = Vec::new();
@@ -43,6 +58,21 @@ pub fn help(id: &str, problem: Problem, state: &Entity<AppState>, retry: Option<
                 .compact()
                 .label("Check again")
                 .on_click(move |_, _, cx| state.update(cx, |s, cx| s.refresh_health(cx)))
+                .into_any_element(),
+        );
+    }
+    if matches!(problem, Problem::NeedsHuman(_)) {
+        let state = state.clone();
+        buttons.push(
+            Button::new(SharedString::from(format!("{id}-open-browser")))
+                .outline()
+                .compact()
+                .icon(IconName::ExternalLink)
+                .label("Open browser")
+                .on_click(move |_, window, cx| match &open_browser {
+                    Some(open) => open(window, cx),
+                    None => state.update(cx, |s, cx| s.open_settings(Some("Browser sessions"), cx)),
+                })
                 .into_any_element(),
         );
     }

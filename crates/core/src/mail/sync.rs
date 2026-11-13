@@ -12,8 +12,8 @@ use tokio::sync::watch;
 use super::account::{KV_HISTORY_ID, KV_LAST_REPORT, KV_LAST_SYNC};
 use super::classify::{self, MailKind};
 use super::gmail::{self, GmailClient, MailMessage};
-use super::notify::desktop_notify;
 use crate::llm::{Llm, LlmFuture};
+use crate::notify::desktop_notify;
 use crate::store::{Application, Email, Status};
 use crate::{runtime, Core};
 

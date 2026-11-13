@@ -2,9 +2,12 @@
 
 mod app;
 mod detail;
+mod prefs;
 mod problem;
+mod queue;
 mod settings;
 mod sidebar;
+mod trends;
 
 use std::sync::Arc;
 

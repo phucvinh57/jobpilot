@@ -1,4 +1,4 @@
-//! Left column: JD input, application list, Settings.
+//! Left column: JD input, application list, navigation (Queue, Preferences, Trends) and Settings.
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::input::*;
@@ -43,6 +43,23 @@ impl Sidebar {
         })
         .detach();
         Self { state, jd_input }
+    }
+
+    /// One navigation entry; `current` is the screen being shown.
+    fn nav(
+        &self,
+        id: &'static str,
+        icon: IconName,
+        label: &'static str,
+        target: Screen,
+        current: Screen,
+        cx: &Context<Self>,
+    ) -> Button {
+        Button::new(id).ghost().icon(icon).label(label).selected(current == target).on_click(cx.listener(
+            move |this, _, _, cx| {
+                this.state.update(cx, |s, cx| s.show(target, cx));
+            },
+        ))
     }
 }
 
@@ -149,14 +166,16 @@ impl Render for Sidebar {
                     }),
             )
             .child(
-                Button::new("open-settings")
-                    .ghost()
-                    .icon(IconName::Settings)
-                    .label("Settings")
-                    .selected(screen == Screen::Settings)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.state.update(cx, |s, cx| s.show(Screen::Settings, cx));
-                    })),
+                div()
+                    .id("navigation")
+                    .role(Role::Navigation)
+                    .aria_label("Navigation")
+                    .v_flex()
+                    .gap_1()
+                    .child(self.nav("nav-queue", IconName::Inbox, "Queue", Screen::Queue, screen, cx))
+                    .child(self.nav("nav-preferences", IconName::Settings2, "Preferences", Screen::Preferences, screen, cx))
+                    .child(self.nav("nav-trends", IconName::ChartPie, "Trends", Screen::Trends, screen, cx))
+                    .child(self.nav("open-settings", IconName::Settings, "Settings", Screen::Settings, screen, cx)),
             )
     }
 }
