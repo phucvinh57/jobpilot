@@ -9,6 +9,7 @@
 mod logic;
 
 use std::collections::{BTreeSet, HashMap};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use gpui_kit::component::button::*;
@@ -37,6 +38,10 @@ use logic::{
     ago, dismissed_note, drop_unreported, is_web_link, meta_line, queue_primary_for, score_label, score_tone, source_name, source_needs_attention,
     source_status, QueueAction, QueueFacts, Tone,
 };
+
+/// The first look at the daily-run setting after the app starts, and the gap between looks after that.
+const DAILY_FIRST_CHECK: Duration = Duration::from_secs(60);
+const DAILY_CHECK_EVERY: Duration = Duration::from_secs(15 * 60);
 
 /// Minimum scores the filter offers.
 const MIN_SCORES: [f64; 3] = [50.0, 70.0, 85.0];
@@ -149,6 +154,7 @@ impl QueueView {
             open_errors: HashMap::new(),
         };
         view.watch(cx);
+        view.watch_daily(cx);
         view
     }
 
@@ -171,6 +177,50 @@ impl QueueView {
                 }
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
+            }
+        })
+        .detach();
+    }
+
+    /// The optional daily run: every few minutes ask the core whether one is due (setting on, a
+    /// source, nothing running, a day since the last run) and, if so, start it like "Search now",
+    /// so the progress line, the queue and the challenge hand-off work the same. This view lives
+    /// as long as the app, so the timer does too.
+    fn watch_daily(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut wait = DAILY_FIRST_CHECK;
+            loop {
+                cx.background_executor().timer(wait).await;
+                wait = DAILY_CHECK_EVERY;
+                let Ok(core) = this.update(cx, |this, cx| (this.searching.is_none()).then(|| this.core(cx))) else { break };
+                let Some(core) = core else { continue };
+                let rx = runtime::spawn({
+                    let core = core.clone();
+                    async move { core.discover_due(jobpilot_core::chrono::Utc::now()) }
+                });
+                match rx.await.unwrap_or_else(|_| Err(anyhow!("the task was cancelled"))) {
+                    Ok(true) => {
+                        // Skip if the user started a search meanwhile; record the attempt only for a
+                        // daily run that really starts.
+                        let Ok(started) = this.update(cx, |this, cx| {
+                            let idle = this.searching.is_none();
+                            if idle {
+                                this.search_now(cx);
+                            }
+                            idle
+                        }) else {
+                            break;
+                        };
+                        if started {
+                            let rx = runtime::spawn(async move { core.discover_daily_started(jobpilot_core::chrono::Utc::now()) });
+                            if let Ok(Err(e)) = rx.await {
+                                tracing::warn!("recording the daily search failed: {e:#}");
+                            }
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("checking whether the daily search is due failed: {e:#}"),
+                }
             }
         })
         .detach();

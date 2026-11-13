@@ -1275,3 +1275,38 @@ async fn open_browser_uses_the_bound_session_and_continue_frees_its_profile() {
     assert!(page.html.contains("Sign in"));
     core.sessions().launch(session.id, true).await.unwrap().close().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_run_in_progress_is_running_and_not_due() {
+    let h = Harness::new();
+    let core = Arc::new(h.open());
+    h.add_source(&core, "a", FakeSource::new(vec![vec![cand("a.test", 1, "Acme", "Engineer")]]));
+    core.set_discover_daily(true).unwrap();
+    assert!(core.discover_due(chrono::Utc::now()).unwrap());
+    // The search stops at the challenge check until the test lets it go.
+    let (reached, go) = (Arc::new(tokio::sync::Notify::new()), Arc::new(tokio::sync::Notify::new()));
+    let mut deps = h.deps();
+    let (r, g, first) = (reached.clone(), go.clone(), Arc::new(AtomicBool::new(true)));
+    deps.challenge = Arc::new(move |_| {
+        let (r, g, first) = (r.clone(), g.clone(), first.clone());
+        async move {
+            if first.swap(false, Ordering::SeqCst) {
+                r.notify_one();
+                g.notified().await;
+            }
+            Ok(None)
+        }
+        .boxed()
+    });
+    let run = {
+        let core = core.clone();
+        tokio::spawn(async move { core.discover_now_with(deps).await })
+    };
+    reached.notified().await;
+    assert!(core.discover_running().unwrap());
+    assert!(!core.discover_due(chrono::Utc::now()).unwrap(), "never two runs at once");
+    go.notify_one();
+    run.await.unwrap().unwrap();
+    assert!(!core.discover_running().unwrap());
+    assert!(!core.discover_due(chrono::Utc::now()).unwrap(), "it just ran");
+}

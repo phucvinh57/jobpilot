@@ -84,6 +84,8 @@ pub struct SourcesSection {
     sessions: Vec<Session>,
     /// Sources paused for the user right now.
     waiting: Vec<i64>,
+    /// "Search daily while JobPilot is open" (the Queue runs it).
+    daily: bool,
     /// Reload from the store on the next render.
     dirty: bool,
     /// A reload is running on the core runtime.
@@ -108,6 +110,7 @@ impl SourcesSection {
             sources: Vec::new(),
             sessions: Vec::new(),
             waiting: Vec::new(),
+            daily: false,
             dirty: true,
             loading: false,
             loaded: false,
@@ -143,14 +146,18 @@ impl SourcesSection {
         self.loading = true;
         let rx = runtime::spawn(async move {
             let waiting = core.discover_waiting().map(|w| w.into_iter().map(|w| w.source_id).collect::<Vec<_>>()).unwrap_or_default();
-            (core.job_sources(), core.sessions().list(), waiting)
+            (core.job_sources(), core.sessions().list(), waiting, core.discover_daily_enabled())
         });
         cx.spawn(async move |this, cx| {
             let loaded = rx.await;
             this.update(cx, |this, cx| {
                 this.loading = false;
                 match loaded {
-                    Ok((sources, sessions, waiting)) => {
+                    Ok((sources, sessions, waiting, daily)) => {
+                        match daily {
+                            Ok(on) => this.daily = on,
+                            Err(e) => this.error = Some(format!("{e:#}")),
+                        }
                         match sources {
                             Ok(list) => this.sources = list,
                             Err(e) => this.error = Some(format!("{e:#}")),
@@ -230,6 +237,13 @@ impl SourcesSection {
     fn set_enabled(&mut self, id: i64, enabled: bool, cx: &mut Context<Self>) {
         let core = self.state.read(cx).core.clone();
         self.run(async move { core.set_job_source_enabled(id, enabled) }, |_| {}, cx);
+    }
+
+    fn set_daily(&mut self, on: bool, cx: &mut Context<Self>) {
+        // Shown at once; the reload after the write confirms it (or puts the old value back).
+        self.daily = on;
+        let core = self.state.read(cx).core.clone();
+        self.run(async move { core.set_discover_daily(on) }, |_| {}, cx);
     }
 
     fn set_session(&mut self, id: i64, session: Option<i64>, cx: &mut Context<Self>) {
@@ -412,6 +426,18 @@ impl Render for SourcesSection {
             "Job sources",
             "Where to look for jobs. Public boards and Hacker News need no login; for a site that wants one, pick a browser session you logged in to.",
             cx,
+        )
+        .child(
+            div()
+                .v_flex()
+                .gap_1()
+                .child(
+                    Switch::new("search-daily")
+                        .checked(self.daily)
+                        .label("Search daily while JobPilot is open")
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_daily(*checked, cx))),
+                )
+                .child(div().text_xs().text_color(muted).child("Looks again when the last search is a day old. Never while one is running.")),
         )
         .child(div().v_flex().gap_2().children(rows))
         .when(self.loaded && self.sources.is_empty() && !self.form_open, |d| {
