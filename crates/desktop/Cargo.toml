@@ -1,0 +1,50 @@
+[package]
+name = "jobpilot"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Tailored CVs, managed-browser job applications and Gmail status tracking"
+
+[dependencies]
+jobpilot-core = { path = "../core" }
+gpui-kit = { version = "0.9", features = ["tree-sitter-yaml"] }
+anyhow.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# `cargo deb -p jobpilot` (scripts/package.sh). Paths are relative to this crate.
+[package.metadata.deb]
+name = "jobpilot"
+maintainer = "JobPilot <jobpilot@localhost>"
+section = "utils"
+priority = "optional"
+extended-description = """\
+Turns a job description into a CV tailored from your own profile.yaml, lets you edit it, \
+fills and submits the application in a managed browser only after you confirm, and tracks \
+replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider. \
+All data stays on this machine; secrets live in the OS keyring."""
+depends = "$auto, libvulkan1, libwayland-client0"
+recommends = "google-chrome-stable | chromium | chromium-browser, gnome-keyring | kwalletd6 | kwalletd5"
+suggests = "typst"
+assets = [
+    ["target/release/jobpilot", "usr/bin/", "755"],
+    ["../../assets/jobpilot.desktop", "usr/share/applications/jobpilot.desktop", "644"],
+    ["../../assets/icons/jobpilot.svg", "usr/share/icons/hicolor/scalable/apps/jobpilot.svg", "644"],
+    ["../../assets/icons/jobpilot-256.png", "usr/share/icons/hicolor/256x256/apps/jobpilot.png", "644"],
+    ["../../assets/icons/jobpilot-48.png", "usr/share/icons/hicolor/48x48/apps/jobpilot.png", "644"],
+    ["../../README.md", "usr/share/doc/jobpilot/README.md", "644"],
+]
+
+# `cargo bundle` (cargo-bundle) metadata; the Linux package is the .deb above.
+[package.metadata.bundle]
+name = "JobPilot"
+identifier = "dev.jobpilot.app"
+icon = ["../../assets/icons/jobpilot-256.png"]
+category = "Office"
+short_description = "Tailored CVs, managed-browser applications, Gmail status tracking"
+long_description = "Turns a job description into a CV tailored from your own profile, applies in a managed browser after you confirm, and tracks replies."

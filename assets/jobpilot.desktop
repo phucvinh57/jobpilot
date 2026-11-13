@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=JobPilot
+GenericName=Job application assistant
+Comment=Tailor your CV to a job description, apply in a managed browser, track replies
+Exec=jobpilot
+Icon=jobpilot
+Terminal=false
+Categories=Office;
+Keywords=cv;resume;job;application;
+StartupWMClass=jobpilot
+StartupNotify=true

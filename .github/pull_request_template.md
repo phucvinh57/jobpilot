@@ -2,7 +2,7 @@
 
 ## Testing
 
-<!-- `scripts/check.sh` output and the page count of each changed CV. -->
+<!-- `scripts/check.sh` output, and how the UI was checked if it changed. -->
 
 ## Risk
 

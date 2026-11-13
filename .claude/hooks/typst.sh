@@ -5,8 +5,8 @@ root=$(git -C "$(dirname "$file")" rev-parse --show-toplevel 2>/dev/null) || exi
 rel=${file#"$root"/}
 
 case "$rel" in
-  cvs/*.yaml | profile.yaml) data=$rel ;;
-  template/*.typ) data=profile.yaml ;;
+  profile.yaml | assets/prompts/*.yaml) data=$rel ;;
+  assets/*.typ) data=profile.yaml ;;
   *) exit 0 ;;
 esac
 
@@ -14,7 +14,7 @@ cd "$root" || exit 0
 command -v typst >/dev/null || exit 0
 pdf=$(mktemp)
 trap 'rm -f "$pdf"' EXIT
-if ! out=$(typst compile --format pdf --root "$root" --input "data=$data" template/cv.typ "$pdf" 2>&1); then
+if ! out=$(typst compile --format pdf --root "$root" --input "data=$data" assets/cv.typ "$pdf" 2>&1); then
   echo "$out" >&2
   exit 2
 fi
