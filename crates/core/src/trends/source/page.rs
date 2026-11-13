@@ -119,7 +119,7 @@ mod tests {
         let mut strict = ctx(&fx, &[]);
         let mut config = (*strict.config).clone();
         config.limits.allow_private_hosts = false;
-        strict.http = crate::trends::http::Http::new(&config.limits).unwrap();
+        strict.http = crate::trends::http::Http::new(&config.limits.http()).unwrap();
         strict.config = std::sync::Arc::new(config);
 
         let err = fetch_text(&strict, &format!("{}/job", fx.base())).await.unwrap_err();

@@ -22,7 +22,7 @@
 
 pub mod collect;
 pub mod config;
-pub mod http;
+pub use crate::net::http;
 pub mod period;
 pub mod source;
 mod text;

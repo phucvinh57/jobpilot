@@ -187,7 +187,7 @@ impl Env {
 
 /// The graph (see the module docs). Rebuild it with the same `config` to resume a thread.
 pub fn graph(store: Store, secrets: Secrets, paths: Paths, config: TrendConfig) -> Result<GraphDef<TrendRun>> {
-    let http = Http::new(&config.limits)?;
+    let http = Http::new(&config.limits.http())?;
     let collector_timeout = config.limits.collector_budget + NODE_MARGIN;
     let env = Arc::new(Env { store, secrets, paths, config: Arc::new(config), http });
     let mut graph = GraphDef::new(GRAPH).append("items").append("outcomes").node("plan", {

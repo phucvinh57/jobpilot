@@ -1,5 +1,6 @@
-//! The one HTTP client of the collectors: read-only, http(s) only, a size cap, and a minimum gap
-//! between two requests to the same host (shared by every collector of a run).
+//! The shared HTTP client for fetching third-party data (trend collectors, job discovery):
+//! read-only, http(s) only, a size cap enforced while streaming, and a minimum gap between two
+//! requests to the same host (shared by every user of one client).
 //!
 //! Redirects are followed here, not by `reqwest`, so that every hop gets the same treatment as the
 //! first request: the host check (no machine-local or private addresses unless
@@ -21,10 +22,27 @@ use reqwest::Method;
 use serde::de::DeserializeOwned;
 use tokio::time::Instant;
 
-use super::config::CollectLimits;
+/// Says who is asking. The readers do not pretend to be a browser.
+const USER_AGENT: &str = concat!("JobPilot/", env!("CARGO_PKG_VERSION"), " (personal job-search tool; read-only)");
 
-/// Says who is asking. The collectors do not pretend to be a browser.
-const USER_AGENT: &str = concat!("JobPilot/", env!("CARGO_PKG_VERSION"), " (personal market-trend reader; read-only)");
+/// What one client may do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpLimits {
+    /// Minimum gap between two requests to the same host.
+    pub host_delay: Duration,
+    /// Timeout of one request.
+    pub request_timeout: Duration,
+    /// Largest response body read.
+    pub max_bytes: usize,
+    /// Request machine-local and private addresses too. Off, except in tests.
+    pub allow_private_hosts: bool,
+}
+
+impl Default for HttpLimits {
+    fn default() -> Self {
+        Self { host_delay: Duration::from_secs(1), request_timeout: Duration::from_secs(30), max_bytes: 20 * 1024 * 1024, allow_private_hosts: false }
+    }
+}
 
 /// Why a request produced no body.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,7 +126,7 @@ pub struct Http {
 
 impl Http {
     /// A client for `limits`: public hosts only, unless `allow_private_hosts`.
-    pub fn new(limits: &CollectLimits) -> Result<Self> {
+    pub fn new(limits: &HttpLimits) -> Result<Self> {
         if limits.allow_private_hosts {
             Self::build(limits, Arc::new(|_| true), false)
         } else {
@@ -119,11 +137,11 @@ impl Http {
     /// Like [`new`](Self::new) with `allowed` deciding which URLs may be requested (tests: allow
     /// one local fixture server and refuse another).
     #[cfg(test)]
-    pub(crate) fn with_host_check(limits: &CollectLimits, allowed: impl Fn(&url::Url) -> bool + Send + Sync + 'static) -> Result<Self> {
+    pub(crate) fn with_host_check(limits: &HttpLimits, allowed: impl Fn(&url::Url) -> bool + Send + Sync + 'static) -> Result<Self> {
         Self::build(limits, Arc::new(allowed), false)
     }
 
-    fn build(limits: &CollectLimits, allowed: HostCheck, public_dns: bool) -> Result<Self> {
+    fn build(limits: &HttpLimits, allowed: HostCheck, public_dns: bool) -> Result<Self> {
         let mut builder = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(limits.request_timeout)
@@ -134,6 +152,12 @@ impl Http {
         }
         let client = builder.build().context("building the HTTP client")?;
         Ok(Self { client, delay: limits.host_delay, max_bytes: limits.max_bytes, allowed, slots: Arc::default() })
+    }
+
+    /// The same client (connections, host check and per-host delays are shared) with another body
+    /// cap, for a caller that reads small API answers and big pages through one set of delays.
+    pub fn with_max_bytes(&self, max_bytes: usize) -> Self {
+        Self { max_bytes, ..self.clone() }
     }
 
     /// `GET url`; a non-2xx status is [`FetchError::Status`].
@@ -304,27 +328,65 @@ fn ip_is_public(ip: std::net::IpAddr) -> bool {
     }
 }
 
+/// A routable public IPv6 address. Addresses that wrap an IPv4 address (mapped, NAT64, 6to4,
+/// IPv4-compatible) are as public as the IPv4 address inside; special-use ranges are not public.
 fn ipv6_is_public(ip: std::net::Ipv6Addr) -> bool {
-    let first = ip.segments()[0];
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return ipv4_is_public(v4);
+    }
+    let seg = ip.segments();
+    let first = seg[0];
+    let embedded = |hi: u16, lo: u16| {
+        let [a, b] = hi.to_be_bytes();
+        let [c, d] = lo.to_be_bytes();
+        ipv4_is_public(std::net::Ipv4Addr::new(a, b, c, d))
+    };
+    // NAT64 64:ff9b::/96: the IPv4 address in the last 32 bits is where it leads (the rest of
+    // 64:ff9b::/32 is local-use space).
+    if first == 0x64 && seg[1] == 0xff9b {
+        return seg[2..6] == [0; 4] && embedded(seg[6], seg[7]);
+    }
+    // 6to4 2002::/16: the IPv4 address is in bits 16..48.
+    if first == 0x2002 {
+        return embedded(seg[1], seg[2]);
+    }
+    // IPv4-compatible ::a.b.c.d (also `::` and `::1`, whose "IPv4 address" is not public).
+    if seg[..6] == [0; 6] {
+        return embedded(seg[6], seg[7]);
+    }
+    let documentation = first == 0x2001 && seg[1] == 0x0db8;
     let unique_local = first & 0xfe00 == 0xfc00;
     let link_local = first & 0xffc0 == 0xfe80;
-    !(ip.is_loopback() || ip.is_unspecified() || unique_local || link_local) && ip.to_ipv4_mapped().is_none_or(ipv4_is_public)
+    let site_local = first & 0xffc0 == 0xfec0; // fec0::/10, deprecated but still private space
+    !(ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || documentation || unique_local || link_local || site_local)
 }
 
 fn ipv4_is_public(ip: std::net::Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
-    let shared = a == 100 && (64..128).contains(&b); // carrier-grade NAT
-    !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || a == 0 || shared)
+    let [a, b, c, _] = ip.octets();
+    let shared = a == 100 && (64..128).contains(&b); // 100.64.0.0/10, carrier-grade NAT
+    let protocol = a == 192 && b == 0 && c == 0; // 192.0.0.0/24, IETF protocol assignments
+    let benchmarking = a == 198 && (18..20).contains(&b); // 198.18.0.0/15
+    !(ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || a == 0
+        || a >= 224 // 224.0.0.0/4 multicast and 240.0.0.0/4 reserved
+        || shared
+        || protocol
+        || benchmarking)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trends::testutil::Fixtures;
+    use crate::net::fixtures::Fixtures;
 
     /// Limits for tests against local fixture servers.
-    fn limits(delay_ms: u64) -> CollectLimits {
-        CollectLimits { host_delay: Duration::from_millis(delay_ms), allow_private_hosts: true, ..CollectLimits::default() }
+    fn limits(delay_ms: u64) -> HttpLimits {
+        HttpLimits { host_delay: Duration::from_millis(delay_ms), allow_private_hosts: true, ..HttpLimits::default() }
     }
 
     /// Allow requests to the fixture server `fx` only.
@@ -369,7 +431,7 @@ mod tests {
         let fx = Fixtures::start().await;
         fx.route("/ok", 200, "text/plain", "hello").route("/gone", 404, "text/plain", "x").route("/big", 200, "text/plain", "0123456789".repeat(100));
         let base = fx.base();
-        let http = Http::new(&CollectLimits { max_bytes: 500, ..limits(0) }).unwrap();
+        let http = Http::new(&HttpLimits { max_bytes: 500, ..limits(0) }).unwrap();
         let ok = http.get(&format!("{base}/ok"), &[]).await.unwrap();
         assert_eq!((ok.text().as_str(), ok.content_type.as_str()), ("hello", "text/plain"));
         assert_eq!(http.get(&format!("{base}/gone"), &[]).await.unwrap_err(), FetchError::Status(404));
@@ -395,6 +457,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_client_with_another_cap_shares_the_host_delays() {
+        let fx = Fixtures::start().await;
+        fx.route("/big", 200, "text/plain", "0123456789".repeat(100));
+        let small = Http::new(&HttpLimits { max_bytes: 500, ..limits(100) }).unwrap();
+        let large = small.with_max_bytes(5000);
+        let url = format!("{}/big", fx.base());
+        let started = std::time::Instant::now();
+        assert_eq!(small.get(&url, &[]).await.unwrap_err(), FetchError::TooLarge(500));
+        assert_eq!(large.get(&url, &[]).await.unwrap().body.len(), 1000);
+        assert!(started.elapsed() >= Duration::from_millis(100), "one table of turns for both: {:?}", started.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_body_without_a_length_is_capped_while_it_streams() {
+        // No Content-Length (the end of the body is the end of the connection), so only the
+        // streaming check can stop it.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let Ok((mut sock, _)) = listener.accept().await else { return };
+            let mut buf = [0u8; 2048];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n").await;
+            for _ in 0..64 {
+                if sock.write_all(&[b'x'; 1024]).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let http = Http::new(&HttpLimits { max_bytes: 4096, ..limits(0) }).unwrap();
+        assert_eq!(http.get(&format!("http://{addr}/stream"), &[]).await.unwrap_err(), FetchError::TooLarge(4096));
+    }
+
+    #[tokio::test]
     async fn json_errors_do_not_echo_the_body() {
         let fx = Fixtures::start().await;
         fx.route("/j", 200, "application/json", r#"{"secret": "hunter2hunter2"}"#);
@@ -411,7 +508,7 @@ mod tests {
     async fn the_host_check_is_part_of_get_and_applies_unless_private_hosts_are_allowed() {
         let fx = Fixtures::start().await;
         fx.route("/ok", 200, "text/plain", "hello");
-        let strict = Http::new(&CollectLimits { allow_private_hosts: false, ..limits(0) }).unwrap();
+        let strict = Http::new(&HttpLimits { allow_private_hosts: false, ..limits(0) }).unwrap();
         // A caller cannot skip the guard: the fixture is on 127.0.0.1.
         assert_eq!(strict.get(&format!("{}/ok", fx.base()), &[]).await.unwrap_err(), FetchError::Private);
         assert_eq!(strict.get("http://localhost:1/x", &[]).await.unwrap_err(), FetchError::Private);
@@ -495,5 +592,30 @@ mod tests {
         let err = public_addrs("localhost").await.unwrap_err().to_string();
         assert!(err.contains("private network"), "{err}");
         assert!(ip_is_public("93.184.216.34".parse().unwrap()) && !ip_is_public("::1".parse().unwrap()) && !ip_is_public("10.1.2.3".parse().unwrap()));
+    }
+
+    #[test]
+    fn special_use_addresses_are_not_public_whatever_way_they_are_written() {
+        let ip = |s: &str| -> std::net::IpAddr { s.parse().unwrap() };
+        for private in [
+            // IPv4 special-use ranges
+            "192.0.0.8", "198.18.0.1", "198.19.255.254", "224.0.0.1", "239.255.255.250", "240.0.0.1", "255.255.255.255", "192.0.2.1", "198.51.100.7", "203.0.113.9",
+            "100.64.0.1", "169.254.169.254", "127.0.0.1", "0.1.2.3",
+            // IPv6: private, multicast, site-local, documentation
+            "::1", "::", "fd00::1", "fe80::1", "fec0::1", "ff02::1", "2001:db8::1",
+            // the same IPv4 addresses inside IPv6
+            "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::7f00:1", "::10.1.2.3", "::c0a8:101",
+            "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe", "64:ff9b::c0a8:1", "64:ff9b:1::1",
+            "2002:7f00:1::1", "2002:a9fe:a9fe::1", "2002:c0a8:101::", "2002:ac10::1",
+        ] {
+            assert!(!ip_is_public(ip(private)), "{private}");
+        }
+        for public in ["93.184.216.34", "8.8.8.8", "1.1.1.1", "2606:2800:220:1:248:1893:25c8:1946", "2001:4860:4860::8888", "64:ff9b::5db8:d822", "2002:5db8:d822::1", "::ffff:93.184.216.34", "::5db8:d822"] {
+            assert!(ip_is_public(ip(public)), "{public}");
+        }
+        // The URL check agrees, for the literals a posting link could carry.
+        for bad in ["http://[64:ff9b::7f00:1]/", "http://[2002:a9fe:a9fe::1]/", "http://[::7f00:1]/", "http://[fec0::1]/", "http://[ff02::1]/", "http://224.0.0.1/", "http://198.18.0.1/", "http://192.0.0.1/", "http://240.0.0.1/"] {
+            assert!(public_http_url(bad, false).is_err(), "{bad}");
+        }
     }
 }

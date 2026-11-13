@@ -145,12 +145,22 @@ async fn ingest_url(url: &str) -> Result<JdText> {
         bail!("{url} is larger than {} MB", MAX_DOWNLOAD_BYTES / 1024 / 1024);
     }
 
-    let text = if content_type.contains("application/pdf") || parsed.path().to_lowercase().ends_with(".pdf") {
-        let bytes = bytes.to_vec();
+    let text = page_text(url, &final_url, &content_type, bytes.to_vec()).await?;
+    Ok(JdText { text, source: Some(url.to_string()), url: Some(final_url) })
+}
+
+/// The readable text of a fetched page body: HTML (Readability), a PDF or plain text, by
+/// `content_type` and the path of `url`. [`NeedsBrowser`] when too little text is found (a page
+/// rendered by JavaScript, a bot wall). `final_url` is the address after redirects, for relative
+/// links. Shared by [`ingest`] and the discovery fetch (which brings its own safe HTTP client).
+pub(crate) async fn page_text(url: &str, final_url: &str, content_type: &str, bytes: Vec<u8>) -> Result<String> {
+    let content_type = content_type.to_lowercase();
+    let is_pdf_path = url::Url::parse(url).is_ok_and(|u| u.path().to_lowercase().ends_with(".pdf"));
+    let text = if content_type.contains("application/pdf") || is_pdf_path {
         clean(&run_blocking(move || pdf_text(&bytes)).await?)
     } else if content_type.contains("html") || content_type.is_empty() || content_type.contains("xml") {
         let html = String::from_utf8_lossy(&bytes).into_owned();
-        let base = final_url.clone();
+        let base = final_url.to_string();
         run_blocking(move || Ok(extract_html(&html, Some(&base)))).await?
     } else {
         // text/plain, text/markdown, ...
@@ -158,12 +168,15 @@ async fn ingest_url(url: &str) -> Result<JdText> {
     };
 
     if text.chars().count() < MIN_PAGE_CHARS {
-        return Err(needs_browser(format!(
-            "only {} characters of text were found (the page is probably rendered by JavaScript)",
-            text.chars().count()
-        )));
+        return Err(anyhow::Error::new(NeedsBrowser {
+            url: url.to_string(),
+            reason: format!(
+                "only {} characters of text were found (the page is probably rendered by JavaScript)",
+                text.chars().count()
+            ),
+        }));
     }
-    Ok(JdText { text, source: Some(url.to_string()), url: Some(final_url) })
+    Ok(text)
 }
 
 /// Run CPU-bound extraction off the async worker (DOM parsing and PDF decoding can take a while).
