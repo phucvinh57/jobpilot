@@ -1,6 +1,6 @@
 //! Graph tests of the runner: fake sources, `llm::fake`, a real SQLite file; no network.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -134,7 +134,7 @@ impl Harness {
 
     fn deps(&self) -> DiscoverDeps {
         let llm: Arc<dyn Llm> = self.llm.clone();
-        let mut deps = DiscoverDeps::new(llm, DiscoverLimits { host_delay: std::time::Duration::ZERO, ..DiscoverLimits::default() });
+        let mut deps = DiscoverDeps::new(llm, DiscoverLimits { host_delay: std::time::Duration::ZERO, ..DiscoverLimits::default() }).expect("deps");
         let sources = self.sources.clone();
         deps.sources = Arc::new(move |source| {
             let found = sources.lock().unwrap().get(&source.name).cloned();
@@ -474,6 +474,7 @@ async fn postings_without_text_use_the_fetch_hook_and_unreadable_ones_are_skippe
     *h.fetch_answer.lock().unwrap() = Err("https://f.test/jobs/1 needs a browser to render: only 12 characters of text".into());
     let summary = core.discover_now_with(h.deps()).await.unwrap();
     assert_eq!((result_of(&summary, id).saved, result_of(&summary, id).skipped), (0, 2));
+    assert_eq!(result_of(&summary, id).skip_kinds, BTreeMap::from([("unreadable".to_string(), 2)]), "kinds, not the error text");
     assert_eq!(h.fetched.lock().unwrap().len(), 2);
     assert!(leads(&core, LeadState::New).is_empty());
     assert!(!core.store.lead_exists("https://f.test/jobs/1", "").unwrap());
@@ -493,6 +494,142 @@ async fn postings_without_text_use_the_fetch_hook_and_unreadable_ones_are_skippe
     );
     let summary = core.discover_now_with(h.deps()).await.unwrap();
     assert_eq!((result_of(&summary, id).saved, result_of(&summary, id).skipped), (0, 1));
+    assert_eq!(result_of(&summary, id).skip_kinds, BTreeMap::from([("too_short".to_string(), 1)]));
+}
+
+#[tokio::test]
+async fn skipped_postings_are_counted_by_kind() {
+    let h = Harness::new();
+    let core = h.open();
+    let adapter = Arc::new(FakeSource {
+        pages: vec![vec![
+            cand("k.test", 1, "Acme", "Engineer"),
+            cand("k.test", 2, "Initech", "Engineer"),
+            cand("k.test", 3, "Hooli", "Engineer"),
+            cand("k.test", 4, "Umbrella", "Engineer"),
+        ]],
+        failure: Mutex::new(None),
+        no_text: true,
+        searched: AtomicUsize::new(0),
+    });
+    let id = h.add_source(&core, "k", adapter);
+    let mut deps = h.deps();
+    deps.fetch = Arc::new(|req| {
+        let error = match req.candidate.url.rsplit('/').next() {
+            Some("1") => anyhow::Error::new(crate::pipeline::ingest::NeedsBrowser { url: req.candidate.url.clone(), reason: "js".into() }),
+            Some("2") => anyhow::anyhow!("fetching k.test: HTTP 404 Not Found"),
+            Some("3") => anyhow::anyhow!("fetching k.test: HTTP 403 Forbidden"),
+            _ => anyhow::anyhow!("the page has no text"),
+        };
+        async move { Err(error) }.boxed()
+    });
+    let summary = core.discover_now_with(deps).await.unwrap();
+    let kinds = &result_of(&summary, id).skip_kinds;
+    assert_eq!(
+        *kinds,
+        BTreeMap::from([
+            ("needs_browser".to_string(), 1),
+            ("gone".to_string(), 1),
+            ("forbidden".to_string(), 1),
+            ("unreadable".to_string(), 1)
+        ])
+    );
+    assert_eq!(result_of(&summary, id).skipped, 4);
+    let kept = core.discover_last_run().unwrap().unwrap();
+    assert_eq!(kept.sources[0].skip_kinds, *kinds, "the kinds are part of the kept summary");
+}
+
+#[tokio::test]
+async fn a_posting_found_by_two_sources_is_counted_as_a_duplicate() {
+    /// Holds each source's posting fetch until both have got there, so both pages went through
+    /// dedup before either lead is saved.
+    struct Meet(Arc<FakeSource>, Arc<tokio::sync::Barrier>);
+    #[async_trait]
+    impl JobSource for Meet {
+        async fn search(&self, prefs: &Preferences, ctx: &SearchCtx) -> Result<SearchPage> {
+            self.0.search(prefs, ctx).await
+        }
+        async fn posting(&self, c: &Candidate) -> Result<Option<String>> {
+            self.1.wait().await;
+            self.0.posting(c).await
+        }
+    }
+    let h = Harness::new();
+    let core = h.open();
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let mut meeting: HashMap<String, Arc<Meet>> = HashMap::new();
+    let mut ids = Vec::new();
+    for (name, host) in [("a", "a.test"), ("c", "c.test")] {
+        let src = FakeSource::new(vec![vec![cand(host, 1, "Acme Inc", "Backend Engineer")]]);
+        meeting.insert(name.into(), Arc::new(Meet(src.clone(), barrier.clone())));
+        ids.push(h.add_source(&core, name, src));
+    }
+    let mut deps = h.deps();
+    deps.sources = Arc::new(move |source| {
+        meeting.get(&source.name).map(|m| m.clone() as Arc<dyn JobSource>).ok_or_else(|| anyhow::anyhow!("no fake"))
+    });
+    let summary = core.discover_now_with(deps).await.unwrap();
+    assert_eq!(summary.saved, 1, "one lead for the job");
+    assert_eq!(summary.skipped, 1);
+    let skipped_by: Vec<_> = ids.iter().filter_map(|id| result_of(&summary, *id).skip_kinds.get("duplicate").copied()).collect();
+    assert_eq!(skipped_by, [1], "the later save found its twin");
+}
+
+#[tokio::test]
+async fn challenges_with_a_clean_check_in_between_are_not_in_a_row() {
+    // Postings 1, 3, 5 meet a login wall (and pass when fetched again after Continue): three
+    // challenges, but never three in a row, so the source is not given up.
+    let h = Harness::new();
+    let core = h.open();
+    let page: Vec<_> = (1..=5).map(|n| cand("r.test", n, &format!("Company{n}"), "Engineer")).collect();
+    let id = h.add_source(&core, "r", FakeSource::new(vec![page]));
+    let checks = Arc::new(AtomicUsize::new(0));
+    let mut deps = h.deps();
+    deps.challenge = {
+        let checks = checks.clone();
+        Arc::new(move |check| {
+            let checks = checks.clone();
+            async move {
+                Ok(match check.stage {
+                    CheckStage::Search => None,
+                    // Posting checks 0, 2, 4 find a wall; 1, 3, 5, 6 are clean.
+                    CheckStage::Posting => {
+                        let n = checks.fetch_add(1, Ordering::SeqCst);
+                        (n.is_multiple_of(2) && n < 5).then_some(ChallengeKind::Login)
+                    }
+                })
+            }
+            .boxed()
+        })
+    };
+    let summary = core.discover_now_with(deps.clone()).await.unwrap();
+    let thread = source_thread(&summary.run, id);
+    let mut last = result_of(&summary, id).clone();
+    let mut continues = 0;
+    while last.status == SourceStatus::Waiting {
+        continues += 1;
+        assert!(continues <= 5, "it should not keep waiting");
+        last = core.discover_resume_with(deps.clone(), &thread).await.unwrap();
+    }
+    assert_eq!(continues, 3, "three walls, each continued");
+    assert_eq!((last.status, last.saved), (SourceStatus::Done, 5), "{last:?}");
+    assert_eq!(last.note, "", "not paused for the day");
+    assert!(core.store.kv_get(&format!("discover.paused.{id}")).unwrap().is_none());
+}
+
+#[test]
+fn a_failed_source_note_never_carries_a_secret() {
+    let h = Harness::new();
+    let core = h.open();
+    let id = h.add_source(&core, "a", FakeSource::new(vec![vec![]]));
+    let message = "boom: Authorization: Bearer abcdefghijklmnop1234 and key sk-abcdefghijklmnopqrstuvwxyz0123";
+    let failure = crate::graph::Failure { problem: crate::health::Problem::Other, node: "search".into(), message: message.into() };
+    let result = run::source_result(&core.store, "discover:1:1", id, Ok(Outcome::Failed(failure)));
+    let status = core.store.get_source(id).unwrap().unwrap().last_status.unwrap();
+    for text in [&result.note, &status] {
+        assert!(text.contains("boom"), "{text}");
+        assert!(!text.contains("abcdefghijklmnop1234") && !text.contains("sk-abcdefghijklmnop"), "{text}");
+    }
 }
 
 #[tokio::test]
@@ -662,28 +799,55 @@ async fn a_source_still_waiting_from_an_earlier_run_is_not_started_again() {
 }
 
 #[tokio::test]
-async fn postings_of_one_host_are_fetched_one_delay_apart() {
+async fn postings_of_one_host_are_fetched_one_delay_apart_by_the_default_fetch() {
+    use crate::net::fixtures::Fixtures;
+    let fx = Fixtures::start().await;
+    let page = format!(
+        "<!doctype html><html><head><title>Engineer</title></head><body><main><h1>Engineer</h1><p>{}</p></main></body></html>",
+        "You will build and run backend services in Rust and own their quality. ".repeat(10)
+    );
+    let candidates: Vec<Candidate> = (1..=3)
+        .map(|n| {
+            fx.route(&format!("/jobs/{n}"), 200, "text/html", page.clone());
+            Candidate { url: format!("{}/jobs/{n}", fx.base()), title: "Engineer".into(), company: format!("Co{n}"), location: "Remote".into(), snippet: String::new() }
+        })
+        .collect();
+    let h = Harness::new();
+    let core = h.open();
+    let adapter = Arc::new(FakeSource { pages: vec![candidates], failure: Mutex::new(None), no_text: true, searched: AtomicUsize::new(0) });
+    h.add_source(&core, "f", adapter);
+    let mut deps = h.deps();
+    // The real fetch hook, with a delay between requests to one host and the local fixture allowed.
+    let limits = DiscoverLimits { host_delay: std::time::Duration::from_millis(60), allow_private_hosts: true, ..deps.limits };
+    deps.fetch = DiscoverDeps::new(deps.llm.clone(), limits).unwrap().fetch;
+    let started = std::time::Instant::now();
+    core.discover_now_with(deps).await.unwrap();
+    assert_eq!(fx.hits().len(), 3, "each posting was fetched through the shared client");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(110), "two delays for three fetches: {:?}", started.elapsed());
+}
+
+#[tokio::test]
+async fn the_default_fetch_never_reads_a_private_address() {
+    use crate::net::fixtures::Fixtures;
+    let fx = Fixtures::start().await;
+    fx.route("/jobs/1", 200, "text/html", "<html><body>secret</body></html>");
     let h = Harness::new();
     let core = h.open();
     let adapter = Arc::new(FakeSource {
-        pages: vec![vec![cand("f.test", 1, "Acme", "Engineer"), cand("f.test", 2, "Initech", "Engineer"), cand("f.test", 3, "Hooli", "Engineer")]],
+        pages: vec![vec![Candidate { url: format!("{}/jobs/1", fx.base()), title: "Engineer".into(), company: "Acme".into(), ..Default::default() }]],
         failure: Mutex::new(None),
         no_text: true,
         searched: AtomicUsize::new(0),
     });
     h.add_source(&core, "f", adapter);
     let mut deps = h.deps();
-    deps.gate = Arc::new(HostGate::new(std::time::Duration::from_millis(60)));
-    let times = Arc::new(Mutex::new(Vec::new()));
-    let (log, inner) = (times.clone(), deps.fetch.clone());
-    deps.fetch = Arc::new(move |req| {
-        log.lock().unwrap().push(std::time::Instant::now());
-        inner(req)
-    });
-    core.discover_now_with(deps).await.unwrap();
-    let times = times.lock().unwrap();
-    assert_eq!(times.len(), 3);
-    assert!(times[2].duration_since(times[0]) >= std::time::Duration::from_millis(110), "two delays for three fetches");
+    // The default fetch with the default (strict) limits: the fixture is on 127.0.0.1.
+    deps.fetch = DiscoverDeps::new(deps.llm.clone(), DiscoverLimits { host_delay: std::time::Duration::ZERO, ..DiscoverLimits::default() }).unwrap().fetch;
+    let summary = core.discover_now_with(deps).await.unwrap();
+    assert!(fx.hits().is_empty(), "a posting link to a private address was never requested");
+    assert_eq!((summary.saved, summary.skipped), (0, 1));
+    assert_eq!(summary.sources[0].skip_kinds.get("unreadable"), Some(&1));
+    assert!(!core.store.lead_exists(&format!("{}/jobs/1", fx.base()), "").unwrap());
 }
 
 #[tokio::test]

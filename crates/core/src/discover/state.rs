@@ -1,5 +1,7 @@
 //! The states of the two graphs and what a run reports.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::score::Scored;
@@ -66,6 +68,9 @@ pub struct SourceState {
     pub dismissed: u32,
     /// Postings left alone: no readable text, or saved meanwhile by someone else.
     pub skipped: u32,
+    /// `skipped` by kind (`needs_browser`, `gone`, `forbidden`, `unreadable`, `too_short`,
+    /// `duplicate`): labels only, never page text.
+    pub skip_kinds: BTreeMap<String, u32>,
     /// What the user has to deal with before the source goes on.
     pub challenge: Option<Challenge>,
     /// Challenges in a row; a page that goes through resets it.
@@ -108,6 +113,9 @@ pub struct SourceResult {
     pub saved: u32,
     pub dismissed: u32,
     pub skipped: u32,
+    /// `skipped` by kind, see [`SourceState::skip_kinds`].
+    #[serde(default)]
+    pub skip_kinds: BTreeMap<String, u32>,
     /// What the user should know: `login` / `captcha` / `blocked` for a waiting source, the error
     /// for a failed one (secrets masked), why it was not run, or why it ended early. Empty when
     /// all is well.
@@ -123,6 +131,7 @@ impl SourceResult {
             saved: state.map_or(0, |s| s.saved),
             dismissed: state.map_or(0, |s| s.dismissed),
             skipped: state.map_or(0, |s| s.skipped),
+            skip_kinds: state.map(|s| s.skip_kinds.clone()).unwrap_or_default(),
             note,
         }
     }

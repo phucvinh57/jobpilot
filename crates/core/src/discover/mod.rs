@@ -14,15 +14,17 @@
 //! - [`score`]: hard filters in code, then one model call per lead, then the weighted sum.
 //! - [`dedup`]: canonical URL and `slug(company)-slug(role)` against leads and applications.
 //! - [`deps`]: the replaceable pieces of a run. **Hooks for later work:** `DiscoverDeps::challenge`
-//!   (part B fills it with `browser/challenge.rs`), `DiscoverDeps::insight` (P11 wires
-//!   `pipeline::insight`) and `DiscoverDeps::fetch` (browser fallback).
-//! - [`limits`]: the per-host delay, pages per run, and the three-challenges rule.
+//!   (part B fills it with `browser/challenge.rs`), `DiscoverDeps::insight` (wired to
+//!   `pipeline::insight` by `DiscoverDeps::live`) and `DiscoverDeps::fetch` (browser fallback).
+//! - [`limits`]: the per-host delay, pages per run, and the three-challenges rule. Every request
+//!   (adapters and posting fetch) goes through the shared safe client, [`crate::net::http`].
 //!
 //! Posting texts are untrusted: they only ever reach the model between markers, as data. URLs
 //! come from the adapters and are restricted to http(s).
 
 pub mod dedup;
 pub mod deps;
+mod fetch;
 pub mod limits;
 mod run;
 pub mod score;
@@ -38,7 +40,7 @@ pub use deps::{
     ChallengeCheck, ChallengeProbe, CheckStage, DiscoverDeps, FetchRequest, InsightHook, InsightRequest, Notifier,
     PostingFetcher, SourceFactory,
 };
-pub use limits::{DiscoverLimits, HostGate, MAX_CHALLENGES_IN_A_ROW};
+pub use limits::{DiscoverLimits, MAX_CHALLENGES_IN_A_ROW};
 pub use run::lead_dir;
 pub use source::{Candidate, JobSource, SearchCtx, SearchPage};
 pub use state::{

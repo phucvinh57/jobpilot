@@ -1,5 +1,6 @@
-//! The one HTTP client of the collectors: read-only, http(s) only, a size cap, and a minimum gap
-//! between two requests to the same host (shared by every collector of a run).
+//! The shared HTTP client for fetching third-party data (trend collectors, job discovery):
+//! read-only, http(s) only, a size cap enforced while streaming, and a minimum gap between two
+//! requests to the same host (shared by every user of one client).
 //!
 //! Redirects are followed here, not by `reqwest`, so that every hop gets the same treatment as the
 //! first request: the host check (no machine-local or private addresses unless
@@ -21,10 +22,27 @@ use reqwest::Method;
 use serde::de::DeserializeOwned;
 use tokio::time::Instant;
 
-use super::config::CollectLimits;
+/// Says who is asking. The readers do not pretend to be a browser.
+const USER_AGENT: &str = concat!("JobPilot/", env!("CARGO_PKG_VERSION"), " (personal job-search tool; read-only)");
 
-/// Says who is asking. The collectors do not pretend to be a browser.
-const USER_AGENT: &str = concat!("JobPilot/", env!("CARGO_PKG_VERSION"), " (personal market-trend reader; read-only)");
+/// What one client may do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpLimits {
+    /// Minimum gap between two requests to the same host.
+    pub host_delay: Duration,
+    /// Timeout of one request.
+    pub request_timeout: Duration,
+    /// Largest response body read.
+    pub max_bytes: usize,
+    /// Request machine-local and private addresses too. Off, except in tests.
+    pub allow_private_hosts: bool,
+}
+
+impl Default for HttpLimits {
+    fn default() -> Self {
+        Self { host_delay: Duration::from_secs(1), request_timeout: Duration::from_secs(30), max_bytes: 20 * 1024 * 1024, allow_private_hosts: false }
+    }
+}
 
 /// Why a request produced no body.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,7 +126,7 @@ pub struct Http {
 
 impl Http {
     /// A client for `limits`: public hosts only, unless `allow_private_hosts`.
-    pub fn new(limits: &CollectLimits) -> Result<Self> {
+    pub fn new(limits: &HttpLimits) -> Result<Self> {
         if limits.allow_private_hosts {
             Self::build(limits, Arc::new(|_| true), false)
         } else {
@@ -119,11 +137,11 @@ impl Http {
     /// Like [`new`](Self::new) with `allowed` deciding which URLs may be requested (tests: allow
     /// one local fixture server and refuse another).
     #[cfg(test)]
-    pub(crate) fn with_host_check(limits: &CollectLimits, allowed: impl Fn(&url::Url) -> bool + Send + Sync + 'static) -> Result<Self> {
+    pub(crate) fn with_host_check(limits: &HttpLimits, allowed: impl Fn(&url::Url) -> bool + Send + Sync + 'static) -> Result<Self> {
         Self::build(limits, Arc::new(allowed), false)
     }
 
-    fn build(limits: &CollectLimits, allowed: HostCheck, public_dns: bool) -> Result<Self> {
+    fn build(limits: &HttpLimits, allowed: HostCheck, public_dns: bool) -> Result<Self> {
         let mut builder = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(limits.request_timeout)
@@ -134,6 +152,12 @@ impl Http {
         }
         let client = builder.build().context("building the HTTP client")?;
         Ok(Self { client, delay: limits.host_delay, max_bytes: limits.max_bytes, allowed, slots: Arc::default() })
+    }
+
+    /// The same client (connections, host check and per-host delays are shared) with another body
+    /// cap, for a caller that reads small API answers and big pages through one set of delays.
+    pub fn with_max_bytes(&self, max_bytes: usize) -> Self {
+        Self { max_bytes, ..self.clone() }
     }
 
     /// `GET url`; a non-2xx status is [`FetchError::Status`].
@@ -320,11 +344,11 @@ fn ipv4_is_public(ip: std::net::Ipv4Addr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trends::testutil::Fixtures;
+    use crate::net::fixtures::Fixtures;
 
     /// Limits for tests against local fixture servers.
-    fn limits(delay_ms: u64) -> CollectLimits {
-        CollectLimits { host_delay: Duration::from_millis(delay_ms), allow_private_hosts: true, ..CollectLimits::default() }
+    fn limits(delay_ms: u64) -> HttpLimits {
+        HttpLimits { host_delay: Duration::from_millis(delay_ms), allow_private_hosts: true, ..HttpLimits::default() }
     }
 
     /// Allow requests to the fixture server `fx` only.
@@ -369,7 +393,7 @@ mod tests {
         let fx = Fixtures::start().await;
         fx.route("/ok", 200, "text/plain", "hello").route("/gone", 404, "text/plain", "x").route("/big", 200, "text/plain", "0123456789".repeat(100));
         let base = fx.base();
-        let http = Http::new(&CollectLimits { max_bytes: 500, ..limits(0) }).unwrap();
+        let http = Http::new(&HttpLimits { max_bytes: 500, ..limits(0) }).unwrap();
         let ok = http.get(&format!("{base}/ok"), &[]).await.unwrap();
         assert_eq!((ok.text().as_str(), ok.content_type.as_str()), ("hello", "text/plain"));
         assert_eq!(http.get(&format!("{base}/gone"), &[]).await.unwrap_err(), FetchError::Status(404));
@@ -395,6 +419,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_client_with_another_cap_shares_the_host_delays() {
+        let fx = Fixtures::start().await;
+        fx.route("/big", 200, "text/plain", "0123456789".repeat(100));
+        let small = Http::new(&HttpLimits { max_bytes: 500, ..limits(100) }).unwrap();
+        let large = small.with_max_bytes(5000);
+        let url = format!("{}/big", fx.base());
+        let started = std::time::Instant::now();
+        assert_eq!(small.get(&url, &[]).await.unwrap_err(), FetchError::TooLarge(500));
+        assert_eq!(large.get(&url, &[]).await.unwrap().body.len(), 1000);
+        assert!(started.elapsed() >= Duration::from_millis(100), "one table of turns for both: {:?}", started.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_body_without_a_length_is_capped_while_it_streams() {
+        // No Content-Length (the end of the body is the end of the connection), so only the
+        // streaming check can stop it.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let Ok((mut sock, _)) = listener.accept().await else { return };
+            let mut buf = [0u8; 2048];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n").await;
+            for _ in 0..64 {
+                if sock.write_all(&[b'x'; 1024]).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let http = Http::new(&HttpLimits { max_bytes: 4096, ..limits(0) }).unwrap();
+        assert_eq!(http.get(&format!("http://{addr}/stream"), &[]).await.unwrap_err(), FetchError::TooLarge(4096));
+    }
+
+    #[tokio::test]
     async fn json_errors_do_not_echo_the_body() {
         let fx = Fixtures::start().await;
         fx.route("/j", 200, "application/json", r#"{"secret": "hunter2hunter2"}"#);
@@ -411,7 +470,7 @@ mod tests {
     async fn the_host_check_is_part_of_get_and_applies_unless_private_hosts_are_allowed() {
         let fx = Fixtures::start().await;
         fx.route("/ok", 200, "text/plain", "hello");
-        let strict = Http::new(&CollectLimits { allow_private_hosts: false, ..limits(0) }).unwrap();
+        let strict = Http::new(&HttpLimits { allow_private_hosts: false, ..limits(0) }).unwrap();
         // A caller cannot skip the guard: the fixture is on 127.0.0.1.
         assert_eq!(strict.get(&format!("{}/ok", fx.base()), &[]).await.unwrap_err(), FetchError::Private);
         assert_eq!(strict.get("http://localhost:1/x", &[]).await.unwrap_err(), FetchError::Private);

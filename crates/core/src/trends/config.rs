@@ -3,6 +3,8 @@
 
 use std::time::Duration;
 
+use crate::net::http::HttpLimits;
+
 /// Base URLs of the APIs the adapters call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Endpoints {
@@ -85,6 +87,18 @@ impl Default for CollectLimits {
             source_timeout: Duration::from_secs(120),
             collector_budget: Duration::from_secs(240),
             allow_private_hosts: false,
+        }
+    }
+}
+
+impl CollectLimits {
+    /// What the shared HTTP client takes from these limits.
+    pub fn http(&self) -> HttpLimits {
+        HttpLimits {
+            host_delay: self.host_delay,
+            request_timeout: self.request_timeout,
+            max_bytes: self.max_bytes,
+            allow_private_hosts: self.allow_private_hosts,
         }
     }
 }

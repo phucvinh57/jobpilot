@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{
-    html_to_text, mentions, one_line, page_of, title_fits_roles, Cached, Candidate, Http, JobSource, SearchCtx,
+    html_to_text, mentions, mentions_lowered, one_line, page_of, title_fits_roles, Cached, Candidate, Http, JobSource, SearchCtx,
     SearchPage, LISTING_TTL, SNIPPET_CHARS,
 };
 use crate::prefs::Preferences;
@@ -24,15 +24,16 @@ pub struct HnHiring {
     thread: Cached<Vec<Comment>>,
 }
 
-/// A top-level comment of the thread.
+/// A top-level comment of the thread, prepared once when the thread is loaded.
 struct Comment {
     id: String,
     /// The first line (by HN convention `Company | Role | Location | ...`).
     header: String,
-    /// What follows the header.
-    rest: String,
     /// The whole comment as plain text.
     text: String,
+    /// `text` in lower case, for matching skills.
+    lower: String,
+    candidate: Candidate,
 }
 
 impl HnHiring {
@@ -77,13 +78,14 @@ fn comment_of(c: &Value) -> Option<Comment> {
     let mut lines = text.lines().skip_while(|l| l.trim().is_empty());
     let header = one_line(lines.next()?, usize::MAX);
     let rest = lines.collect::<Vec<_>>().join(" ");
-    Some(Comment { id, header, rest, text })
+    let candidate = candidate_of(&id, &header, &rest);
+    Some(Comment { id, header, lower: text.to_lowercase(), text, candidate })
 }
 
 /// `Company | Role | Location | ...` -> a candidate. Every part of the header that is not the
 /// company stays in the title, so nothing the poster wrote is lost.
-fn candidate_of(c: &Comment) -> Candidate {
-    let parts: Vec<&str> = c.header.split('|').map(str::trim).filter(|p| !p.is_empty()).collect();
+fn candidate_of(id: &str, header: &str, rest: &str) -> Candidate {
+    let parts: Vec<&str> = header.split('|').map(str::trim).filter(|p| !p.is_empty()).collect();
     let company = one_line(parts.first().copied().unwrap_or_default(), 60);
     let location = parts
         .iter()
@@ -92,11 +94,11 @@ fn candidate_of(c: &Comment) -> Candidate {
         .map(|p| one_line(p, 80))
         .unwrap_or_default();
     Candidate {
-        url: format!("{ITEM_URL}{}", c.id),
-        title: one_line(&c.header, TITLE_CHARS),
+        url: format!("{ITEM_URL}{id}"),
+        title: one_line(header, TITLE_CHARS),
         company,
         location,
-        snippet: one_line(&c.rest, SNIPPET_CHARS),
+        snippet: one_line(rest, SNIPPET_CHARS),
     }
 }
 
@@ -107,14 +109,14 @@ fn relevant(c: &Comment, prefs: &Preferences) -> bool {
     if skills.is_empty() && prefs.roles.is_empty() {
         return true;
     }
-    skills.iter().any(|s| mentions(&c.text, s)) || (!prefs.roles.is_empty() && title_fits_roles(&c.header, &prefs.roles))
+    skills.iter().any(|s| mentions_lowered(&c.lower, s)) || (!prefs.roles.is_empty() && title_fits_roles(&c.header, &prefs.roles))
 }
 
 #[async_trait]
 impl JobSource for HnHiring {
     async fn search(&self, prefs: &Preferences, ctx: &SearchCtx) -> Result<SearchPage> {
         let fitting: Vec<Candidate> =
-            self.comments().await?.iter().filter(|c| relevant(c, prefs)).map(candidate_of).collect();
+            self.comments().await?.iter().filter(|c| relevant(c, prefs)).map(|c| c.candidate.clone()).collect();
         let (candidates, next) = page_of(&fitting, ctx)?;
         Ok(SearchPage { candidates, next })
     }

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 pub use ashby::Ashby;
 pub use greenhouse::Greenhouse;
 pub use hn_hiring::HnHiring;
-pub use http::{Http, ReqwestHttp};
+pub use http::{Http, NetHttp};
 pub use lever::Lever;
 
 #[cfg(test)]
@@ -115,7 +115,10 @@ pub(crate) fn board_slug(input: &str, hosts: &[&str]) -> Result<String> {
     if input.is_empty() {
         bail!("no company board is set: enter the board URL or its short name");
     }
-    let valid = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    // `.` and `..` (and anything starting with a dot) would walk out of the API path.
+    let valid = |s: &str| {
+        !s.is_empty() && !s.starts_with('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
     if !input.contains('/') && !input.contains(':') {
         return if valid(input) { Ok(input.to_string()) } else { bail!("`{input}` is not a board name") };
     }
@@ -166,7 +169,12 @@ pub(crate) fn title_fits_roles(title: &str, roles: &[String]) -> bool {
 /// Does `text` mention `term` as a word (so `go` is not in `google`, while `c++` and `.net`
 /// work)? Case-insensitive.
 pub(crate) fn mentions(text: &str, term: &str) -> bool {
-    let (text, term) = (text.to_lowercase(), term.trim().to_lowercase());
+    mentions_lowered(&text.to_lowercase(), term)
+}
+
+/// [`mentions`] for a `text` that is lower case already (matched against many terms).
+pub(crate) fn mentions_lowered(text: &str, term: &str) -> bool {
+    let term = term.trim().to_lowercase();
     if term.is_empty() {
         return false;
     }
@@ -261,6 +269,10 @@ mod tests {
         assert!(board_slug("", &gh).is_err());
         assert!(board_slug("https://evil.test/acme", &gh).unwrap_err().to_string().contains("evil.test"));
         assert!(board_slug("a b", &gh).is_err());
+        for dots in [".", "..", ".hidden", "https://boards.greenhouse.io/..", "https://boards.greenhouse.io/.", "https://boards.greenhouse.io/embed/job_board?for=.."] {
+            assert!(board_slug(dots, &gh).is_err(), "{dots}");
+        }
+        assert_eq!(board_slug("a.b-c_d", &gh).unwrap(), "a.b-c_d", "dots inside a name are fine");
         assert!(board_slug("https://boards.greenhouse.io/", &gh).is_err());
     }
 

@@ -40,6 +40,7 @@ use crate::graph::nodes::{self, Challenge, ChallengeKind};
 use crate::graph::{GraphDef, Graphs, Limits, Outcome, END, START};
 use crate::health::{classify, Problem};
 use crate::pipeline::analyze::truncate_chars;
+use crate::pipeline::ingest::NeedsBrowser;
 use crate::pipeline::cv::Cv;
 use crate::redact::redact;
 use crate::store::{LeadState, NewLead, Source, SourcePurpose, Store};
@@ -224,6 +225,8 @@ async fn check(sh: Arc<Shared>, mut s: SourceState, stage: CheckStage) -> Result
     };
     let found = (sh.deps.challenge)(ChallengeCheck { source: source.clone(), stage, url: url.clone(), text }).await?;
     let Some(kind) = found else {
+        // The page or the posting went through: the challenges are not "in a row" any more.
+        s.strikes = 0;
         return Ok(s);
     };
     s.strikes += 1;
@@ -278,8 +281,6 @@ async fn dedup(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     s.pages += u32::from(fresh > 0);
     let limits = &sh.deps.limits;
     s.paged_out = s.cursor.is_none() || s.pages >= limits.pages_per_run || s.scanned >= limits.pages_per_run.saturating_mul(SCAN_FACTOR);
-    // A page went through, so the source is not blocking us.
-    s.strikes = 0;
     tracing::info!(run = %s.run, source_id = s.source_id, new = fresh, "source page deduplicated");
     Ok(s)
 }
@@ -297,8 +298,8 @@ async fn next_candidate(_sh: Arc<Shared>, mut s: SourceState) -> Result<SourceSt
     Ok(s)
 }
 
-/// `fetch`: the posting's text, from the adapter when it has it, else through the fetch hook after
-/// the host's turn. A network failure fails the thread (Retry); a posting that cannot be read is
+/// `fetch`: the posting's text, from the adapter when it has it, else through the fetch hook (whose
+/// default keeps the per-host delay). A network failure fails the thread (Retry); a posting that cannot be read is
 /// skipped and stays unknown, so a later run tries it again.
 async fn fetch(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     let Some(candidate) = s.current.clone() else { return Ok(s) };
@@ -306,34 +307,46 @@ async fn fetch(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     let adapter = sh.adapter(&source)?;
     let got = match adapter.posting(&candidate).await {
         Ok(Some(text)) => Ok(text),
-        Ok(None) => {
-            if let Some(host) = host_of(&candidate.url) {
-                sh.deps.gate.wait(&host).await;
-            }
-            (sh.deps.fetch)(FetchRequest { source, candidate }).await
-        }
+        Ok(None) => (sh.deps.fetch)(FetchRequest { source, candidate }).await,
         Err(e) => Err(e),
     };
     match got {
         Ok(text) if text.trim().chars().count() >= MIN_POSTING_CHARS => {
             s.jd = truncate_chars(text.trim(), MAX_POSTING_CHARS).to_string();
         }
-        Ok(_) => skip(&mut s, "no readable text"),
+        Ok(_) => skip(&mut s, "too_short"),
         Err(e) if classify(&format!("{e:#}")) == Problem::Network => return Err(e.context("fetching a posting")),
-        Err(_) => skip(&mut s, "not readable"),
+        Err(e) => skip(&mut s, skip_kind(&e)),
     }
     Ok(s)
 }
 
-fn skip(s: &mut SourceState, why: &'static str) {
-    tracing::warn!(run = %s.run, source_id = s.source_id, why, "posting skipped");
-    s.skipped += 1;
-    s.current = None;
-    s.jd.clear();
+/// Why a posting could not be read, as a label (the error's text is not kept).
+fn skip_kind(e: &anyhow::Error) -> &'static str {
+    if e.downcast_ref::<NeedsBrowser>().is_some() {
+        return "needs_browser";
+    }
+    let text = format!("{e:#}");
+    if ["HTTP 404", "HTTP 410"].iter().any(|s| text.contains(s)) {
+        "gone"
+    } else if ["HTTP 401", "HTTP 403"].iter().any(|s| text.contains(s)) {
+        "forbidden"
+    } else {
+        "unreadable"
+    }
 }
 
-fn host_of(url: &str) -> Option<String> {
-    url::Url::parse(url).ok()?.host_str().map(str::to_string)
+/// Count a posting left alone, by kind.
+fn count_skip(s: &mut SourceState, kind: &'static str) {
+    s.skipped += 1;
+    *s.skip_kinds.entry(kind.to_string()).or_default() += 1;
+}
+
+fn skip(s: &mut SourceState, kind: &'static str) {
+    tracing::warn!(run = %s.run, source_id = s.source_id, kind, "posting skipped");
+    count_skip(s, kind);
+    s.current = None;
+    s.jd.clear();
 }
 
 /// `filter`: the hard filters, in code.
@@ -380,7 +393,7 @@ async fn save_lead(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     let insight_json = s.insight.take();
     match store_lead(&sh, &s, LeadState::New, None, score, score_json, insight_json)? {
         Stored::Saved => s.saved += 1,
-        Stored::AlreadyKnown => s.skipped += 1,
+        Stored::AlreadyKnown => count_skip(&mut s, "duplicate"),
     }
     clear_current(&mut s);
     Ok(s)
@@ -391,7 +404,7 @@ async fn dismiss(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     let reason = s.verdict.take();
     match store_lead(&sh, &s, LeadState::Dismissed, reason, None, None, None)? {
         Stored::Saved => s.dismissed += 1,
-        Stored::AlreadyKnown => s.skipped += 1,
+        Stored::AlreadyKnown => count_skip(&mut s, "duplicate"),
     }
     clear_current(&mut s);
     Ok(s)
@@ -565,7 +578,8 @@ pub(crate) fn source_result(store: &Store, thread: &str, source_id: i64, outcome
         result
     };
     let failed = |message: String| {
-        let note = one_line(&message, 160);
+        // The graph runtime masks secrets already; the note is shown and stored, so mask again.
+        let note = one_line(&redact(&message), 160);
         if let Err(e) = store.set_source_run(source_id, &format!("failed: {note}")) {
             tracing::warn!(source_id, error = %e, "recording a failed source failed");
         }
@@ -579,7 +593,7 @@ pub(crate) fn source_result(store: &Store, thread: &str, source_id: i64, outcome
         Ok(Outcome::Waiting(reason)) => so_far(SourceStatus::Waiting, wait_label(&reason).into()),
         Ok(Outcome::Failed(f)) => failed(f.message),
         Ok(Outcome::Cancelled) => SourceResult::of(thread, source_id, SourceStatus::Cancelled, None, String::new()),
-        Err(e) => failed(redact(&format!("{e:#}")).into_owned()),
+        Err(e) => failed(format!("{e:#}")),
     }
 }
 

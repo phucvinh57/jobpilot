@@ -6,6 +6,7 @@
 //! - `notify`, `prefs` (and the store tables behind them) — P8, then P9+
 //! - `trends` — P13 (collection; the digest follows in part B)
 //! - `discover` — P10
+//! - `net` — the shared safe HTTP client (moved out of `trends`)
 //!
 //! Extend [`Core`] from your own module with `impl Core { ... }` instead of editing `facade.rs`.
 
@@ -18,6 +19,7 @@ pub mod health;
 pub mod llm;
 pub mod logging;
 pub mod mail;
+pub mod net;
 pub mod notify;
 pub mod paths;
 pub mod pipeline;
