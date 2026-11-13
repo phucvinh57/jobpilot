@@ -13,20 +13,20 @@ CI has no AI reviewer, so this skill is the review. Report evidence, not claims.
 - Read `git status --short` and `git diff main...HEAD --stat`, then pick the risk tier from `docs/REVIEW.md`.
 - Choose a shape:
   - **One PR** for one coherent change.
-  - **A `gh stack`** when the layers build on each other and each can be reviewed and pass checks alone (e.g. new `profile.yaml` facts → the CVs that use them).
+  - **A `gh stack`** when the layers build on each other and each can be reviewed and pass checks alone (e.g. a `core` API → the view that uses it).
   - **Separate worktrees** for unrelated changes.
 
 ## 2. Verify
 
-- Run `scripts/check.sh`, fix failures and keep its output for the PR body.
-- For each changed CV, keep its page count (`pdfinfo build/<slug>.pdf | grep Pages`).
+- Run `scripts/check.sh` (cargo build/test/clippy for Rust changes, a Typst render for `profile.yaml`/`assets/`), fix failures and keep its output for the PR body.
+- For a UI change, check it visually (AGENTS.md, "Check the UI visually").
 
 ## 3. Review
 
 Review with fresh context against `docs/REVIEW.md`. In a stack, review each layer against its parent.
 
 - Run `code-review` at the tier's level (`low` / `medium` / `high`). For the High tier, also run `security-review`.
-- For a CV, check every bullet, title, date, number and technology against `profile.yaml`, and the CV against its JD in `jds/`.
+- For a change to CV generation (`assets/prompts/`, `pipeline/`), check that no fact can come from outside `profile.yaml`.
 - Fix every Important finding. Fix each other finding, or give a one-line reason not to.
 - Repeat steps 2–3 on the new changes only, up to 3 rounds. If findings persist after that, question the approach with the user.
 - If the same kind of finding recurs, propose a fix at the source: an `AGENTS.md` rule, a `REVIEW.md` line or a check in `scripts/check.sh`.
@@ -38,7 +38,7 @@ Review with fresh context against `docs/REVIEW.md`. In a stack, review each laye
 - Never use `--no-verify`, because the pre-push hook re-runs `check.sh`.
 - Write each PR body to a scratchpad file following `.github/pull_request_template.md`:
   - **What changed:** the content, not the file list.
-  - **Testing:** the commands actually run, their results and the page count of each changed CV.
+  - **Testing:** the commands actually run and their results.
   - **Risk:** the tier and what could break.
   - **How to revert:** `git revert` is enough unless `profile.yaml` facts were removed. Then say what to restore.
   - Any findings left open, with their reasons.

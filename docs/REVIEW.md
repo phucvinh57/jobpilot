@@ -16,13 +16,13 @@ For human reviewers and the `/pre-pr` skill. When a bug slips through, add a lin
 
 Set by the paths touched. The highest wins. Each PR gets exactly one label: `risk: low`, `risk: medium` or `risk: high`. Low and Medium PRs are merged by `/pre-pr` once `CI OK` passes. High PRs wait for a human. The required `Risk label` check (`.github/workflows/risk.yml`) enforces the label, the High paths, and no auto-merge on High. Change the list there along with this one.
 
-- **High** (a human reads the diff): `profile.yaml`, `template/`, `Makefile`, `scripts/`, `.githooks/`, `.github/`, `.claude/`, `.agents/`, `AGENTS.md`, `CLAUDE.md`, `docs/REVIEW.md`.
-- **Low:** `jds/`, `README.md`, other docs.
-- **Medium:** everything else (`cvs/`).
+- **High** (a human reads the diff): `profile.yaml`, `assets/cv.typ`, `assets/prompts/`, `scripts/`, `.githooks/`, `.github/`, `.claude/`, `.agents/`, `AGENTS.md`, `CLAUDE.md`, `docs/REVIEW.md`.
+- **Low:** `README.md`, other docs.
+- **Medium:** everything else (`crates/`, `Cargo.*`).
 
 ## Ignore
 
-`build/` and generated PDFs.
+`target/`, `dist/` and generated PDFs.
 
 ## Reporting
 

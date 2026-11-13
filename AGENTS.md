@@ -38,6 +38,7 @@ crates/desktop (package `jobpilot`)               GPUI views only
 - Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-core -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
 - Package: `scripts/package.sh` -> `dist/`
 - Needs: Rust, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (wayland/xkbcommon/vulkan, libdbus for the keyring).
+- Pre-PR checks: `scripts/check.sh [--all]` (paths changed since main); `git config core.hooksPath .githooks` once per clone runs it before every push.
 - Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_core=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
 
 ## Check the UI visually
@@ -59,6 +60,13 @@ GPUI exposes elements through AccessKit (AT-SPI). An element is visible only wit
 - Start the app after the holder, on XWayland (see above). An instance that was activated mid-run (or native Wayland) may only expose the root node.
 - `agent-desktop snapshot --app jobpilot -i --compact` then `agent-desktop click "@<snapshot id>:eN"`. Take a fresh snapshot after every state change: refs are per snapshot.
 - Limits: GPUI text inputs expose only `SetFocus`, so `set-value` and typing do not work, and `--headed type/focus` is refused on a Wayland session. To enter text, seed the DB or send real key events on XWayland (xdotool, not installed by default). Some chip buttons were not re-clickable after a first state change; take a new snapshot before clicking again.
+
+## Workflow
+
+- **One worktree per change** (`claude -w <name>`, in `.claude/worktrees/`).
+- **Execute an approved plan with subagents.** Split it into independent tasks, each a `general-purpose` subagent with a self-contained brief (goal, files, steps, checks). The main session checks their results, then runs `/pre-pr`.
+- **Show the result, don't claim it.** Report the output of `scripts/check.sh`. Never use `--no-verify`.
+- **Finish with `/pre-pr` without asking.** Low and Medium PRs are merged by `/pre-pr` once `CI OK` passes. High PRs wait for a human.
 
 ## Rules
 

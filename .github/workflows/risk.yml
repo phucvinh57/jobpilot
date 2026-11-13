@@ -34,7 +34,7 @@ jobs:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           AUTO_MERGE: ${{ github.event.pull_request.auto_merge != null }}
           HIGH_PATHS: >-
-            ^(profile\.yaml$|template/|Makefile$|scripts/|\.githooks/|\.github/|\.claude/|\.agents/|AGENTS\.md$|CLAUDE\.md$|docs/REVIEW\.md$)
+            ^(profile\.yaml$|assets/cv\.typ$|assets/prompts/|scripts/|\.githooks/|\.github/|\.claude/|\.agents/|AGENTS\.md$|CLAUDE\.md$|docs/REVIEW\.md$)
         run: |
           risk=$(jq -r '[.[] | select(startswith("risk: "))] | if length == 1 then .[0] | ltrimstr("risk: ") else "" end' <<<"$LABELS")
           if [[ ! $risk =~ ^(low|medium|high)$ ]]; then

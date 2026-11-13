@@ -23,10 +23,22 @@ jobs:
         with:
           typst-version: 0.15.1
 
-      - name: Install poppler-utils
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - name: Install Linux libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libvulkan-dev libfontconfig-dev libfreetype-dev \
+            libdbus-1-dev libssl-dev libasound2-dev libzstd-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Check
+        env:
+          JOBPILOT_SECRETS: memory
         run: scripts/check.sh --all
 
   ci-ok:

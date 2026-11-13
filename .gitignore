@@ -1,5 +1,4 @@
 target/
-.claude/worktrees/
 *.pdf
 .env
 .DS_Store
