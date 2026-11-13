@@ -13,19 +13,19 @@ sections: [summary, skills, projects, experience, education, languages]
 
 summary:
   - Software engineer with 2+ years of DevOps-related experience operating Linux VPS/Cloud servers for web products and internal platforms.
-  - Hands-on with Nginx, MySQL/PostgreSQL, DNS, SSL, SSH, backup/migration, and server hardening.
+  - Hands-on with Nginx, MySQL/PostgreSQL, DNS, SSL, backup/migration, and server hardening.
   - Experienced in troubleshooting website downtime, slow performance, malware/security risks, and database-related issues with a reliability-first mindset.
   - Familiar with Docker, Git-based deployment/CI-CD, K8s, Cloudflare, and English communication for cross-border collaboration.
 
 skills:
   - category: Linux & Server Ops
-    items: [Linux, VPS, Cloud Server, SSH, System Hardening, Monitoring, Proxmox]
+    items: [Linux, VPS, System Hardening, Monitoring, Proxmox]
   - category: Web Hosting Stack
     items: [Nginx, Apache, PHP, MySQL, DNS, SSL/TLS]
   - category: Troubleshooting
-    items: [Website Downtime, Performance Tuning, Database Incidents, Log Analysis, Root Cause Analysis]
+    items: [Performance Tuning, Log Analysis, Root Cause Analysis]
   - category: DevOps & Platform
-    items: [Docker, Git Deployment, CI/CD, GitHub Actions, Cloudflare, Email Hosting Basics]
+    items: [Docker, CI/CD, GitHub Actions, Cloudflare, Email Hosting Basics]
   - category: Control Panels & Migration
     items: [cPanel, HestiaCP, Backup Strategy, Data Migration, Disaster Recovery]
 
