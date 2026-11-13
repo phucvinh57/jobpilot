@@ -1,10 +1,11 @@
-build/
+target/
 .claude/worktrees/
 *.pdf
 .env
 .DS_Store
 .idea
 
-# leftovers from the Reactive Resume stack (kept on disk, not tracked)
+# local/private leftovers
 data/
 backups/
+.claude/worktrees/

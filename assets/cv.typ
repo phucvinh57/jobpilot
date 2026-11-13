@@ -1,5 +1,5 @@
 // Renders a CV from a YAML data file.
-// Usage: typst compile --root . --input data=cvs/<name>.yaml template/cv.typ build/<name>.pdf
+// Usage: typst compile --root <dir> --input data=<file>.yaml cv.typ out.pdf
 #import "@preview/basic-resume:0.2.10": *
 
 #let data = yaml("/" + sys.inputs.at("data", default: "profile.yaml"))

@@ -1,0 +1,9 @@
+[package]
+name = "jobpilot"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+jobpilot-core = { path = "../core" }
+gpui-kit = "0.9"
+anyhow.workspace = true

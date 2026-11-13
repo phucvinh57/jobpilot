@@ -1,44 +1,27 @@
-# private-resumes
+# JobPilot
 
-My CVs as YAML, compiled locally to PDF with [Typst](https://typst.app) using the
-[`basic-resume`](https://typst.app/universe/package/basic-resume) package.
+Desktop app that turns a job description into a tailored CV (from your own `profile.yaml`), lets you edit it, fills and submits the application in a managed browser after you confirm, and tracks replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider.
+
+## Requirements
+
+- Rust (stable)
+- [`typst`](https://typst.app) CLI on `PATH`
+- Chrome or Chromium (for browser automation)
+- Linux: wayland/X11, xkbcommon, vulkan and a Secret Service (libdbus) for the keyring
+
+## Run
 
 ```
-profile.yaml          master profile: everything I've done (source of truth)
-cvs/<slug>.yaml       one tailored CV per job description
-jds/<slug>.md         job descriptions
-template/cv.typ       shared renderer
-build/<slug>.pdf      output (gitignored)
+cargo run -p jobpilot
 ```
 
-## Setup
+Private state lives in `$XDG_DATA_HOME/jobpilot` (SQLite DB, generated CVs, browser profiles). API keys and tokens go to the OS keyring. Set `JOBPILOT_DEMO=1` to start with sample applications.
 
-```bash
-cargo install --locked typst-cli
+## Develop
+
+```
+cargo build --workspace
+cargo test --workspace
 ```
 
-The package is downloaded automatically on first compile.
-
-## Build
-
-```bash
-make profile                 # full CV from profile.yaml -> build/profile.pdf
-make cv NAME=<slug>          # cvs/<slug>.yaml -> build/<slug>.pdf
-make all                     # everything
-make watch NAME=<slug>       # rebuild on save (omit NAME for profile)
-make check                   # pre-PR checks (build, 2-page limit, header); ARGS=--all for everything
-make hooks                   # once per clone: run the checks before every push
-```
-
-Optional per-file `style:` block: `font`, `font-size` (e.g. `"10pt"`), `accent-color` (hex), `paper`.
-
-## Tailoring a CV to a JD
-
-The `tailor-cv` skill (`.agents/skills/tailor-cv/SKILL.md`) reads the JD and
-`profile.yaml`, writes `cvs/<slug>.yaml`, and compiles it. It never adds facts
-that aren't in the profile.
-
-- **Claude Code**: `/tailor-cv <paste JD or path>` (via `.claude/skills/` symlink)
-- **OpenAI Codex**: `$tailor-cv <paste JD or path>` (reads `.agents/skills/`)
-
-New achievements go into `profile.yaml` first, so every future CV can use them.
+See `AGENTS.md` for the layout and rules.
