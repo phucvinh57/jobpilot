@@ -17,7 +17,7 @@
 //! [`text_probe`] is the default challenge hook of a run: the cheap, browser-free check of what a
 //! fetch returned. Pages rendered in the browser report their own challenge (`ChallengeFound`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -159,20 +159,49 @@ pub(crate) fn discard_window(paths: &Paths, thread: &str) {
     drop(runtime::spawn(async move { close_key(&key).await }));
 }
 
+/// The keys that have a watcher running.
+fn watchers() -> &'static Mutex<HashSet<String>> {
+    static WATCHERS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    WATCHERS.get_or_init(Default::default)
+}
+
+/// The right to be the one watcher of a key; ends when dropped.
+struct WatchClaim(String);
+
+impl WatchClaim {
+    /// `None` when a watcher is already running for `key`.
+    fn new(key: &str) -> Option<Self> {
+        watchers().lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string()).then(|| WatchClaim(key.to_string()))
+    }
+}
+
+impl Drop for WatchClaim {
+    fn drop(&mut self) {
+        watchers().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
 /// Watch the window under `key`: when the user closes it themselves, close what is left of it (the
-/// session's profile is free again for reads) and stop. Also stops when the window is gone.
+/// session's profile is free again for reads) and stop. Also stops when the window is gone. One
+/// watcher per key: opening the browser again while a watcher runs adds no second one.
 fn watch(key: String) {
+    let Some(claim) = WatchClaim::new(&key) else { return };
     drop(runtime::spawn(async move {
         loop {
             tokio::time::sleep(WATCH_EVERY).await;
             let lock = thread_lock(&key);
             let _one_at_a_time = lock.lock().await;
-            let Some(mut held) = take_window(&key) else { return };
+            let Some(mut held) = take_window(&key) else {
+                // Given up while the key's lock is held, so an open that follows starts a new watcher.
+                drop(claim);
+                return;
+            };
             if held.is_alive().await {
                 put_window(&key, held);
             } else {
                 tracing::info!("the user closed a browser window opened for a paused source");
                 held.close().await;
+                drop(claim);
                 return;
             }
         }
@@ -293,6 +322,17 @@ mod tests {
         assert_eq!(probe(check(CheckStage::Posting, crate::browser::challenge::tests::BOT_POSTING)).await.unwrap(), None);
         // The posting's own address says nothing: a job called "login engineer" is not a login wall.
         assert_eq!(probe(check(CheckStage::Posting, &posting)).await.unwrap(), None);
+    }
+
+    #[test]
+    fn a_key_has_one_watcher_at_a_time() {
+        let key = "watch-test\u{0}discover:run:1";
+        let first = WatchClaim::new(key).expect("the first watcher");
+        assert!(WatchClaim::new(key).is_none(), "a second one is not started while the first runs");
+        assert!(WatchClaim::new("watch-test\u{0}discover:run:2").is_some(), "another key has its own");
+        drop(first);
+        let again = WatchClaim::new(key);
+        assert!(again.is_some(), "once it ended, a new one may start");
     }
 
     #[test]

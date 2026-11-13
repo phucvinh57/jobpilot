@@ -15,8 +15,11 @@
 //! - a refused request is answered `403` (a tunnel) or just dropped (plain http) and counted
 //!   ([`Guard::blocked`]), and nothing reaches the private host.
 //!
-//! The proxy only relays bytes (a TLS tunnel stays end to end); a plain http request is sent on in
-//! origin form with `Connection: close`. It listens on `127.0.0.1` on a free port, for one browser, and
+//! The proxy only relays bytes (a TLS tunnel stays end to end, to the one host that was checked); a
+//! plain http request is sent on in origin form with `Connection: close`, and a plain connection
+//! carries **one request**: its body is relayed by its `Content-Length`, the answer is relayed, the
+//! connection is closed, and nothing else the browser wrote on it (a pipelined request for another
+//! host) is ever sent anywhere. It listens on `127.0.0.1` on a free port, for one browser, and
 //! stops when the [`Guard`] is dropped. The browser must be started with [`Guard::chrome_args`], which
 //! also turns off QUIC and non-proxied WebRTC (UDP would go around a proxy) and removes Chrome's
 //! implicit "loopback is never proxied" rule.
@@ -31,10 +34,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::{JoinHandle, JoinSet};
 
-use crate::net::http::public_socket_addrs;
+use crate::net::http::{public_socket_addrs, NotPublic};
 
 /// Longest request head accepted.
 const HEAD_MAX: usize = 16 * 1024;
+/// Largest body of a plain http request that is sent on.
+const BODY_MAX: usize = 16 * 1024 * 1024;
 /// How long the browser has to send a request head, and the proxy to connect.
 const STEP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -144,8 +149,8 @@ enum Refusal {
 enum Request {
     /// A tunnel to `https://host:port` (the URL is only a parsed host and port).
     Tunnel(url::Url),
-    /// A plain http request: where it goes and the head to send there.
-    Plain { url: url::Url, head: Vec<u8> },
+    /// A plain http request: where it goes, the head to send there and how long its body is.
+    Plain { url: url::Url, head: Vec<u8>, body_len: usize },
 }
 
 async fn serve(mut client: TcpStream, policy: &Policy, blocked: &AtomicUsize) -> Result<()> {
@@ -172,11 +177,25 @@ async fn serve(mut client: TcpStream, policy: &Policy, blocked: &AtomicUsize) ->
         }
     };
     match request {
-        Request::Tunnel(_) => client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?,
-        Request::Plain { head, .. } => upstream.write_all(&head).await?,
+        Request::Tunnel(_) => {
+            client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
+            upstream.write_all(&rest).await?;
+            tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+        }
+        Request::Plain { head, body_len, .. } => {
+            upstream.write_all(&head).await?;
+            // **One request per connection.** Only this request's own body goes on; whatever else the
+            // browser sent on the socket (a pipelined second request, one sent after the answer) is
+            // dropped, because it could name a host that was never checked.
+            let from_rest = rest.len().min(body_len);
+            upstream.write_all(&rest[..from_rest]).await?;
+            let mut body = (&mut client).take((body_len - from_rest) as u64);
+            tokio::io::copy(&mut body, &mut upstream).await?;
+            // The answer (the server was told `Connection: close`), then the connection ends.
+            tokio::io::copy(&mut upstream, &mut client).await?;
+            let _ = client.shutdown().await;
+        }
     }
-    upstream.write_all(&rest).await?;
-    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
     Ok(())
 }
 
@@ -231,33 +250,42 @@ fn parse(head: &[u8]) -> Result<Request> {
         None => url.path().to_string(),
     };
     let mut out = format!("{method} {origin} {version}\r\n").into_bytes();
+    let mut body_len = None;
     for line in lines {
         if line.is_empty() {
             continue;
         }
-        let name = line.split(|b| *b == b':').next().unwrap_or_default();
+        let (name, value) = match line.iter().position(|b| *b == b':') {
+            Some(at) => (&line[..at], &line[at + 1..]),
+            None => (line, &line[line.len()..]),
+        };
         if HOP_HEADERS.iter().any(|h| name.eq_ignore_ascii_case(h.as_bytes())) {
             continue;
+        }
+        // The body has to be framed by a length, so that it is known where this request ends.
+        if name.eq_ignore_ascii_case(b"transfer-encoding") {
+            bail!("a body without a length is not sent through the guard");
+        }
+        if name.eq_ignore_ascii_case(b"content-length") {
+            let len = std::str::from_utf8(value).ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| *n <= BODY_MAX);
+            match (len, body_len) {
+                (Some(len), None) => body_len = Some(len),
+                _ => bail!("the request has a bad or repeated Content-Length"),
+            }
         }
         out.extend_from_slice(line);
         out.extend_from_slice(b"\r\n");
     }
     out.extend_from_slice(b"Connection: close\r\n\r\n");
-    Ok(Request::Plain { url, head: out })
+    Ok(Request::Plain { url, head: out, body_len: body_len.unwrap_or(0) })
 }
 
 /// Connect to `url`'s host and port: to an address `policy` allows (by default the ones the net
 /// rules allow).
 async fn connect(url: &url::Url, policy: &Policy) -> Result<TcpStream, Refusal> {
-    let addrs = match policy {
-        Policy::Anything => any_addrs(url).await.map_err(Refusal::Failed)?,
-        Policy::Public => public_socket_addrs(url).await.map_err(|_| Refusal::Private)?,
-        #[cfg(test)]
-        Policy::OnlyPorts(ports) => match url.port_or_known_default() {
-            Some(port) if ports.contains(&port) => any_addrs(url).await.map_err(Refusal::Failed)?,
-            _ => return Err(Refusal::Private),
-        },
-    };
+    let addrs = tokio::time::timeout(STEP_TIMEOUT, resolve(url, policy))
+        .await
+        .map_err(|_| Refusal::Failed(anyhow!("resolving the name: timed out")))??;
     let mut last = anyhow!("the host has no address");
     for addr in addrs {
         match tokio::time::timeout(STEP_TIMEOUT, TcpStream::connect(addr)).await {
@@ -267,6 +295,20 @@ async fn connect(url: &url::Url, policy: &Policy) -> Result<TcpStream, Refusal> 
         }
     }
     Err(Refusal::Failed(last))
+}
+
+/// The addresses `policy` lets `url` be reached at. A host or name that is not public is
+/// [`Refusal::Private`]; a name that does not resolve is a plain failure.
+async fn resolve(url: &url::Url, policy: &Policy) -> Result<Vec<SocketAddr>, Refusal> {
+    match policy {
+        Policy::Anything => any_addrs(url).await.map_err(Refusal::Failed),
+        Policy::Public => public_socket_addrs(url).await.map_err(|e| if e.is::<NotPublic>() { Refusal::Private } else { Refusal::Failed(e) }),
+        #[cfg(test)]
+        Policy::OnlyPorts(ports) => match url.port_or_known_default() {
+            Some(port) if ports.contains(&port) => any_addrs(url).await.map_err(Refusal::Failed),
+            _ => Err(Refusal::Private),
+        },
+    }
 }
 
 /// Every address of `url`'s host, private or not.
@@ -374,6 +416,69 @@ mod tests {
         let dead = ask(&guard, "CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: x\r\n\r\n").await;
         assert!(dead.starts_with("HTTP/1.1 502"), "{dead}");
         assert_eq!(guard.blocked(), 0);
+    }
+
+    /// Send `raw` pieces to the proxy (a pause between them) and read until it closes.
+    async fn ask_in_pieces(guard: &Guard, pieces: &[&str]) -> String {
+        let mut stream = TcpStream::connect(guard.addr).await.unwrap();
+        for piece in pieces {
+            let _ = stream.write_all(piece.as_bytes()).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let mut out = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut out)).await;
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[tokio::test]
+    async fn a_plain_connection_carries_one_request_and_nothing_else_is_sent_on() {
+        // `public` stands for a checked host, `private` for one the guard would refuse.
+        let (public, private) = (Fixtures::start().await, Fixtures::start().await);
+        public.route("/hello", 200, "text/plain", "hello").route("/post", 200, "text/plain", "posted");
+        private.route("/secret", 200, "text/plain", "the admin console");
+        let (a, b) = (port_of(&public), port_of(&private));
+        let guard = Guard::start(Policy::OnlyPorts(vec![a])).await.unwrap();
+        let get = |port: u16, path: &str| format!("GET http://127.0.0.1:{port}{path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+
+        // Pipelined: a second request for the private host in the same write is dropped.
+        let answer = ask(&guard, &format!("{}{}", get(a, "/hello"), get(b, "/secret"))).await;
+        assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("hello"), "{answer}");
+        assert_eq!(answer.matches("HTTP/1.1").count(), 1, "one answer: {answer}");
+        // Sent after the answer on the same socket: not sent anywhere either.
+        let late = ask_in_pieces(&guard, &[&get(a, "/hello"), &get(b, "/secret")]).await;
+        assert_eq!(late.matches("HTTP/1.1").count(), 1, "{late}");
+        assert_eq!(public.hits().len(), 2, "each connection asked its one request: {:?}", public.hits());
+        assert!(public.hits().iter().all(|h| h.target == "/hello"), "nothing else reached the checked host: {:?}", public.hits());
+        assert!(private.hits().is_empty(), "the unchecked host saw {:?}", private.hits());
+        assert_eq!(guard.blocked(), 0, "the dropped request never got as far as being judged");
+
+        // A body goes on by its length, and only that much.
+        let post = format!("POST http://127.0.0.1:{a}/post HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello");
+        let answer = ask_in_pieces(&guard, &[&post[..post.len() - 3], &format!("{}{}", &post[post.len() - 3..], get(b, "/secret"))]).await;
+        assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("posted"), "{answer}");
+        let posted = &public.hits_on("/post")[0];
+        assert_eq!((posted.method.as_str(), posted.body.as_str()), ("POST", "hello"), "the body, no more and no less");
+        assert!(private.hits().is_empty(), "{:?}", private.hits());
+
+        // A body without a length, or a bad one, is not sent (the end of the request would be unknown).
+        let before = public.hits().len();
+        for head in ["Transfer-Encoding: chunked", "Content-Length: abc", "Content-Length: 3\r\nContent-Length: 3", "Content-Length: 99999999999"] {
+            let raw = format!("POST http://127.0.0.1:{a}/post HTTP/1.1\r\nHost: x\r\n{head}\r\n\r\n3\r\nabc\r\n0\r\n\r\n");
+            assert_eq!(ask(&guard, &raw).await, "", "{head}");
+        }
+        assert_eq!(public.hits().len(), before);
+    }
+
+    #[tokio::test]
+    async fn a_name_that_does_not_resolve_is_a_failure_not_a_private_refusal() {
+        let guard = Guard::start(Policy::Public).await.unwrap();
+        let answer = ask(&guard, "CONNECT does-not-exist.invalid:443 HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(answer.starts_with("HTTP/1.1 502"), "{answer}");
+        assert_eq!(guard.blocked(), 0);
+        // Private names stay refusals.
+        let answer = ask(&guard, "CONNECT localhost:443 HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+        assert_eq!(guard.blocked(), 1);
     }
 
     #[tokio::test]

@@ -306,20 +306,36 @@ pub fn public_http_url(raw: &str, allow_private: bool) -> Result<url::Url> {
     Ok(url)
 }
 
+/// The host is on this machine or a private network (or a name only resolves to such addresses).
+#[derive(Debug)]
+pub(crate) struct NotPublic;
+
+impl std::fmt::Display for NotPublic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("addresses on this machine or a private network are not read")
+    }
+}
+
+impl std::error::Error for NotPublic {}
+
 /// Where a connection to `url`'s host may go (for a client that connects by itself, like the
 /// browser guard): an IP address as it is, a name as every public address it resolves to (the
 /// resolver of this module, which drops private ones). `Err` when the host is not public or a name
 /// only resolves to private addresses.
 pub(crate) async fn public_socket_addrs(url: &url::Url) -> Result<Vec<std::net::SocketAddr>> {
     if !is_public_host(url) {
-        bail!("addresses on this machine or a private network are not read");
+        return Err(NotPublic.into());
     }
     let port = url.port_or_known_default().unwrap_or(80);
     Ok(match url.host() {
         Some(url::Host::Ipv4(ip)) => vec![std::net::SocketAddr::new(ip.into(), port)],
         Some(url::Host::Ipv6(ip)) => vec![std::net::SocketAddr::new(ip.into(), port)],
         Some(url::Host::Domain(name)) => {
-            let found = public_addrs(name.trim_end_matches('.')).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            // A name that does not resolve is a plain failure; only private answers are `NotPublic`.
+            let found: Vec<_> = tokio::net::lookup_host((name.trim_end_matches('.'), 0)).await?.filter(|a| ip_is_public(a.ip())).collect();
+            if found.is_empty() {
+                return Err(NotPublic.into());
+            }
             found.into_iter().map(|a| std::net::SocketAddr::new(a.ip(), port)).collect()
         }
         None => bail!("the address has no host"),
@@ -455,6 +471,16 @@ mod tests {
         for bad in ["http://127.0.0.1:8080/", "http://[::1]/", "http://10.1.2.3/", "http://localhost/", "http://intranet/", "http://printer.local/"] {
             let err = public_socket_addrs(&url(bad)).await.unwrap_err().to_string();
             assert!(err.contains("private network"), "{bad}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_name_that_does_not_resolve_is_not_a_private_address() {
+        let url = |s: &str| url::Url::parse(s).unwrap();
+        let err = public_socket_addrs(&url("http://does-not-exist.invalid/")).await.unwrap_err();
+        assert!(!err.is::<NotPublic>(), "a resolver failure is its own error: {err:#}");
+        for private in ["http://10.0.0.1/", "http://localhost/", "http://[::1]/"] {
+            assert!(public_socket_addrs(&url(private)).await.unwrap_err().is::<NotPublic>(), "{private}");
         }
     }
 
