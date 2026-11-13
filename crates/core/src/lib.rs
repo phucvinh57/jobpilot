@@ -2,7 +2,7 @@
 //!
 //! Module ownership (so parallel work does not collide):
 //! - `paths`, `runtime`, `store`, `secrets`, `facade` — P0 (foundation)
-//! - `llm` — P1, `pipeline` — P2, `browser` — P4, `apply` — P5, `mail` — P6
+//! - `llm` — P1, `pipeline` — P2, `browser` — P4, `apply` — P5, `mail` — P6, `graph` — P8
 //! - `notify`, `prefs` (and the store tables behind them) — P8, then P9+
 //!
 //! Extend [`Core`] from your own module with `impl Core { ... }` instead of editing `facade.rs`.
@@ -10,6 +10,7 @@
 pub mod apply;
 pub mod browser;
 pub mod facade;
+pub mod graph;
 pub mod health;
 pub mod llm;
 pub mod logging;

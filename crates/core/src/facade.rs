@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::graph::Graphs;
 use crate::{Paths, Secrets, Store};
 
 /// kv key holding the effective profile path.
@@ -15,6 +16,8 @@ pub struct Core {
     pub paths: Paths,
     pub store: Store,
     pub secrets: Secrets,
+    /// The graph runtime: runs, resumes and reports the flows (see [`crate::graph`]).
+    pub graphs: Graphs,
 }
 
 impl Core {
@@ -27,7 +30,8 @@ impl Core {
     pub fn open_at(paths: Paths, secrets: Secrets) -> Result<Self> {
         paths.ensure()?;
         let store = Store::open(&paths.db)?;
-        Ok(Self { paths, store, secrets })
+        let graphs = Graphs::new(store.clone());
+        Ok(Self { paths, store, secrets, graphs })
     }
 
     /// The effective profile path: kv `profile_path`, else [`Paths::default_profile_path`].

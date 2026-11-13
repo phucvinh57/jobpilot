@@ -3,7 +3,8 @@
 //! Each table lives in its own file as `impl Store { .. }` so sub-plans can extend
 //! their table without touching others: `applications`/`events`/`status` (P2/P3),
 //! `providers` (P1), `sessions` (P4), `emails` (P6), `kv` (shared settings); P8 adds `preferences`,
-//! `chat` (preference chat), `sources`, `leads` (discovery) and `trends` (trend items + reports).
+//! `chat` (preference chat), `sources`, `leads` (discovery), `trends` (trend items + reports) and
+//! `graph` (graph runtime checkpoints).
 //!
 //! Schema changes: append a new entry to [`MIGRATIONS`] (never edit an existing one).
 
@@ -11,6 +12,7 @@ mod applications;
 mod chat;
 mod emails;
 mod events;
+mod graph;
 mod kv;
 mod leads;
 mod preferences;
@@ -31,6 +33,9 @@ pub use chat::ChatMessage;
 pub use emails::Email;
 pub use events::Event;
 pub use leads::{Lead, LeadState, NewLead};
+pub use graph::{
+    GraphCheckpointRow, GraphThread, GRAPH_DONE, GRAPH_FAILED, GRAPH_RUNNING, GRAPH_WAITING,
+};
 pub use providers::{NewProvider, Provider, ProviderKind};
 pub use sessions::{NewSession, Session};
 pub use sources::{NewSource, Source, SourcePurpose};
@@ -164,6 +169,25 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX reports_kind ON reports(kind, id);
     ALTER TABLE applications ADD COLUMN insight_json TEXT;
+    ",
+    // 3: graph runtime checkpoints (see `graph`); `status`/`detail_json` of the newest row are the
+    // thread's status
+    "
+    CREATE TABLE graph_checkpoints (
+        seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+        id          TEXT NOT NULL UNIQUE,
+        thread      TEXT NOT NULL,
+        graph       TEXT NOT NULL,
+        step        INTEGER NOT NULL,
+        state_json  TEXT NOT NULL,
+        rest_json   TEXT NOT NULL DEFAULT '{}',
+        status      TEXT NOT NULL DEFAULT 'running',
+        detail_json TEXT,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    );
+    CREATE INDEX graph_checkpoints_thread ON graph_checkpoints(thread, seq);
+    CREATE INDEX graph_checkpoints_status ON graph_checkpoints(status, updated_at);
     ",
 ];
 
