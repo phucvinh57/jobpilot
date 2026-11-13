@@ -194,19 +194,28 @@ impl QueueView {
                 wait = DAILY_CHECK_EVERY;
                 let Ok(core) = this.update(cx, |this, cx| (this.searching.is_none()).then(|| this.core(cx))) else { break };
                 let Some(core) = core else { continue };
-                let rx = runtime::spawn(async move {
-                    let now = jobpilot_core::chrono::Utc::now();
-                    if core.discover_due(now)? {
-                        core.discover_daily_started(now)?;
-                        return Ok(true);
-                    }
-                    Ok(false)
+                let rx = runtime::spawn({
+                    let core = core.clone();
+                    async move { core.discover_due(jobpilot_core::chrono::Utc::now()) }
                 });
                 match rx.await.unwrap_or_else(|_| Err(anyhow!("the task was cancelled"))) {
-                    // `search_now` does nothing if the user started a search meanwhile.
                     Ok(true) => {
-                        if this.update(cx, |this, cx| this.search_now(cx)).is_err() {
+                        // Skip if the user started a search meanwhile; record the attempt only for a
+                        // daily run that really starts.
+                        let Ok(started) = this.update(cx, |this, cx| {
+                            let idle = this.searching.is_none();
+                            if idle {
+                                this.search_now(cx);
+                            }
+                            idle
+                        }) else {
                             break;
+                        };
+                        if started {
+                            let rx = runtime::spawn(async move { core.discover_daily_started(jobpilot_core::chrono::Utc::now()) });
+                            if let Ok(Err(e)) = rx.await {
+                                tracing::warn!("recording the daily search failed: {e:#}");
+                            }
                         }
                     }
                     Ok(false) => {}

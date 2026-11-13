@@ -18,9 +18,10 @@ pub const DAILY_ATTEMPT_KEY: &str = "discover.daily_attempt";
 pub const DAILY_EVERY_HOURS: i64 = 24;
 
 /// Whether a daily run is due: the setting is on, there is a source to search, nothing is running,
-/// and the last run (or attempt) is more than a day old or there was none.
+/// and the last run (or attempt) is more than a day old or there was none. A time in the future (the
+/// clock was set back) counts as due, so a bad clock never blocks the run for long.
 pub fn is_due(enabled: bool, enabled_sources: usize, running: bool, last: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
-    enabled && enabled_sources > 0 && !running && last.is_none_or(|t| now - t >= Duration::hours(DAILY_EVERY_HOURS))
+    enabled && enabled_sources > 0 && !running && last.is_none_or(|t| t > now || now - t >= Duration::hours(DAILY_EVERY_HOURS))
 }
 
 impl Core {
@@ -58,15 +59,19 @@ impl Core {
     /// Record that a daily run starts at `now` (see [`DAILY_ATTEMPT_KEY`]).
     pub fn discover_daily_started(&self, now: DateTime<Utc>) -> Result<()> {
         self.store.kv_set(DAILY_ATTEMPT_KEY, &now.to_rfc3339())?;
-        let sources = self.store.list_enabled_sources(SourcePurpose::Jobs)?.len();
-        tracing::info!(sources, "daily discovery run started");
+        tracing::info!("daily discovery run started");
         Ok(())
     }
 
-    /// The newest of the last run's end and the last daily attempt.
+    /// The newest of the last run's end and the last daily attempt. An unreadable last-run summary
+    /// counts as none, so it never blocks the daily run.
     fn discover_last_activity(&self) -> Result<Option<DateTime<Utc>>> {
         let parse = |s: &str| DateTime::parse_from_rfc3339(s).ok().map(|t| t.with_timezone(&Utc));
-        let run = self.discover_last_run()?.and_then(|r| parse(&r.finished_at).or_else(|| parse(&r.started_at)));
+        let last_run = self.discover_last_run().unwrap_or_else(|e| {
+            tracing::warn!("the last discovery summary is unreadable, ignoring it: {e:#}");
+            None
+        });
+        let run = last_run.and_then(|r| parse(&r.finished_at).or_else(|| parse(&r.started_at)));
         let attempt = self.store.kv_get(DAILY_ATTEMPT_KEY)?.and_then(|s| parse(&s));
         Ok(run.max(attempt))
     }
@@ -100,7 +105,7 @@ mod tests {
         assert!(!is_due(false, 1, false, None, now), "setting off");
         assert!(!is_due(true, 0, false, None, now), "no source");
         assert!(!is_due(true, 1, true, ago(30), now), "a run in progress");
-        assert!(!is_due(true, 1, false, Some(now + Duration::hours(1)), now), "a clock that went back waits");
+        assert!(is_due(true, 1, false, Some(now + Duration::hours(1)), now), "a time in the future does not block");
     }
 
     #[test]
@@ -132,5 +137,14 @@ mod tests {
         assert!(core.discover_due(now).unwrap());
         core.set_job_source_enabled(src.id, false).unwrap();
         assert!(!core.discover_due(now).unwrap(), "the only source is disabled");
+    }
+
+    #[test]
+    fn an_unreadable_last_run_does_not_block_the_daily_run() {
+        let (_dir, core) = core();
+        core.set_discover_daily(true).unwrap();
+        core.add_job_source("hn_hiring", "", "", None).unwrap();
+        core.store.kv_set(LAST_RUN_KEY, "not json").unwrap();
+        assert!(core.discover_due(Utc::now()).unwrap());
     }
 }
