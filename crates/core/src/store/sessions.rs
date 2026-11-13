@@ -85,6 +85,18 @@ impl Store {
         })
     }
 
+    /// Back to a never-logged-in session: status `new`, no domains, never verified.
+    pub fn reset_session(&self, id: i64) -> Result<()> {
+        self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE sessions SET status = 'new', domains_json = '[]', last_verified_at = NULL WHERE id = ?1",
+                [id],
+            )?;
+            anyhow::ensure!(n == 1, "session {id} not found");
+            Ok(())
+        })
+    }
+
     pub fn delete_session(&self, id: i64) -> Result<()> {
         self.with_conn(|c| {
             c.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
