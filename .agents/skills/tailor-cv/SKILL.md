@@ -32,6 +32,7 @@ Repo layout (paths relative to the repo root):
    - Skill items with commas inside brackets must be quoted, e.g. `['AWS (S3, SQS)']`.
 6. **Compile and check.** Run `make cv NAME=<slug>`. Fix any errors (usually unescaped markup or bad YAML) and rerun. Target **1 page** (2 max for senior roles): if it overflows, trim the least relevant bullets. Check the page count with `pdfinfo build/<slug>.pdf | grep Pages`.
 7. **Report** to the user, briefly: output path, page count, what was emphasised, what was omitted, and JD requirements the profile has no evidence for (so the user can add real facts to `profile.yaml`).
+8. **Finish with `/pre-pr`** (work in a worktree).
 
 ## Updating the master profile
 

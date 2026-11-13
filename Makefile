@@ -2,7 +2,7 @@ TYPST    ?= typst
 TEMPLATE := template/cv.typ
 CVS      := $(basename $(notdir $(wildcard cvs/*.yaml)))
 
-.PHONY: all profile cv watch clean list
+.PHONY: all profile cv watch clean list check hooks
 
 # Build the master profile and every tailored CV
 all: profile $(addprefix build/,$(addsuffix .pdf,$(CVS)))
@@ -30,3 +30,11 @@ build:
 
 clean:
 	rm -rf build
+
+# Run the pre-PR checks (make check ARGS=--all for everything)
+check:
+	scripts/check.sh $(ARGS)
+
+# Enable the pre-push hook (once per clone)
+hooks:
+	git config core.hooksPath .githooks
