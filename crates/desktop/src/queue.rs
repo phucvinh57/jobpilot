@@ -9,6 +9,7 @@
 mod logic;
 
 use std::collections::{BTreeSet, HashMap};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use gpui_kit::component::button::*;
@@ -37,6 +38,10 @@ use logic::{
     ago, dismissed_note, drop_unreported, is_web_link, meta_line, queue_primary_for, score_label, score_tone, source_name, source_needs_attention,
     source_status, QueueAction, QueueFacts, Tone,
 };
+
+/// The first look at the daily-run setting after the app starts, and the gap between looks after that.
+const DAILY_FIRST_CHECK: Duration = Duration::from_secs(60);
+const DAILY_CHECK_EVERY: Duration = Duration::from_secs(15 * 60);
 
 /// Minimum scores the filter offers.
 const MIN_SCORES: [f64; 3] = [50.0, 70.0, 85.0];
@@ -149,6 +154,7 @@ impl QueueView {
             open_errors: HashMap::new(),
         };
         view.watch(cx);
+        view.watch_daily(cx);
         view
     }
 
@@ -171,6 +177,41 @@ impl QueueView {
                 }
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
+            }
+        })
+        .detach();
+    }
+
+    /// The optional daily run: every few minutes ask the core whether one is due (setting on, a
+    /// source, nothing running, a day since the last run) and, if so, start it like "Search now",
+    /// so the progress line, the queue and the challenge hand-off work the same. This view lives
+    /// as long as the app, so the timer does too.
+    fn watch_daily(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut wait = DAILY_FIRST_CHECK;
+            loop {
+                cx.background_executor().timer(wait).await;
+                wait = DAILY_CHECK_EVERY;
+                let Ok(core) = this.update(cx, |this, cx| (this.searching.is_none()).then(|| this.core(cx))) else { break };
+                let Some(core) = core else { continue };
+                let rx = runtime::spawn(async move {
+                    let now = jobpilot_core::chrono::Utc::now();
+                    if core.discover_due(now)? {
+                        core.discover_daily_started(now)?;
+                        return Ok(true);
+                    }
+                    Ok(false)
+                });
+                match rx.await.unwrap_or_else(|_| Err(anyhow!("the task was cancelled"))) {
+                    // `search_now` does nothing if the user started a search meanwhile.
+                    Ok(true) => {
+                        if this.update(cx, |this, cx| this.search_now(cx)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("checking whether the daily search is due failed: {e:#}"),
+                }
             }
         })
         .detach();

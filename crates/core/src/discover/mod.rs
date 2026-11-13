@@ -7,6 +7,7 @@
 //! core.discover_open_browser(&w.thread).await?;         // "Open browser": a visible window on the page to deal with
 //! core.discover_resume(&w.thread).await?;               // "Continue" (or "Retry" for a failed source)
 //! core.discover_cancel(&w.thread)?;                     // skip that source
+//! if core.discover_due(Utc::now())? { .. }              // the daily timer: setting on, a source, idle, 24h since the last run
 //! core.add_job_source("career_page", "", url, None)?;   // Settings > Job sources: add, enable, bind a session, remove
 //! ```
 //!
@@ -21,6 +22,7 @@
 //! - [`handoff`]: the login / captcha / block page hand-off: [`Core::discover_open_browser`] opens the
 //!   page visibly for the user (the app never solves a challenge), the default [`text_probe`], and
 //!   [`needs_human`] (a paused run's reason as the `Problem` to show).
+//! - [`schedule`]: the optional daily run (`discover_daily_enabled`, `set_discover_daily`, `discover_due`).
 //! - [`sources`]: add, enable, bind a session to and remove job sources (`Core::job_sources`, ...).
 //! - [`limits`]: the per-host delay, pages per run, and the three-challenges rule. Every request
 //!   (adapters and posting fetch) goes through the shared safe client, [`crate::net::http`].
@@ -36,6 +38,7 @@ pub mod limits;
 pub mod promote;
 pub mod queue;
 mod run;
+pub mod schedule;
 pub mod score;
 pub mod source;
 pub mod sources;

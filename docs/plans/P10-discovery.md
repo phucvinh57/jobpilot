@@ -48,7 +48,7 @@ Two graphs, so that one paused source never blocks the others.
 
 Limits: per-host delay, pages per run, three challenges in a row disable the source for the day. One source failing ends its own thread with `Failed`; the others continue. Logs carry ids and counts only.
 
-Trigger (decision 5): "Search now" in the queue, optional daily run while the app is open. On start, the app lists `waiting()` threads so a paused source from an earlier session can be continued or cancelled.
+Trigger (decision 5): "Search now" in the queue, optional daily run while the app is open (Settings > Job sources > "Search daily while JobPilot is open", off by default, kv `discover.daily`). The Queue view checks `Core::discover_due` a minute after start and every 15 minutes (setting on, an enabled source, no run in progress, last run or daily attempt over 24 h ago) and then starts the same path as "Search now". On start, the app lists `waiting()` threads so a paused source from an earlier session can be continued or cancelled.
 
 ## Challenge hand-off (`browser/challenge.rs`)
 
