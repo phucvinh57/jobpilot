@@ -29,14 +29,19 @@ impl Remote {
 }
 
 /// How much each scoring criterion counts. The default (and a [`normalized`](Weights::normalized)
-/// value) sums to 100.
+/// value) sums to 100. A criterion missing from a partial JSON object counts as 0, so
+/// `{"skills": 80}` means "only skills" rather than 80 on top of the defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct Weights {
+    #[serde(default)]
     pub skills: u32,
+    #[serde(default)]
     pub domain: u32,
+    #[serde(default)]
     pub location: u32,
+    #[serde(default)]
     pub salary: u32,
+    #[serde(default)]
     pub seniority: u32,
 }
 
@@ -179,7 +184,7 @@ mod tests {
         assert_eq!(p.roles, ["SRE"]);
         assert_eq!(p.remote, Remote::Hybrid);
         assert_eq!(p.weights.skills, 50);
-        assert_eq!(p.weights.domain, Weights::default().domain);
+        assert_eq!(p.weights.domain, 0, "a criterion missing from a partial weights object counts as 0");
         assert!(p.must_skills.is_empty() && p.salary_min.is_none());
         let empty: Preferences = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, Preferences::default());
@@ -201,5 +206,13 @@ mod tests {
         assert_eq!(p.notes, "hi");
         assert_eq!(p.weights.sum(), 100);
         assert_eq!(Preferences { currency: Some("  ".into()), ..Default::default() }.normalized().currency, None);
+    }
+
+    #[test]
+    fn partial_weights_count_missing_criteria_as_zero() {
+        let w: Weights = serde_json::from_str(r#"{"skills": 80}"#).unwrap();
+        assert_eq!(w.normalized().skills, 100);
+        let p: Preferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.weights, Weights::default(), "no weights at all keeps the default");
     }
 }

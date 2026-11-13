@@ -178,28 +178,32 @@ impl Store {
 
     /// Record where the posting text was saved.
     pub fn set_lead_jd_path(&self, id: i64, jd_path: &std::path::Path) -> Result<()> {
-        self.update_lead("jd_path = ?1", params![jd_path.to_string_lossy(), id], id)
+        self.update_lead("jd_path = ?1", params![jd_path.to_string_lossy(), id], id, "")
     }
 
-    /// The user (or a filter) rejected the lead; `reason` may be empty.
+    /// The user (or a filter) rejected the lead; `reason` may be empty. Only a `new` lead can be
+    /// dismissed: states move forward only.
     pub fn dismiss_lead(&self, id: i64, reason: &str) -> Result<()> {
-        self.update_lead("state = 'dismissed', dismiss_reason = ?1", params![reason, id], id)
+        self.update_lead("state = 'dismissed', dismiss_reason = ?1", params![reason, id], id, NEW_ONLY)
     }
 
-    /// The lead became application `app_id`.
+    /// The lead became application `app_id`. Only a `new` lead can be promoted.
     pub fn promote_lead(&self, id: i64, app_id: i64) -> Result<()> {
-        self.update_lead("state = 'promoted', app_id = ?1", params![app_id, id], id)
+        self.update_lead("state = 'promoted', app_id = ?1", params![app_id, id], id, NEW_ONLY)
     }
 
-    /// `SET <assignments> WHERE id = ?N`, where N is the last parameter.
-    fn update_lead(&self, set: &str, args: &[&dyn rusqlite::ToSql], id: i64) -> Result<()> {
+    /// `SET <assignments> WHERE id = ?N<guard>`, where N is the last parameter.
+    fn update_lead(&self, set: &str, args: &[&dyn rusqlite::ToSql], id: i64, guard: &str) -> Result<()> {
         self.with_conn(|c| {
-            let n = c.execute(&format!("UPDATE leads SET {set} WHERE id = ?{}", args.len()), args)?;
-            anyhow::ensure!(n == 1, "lead {id} not found");
+            let n = c.execute(&format!("UPDATE leads SET {set} WHERE id = ?{}{guard}", args.len()), args)?;
+            anyhow::ensure!(n == 1, "lead {id} not found or not in state new");
             Ok(())
         })
     }
 }
+
+/// Extra `WHERE` clause for a state change: leads only move forward from `new`.
+const NEW_ONLY: &str = " AND state = 'new'";
 
 #[cfg(test)]
 mod tests {
@@ -284,5 +288,15 @@ mod tests {
         assert_eq!(store.get_lead(filtered.id).unwrap().unwrap().source_id, None);
         store.delete_application(app.id).unwrap();
         assert_eq!(store.get_lead(lead.id).unwrap().unwrap().app_id, None);
+    }
+
+    #[test]
+    fn lead_state_moves_forward_only() {
+        let store = Store::open_in_memory().unwrap();
+        let lead = store.add_lead(&new("https://x/fwd", "acme-fwd", None)).unwrap();
+        store.dismiss_lead(lead.id, "too far").unwrap();
+        assert!(store.promote_lead(lead.id, 1).is_err());
+        assert!(store.dismiss_lead(lead.id, "again").is_err());
+        assert_eq!(store.get_lead(lead.id).unwrap().unwrap().state, LeadState::Dismissed);
     }
 }
