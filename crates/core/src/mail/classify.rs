@@ -107,17 +107,21 @@ pub fn is_ats_host(host: &str) -> bool {
     ATS_DOMAINS.iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
 
+/// The company domain of one web address; `None` when it is not a URL, or its host is `localhost`,
+/// an IP address or an ATS / job board.
+pub fn url_company_domain(raw: &str) -> Option<String> {
+    let url = url::Url::parse(raw.trim()).ok()?;
+    let host = url.host_str()?.trim_start_matches("www.").to_ascii_lowercase();
+    if host == "localhost" || host.parse::<std::net::IpAddr>().is_ok() || is_ats_host(&host) {
+        return None;
+    }
+    Some(registrable_domain(&host))
+}
+
 /// The application's own company domain, from `apply_url` then `source`; `None` when both are
 /// missing, not URLs, or hosted on an ATS.
 pub fn company_domain(app: &Application) -> Option<String> {
-    [app.apply_url.as_deref(), app.source.as_deref()].into_iter().flatten().find_map(|raw| {
-        let url = url::Url::parse(raw.trim()).ok()?;
-        let host = url.host_str()?.trim_start_matches("www.").to_ascii_lowercase();
-        if host == "localhost" || host.parse::<std::net::IpAddr>().is_ok() || is_ats_host(&host) {
-            return None;
-        }
-        Some(registrable_domain(&host))
-    })
+    [app.apply_url.as_deref(), app.source.as_deref()].into_iter().flatten().find_map(url_company_domain)
 }
 
 /// Lower-cased host part of a `From` header's address.

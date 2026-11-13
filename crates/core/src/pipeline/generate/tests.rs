@@ -5,7 +5,9 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::llm::fake::FakeLlm;
+use crate::llm::Llm;
 use crate::pipeline::ingest::tests::{serve, JOB_HTML};
+use crate::pipeline::insight::Insight;
 use crate::store::Status;
 use crate::{Paths, Secrets};
 
@@ -321,6 +323,126 @@ async fn the_master_profile_is_never_modified() {
     let llm = FakeLlm::with_replies([analysis(), reply(EXAMPLE, &[])]);
     Pipeline::new(&core, &llm).generate(JdInput::Text(JD.into()), |_| {}).await.unwrap();
     assert_eq!(std::fs::read(&profile).unwrap(), before);
+}
+
+/// What the model says about the company in the brief tests.
+fn brief_reply() -> Value {
+    json!({
+        "domain": "Warehouse robotics", "business_summary": "Builds robots for warehouses.",
+        "company": {"size": "", "stage": "", "funding": "", "hq": "", "founded": ""},
+        "interview": {"stages": [], "notes": "", "found": false}, "source_pages": []
+    })
+}
+
+/// A model that answers the brief only once its gate is opened.
+struct Gated {
+    gate: Arc<tokio::sync::Notify>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl Llm for Gated {
+    fn complete_json<'a>(&'a self, _: &'a str, _: &'a str, _: &'a Value) -> crate::llm::LlmFuture<'a, Value> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            self.gate.notified().await;
+            Ok(brief_reply())
+        })
+    }
+
+    fn list_models(&self) -> crate::llm::LlmFuture<'_, Vec<String>> {
+        Box::pin(std::future::ready(Ok(Vec::new())))
+    }
+}
+
+/// The brief runs detached on the global runtime: wait (up to 5 s) until `done` holds.
+async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+fn stored_brief(core: &Core, id: i64) -> Option<Insight> {
+    core.store.get_application(id).unwrap().unwrap().insight_json.as_deref().and_then(Insight::from_json)
+}
+
+#[tokio::test]
+async fn the_company_brief_runs_detached_and_never_delays_the_cv() {
+    let (_dir, core) = core();
+    core.store.kv_set(MAX_PAGES_KEY, "2").unwrap();
+    let url = serve(200, "text/html; charset=utf-8", JOB_HTML.to_string()).await;
+    let llm = FakeLlm::with_replies([analysis(), reply(EXAMPLE, &[])]);
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let brief_llm = Arc::new(Gated { gate: gate.clone(), calls: Default::default() });
+    let app =
+        Pipeline::new(&core, &llm).with_insight(brief_llm.clone()).generate(JdInput::Url(url.clone()), |_| {}).await.unwrap();
+
+    // The CV is done while the brief is still waiting for its model.
+    assert_eq!(llm.calls().len(), 2, "the brief has its own client: the CV's scripted answers are untouched");
+    assert!(app.cv_pdf_path().is_file());
+    assert!(app.insight_json.is_none());
+    eventually("the brief to start", || brief_llm.calls.load(std::sync::atomic::Ordering::SeqCst) == 1).await;
+    assert!(stored_brief(&core, app.id).is_none());
+
+    // Generating again while that brief runs (a retry) does not start a second one.
+    let llm = FakeLlm::with_replies([reply(EXAMPLE, &[])]);
+    let second = Arc::new(Gated { gate: gate.clone(), calls: Default::default() });
+    Pipeline::new(&core, &llm).with_insight(second.clone()).regenerate(app.id, |_| {}).await.unwrap();
+    assert_eq!(second.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(brief_llm.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    gate.notify_one();
+    eventually("the brief to be stored", || stored_brief(&core, app.id).is_some()).await;
+    let brief = stored_brief(&core, app.id).unwrap();
+    assert_eq!(brief.domain, "Warehouse robotics");
+    assert_eq!(brief.skills.required, ["Linux administration", "Nginx"], "the analysis' skills");
+    // The JD's own URL is the source; a local address is not a company site, so no page was read.
+    assert_eq!(brief.sources, [url]);
+}
+
+#[tokio::test]
+async fn a_failed_brief_never_fails_generation_and_regenerate_fills_it_in() {
+    let (_dir, core) = core();
+    core.store.kv_set(MAX_PAGES_KEY, "2").unwrap();
+    let url = serve(200, "text/html; charset=utf-8", JOB_HTML.to_string()).await;
+    let llm = FakeLlm::with_replies([analysis(), reply(EXAMPLE, &[])]);
+    let down = Arc::new(FakeLlm::with_error("HTTP 503 Service Unavailable"));
+    let app = Pipeline::new(&core, &llm).with_insight(down.clone()).generate(JdInput::Url(url), |_| {}).await.unwrap();
+    eventually("the failing brief to run", || down.calls().len() == 1).await;
+    assert!(app.insight_json.is_none() && app.cv_pdf_path().is_file());
+    assert!(!event_text(&core, app.id).contains("[error]"), "{}", event_text(&core, app.id));
+
+    // Regenerate has the stored analysis and starts the missing brief.
+    let llm = FakeLlm::with_replies([reply(EXAMPLE, &[])]);
+    let up = Arc::new(FakeLlm::with_replies([brief_reply()]));
+    let app = Pipeline::new(&core, &llm).with_insight(up.clone()).regenerate(app.id, |_| {}).await.unwrap();
+    eventually("the brief to be stored", || stored_brief(&core, app.id).is_some()).await;
+    assert_eq!(up.calls().len(), 1);
+
+    // ...and leaves an existing one alone.
+    let before = core.store.get_application(app.id).unwrap().unwrap().insight_json;
+    let llm = FakeLlm::with_replies([reply(EXAMPLE, &[])]);
+    let unused = Arc::new(FakeLlm::with_error("must not be called"));
+    let again = Pipeline::new(&core, &llm).with_insight(unused.clone()).regenerate(app.id, |_| {}).await.unwrap();
+    assert!(unused.calls().is_empty());
+    assert_eq!(again.insight_json, before);
+}
+
+#[tokio::test]
+async fn a_failing_cv_still_reports_its_own_error() {
+    let (_dir, core) = core();
+    core.set_profile_path(Path::new("/definitely/missing/profile.yaml")).unwrap();
+    let llm = FakeLlm::with_replies([analysis()]);
+    let brief_llm = Arc::new(FakeLlm::with_replies([brief_reply()]));
+    let err = Pipeline::new(&core, &llm)
+        .with_insight(brief_llm)
+        .generate(JdInput::Text(JD.into()), |_| {})
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("cannot read the profile"), "{err:#}");
 }
 
 #[tokio::test]

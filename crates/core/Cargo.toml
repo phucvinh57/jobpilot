@@ -34,6 +34,7 @@ async-trait = "0.1"
 tokio-util = "0.7"
 url = "2"
 quick-xml = "0.41"
+encoding_rs = "0.8"
 notify-rust = "4"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry", "tracing-log"] }
 tracing-appender = "0.2.5"

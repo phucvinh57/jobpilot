@@ -11,7 +11,8 @@ use gpui_kit::component::*;
 use gpui_kit::*;
 use jobpilot_core::browser::fetch::generate_with_browser;
 use jobpilot_core::health::{self, Health, Problem};
-use jobpilot_core::pipeline::{self, JdInput, Progress};
+use jobpilot_core::pipeline::insight::{CompanyFacts, Interview, Skills};
+use jobpilot_core::pipeline::{self, Insight, JdInput, Progress};
 use jobpilot_core::store::{Application, NewApplication, Status};
 use jobpilot_core::{mail, runtime, Core};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -528,6 +529,40 @@ pub fn seed_demo(core: &Core) -> Result<()> {
             ..Default::default()
         })?;
         core.store.force_status(app.id, status, "demo data")?;
+        if slug == "acme-backend-engineer" {
+            let json = serde_json::to_string(&demo_insight(slug))?;
+            core.store.set_insight_json(app.id, Some(&json))?;
+        }
     }
     Ok(())
+}
+
+/// A company brief for the demo data: some facts found, some not.
+fn demo_insight(slug: &str) -> Insight {
+    let strings = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    Insight {
+        domain: "B2B payments infrastructure".into(),
+        business_summary: "Sells a payments API to online marketplaces, which use it to pay out sellers in 40 countries.".into(),
+        company: CompanyFacts {
+            size: "200-500 employees".into(),
+            stage: "Series C".into(),
+            hq: "Singapore".into(),
+            founded: "2016".into(),
+            ..CompanyFacts::default()
+        },
+        skills: Skills {
+            required: strings(&["Rust", "PostgreSQL", "Distributed systems", "Linux"]),
+            preferred: strings(&["Kafka", "Kubernetes"]),
+        },
+        interview: Interview {
+            stages: strings(&["Recruiter call", "Technical screen", "System design", "Team interview", "Offer"]),
+            notes: "The whole process takes about three weeks.".into(),
+            found: true,
+        },
+        sources: vec![
+            format!("https://{slug}.example.com/jobs/1"),
+            format!("https://{slug}.example.com/about"),
+            format!("https://{slug}.example.com/careers"),
+        ],
+    }
 }
