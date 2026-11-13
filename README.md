@@ -26,6 +26,8 @@ make profile                 # full CV from profile.yaml -> build/profile.pdf
 make cv NAME=<slug>          # cvs/<slug>.yaml -> build/<slug>.pdf
 make all                     # everything
 make watch NAME=<slug>       # rebuild on save (omit NAME for profile)
+make check                   # pre-PR checks (build, 2-page limit, header); ARGS=--all for everything
+make hooks                   # once per clone: run the checks before every push
 ```
 
 Optional per-file `style:` block: `font`, `font-size` (e.g. `"10pt"`), `accent-color` (hex), `paper`.
