@@ -191,7 +191,7 @@ async fn ingest_file(path: &Path) -> Result<JdText> {
 }
 
 /// `pdf-extract` panics on some malformed files; turn that into an error.
-fn pdf_text(bytes: &[u8]) -> Result<String> {
+pub(crate) fn pdf_text(bytes: &[u8]) -> Result<String> {
     let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(bytes));
     match result {
         Ok(Ok(text)) => Ok(text),

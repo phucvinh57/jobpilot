@@ -4,6 +4,7 @@
 //! - `paths`, `runtime`, `store`, `secrets`, `facade` — P0 (foundation)
 //! - `llm` — P1, `pipeline` — P2, `browser` — P4, `apply` — P5, `mail` — P6, `graph` — P8
 //! - `notify`, `prefs` (and the store tables behind them) — P8, then P9+
+//! - `trends` — P13 (collection; the digest follows in part B)
 //!
 //! Extend [`Core`] from your own module with `impl Core { ... }` instead of editing `facade.rs`.
 
@@ -23,6 +24,7 @@ pub mod redact;
 pub mod runtime;
 pub mod secrets;
 pub mod store;
+pub mod trends;
 
 pub use chrono;
 pub use facade::Core;
