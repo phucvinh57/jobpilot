@@ -5,6 +5,8 @@ use gpui_kit::*;
 
 use crate::app::AppState;
 
+use super::PrimaryAction;
+
 pub struct ApplyTab;
 
 impl ApplyTab {
@@ -12,6 +14,10 @@ impl ApplyTab {
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
         Self
     }
+
+    /// Called by the detail pane's primary button for `ReviewAndSubmit` and `Submit`
+    /// (the pane has already switched to this tab). Implemented in P5.
+    pub fn on_primary(&mut self, _action: PrimaryAction, _window: &mut Window, _cx: &mut Context<Self>) {}
 }
 
 impl Render for ApplyTab {

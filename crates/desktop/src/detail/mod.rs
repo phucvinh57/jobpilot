@@ -93,6 +93,21 @@ impl Detail {
     }
 }
 
+impl Detail {
+    /// Generate / Approve CV are handled here (P3). Review & Submit / Submit belong to the
+    /// Apply tab (P5): switch to it and delegate.
+    fn on_primary(&mut self, action: PrimaryAction, window: &mut Window, cx: &mut Context<Self>) {
+        match action {
+            PrimaryAction::Generate | PrimaryAction::ApproveCv => {} // P3
+            PrimaryAction::ReviewAndSubmit | PrimaryAction::Submit => {
+                self.tab = DetailTab::Apply;
+                self.apply.update(cx, |tab, cx| tab.on_primary(action, window, cx));
+                cx.notify();
+            }
+        }
+    }
+}
+
 impl Render for Detail {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.state.read(cx).selected_app().cloned();
@@ -152,8 +167,9 @@ impl Render for Detail {
             .when_some(PrimaryAction::for_application(&app), |d, action| {
                 d.child(
                     div().h_flex().justify_end().child(
-                        // Wired to core in later sub-plans: Generate (P2/P3), Approve (P3), Review/Submit (P5).
-                        Button::new("primary-action").primary().label(action.label()),
+                        Button::new("primary-action").primary().label(action.label()).on_click(cx.listener(
+                            move |this, _, window, cx| this.on_primary(action, window, cx),
+                        )),
                     ),
                 )
             })
