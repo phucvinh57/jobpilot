@@ -275,7 +275,13 @@ impl Graphs {
         // Saved before the first node runs, so a thread that fails in its first step can be resumed.
         let first = Checkpoint::new(thread, to_map(&input)?.into_iter().collect(), 0, compiled.get_entry_nodes());
         if let Some(checkpointer) = compiled.checkpointer() {
-            checkpointer.save(&first).await.context("saving the first checkpoint")?;
+            if let Err(error) = checkpointer.save(&first).await {
+                // Cancelled before the run started: the saver refused on purpose.
+                if token.is_cancelled() {
+                    return Ok(Outcome::Cancelled);
+                }
+                return Err(error).context("saving the first checkpoint");
+            }
         }
         tracing::info!(graph = %graph.name, %thread, "graph run started");
         self.drive(graph, compiled, thread, adk_graph::State::new(), token).await
