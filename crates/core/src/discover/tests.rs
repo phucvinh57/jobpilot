@@ -1,0 +1,720 @@
+//! Graph tests of the runner: fake sources, `llm::fake`, a real SQLite file; no network.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use anyhow::{bail, Result};
+use async_trait::async_trait;
+use futures::FutureExt;
+use serde_json::json;
+
+use super::*;
+use crate::graph::nodes::ChallengeKind;
+use crate::llm::fake::FakeLlm;
+use crate::llm::Llm;
+use crate::prefs::Preferences;
+use crate::store::{LeadState, NewApplication, NewLead, NewSource, SourcePurpose};
+use crate::{Paths, Secrets};
+
+const POSTING: &str = "We are hiring. You will build and run backend services in Rust, own their quality, and work with a small team.";
+
+fn cand(host: &str, n: u32, company: &str, title: &str) -> Candidate {
+    Candidate {
+        url: format!("https://{host}/jobs/{n}"),
+        title: title.into(),
+        company: company.into(),
+        location: "Remote".into(),
+        snippet: "snippet".into(),
+    }
+}
+
+/// A scripted source: pages of candidates, an optional failure, and its own posting texts.
+struct FakeSource {
+    pages: Vec<Vec<Candidate>>,
+    /// `search` fails with this message while it is set.
+    failure: Mutex<Option<String>>,
+    /// `posting` returns `None` (so the runner's fetch hook is used) instead of text.
+    no_text: bool,
+    searched: AtomicUsize,
+}
+
+impl FakeSource {
+    fn new(pages: Vec<Vec<Candidate>>) -> Arc<Self> {
+        Arc::new(Self { pages, failure: Mutex::new(None), no_text: false, searched: AtomicUsize::new(0) })
+    }
+
+    fn failing(message: &str) -> Arc<Self> {
+        let s = Self::new(vec![vec![]]);
+        *s.failure.lock().unwrap() = Some(message.into());
+        s
+    }
+}
+
+#[async_trait]
+impl JobSource for FakeSource {
+    async fn search(&self, _prefs: &Preferences, ctx: &SearchCtx) -> Result<SearchPage> {
+        self.searched.fetch_add(1, Ordering::SeqCst);
+        if let Some(m) = self.failure.lock().unwrap().clone() {
+            bail!("{m}");
+        }
+        let at: usize = ctx.cursor.as_deref().map_or(0, |c| c.parse().unwrap());
+        Ok(SearchPage {
+            candidates: self.pages.get(at).cloned().unwrap_or_default(),
+            next: (at + 1 < self.pages.len()).then(|| (at + 1).to_string()),
+        })
+    }
+
+    async fn posting(&self, c: &Candidate) -> Result<Option<String>> {
+        Ok((!self.no_text).then(|| format!("{}\n\n{POSTING}", c.title)))
+    }
+}
+
+/// A data directory with a profile and a set of fakes; `deps` builds what a run needs.
+struct Harness {
+    dir: tempfile::TempDir,
+    llm: Arc<FakeLlm>,
+    /// source name -> adapter
+    sources: Arc<Mutex<HashMap<String, Arc<FakeSource>>>>,
+    /// While false, source "b" meets a login wall.
+    solved: Arc<AtomicBool>,
+    /// Sources named here meet a blocked page at every search.
+    always_blocked: Arc<Mutex<Vec<String>>>,
+    notices: Arc<Mutex<Vec<String>>>,
+    insight_calls: Arc<AtomicUsize>,
+    /// What the insight hook answers: `Ok(Some(json))`, `Ok(None)` or an error.
+    insight: Arc<Mutex<Result<Option<String>, String>>>,
+    fetched: Arc<Mutex<Vec<String>>>,
+    fetch_answer: Arc<Mutex<Result<String, String>>>,
+}
+
+fn scores() -> serde_json::Value {
+    json!({
+        "skills": {"score": 80, "known": true, "reason": "matches"},
+        "domain": {"score": 60, "known": true, "reason": "ok"},
+        "location": {"score": 100, "known": true, "reason": "remote"},
+        "salary": {"score": 0, "known": false, "reason": "not stated"},
+        "seniority": {"score": 70, "known": true, "reason": "fits"}
+    })
+}
+
+impl Harness {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        Self {
+            dir,
+            llm: Arc::new(FakeLlm::with_replies(std::iter::repeat_n(scores(), 200))),
+            sources: Arc::default(),
+            solved: Arc::new(AtomicBool::new(false)),
+            always_blocked: Arc::default(),
+            notices: Arc::default(),
+            insight_calls: Arc::default(),
+            insight: Arc::new(Mutex::new(Ok(None))),
+            fetched: Arc::default(),
+            fetch_answer: Arc::new(Mutex::new(Ok(POSTING.to_string()))),
+        }
+    }
+
+    fn open(&self) -> Core {
+        let paths = Paths::new(self.dir.path().join("jp"));
+        let core = Core::open_at(paths, Secrets::memory()).unwrap();
+        let profile = self.dir.path().join("profile.yaml");
+        std::fs::write(&profile, "basics: {name: Ada, headline: Rust engineer}\nskills:\n  - {category: Languages, items: [Rust, Go]}\n").unwrap();
+        core.set_profile_path(&profile).unwrap();
+        core
+    }
+
+    fn add_source(&self, core: &Core, name: &str, adapter: Arc<FakeSource>) -> i64 {
+        self.sources.lock().unwrap().insert(name.into(), adapter);
+        core.store
+            .add_source(&NewSource { kind: "fake".into(), name: name.into(), url: format!("https://{name}.test"), purpose: SourcePurpose::Jobs, session_id: None })
+            .unwrap()
+            .id
+    }
+
+    fn deps(&self) -> DiscoverDeps {
+        let llm: Arc<dyn Llm> = self.llm.clone();
+        let mut deps = DiscoverDeps::new(llm, DiscoverLimits { host_delay: std::time::Duration::ZERO, ..DiscoverLimits::default() });
+        let sources = self.sources.clone();
+        deps.sources = Arc::new(move |source| {
+            let found = sources.lock().unwrap().get(&source.name).cloned();
+            found.map(|s| s as Arc<dyn JobSource>).ok_or_else(|| anyhow::anyhow!("no fake for {}", source.name))
+        });
+        let (solved, blocked) = (self.solved.clone(), self.always_blocked.clone());
+        deps.challenge = Arc::new(move |check| {
+            let (solved, blocked) = (solved.clone(), blocked.clone());
+            async move {
+                let name = check.source.name.clone();
+                if check.stage != CheckStage::Search {
+                    return Ok(None);
+                }
+                if blocked.lock().unwrap().contains(&name) {
+                    return Ok(Some(ChallengeKind::Blocked));
+                }
+                Ok((name == "b" && !solved.load(Ordering::SeqCst)).then_some(ChallengeKind::Login))
+            }
+            .boxed()
+        });
+        let notices = self.notices.clone();
+        deps.notify = Arc::new(move |title, body| notices.lock().unwrap().push(format!("{title}: {body}")));
+        let (calls, answer) = (self.insight_calls.clone(), self.insight.clone());
+        deps.insight = Arc::new(move |_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let answer = answer.lock().unwrap().clone();
+            async move { answer.map_err(|e| anyhow::anyhow!(e)) }.boxed()
+        });
+        let (fetched, answer) = (self.fetched.clone(), self.fetch_answer.clone());
+        deps.fetch = Arc::new(move |req| {
+            fetched.lock().unwrap().push(req.candidate.url.clone());
+            let answer = answer.lock().unwrap().clone();
+            async move { answer.map_err(|e| anyhow::anyhow!(e)) }.boxed()
+        });
+        deps
+    }
+}
+
+fn leads(core: &Core, state: LeadState) -> Vec<crate::store::Lead> {
+    core.store.list_leads(state).unwrap()
+}
+
+fn result_of(summary: &RunSummary, source_id: i64) -> &SourceResult {
+    summary.sources.iter().find(|r| r.source_id == source_id).expect("the source is in the summary")
+}
+
+#[tokio::test]
+async fn leads_are_saved_while_a_blocked_source_waits_and_resuming_it_finishes_the_run() {
+    let h = Harness::new();
+    let core = h.open();
+    core.save_preferences(Preferences { exclude_companies: vec!["Evil".into()], ..Default::default() }).unwrap();
+    // Already known: a lead (by URL) and an application (by company and role).
+    core.store.add_lead(&NewLead { url: "https://c.test/jobs/1".into(), dedup_key: "x-y".into(), ..Default::default() }).unwrap();
+    core.store
+        .create_application(&NewApplication {
+            slug: "globex-sre".into(),
+            dir: "/tmp/globex-sre".into(),
+            company: "Globex".into(),
+            role: "Site Reliability Engineer".into(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let a = h.add_source(
+        &core,
+        "a",
+        FakeSource::new(vec![vec![
+            cand("a.test", 1, "Acme", "Backend Engineer"),
+            cand("a.test", 2, "Evil Corp", "Backend Engineer"),
+            cand("a.test", 3, "Initech", "Platform Engineer"),
+            cand("a.test", 3, "Initech", "Platform Engineer (dup on the same page)"),
+            Candidate { url: "javascript:alert(1)".into(), ..cand("a.test", 4, "Hax", "Hacker") },
+        ]]),
+    );
+    let b = h.add_source(&core, "b", FakeSource::new(vec![vec![cand("b.test", 1, "Umbrella", "Data Engineer")]]));
+    let c = h.add_source(
+        &core,
+        "c",
+        FakeSource::new(vec![vec![
+            cand("c.test", 1, "Known Inc", "Anything"),
+            cand("c.test", 2, "Globex Corp", "Site Reliability Engineer"),
+            cand("c.test", 3, "Hooli", "Rust Developer"),
+        ]]),
+    );
+
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+
+    // a: Acme + Initech saved, Evil dismissed. c: Hooli saved; the lead's URL and the application's job are known.
+    assert_eq!(result_of(&summary, a).status, SourceStatus::Done);
+    assert_eq!((result_of(&summary, a).saved, result_of(&summary, a).dismissed), (2, 1));
+    assert_eq!(result_of(&summary, c).status, SourceStatus::Done);
+    assert_eq!(result_of(&summary, c).saved, 1);
+    assert_eq!(result_of(&summary, b).status, SourceStatus::Waiting);
+    assert_eq!(result_of(&summary, b).note, "login");
+    assert_eq!((summary.saved, summary.dismissed, summary.waiting, summary.failed), (3, 1, 1, 0));
+
+    let new: Vec<_> = leads(&core, LeadState::New).into_iter().filter(|l| l.source_id.is_some()).collect();
+    let mut names: Vec<_> = new.iter().map(|l| l.company.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["Acme", "Hooli", "Initech"]);
+    let acme = new.iter().find(|l| l.company == "Acme").unwrap();
+    assert_eq!(acme.score, Some(77.1), "6550 / 85: the salary was not judged, so its weight does not count");
+    assert!(acme.score_json.as_deref().unwrap().contains("\"matches\""));
+    assert_eq!(acme.source_id, Some(a));
+    assert_eq!(acme.url, "https://a.test/jobs/1");
+    let jd = std::fs::read_to_string(acme.jd_path.as_ref().unwrap()).unwrap();
+    assert!(jd.starts_with("# Acme \u{2014} Backend Engineer\nSource: https://a.test/jobs/1\n\n"), "{jd}");
+    assert!(jd.contains("Rust") && acme.jd_path.as_ref().unwrap().starts_with(lead_dir(&core.paths, acme.id)));
+    let dismissed = leads(&core, LeadState::Dismissed);
+    let evil = dismissed.iter().find(|l| l.company == "Evil Corp").unwrap();
+    assert_eq!(evil.dismiss_reason.as_deref(), Some("excluded company: Evil"));
+    assert_eq!(evil.score, None);
+    assert_eq!(h.llm.calls().len(), 3, "one model call per scored lead, none for the dismissed or known ones");
+    assert!(h.llm.calls()[0].user.contains("Headline: Rust engineer") && !h.llm.calls()[0].user.contains("Ada"));
+
+    // The source's status and the summary are kept.
+    assert_eq!(core.store.get_source(a).unwrap().unwrap().last_status.as_deref(), Some("ok"));
+    assert_eq!(core.store.get_source(b).unwrap().unwrap().last_status.as_deref(), Some("needs_human"));
+    assert!(core.store.get_source(a).unwrap().unwrap().last_run_at.is_some());
+    assert_eq!(core.discover_last_run().unwrap().unwrap(), summary);
+    assert_eq!(h.notices.lock().unwrap().len(), 1);
+    assert!(h.notices.lock().unwrap()[0].contains("b: sign in"), "{:?}", h.notices);
+
+    // One source waits at wait_human; the others are done.
+    let waiting = core.discover_waiting().unwrap();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!((waiting[0].source_id, waiting[0].source_name.as_str()), (b, "b"));
+    assert_eq!(waiting[0].reason, WaitReason::Login { source_id: b, url: "https://b.test".into() });
+    let thread = waiting[0].thread.clone();
+    let mut before: Vec<_> = leads(&core, LeadState::New).iter().chain(&dismissed).map(|l| l.id).collect();
+    before.sort_unstable();
+
+    // "Restart": a new Core over the same files. Nothing is lost.
+    drop(core);
+    let core = h.open();
+    let waiting = core.discover_waiting().unwrap();
+    assert_eq!(waiting.len(), 1, "the paused source survives a restart");
+    assert_eq!(waiting[0].thread, thread);
+    let mut after: Vec<_> = leads(&core, LeadState::New).iter().chain(&leads(&core, LeadState::Dismissed)).map(|l| l.id).collect();
+    after.sort_unstable();
+    assert_eq!(after, before);
+
+    // The user solved the login: Continue.
+    h.solved.store(true, Ordering::SeqCst);
+    let done = core.discover_resume_with(h.deps(), &thread).await.unwrap();
+    assert_eq!((done.status, done.saved), (SourceStatus::Done, 1));
+    assert!(core.discover_resume_with(h.deps(), &thread).await.unwrap_err().to_string().contains("finished"));
+    assert!(core.discover_waiting().unwrap().is_empty());
+    assert!(leads(&core, LeadState::New).iter().any(|l| l.company == "Umbrella"));
+    assert_eq!(core.store.get_source(b).unwrap().unwrap().last_status.as_deref(), Some("ok"));
+    assert_eq!(h.llm.calls().len(), 4);
+}
+
+#[tokio::test]
+async fn a_failing_source_ends_only_its_own_thread_and_retry_resumes_it() {
+    let h = Harness::new();
+    let core = h.open();
+    let good = h.add_source(&core, "a", FakeSource::new(vec![vec![cand("a.test", 1, "Acme", "Backend Engineer")]]));
+    let bad_adapter = FakeSource::failing("fetching boards.test: HTTP 503 Service Unavailable");
+    let bad = h.add_source(&core, "d", bad_adapter.clone());
+
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!(result_of(&summary, good).status, SourceStatus::Done);
+    assert_eq!(result_of(&summary, bad).status, SourceStatus::Failed);
+    assert!(result_of(&summary, bad).note.contains("503"), "{:?}", result_of(&summary, bad));
+    assert_eq!((summary.saved, summary.failed), (1, 1));
+    let status = core.store.get_source(bad).unwrap().unwrap().last_status.unwrap();
+    assert!(status.starts_with("failed: ") && status.contains("503"), "{status}");
+
+    // The failed thread is kept; once the site is back, Retry re-runs the failed node.
+    let thread = source_thread(&summary.run, bad);
+    assert!(matches!(core.graphs.status(&thread).unwrap().unwrap().status, crate::graph::ThreadStatus::Failed(_)));
+    *bad_adapter.failure.lock().unwrap() = None;
+    let retried = core.discover_resume_with(h.deps(), &thread).await.unwrap();
+    assert_eq!(retried.status, SourceStatus::Done);
+    assert_eq!(core.store.get_source(bad).unwrap().unwrap().last_status.as_deref(), Some("ok"));
+}
+
+#[tokio::test]
+async fn a_source_without_an_adapter_fails_alone_with_a_clear_message() {
+    let h = Harness::new();
+    let core = h.open();
+    let ok = h.add_source(&core, "a", FakeSource::new(vec![vec![]]));
+    let yc = core
+        .store
+        .add_source(&NewSource { kind: "yc".into(), name: "yc".into(), url: String::new(), purpose: SourcePurpose::Jobs, session_id: None })
+        .unwrap()
+        .id;
+    // The real factory, so an unknown kind is reported by the adapter table.
+    let mut deps = h.deps();
+    let fake = deps.sources.clone();
+    let http = source::FakeHttp::with([]);
+    deps.sources = Arc::new(move |s| if s.kind == "fake" { fake(s) } else { source::adapter_for(s, http.clone()) });
+    let summary = core.discover_now_with(deps).await.unwrap();
+    assert_eq!(result_of(&summary, ok).status, SourceStatus::Done);
+    assert_eq!(result_of(&summary, yc).status, SourceStatus::Failed);
+    assert!(result_of(&summary, yc).note.contains("no adapter for source kind `yc`"), "{:?}", result_of(&summary, yc));
+}
+
+#[tokio::test]
+async fn three_challenges_in_a_row_disable_the_source_for_the_day() {
+    let h = Harness::new();
+    let core = h.open();
+    let id = h.add_source(&core, "e", FakeSource::new(vec![vec![cand("e.test", 1, "Acme", "Engineer")]]));
+    h.always_blocked.lock().unwrap().push("e".into());
+
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!(result_of(&summary, id).status, SourceStatus::Waiting);
+    assert_eq!(result_of(&summary, id).note, "blocked");
+    let thread = source_thread(&summary.run, id);
+
+    // The user continues, and it is blocked again, twice more.
+    let second = core.discover_resume_with(h.deps(), &thread).await.unwrap();
+    assert_eq!(second.status, SourceStatus::Waiting, "the second strike waits again");
+    let third = core.discover_resume_with(h.deps(), &thread).await.unwrap();
+    assert_eq!(third.status, SourceStatus::Done, "the third strike ends the thread");
+    assert_eq!(third.note, "paused for today after repeated challenges");
+    assert!(core.discover_waiting().unwrap().is_empty());
+    assert_eq!(h.notices.lock().unwrap().len(), 2, "no notification for the strike that ends it");
+    let status = core.store.get_source(id).unwrap().unwrap().last_status.unwrap();
+    assert!(status.starts_with("paused for today"), "{status}");
+    assert!(leads(&core, LeadState::New).is_empty());
+
+    // The next run leaves it alone today.
+    let next = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!(result_of(&next, id).status, SourceStatus::NotRun);
+    assert!(result_of(&next, id).note.contains("paused for today"));
+
+    // Tomorrow it is tried again.
+    core.store.kv_set(&format!("discover.paused.{id}"), "2000-01-01").unwrap();
+    h.always_blocked.lock().unwrap().clear();
+    let tomorrow = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!((result_of(&tomorrow, id).status, result_of(&tomorrow, id).saved), (SourceStatus::Done, 1));
+}
+
+#[tokio::test]
+async fn a_challenge_resets_when_a_page_goes_through() {
+    // "In a row": a page that went through in between starts the count again.
+    let h = Harness::new();
+    let core = h.open();
+    let id = h.add_source(&core, "b", FakeSource::new(vec![vec![cand("b.test", 1, "Acme", "Engineer")], vec![cand("b.test", 2, "Initech", "Engineer")]]));
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!(result_of(&summary, id).status, SourceStatus::Waiting);
+    h.solved.store(true, Ordering::SeqCst);
+    let thread = source_thread(&summary.run, id);
+    let done = core.discover_resume_with(h.deps(), &thread).await.unwrap();
+    assert_eq!((done.status, done.saved), (SourceStatus::Done, 2));
+    assert_eq!(leads(&core, LeadState::New).len(), 2);
+}
+
+#[tokio::test]
+async fn cancelling_a_waiting_source_skips_it_and_keeps_the_others() {
+    let h = Harness::new();
+    let core = h.open();
+    h.add_source(&core, "a", FakeSource::new(vec![vec![cand("a.test", 1, "Acme", "Engineer")]]));
+    let b = h.add_source(&core, "b", FakeSource::new(vec![vec![cand("b.test", 1, "Umbrella", "Engineer")]]));
+    core.discover_now_with(h.deps()).await.unwrap();
+    let waiting = core.discover_waiting().unwrap();
+    assert_eq!(waiting.len(), 1);
+
+    core.discover_cancel(&waiting[0].thread).unwrap();
+    assert!(core.discover_waiting().unwrap().is_empty());
+    assert_eq!(core.store.get_source(b).unwrap().unwrap().last_status.as_deref(), Some("cancelled"));
+    assert_eq!(leads(&core, LeadState::New).len(), 1, "the finished source keeps its lead");
+    assert!(core.discover_cancel("prefs").is_err(), "only discovery threads");
+    assert!(core.discover_resume_with(h.deps(), "discover:1").await.is_err());
+    let gone = core.discover_resume_with(h.deps(), &waiting[0].thread).await.unwrap_err();
+    assert!(gone.to_string().contains("cancelled"), "{gone:#}");
+    assert_eq!(
+        core.store.get_source(b).unwrap().unwrap().last_status.as_deref(),
+        Some("cancelled"),
+        "a refused resume does not touch the source's status"
+    );
+}
+
+#[tokio::test]
+async fn pages_per_run_count_new_pages_and_the_next_run_goes_deeper() {
+    let h = Harness::new();
+    let core = h.open();
+    let pages: Vec<Vec<Candidate>> =
+        (0..5).map(|p| (0..2).map(|i| cand("p.test", p * 2 + i, &format!("Company{p}{i}"), "Engineer")).collect()).collect();
+    let adapter = FakeSource::new(pages);
+    let id = h.add_source(&core, "p", adapter.clone());
+    let mut deps = h.deps();
+    deps.limits.pages_per_run = 2;
+    deps.limits.page_size = 2;
+
+    let first = core.discover_now_with(deps.clone()).await.unwrap();
+    assert_eq!(result_of(&first, id).saved, 4, "two pages of two");
+    assert_eq!(adapter.searched.load(Ordering::SeqCst), 2);
+
+    // The next run finds the first two pages known (free) and takes the next two new ones.
+    let second = core.discover_now_with(deps.clone()).await.unwrap();
+    assert_eq!(result_of(&second, id).saved, 4);
+    assert_eq!(adapter.searched.load(Ordering::SeqCst), 2 + 4, "the known pages were looked at, not counted");
+    let third = core.discover_now_with(deps).await.unwrap();
+    assert_eq!(result_of(&third, id).saved, 2, "the last page");
+    assert_eq!(leads(&core, LeadState::New).len(), 10);
+}
+
+#[tokio::test]
+async fn a_page_with_a_cursor_that_never_ends_is_bounded() {
+    struct Endless;
+    #[async_trait]
+    impl JobSource for Endless {
+        async fn search(&self, _: &Preferences, _: &SearchCtx) -> Result<SearchPage> {
+            Ok(SearchPage { candidates: vec![], next: Some("again".into()) })
+        }
+    }
+    let h = Harness::new();
+    let core = h.open();
+    let id = core
+        .store
+        .add_source(&NewSource { kind: "x".into(), name: "x".into(), url: String::new(), purpose: SourcePurpose::Jobs, session_id: None })
+        .unwrap()
+        .id;
+    let mut deps = h.deps();
+    deps.sources = Arc::new(|_| Ok(Arc::new(Endless) as Arc<dyn JobSource>));
+    deps.limits.pages_per_run = 2;
+    let summary = core.discover_now_with(deps).await.unwrap();
+    assert_eq!(result_of(&summary, id).status, SourceStatus::Done, "ends after pages_per_run * 10 empty pages");
+}
+
+#[tokio::test]
+async fn postings_without_text_use_the_fetch_hook_and_unreadable_ones_are_skipped() {
+    let h = Harness::new();
+    let core = h.open();
+    let adapter = Arc::new(FakeSource {
+        pages: vec![vec![cand("f.test", 1, "Acme", "Engineer"), cand("f.test", 2, "Initech", "Engineer")]],
+        failure: Mutex::new(None),
+        no_text: true,
+        searched: AtomicUsize::new(0),
+    });
+    let id = h.add_source(&core, "f", adapter);
+
+    // The page cannot be read (the default fetch says so for a JS app): skipped, and unknown, so a later run retries.
+    *h.fetch_answer.lock().unwrap() = Err("https://f.test/jobs/1 needs a browser to render: only 12 characters of text".into());
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!((result_of(&summary, id).saved, result_of(&summary, id).skipped), (0, 2));
+    assert_eq!(h.fetched.lock().unwrap().len(), 2);
+    assert!(leads(&core, LeadState::New).is_empty());
+    assert!(!core.store.lead_exists("https://f.test/jobs/1", "").unwrap());
+
+    // Now the hook returns text.
+    *h.fetch_answer.lock().unwrap() = Ok(POSTING.to_string());
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!(result_of(&summary, id).saved, 2);
+    let lead = &leads(&core, LeadState::New)[0];
+    assert!(std::fs::read_to_string(lead.jd_path.as_ref().unwrap()).unwrap().contains("backend services"));
+
+    // A text that is too short is a bot page, not a posting.
+    *h.fetch_answer.lock().unwrap() = Ok("Just a moment...".to_string());
+    h.sources.lock().unwrap().insert(
+        "f".into(),
+        Arc::new(FakeSource { pages: vec![vec![cand("f.test", 3, "Hooli", "Engineer")]], failure: Mutex::new(None), no_text: true, searched: AtomicUsize::new(0) }),
+    );
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!((result_of(&summary, id).saved, result_of(&summary, id).skipped), (0, 1));
+}
+
+#[tokio::test]
+async fn a_network_failure_while_fetching_fails_the_thread_and_retry_goes_on() {
+    let h = Harness::new();
+    let core = h.open();
+    let adapter = Arc::new(FakeSource {
+        pages: vec![vec![cand("f.test", 1, "Acme", "Engineer")]],
+        failure: Mutex::new(None),
+        no_text: true,
+        searched: AtomicUsize::new(0),
+    });
+    let id = h.add_source(&core, "f", adapter);
+    *h.fetch_answer.lock().unwrap() = Err("fetching f.test: error sending request for url".into());
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!(result_of(&summary, id).status, SourceStatus::Failed);
+
+    *h.fetch_answer.lock().unwrap() = Ok(POSTING.to_string());
+    let thread = source_thread(&summary.run, id);
+    let retried = core.discover_resume_with(h.deps(), &thread).await.unwrap();
+    assert_eq!((retried.status, retried.saved), (SourceStatus::Done, 1), "the failed posting is fetched again");
+}
+
+#[tokio::test]
+async fn insight_comes_from_the_hook_and_never_blocks_a_lead() {
+    let h = Harness::new();
+    let core = h.open();
+    h.add_source(&core, "a", FakeSource::new(vec![vec![cand("a.test", 1, "Acme", "Engineer")]]));
+    *h.insight.lock().unwrap() = Ok(Some(r#"{"domain": "robotics"}"#.into()));
+    core.discover_now_with(h.deps()).await.unwrap();
+    let lead = &leads(&core, LeadState::New)[0];
+    assert_eq!(lead.insight_json.as_deref(), Some(r#"{"domain": "robotics"}"#));
+    assert_eq!(h.insight_calls.load(Ordering::SeqCst), 1);
+
+    // An insight that is not JSON is dropped; one that fails leaves the lead without it.
+    for (n, answer) in [Ok(Some("not json".to_string())), Err("pages unreachable".to_string()), Ok(None)].into_iter().enumerate() {
+        *h.insight.lock().unwrap() = answer;
+        h.sources.lock().unwrap().insert("a".into(), FakeSource::new(vec![vec![cand("a.test", 10 + n as u32, &format!("Co{n}"), "Engineer")]]));
+        let summary = core.discover_now_with(h.deps()).await.unwrap();
+        assert_eq!(summary.saved, 1, "the lead is saved anyway");
+    }
+    let without: Vec<_> = leads(&core, LeadState::New).into_iter().filter(|l| l.insight_json.is_none()).collect();
+    assert_eq!(without.len(), 3);
+    assert!(without.iter().all(|l| l.score.is_some()), "and scored");
+}
+
+#[tokio::test]
+async fn insight_is_not_asked_for_a_posting_the_filters_dropped() {
+    let h = Harness::new();
+    let core = h.open();
+    core.save_preferences(Preferences { exclude_companies: vec!["Acme".into()], ..Default::default() }).unwrap();
+    h.add_source(&core, "a", FakeSource::new(vec![vec![cand("a.test", 1, "Acme", "Engineer")]]));
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!((summary.saved, summary.dismissed), (0, 1));
+    assert_eq!(h.insight_calls.load(Ordering::SeqCst), 0);
+    assert!(h.llm.calls().is_empty());
+}
+
+#[tokio::test]
+async fn no_provider_and_no_profile_are_setup_problems_not_crashes() {
+    let h = Harness::new();
+    let core = h.open();
+    let err = core.discover_now().await.unwrap_err();
+    assert_eq!(crate::health::classify(&format!("{err:#}")), crate::health::Problem::NoProvider, "{err:#}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let bare = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
+    bare.set_profile_path(&dir.path().join("missing.yaml")).unwrap();
+    let err = bare.discover_now_with(h.deps()).await.unwrap_err();
+    assert!(format!("{err:#}").contains("cannot read the profile"), "{err:#}");
+}
+
+#[tokio::test]
+async fn disabled_sources_and_trend_sources_are_not_searched() {
+    let h = Harness::new();
+    let core = h.open();
+    let off = h.add_source(&core, "off", FakeSource::new(vec![vec![cand("o.test", 1, "Acme", "Engineer")]]));
+    core.store.set_source_enabled(off, false).unwrap();
+    core.store
+        .add_source(&NewSource { kind: "rss".into(), name: "trends".into(), url: String::new(), purpose: SourcePurpose::Trends, session_id: None })
+        .unwrap();
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert!(summary.sources.is_empty());
+    assert_eq!(core.discover_last_run().unwrap().unwrap().saved, 0);
+}
+
+#[tokio::test]
+async fn the_run_reports_progress_and_runs_on_the_global_runtime() {
+    let h = Harness::new();
+    let core = Arc::new(h.open());
+    h.add_source(&core, "a", FakeSource::new(vec![vec![cand("a.test", 1, "Acme", "Engineer")]]));
+    let mut progress = core.graphs.subscribe();
+    let deps = h.deps();
+    let rx = {
+        let core = core.clone();
+        crate::runtime::spawn(async move { core.discover_now_with(deps).await })
+    };
+    let summary = rx.await.unwrap().unwrap();
+    assert_eq!(summary.saved, 1);
+    let mut graphs_done = Vec::new();
+    while let Ok(p) = progress.try_recv() {
+        if p.event == crate::graph::ProgressEvent::Done {
+            graphs_done.push(p.graph);
+        }
+    }
+    graphs_done.sort();
+    assert_eq!(graphs_done, [DISCOVERY_GRAPH, SOURCE_GRAPH]);
+}
+
+#[tokio::test]
+async fn a_challenge_after_a_fetch_continues_with_the_same_posting_and_a_waiting_source_reports_what_it_saved() {
+    let h = Harness::new();
+    let core = h.open();
+    let pages = vec![vec![cand("m.test", 1, "Acme", "Engineer")], vec![cand("m.test", 2, "Initech", "Engineer")]];
+    let id = h.add_source(&core, "m", FakeSource::new(pages));
+    let (searches, postings) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let hook = |searches: Arc<AtomicUsize>, postings: Arc<AtomicUsize>| -> ChallengeProbe {
+        Arc::new(move |check| {
+            let (searches, postings) = (searches.clone(), postings.clone());
+            async move {
+                Ok(match check.stage {
+                    // The second search page meets a captcha, once.
+                    CheckStage::Search => (searches.fetch_add(1, Ordering::SeqCst) == 1).then_some(ChallengeKind::Captcha),
+                    // The first posting meets a login wall, once.
+                    CheckStage::Posting => {
+                        assert!(check.text.contains("backend services"), "the check sees the fetched text");
+                        (postings.fetch_add(1, Ordering::SeqCst) == 0).then_some(ChallengeKind::Login)
+                    }
+                })
+            }
+            .boxed()
+        })
+    };
+    let mut deps = h.deps();
+    deps.challenge = hook(searches.clone(), postings.clone());
+
+    let summary = core.discover_now_with(deps.clone()).await.unwrap();
+    let thread = source_thread(&summary.run, id);
+    assert_eq!(result_of(&summary, id).status, SourceStatus::Waiting);
+    assert_eq!(result_of(&summary, id).note, "login", "the first posting hit the login wall");
+    assert_eq!(core.discover_waiting().unwrap()[0].reason, WaitReason::Login { source_id: id, url: "https://m.test/jobs/1".into() });
+    assert!(leads(&core, LeadState::New).is_empty());
+
+    // Continue: the same posting is fetched again; then the second page meets the captcha.
+    let second = core.discover_resume_with(deps.clone(), &thread).await.unwrap();
+    assert_eq!(second.status, SourceStatus::Waiting);
+    assert_eq!(second.note, "captcha");
+    assert_eq!(second.saved, 1, "what the source stored before it paused is reported");
+    assert_eq!(leads(&core, LeadState::New).len(), 1);
+
+    let done = core.discover_resume_with(deps, &thread).await.unwrap();
+    assert_eq!((done.status, done.saved), (SourceStatus::Done, 2));
+    assert_eq!(h.llm.calls().len(), 2, "each posting is scored once, though the first was fetched twice");
+}
+
+#[tokio::test]
+async fn a_source_still_waiting_from_an_earlier_run_is_not_started_again() {
+    let h = Harness::new();
+    let core = h.open();
+    let b = h.add_source(&core, "b", FakeSource::new(vec![vec![cand("b.test", 1, "Umbrella", "Engineer")]]));
+    let first = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!(result_of(&first, b).status, SourceStatus::Waiting);
+    let second = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!(result_of(&second, b).status, SourceStatus::NotRun);
+    assert!(result_of(&second, b).note.contains("still waiting"), "{:?}", result_of(&second, b));
+    assert_eq!(core.discover_waiting().unwrap().len(), 1, "one paused thread, not two");
+}
+
+#[tokio::test]
+async fn postings_of_one_host_are_fetched_one_delay_apart() {
+    let h = Harness::new();
+    let core = h.open();
+    let adapter = Arc::new(FakeSource {
+        pages: vec![vec![cand("f.test", 1, "Acme", "Engineer"), cand("f.test", 2, "Initech", "Engineer"), cand("f.test", 3, "Hooli", "Engineer")]],
+        failure: Mutex::new(None),
+        no_text: true,
+        searched: AtomicUsize::new(0),
+    });
+    h.add_source(&core, "f", adapter);
+    let mut deps = h.deps();
+    deps.gate = Arc::new(HostGate::new(std::time::Duration::from_millis(60)));
+    let times = Arc::new(Mutex::new(Vec::new()));
+    let (log, inner) = (times.clone(), deps.fetch.clone());
+    deps.fetch = Arc::new(move |req| {
+        log.lock().unwrap().push(std::time::Instant::now());
+        inner(req)
+    });
+    core.discover_now_with(deps).await.unwrap();
+    let times = times.lock().unwrap();
+    assert_eq!(times.len(), 3);
+    assert!(times[2].duration_since(times[0]) >= std::time::Duration::from_millis(110), "two delays for three fetches");
+}
+
+#[tokio::test]
+async fn at_most_sources_in_parallel_sources_run_at_once() {
+    struct Slow {
+        active: Arc<AtomicUsize>,
+        peak: Arc<AtomicUsize>,
+    }
+    #[async_trait]
+    impl JobSource for Slow {
+        async fn search(&self, _: &Preferences, _: &SearchCtx) -> Result<SearchPage> {
+            let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok(SearchPage::default())
+        }
+    }
+    let h = Harness::new();
+    let core = h.open();
+    for n in 0..5 {
+        core.store
+            .add_source(&NewSource { kind: "slow".into(), name: format!("s{n}"), url: String::new(), purpose: SourcePurpose::Jobs, session_id: None })
+            .unwrap();
+    }
+    let (active, peak) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let mut deps = h.deps();
+    deps.limits.sources_in_parallel = 2;
+    let shared = Arc::new(Slow { active, peak: peak.clone() });
+    deps.sources = Arc::new(move |_| Ok(shared.clone() as Arc<dyn JobSource>));
+    let summary = core.discover_now_with(deps).await.unwrap();
+    assert_eq!(summary.sources.len(), 5);
+    assert_eq!(peak.load(Ordering::SeqCst), 2);
+}

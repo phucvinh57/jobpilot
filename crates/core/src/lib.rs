@@ -5,11 +5,13 @@
 //! - `llm` — P1, `pipeline` — P2, `browser` — P4, `apply` — P5, `mail` — P6, `graph` — P8
 //! - `notify`, `prefs` (and the store tables behind them) — P8, then P9+
 //! - `trends` — P13 (collection; the digest follows in part B)
+//! - `discover` — P10
 //!
 //! Extend [`Core`] from your own module with `impl Core { ... }` instead of editing `facade.rs`.
 
 pub mod apply;
 pub mod browser;
+pub mod discover;
 pub mod facade;
 pub mod graph;
 pub mod health;
