@@ -38,7 +38,7 @@ crates/desktop (package `jobpilot`)               GPUI views only
 - Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-core -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
 - Package: `scripts/package.sh` -> `dist/`
 - Needs: Rust, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (wayland/xkbcommon/vulkan, libdbus for the keyring).
-- Pre-PR checks: `scripts/check.sh [--all]` (paths changed since main); `git config core.hooksPath .githooks` once per clone runs it before every push.
+- Pre-PR checks: `scripts/check.sh [--all]` (paths changed since main: clippy + test, typst render); CI adds `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps) and restores the cache saved by main; `git config core.hooksPath .githooks` once per clone runs it before every push.
 - Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_core=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
 
 ## Check the UI visually

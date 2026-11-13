@@ -300,7 +300,7 @@ mod tests {
             p
         };
         let (md, pdf, png) = (make("a.MD"), make("b.pdf"), make("c.png"));
-        assert!(matches!(file_input(&[md.clone()]), Ok(JdInput::File(p)) if p == md));
+        assert!(matches!(file_input(std::slice::from_ref(&md)), Ok(JdInput::File(p)) if p == md));
         assert!(matches!(file_input(&[png.clone(), pdf.clone()]), Ok(JdInput::File(p)) if p == pdf));
         assert!(file_input(&[png]).unwrap_err().contains(".png"));
         assert!(file_input(&[dir.path().to_path_buf()]).unwrap_err().contains("folder"));

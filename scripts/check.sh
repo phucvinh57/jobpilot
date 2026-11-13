@@ -52,10 +52,12 @@ render_profile() {
   return $rc
 }
 
-if touches '^(Cargo\.(toml|lock)$|crates/|assets/)'; then
-  run build cargo build --workspace &&
-    run test cargo test --workspace &&
-    run clippy cargo clippy --workspace -- -D warnings
+# Extra cargo args, e.g. CARGO_PROFILE_ARG="--profile ci" (see Cargo.toml).
+read -ra prof <<<"${CARGO_PROFILE_ARG:-}"
+
+if touches '^(Cargo\.(toml|lock)$|crates/|assets/|scripts/check\.sh$|\.github/workflows/ci\.yml$)'; then
+  run clippy cargo clippy --workspace --all-targets ${prof[@]+"${prof[@]}"} -- -D warnings &&
+    run test cargo test --workspace ${prof[@]+"${prof[@]}"}
 fi
 
 if touches '^(profile\.yaml$|assets/)'; then
