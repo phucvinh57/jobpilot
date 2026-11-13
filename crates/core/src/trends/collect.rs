@@ -1,8 +1,10 @@
-//! The `trends` graph, collection half (P13a): `plan` -> the collectors in parallel ->
-//! `store_items`.
+//! The `trends` graph: collection (P13a) and, for a run started with the digest on, the digest
+//! (P13b, [`super::digest`]).
 //!
 //! ```text
-//! START -> plan -> { hackernews, yc, feeds, report_search } -> store_items -> wait_human -> END
+//! START -> plan -> { hackernews, yc, feeds, report_search } -> store_items -> wait_human
+//!       -> END                                                        (collection only)
+//!       -> extract -> count -> synthesize -> enforce_citations -> save_report -> END   (with the digest)
 //! ```
 //!
 //! - `plan` reads the enabled trend sources, whether a search API key is saved, and builds the
@@ -28,12 +30,11 @@
 //!   ([`Core::resume_trends_collection`](crate::Core)). Only the `page` adapter can detect one
 //!   here ([`detect_challenge`]); P10's `browser/challenge.rs` will replace the hook.
 //!
-//! # Extension point (P13b)
+//! # The digest (P13b)
 //!
-//! The digest continues after `wait_human`: replace `.edge("wait_human", END)` in [`graph`] with
-//! `extract -> count -> synthesize -> enforce_citations -> save_report -> END`. The thread id
-//! (`trends:<period>`) and the state ([`TrendRun`]) stay; P13b adds fields with
-//! `#[serde(default)]`.
+//! After `wait_human` a route (`TrendRun::digest.enabled`) leads to `extract` or to END. The
+//! digest nodes read their items from the store, so what the other collectors stored is enough
+//! when one source waits at a challenge (see [`super::digest`]).
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -48,6 +49,7 @@ use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
 use super::config::TrendConfig;
+use super::digest::{self, DigestConfig, DigestEnv, DigestState};
 use super::http::{FetchError, Http};
 use super::period::Period;
 use super::source::report_search::{self, build_queries};
@@ -151,11 +153,14 @@ pub struct TrendRun {
     /// Set by `feeds` when a source needs the user; cleared by "Continue".
     #[serde(default)]
     pub challenge: Option<Challenge>,
+    /// The digest (P13b): whether to build it, and what its nodes made.
+    #[serde(default)]
+    pub digest: DigestState,
 }
 
 impl TrendRun {
     pub fn new(period: Period) -> Self {
-        Self { period, plan: Plan::default(), items: Vec::new(), outcomes: Vec::new(), stored: Stored::default(), challenge: None }
+        Self { period, plan: Plan::default(), items: Vec::new(), outcomes: Vec::new(), stored: Stored::default(), challenge: None, digest: DigestState::default() }
     }
 
     /// Outcomes of one adapter kind.
@@ -186,9 +191,16 @@ impl Env {
 }
 
 /// The graph (see the module docs). Rebuild it with the same `config` to resume a thread.
-pub fn graph(store: Store, secrets: Secrets, paths: Paths, config: TrendConfig) -> Result<GraphDef<TrendRun>> {
+pub fn graph(
+    store: Store,
+    secrets: Secrets,
+    paths: Paths,
+    config: TrendConfig,
+    digest: DigestConfig,
+) -> Result<GraphDef<TrendRun>> {
     let http = Http::new(&config.limits.http())?;
     let collector_timeout = config.limits.collector_budget + NODE_MARGIN;
+    let digest_env = Arc::new(DigestEnv { store: store.clone(), secrets: secrets.clone(), config: digest });
     let env = Arc::new(Env { store, secrets, paths, config: Arc::new(config), http });
     let mut graph = GraphDef::new(GRAPH).append("items").append("outcomes").node("plan", {
         let env = env.clone();
@@ -198,7 +210,7 @@ pub fn graph(store: Store, secrets: Secrets, paths: Paths, config: TrendConfig) 
         let env = env.clone();
         graph = graph.node(name, move |s| group(env.clone(), s, kind));
     }
-    Ok(graph
+    let graph = graph
         .node("feeds", {
             let env = env.clone();
             move |s| group(env.clone(), s, SourceKind::Rss)
@@ -215,12 +227,12 @@ pub fn graph(store: Store, secrets: Secrets, paths: Paths, config: TrendConfig) 
         .edge(START, "plan")
         .parallel("plan", &["hackernews", "yc", "feeds", "report_search"], "store_items")
         .edge("store_items", "wait_human")
-        // P13b: extract -> count -> synthesize -> enforce_citations -> save_report goes here.
-        .edge("wait_human", END)
+        .route("wait_human", |s| if s.digest.enabled { "extract" } else { END }, &["extract", END])
         .node_timeout("hackernews", collector_timeout)
         .node_timeout("yc", collector_timeout)
         .node_timeout("feeds", collector_timeout)
-        .node_timeout("report_search", collector_timeout))
+        .node_timeout("report_search", collector_timeout);
+    Ok(digest::add_nodes(graph, digest_env))
 }
 
 // ---------------------------------------------------------------- plan

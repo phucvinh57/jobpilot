@@ -16,13 +16,13 @@ fn period() -> Period {
     Period::parse("2026-W46").unwrap()
 }
 
-fn core() -> (tempfile::TempDir, Core) {
+pub(super) fn core() -> (tempfile::TempDir, Core) {
     let dir = tempfile::tempdir().unwrap();
     let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
     (dir, core)
 }
 
-fn config(fx: &Fixtures) -> TrendConfig {
+pub(super) fn config(fx: &Fixtures) -> TrendConfig {
     TrendConfig {
         endpoints: Endpoints {
             hackernews: format!("{}/hn", fx.base()),
@@ -40,7 +40,7 @@ fn config(fx: &Fixtures) -> TrendConfig {
     }
 }
 
-const HN_FRONT: &str = r#"{"hits": [{"objectID": "1", "title": "Rust 2.0 released", "url": "https://blog.example.com/rust-2", "points": 450, "num_comments": 210, "created_at_i": 1794000000}]}"#;
+pub(super) const HN_FRONT: &str = r#"{"hits": [{"objectID": "1", "title": "Rust 2.0 released", "url": "https://blog.example.com/rust-2", "points": 450, "num_comments": 210, "created_at_i": 1794000000}]}"#;
 const HN_BY_DATE: &str = r#"{"hits": [{"objectID": "902", "title": "Ask HN: Who is hiring? (November 2026)", "created_at_i": 1793635297, "points": 300, "num_comments": 2}]}"#;
 const HN_THREAD: &str = r#"{"id": 902, "children": [
     {"id": 7001, "created_at_i": 1793635303, "text": "Acme | Senior Rust Engineer | REMOTE | We build robots in Rust and Go and need help."},
@@ -61,7 +61,7 @@ fn feed(base: &str) -> String {
 }
 
 /// Every route the full run needs.
-async fn fixtures() -> Fixtures {
+pub(super) async fn fixtures() -> Fixtures {
     let fx = Fixtures::start().await;
     fx.route("/hn/search", 200, "application/json", HN_FRONT);
     fx.route("/hn/search_by_date", 200, "application/json", HN_BY_DATE);
@@ -74,7 +74,7 @@ async fn fixtures() -> Fixtures {
     fx
 }
 
-fn add_all(core: &Core, fx: &Fixtures) {
+pub(super) fn add_all(core: &Core, fx: &Fixtures) {
     core.add_trend_source(SourceKind::HackerNews, "", "").unwrap();
     core.add_trend_source(SourceKind::Yc, "", "").unwrap();
     core.add_trend_source(SourceKind::Rss, "Blog", &format!("{}/feed.xml", fx.base())).unwrap();
@@ -88,7 +88,7 @@ async fn run(core: &Core, fx: &Fixtures) -> TrendRun {
     }
 }
 
-fn status_of<'a>(state: &'a TrendRun, kind: &'a str) -> &'a SourceStatus {
+pub(super) fn status_of<'a>(state: &'a TrendRun, kind: &'a str) -> &'a SourceStatus {
     &state.outcomes_of(kind).next().unwrap_or_else(|| panic!("no outcome for {kind}: {:?}", state.outcomes)).status
 }
 
