@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use super::*;
 use crate::llm::fake::FakeLlm;
 use crate::pipeline::ingest::tests::{serve, JOB_HTML};
+use crate::pipeline::insight::Insight;
 use crate::store::Status;
 use crate::{Paths, Secrets};
 
@@ -321,6 +322,80 @@ async fn the_master_profile_is_never_modified() {
     let llm = FakeLlm::with_replies([analysis(), reply(EXAMPLE, &[])]);
     Pipeline::new(&core, &llm).generate(JdInput::Text(JD.into()), |_| {}).await.unwrap();
     assert_eq!(std::fs::read(&profile).unwrap(), before);
+}
+
+/// What the model says about the company in the brief tests.
+fn brief_reply() -> Value {
+    json!({
+        "domain": "Warehouse robotics", "business_summary": "Builds robots for warehouses.",
+        "company": {"size": "", "stage": "", "funding": "", "hq": "", "founded": ""},
+        "interview": {"stages": [], "notes": "", "found": false}, "source_pages": [1]
+    })
+}
+
+#[tokio::test]
+async fn generate_writes_the_company_brief_next_to_the_cv() {
+    let (_dir, core) = core();
+    core.store.kv_set(MAX_PAGES_KEY, "2").unwrap();
+    // The local server answers every path with the job page: the company pages are all that page.
+    let url = serve(200, "text/html; charset=utf-8", JOB_HTML.to_string()).await;
+    let llm = FakeLlm::with_replies([analysis(), reply(EXAMPLE, &[])]);
+    let brief_llm = Arc::new(FakeLlm::with_replies([brief_reply()]));
+    let app = Pipeline::new(&core, &llm)
+        .with_insight(brief_llm.clone())
+        .generate(JdInput::Url(url.clone()), |_| {})
+        .await
+        .unwrap();
+
+    assert_eq!(llm.calls().len(), 2, "the brief has its own client: the CV's scripted answers are untouched");
+    assert_eq!(brief_llm.calls().len(), 1);
+    assert!(app.cv_pdf_path().is_file());
+    let brief = Insight::from_json(app.insight_json.as_deref().unwrap()).unwrap();
+    assert_eq!(brief.domain, "Warehouse robotics");
+    assert_eq!(brief.skills.required, ["Linux administration", "Nginx"], "the analysis' skills");
+    assert_eq!(brief.sources, [url.clone(), url.replace("/job", "/")], "the posting and the page the model used");
+    assert_eq!(core.store.get_application(app.id).unwrap().unwrap().insight_json, app.insight_json);
+}
+
+#[tokio::test]
+async fn a_failed_brief_never_fails_generation_and_regenerate_fills_it_in() {
+    let (_dir, core) = core();
+    core.store.kv_set(MAX_PAGES_KEY, "2").unwrap();
+    let url = serve(200, "text/html; charset=utf-8", JOB_HTML.to_string()).await;
+    let llm = FakeLlm::with_replies([analysis(), reply(EXAMPLE, &[])]);
+    let down = Arc::new(FakeLlm::with_error("HTTP 503 Service Unavailable"));
+    let app = Pipeline::new(&core, &llm).with_insight(down.clone()).generate(JdInput::Url(url), |_| {}).await.unwrap();
+    assert_eq!(down.calls().len(), 1);
+    assert!(app.insight_json.is_none() && app.cv_pdf_path().is_file());
+    assert!(!event_text(&core, app.id).contains("[error]"), "{}", event_text(&core, app.id));
+
+    // Regenerate has the stored analysis and writes the missing brief.
+    let llm = FakeLlm::with_replies([reply(EXAMPLE, &[])]);
+    let up = Arc::new(FakeLlm::with_replies([brief_reply()]));
+    let app = Pipeline::new(&core, &llm).with_insight(up.clone()).regenerate(app.id, |_| {}).await.unwrap();
+    assert_eq!(up.calls().len(), 1);
+    assert!(app.insight_json.is_some());
+
+    // ...and leaves an existing one alone.
+    let llm = FakeLlm::with_replies([reply(EXAMPLE, &[])]);
+    let unused = Arc::new(FakeLlm::with_error("must not be called"));
+    let again = Pipeline::new(&core, &llm).with_insight(unused.clone()).regenerate(app.id, |_| {}).await.unwrap();
+    assert!(unused.calls().is_empty());
+    assert_eq!(again.insight_json, app.insight_json);
+}
+
+#[tokio::test]
+async fn a_failing_cv_still_reports_its_own_error() {
+    let (_dir, core) = core();
+    core.set_profile_path(Path::new("/definitely/missing/profile.yaml")).unwrap();
+    let llm = FakeLlm::with_replies([analysis()]);
+    let brief_llm = Arc::new(FakeLlm::with_replies([brief_reply()]));
+    let err = Pipeline::new(&core, &llm)
+        .with_insight(brief_llm)
+        .generate(JdInput::Text(JD.into()), |_| {})
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("cannot read the profile"), "{err:#}");
 }
 
 #[tokio::test]

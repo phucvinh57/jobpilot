@@ -20,6 +20,7 @@ use futures::StreamExt;
 use super::chrome;
 use super::session::NO_SANDBOX_ENV;
 use crate::pipeline::ingest::MIN_PAGE_CHARS;
+use crate::pipeline::generate::shared_llm;
 use crate::pipeline::{JdInput, NeedsBrowser, Pipeline, Progress, Stage};
 use crate::store::Application;
 use crate::{Core, Paths};
@@ -220,9 +221,10 @@ pub async fn generate_with_browser(
     input: JdInput,
     progress: impl Fn(Progress) + Send + Sync,
 ) -> Result<Application> {
-    let llm = core.default_llm()?;
+    let llm = shared_llm(core)?;
     let paths = core.paths.clone();
-    generate_with_fallback(&Pipeline::new(core, &*llm), existing, input, progress, move |url| async move {
+    let pipeline = Pipeline::new(core, &*llm).with_insight(llm.clone());
+    generate_with_fallback(&pipeline, existing, input, progress, move |url| async move {
         rendered_html(&paths, &url).await
     })
     .await
