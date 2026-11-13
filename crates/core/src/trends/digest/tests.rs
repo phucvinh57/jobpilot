@@ -420,6 +420,116 @@ async fn enforce_citations_keeps_only_points_a_reader_can_check() {
 }
 
 #[tokio::test]
+async fn a_quote_that_is_the_whole_title_proves_even_when_it_is_short() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let a = stored_item(&store, dir.path(), "https://a.test/1", "Rust 2.0", "# Rust 2.0\n\nThe release notes mention async closures and nothing else of note.", None);
+    let mut state = TrendRun::new(period());
+    state.digest.items = vec![a];
+    let point = |text: &str, quote: &str| Point { section: Section::Hiring, topic: String::new(), text: text.into(), quote: quote.into(), citations: vec![a] };
+    state.digest.points = vec![
+        point("the whole title, shorter than the minimum", "Rust 2.0"),
+        point("the whole title, other case and marks", "\u{201c}rust 2.0\u{201d}"),
+        point("only part of the title", "Rust"),
+        point("a short piece of the text", "async"),
+        point("a short quote from nowhere", "Go 3.0"),
+    ];
+
+    let state = cite::enforce_citations(env_with(store), state).await.unwrap();
+
+    let kept: Vec<&str> = state.digest.points.iter().map(|p| p.text.as_str()).collect();
+    assert_eq!(kept, ["the whole title, shorter than the minimum", "the whole title, other case and marks"]);
+    assert_eq!(state.digest.dropped, 3);
+}
+
+#[tokio::test]
+async fn enforce_citations_applies_the_limits_of_the_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let ids: Vec<i64> = (0..8).map(|n| stored_item(&store, dir.path(), &format!("https://a.test/{n}"), &format!("Item {n}"), "text", None)).collect();
+    let mut state = TrendRun::new(period());
+    state.digest.items = ids.clone();
+    // Five valid points in each of the six sections, each citing all eight items.
+    state.digest.points = Section::ALL
+        .iter()
+        .flat_map(|section| {
+            (0..5).map(|n| Point { section: *section, topic: String::new(), text: format!("{} point {n}", section.as_str()), quote: String::new(), citations: ids.clone() })
+        })
+        .collect();
+
+    let state = cite::enforce_citations(env_with(store), state).await.unwrap();
+
+    let points = &state.digest.points;
+    assert_eq!(points.len(), cite::MAX_POINTS, "twenty in all");
+    for section in Section::ALL {
+        assert!(points.iter().filter(|p| p.section == section).count() <= cite::MAX_POINTS_PER_SECTION, "{section:?}");
+    }
+    assert!(points.iter().all(|p| p.citations.len() == cite::MAX_CITATIONS), "five citations each, the first five");
+    assert_eq!(points[0].citations, ids[..cite::MAX_CITATIONS]);
+    assert_eq!(points[0].text, "rising_skills point 0", "the model's own order decides which stay");
+    assert_eq!(state.digest.dropped, 0, "points over the limits are not 'left out for a bad source'");
+    assert!(SYSTEM_RULES.iter().all(|rule| synthesize::SYSTEM.contains(rule)), "the prompt states the same limits");
+}
+
+/// The limits as the prompt words them.
+const SYSTEM_RULES: [&str; 3] = ["at most 5", "At most 4 points per section", "at most 20 in total"];
+
+#[test]
+fn the_markdown_carries_no_link_or_markup_the_model_wrote() {
+    let item = |id, url: &str| CitedItem { id, title: "Title [x](http://evil.test)".into(), url: url.into() };
+    let data = DigestData {
+        items: vec![
+            item(1, "https://t.test/a b(1)?q=)"),
+            item(2, "javascript:alert(1)"),
+            item(3, "file:///etc/passwd"),
+            item(4, "not a url"),
+        ],
+        points: vec![
+            Point {
+                section: Section::Hiring,
+                topic: "x](http://evil.test) *".into(),
+                text: "[click](http://evil.test) <script>alert(1)</script> **bold** ![img](http://evil.test/i.png) www.evil.test mail a@b.test https://evil.test/x `code` &lt;\n# not a heading".into(),
+                quote: "[quote](http://evil.test)\n> more".into(),
+                citations: vec![1, 2, 3, 4],
+            },
+            Point { section: Section::ForYou, topic: String::new(), text: "- not a nested list".into(), quote: String::new(), citations: vec![1] },
+        ],
+        counts: SkillCounts { months: vec!["2026-11".into()], documents: vec![1], skills: vec![SkillCount { skill: "a|b".into(), by_month: vec![1], total: 1 }] },
+        items_read: 5,
+        dropped: 0,
+    };
+
+    let md = cite::render_markdown(&Period::parse("2026-W46").unwrap(), &data);
+
+    // The only links are the stored addresses of cited web items, with the characters that end a link encoded.
+    assert_eq!(md.matches("[1](https://t.test/a%20b%281%29?q=%29)").count(), 2, "{md}");
+    for plain in ["[2]", "[3]", "[4]"] {
+        assert!(md.contains(plain) && !md.contains(&format!("{plain}(")), "{plain} in {md}");
+    }
+    for bad in ["javascript:", "file:", "](http://", "![", "www.evil", "a@b", "https://evil", "`code`", "**bold**", "\n>"] {
+        assert!(!md.contains(bad), "{bad:?} in {md}");
+    }
+    assert!(md.lines().all(|l| !l.starts_with('#') || l.starts_with("# Weekly digest") || l.starts_with("## ")), "{md}");
+    for escaped in [
+        r"\[click\](http\://evil.test)",
+        r"\<script\>alert(1)\</script\>",
+        r"\*\*bold\*\*",
+        r"!\[img\](http\://evil.test/i.png)",
+        r"www\.evil.test",
+        r"a\@b.test",
+        r"https\://evil.test/x",
+        r"\`code\`",
+        r"\&lt;",
+        r"**x\](http\://evil.test) \***",
+        "  > \\[quote\\](http\\://evil.test) \\> more",
+        r"- \- not a nested list",
+        r"| a\|b |",
+    ] {
+        assert!(md.contains(escaped), "{escaped:?} missing in {md}");
+    }
+}
+
+#[tokio::test]
 async fn the_digest_counts_hiring_postings_and_leads_from_the_store() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_in_memory().unwrap();

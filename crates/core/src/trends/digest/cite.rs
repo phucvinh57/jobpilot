@@ -14,9 +14,13 @@ use crate::trends::period::Period;
 use crate::Store;
 
 /// A quote shorter than this (after [`normalize`]) proves nothing: one word is in every text.
+/// (A whole title is the exception: see [`Searchable::has`].)
 const MIN_QUOTE_CHARS: usize = 10;
-/// Citations kept per point.
-const MAX_CITATIONS: usize = 5;
+/// The limits of the prompt, enforced here because the model may ignore them: citations kept per
+/// point, points per section, points in all.
+pub(super) const MAX_CITATIONS: usize = 5;
+pub(super) const MAX_POINTS_PER_SECTION: usize = 4;
+pub(super) const MAX_POINTS: usize = 20;
 /// Skills in the markdown table of `body_md`.
 const TABLE_SKILLS: usize = 10;
 
@@ -55,15 +59,33 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// What a quote of a cited item is checked against.
+struct Searchable {
+    /// [`haystack`] of the title and the text.
+    haystack: String,
+    /// [`normalize`]d title.
+    title: String,
+}
+
+impl Searchable {
+    /// The quote is in the item's text, or is the item's whole title (which is a quote however short).
+    fn has(&self, quote: &str) -> bool {
+        let wanted = normalize(quote);
+        (!wanted.is_empty() && wanted == self.title) || quote_found(quote, &self.haystack)
+    }
+}
+
 /// Drop every point without a valid citation (an id of an item this digest was built from) and
 /// every point whose quote is in none of its cited items. Invalid ids are removed from the points
-/// that stay. Counts go in `dropped`.
+/// that stay, at most [`MAX_CITATIONS`] are kept. Then the first [`MAX_POINTS_PER_SECTION`] points
+/// of a section and the first [`MAX_POINTS`] in all stay. Points dropped for the first two reasons
+/// are counted in `dropped`.
 pub(super) async fn enforce_citations(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendRun> {
     let valid: HashSet<i64> = s.digest.items.iter().copied().collect();
     let drafted = std::mem::take(&mut s.digest.points);
     let total = drafted.len();
-    let mut haystacks: HashMap<i64, String> = HashMap::new();
-    let (mut uncited, mut fake_quotes, mut empty) = (0usize, 0usize, 0usize);
+    let mut searchable: HashMap<i64, Searchable> = HashMap::new();
+    let (mut uncited, mut fake_quotes, mut empty, mut over_limit) = (0usize, 0usize, 0usize, 0usize);
     let mut kept: Vec<Point> = Vec::new();
 
     for mut point in drafted {
@@ -87,14 +109,17 @@ pub(super) async fn enforce_citations(env: Arc<DigestEnv>, mut s: TrendRun) -> R
         if !point.quote.is_empty() {
             let mut found = false;
             for id in &ids {
-                if !haystacks.contains_key(id) {
-                    let text = match env.store.get_trend_item(*id)? {
-                        Some(item) => format!("{}\n{}", item.title, read_text(&item).await),
-                        None => String::new(),
+                if !searchable.contains_key(id) {
+                    let entry = match env.store.get_trend_item(*id)? {
+                        Some(item) => Searchable {
+                            haystack: haystack(&format!("{}\n{}", item.title, read_text(&item).await)),
+                            title: normalize(&item.title),
+                        },
+                        None => Searchable { haystack: String::new(), title: String::new() },
                     };
-                    haystacks.insert(*id, haystack(&text));
+                    searchable.insert(*id, entry);
                 }
-                if haystacks.get(id).is_some_and(|h| quote_found(&point.quote, h)) {
+                if searchable.get(id).is_some_and(|entry| entry.has(&point.quote)) {
                     found = true;
                     break;
                 }
@@ -107,12 +132,16 @@ pub(super) async fn enforce_citations(env: Arc<DigestEnv>, mut s: TrendRun) -> R
         if kept.iter().any(|k| k.section == point.section && k.text == point.text) {
             continue;
         }
+        if kept.len() >= MAX_POINTS || kept.iter().filter(|k| k.section == point.section).count() >= MAX_POINTS_PER_SECTION {
+            over_limit += 1;
+            continue;
+        }
         point.citations = ids;
         kept.push(point);
     }
     kept.sort_by_key(|p| Section::ALL.iter().position(|s| *s == p.section));
 
-    tracing::info!(drafted = total, kept = kept.len(), uncited, fake_quotes, empty, "digest citations enforced");
+    tracing::info!(drafted = total, kept = kept.len(), uncited, fake_quotes, empty, over_limit, "digest citations enforced");
     s.digest.dropped = u32::try_from(uncited + fake_quotes + empty).unwrap_or(u32::MAX);
     s.digest.points = kept;
     Ok(s)
@@ -196,8 +225,52 @@ pub fn save(store: &Store, period: &Period, data: &DigestData) -> Result<Report>
     })
 }
 
+/// Text written by the model (or the user), safe inside markdown: one line, and nothing in it can
+/// become emphasis, a link, an image, HTML or a heading. An address in it is broken up too
+/// (`https\://`, `www\.`, `\@`) because some renderers link bare addresses.
+fn escape_md(text: &str) -> String {
+    let line = one_line(text);
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len() + 8);
+    for (i, &c) in chars.iter().enumerate() {
+        let before = &chars[..i];
+        let escape = match c {
+            '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '|' | '~' | '&' | '@' => true,
+            ':' => chars[i + 1..].starts_with(&['/', '/']),
+            '.' => {
+                let www = before.len() >= 3 && before[before.len() - 3..].iter().all(|c| c.eq_ignore_ascii_case(&'w'));
+                www || (i > 0 && before.iter().all(char::is_ascii_digit))
+            }
+            '#' | '-' | '+' => i == 0,
+            _ => false,
+        };
+        if escape {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A stored address as a markdown link destination: only http(s), normalised, and with the
+/// characters that could end the link or start markup percent-encoded. `None` for anything else.
+fn link_destination(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok().filter(|u| matches!(u.scheme(), "http" | "https"))?;
+    let mut out = String::with_capacity(url.len());
+    for c in parsed.as_str().chars() {
+        // (`Url` already encodes whitespace, controls and non-ASCII characters.)
+        if matches!(c, '(' | ')' | '[' | ']' | '<' | '>' | '\\' | '`' | '"' | '\'' | '*') {
+            let _ = write!(out, "%{:02X}", c as u32);
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out)
+}
+
 /// The readable digest: sections of points, each point followed by its sources as links, the
-/// quote under it, and a table of the most mentioned skills.
+/// quote under it, and a table of the most mentioned skills. What the model wrote is escaped, and
+/// the only links are the stored addresses of the cited items.
 pub fn render_markdown(period: &Period, data: &DigestData) -> String {
     let url_of: HashMap<i64, &str> = data.items.iter().map(|i| (i.id, i.url.as_str())).collect();
     let mut md = format!("# {}\n\n", report_title(period));
@@ -208,22 +281,22 @@ pub fn render_markdown(period: &Period, data: &DigestData) -> String {
         }
         let _ = write!(md, "## {}\n\n", section.title());
         for point in points {
-            if point.topic.is_empty() {
-                let _ = write!(md, "- {}", point.text);
+            if point.topic.trim().is_empty() {
+                let _ = write!(md, "- {}", escape_md(&point.text));
             } else {
-                let _ = write!(md, "- **{}**: {}", point.topic, point.text);
+                let _ = write!(md, "- **{}**: {}", escape_md(&point.topic), escape_md(&point.text));
             }
             let links: Vec<String> = point
                 .citations
                 .iter()
-                .map(|id| match url_of.get(id) {
-                    Some(url) => format!("[{id}]({url})"),
+                .map(|id| match url_of.get(id).and_then(|url| link_destination(url)) {
+                    Some(destination) => format!("[{id}]({destination})"),
                     None => format!("[{id}]"),
                 })
                 .collect();
             let _ = writeln!(md, " (sources: {})", links.join(", "));
-            if !point.quote.is_empty() {
-                let _ = writeln!(md, "  > {}", point.quote);
+            if !point.quote.trim().is_empty() {
+                let _ = writeln!(md, "  > {}", escape_md(&point.quote));
             }
         }
         md.push('\n');
@@ -241,7 +314,7 @@ pub fn render_markdown(period: &Period, data: &DigestData) -> String {
         md.push_str(&"---|".repeat(counts.months.len() + 1));
         md.push('\n');
         for skill in counts.skills.iter().take(TABLE_SKILLS) {
-            let _ = write!(md, "| {} |", skill.skill);
+            let _ = write!(md, "| {} |", escape_md(&skill.skill));
             for n in &skill.by_month {
                 let _ = write!(md, " {n} |");
             }

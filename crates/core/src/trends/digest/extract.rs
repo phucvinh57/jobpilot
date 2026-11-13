@@ -22,7 +22,7 @@ use crate::trends::collect::TrendRun;
 use crate::trends::text::{cap, truncate};
 
 /// Bump when the extraction prompt or the shape changes: older cache files are then ignored.
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 const MAX_TOPICS: usize = 8;
 const MAX_CLAIMS: usize = 4;
 const MAX_TOPIC_CHARS: usize = 60;
@@ -80,6 +80,18 @@ struct Pending {
     title: String,
     text: String,
     cache: Option<PathBuf>,
+    /// Hash of the title and text the answer is about: a text saved again under the same address
+    /// (the file name is the address's hash) must not reuse an older answer.
+    hash: String,
+}
+
+fn content_hash(title: &str, text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(title.as_bytes());
+    h.update([0]);
+    h.update(text.as_bytes());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Pending {
@@ -92,6 +104,7 @@ impl Pending {
 #[derive(Serialize, Deserialize)]
 struct Cached {
     v: u32,
+    hash: String,
     topics: Vec<String>,
     claims: Vec<Claim>,
 }
@@ -109,11 +122,13 @@ pub(super) async fn extract(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<Tren
     let mut pending = Vec::new();
     for item in &items {
         let cache = item.text_path.as_ref().map(|p| p.with_extension("extract.json"));
-        if let Some(found) = read_cache(cache.as_deref(), item.id).await {
+        let text = read_text(item).await;
+        let hash = content_hash(&item.title, &text);
+        if let Some(found) = read_cache(cache.as_deref(), item.id, &hash).await {
             extractions.push(found);
             continue;
         }
-        pending.push(Pending { id: item.id, title: item.title.clone(), text: read_text(item).await, cache });
+        pending.push(Pending { id: item.id, title: item.title.clone(), text, cache, hash });
     }
     let cached = extractions.len();
 
@@ -192,8 +207,10 @@ async fn extract_batch(llm: &dyn Llm, batch: Vec<Pending>, item_chars: usize) ->
     let reply = llm.complete_json(SYSTEM, &user, &schema()).await.context("extracting topics and claims")?;
     let (found, fake) = parse(&reply, &batch)?;
     for extraction in &found {
-        if let Some(cache) = batch.iter().find(|p| p.id == extraction.item_id).and_then(|p| p.cache.as_deref()) {
-            write_cache(cache, extraction).await;
+        if let Some(item) = batch.iter().find(|p| p.id == extraction.item_id) {
+            if let Some(cache) = item.cache.as_deref() {
+                write_cache(cache, &item.hash, extraction).await;
+            }
         }
     }
     Ok((found, fake))
@@ -284,15 +301,15 @@ fn strings(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-async fn read_cache(path: Option<&Path>, item_id: i64) -> Option<Extraction> {
+async fn read_cache(path: Option<&Path>, item_id: i64, hash: &str) -> Option<Extraction> {
     let bytes = tokio::fs::read(path?).await.ok()?;
     let cached: Cached = serde_json::from_slice(&bytes).ok()?;
-    (cached.v == CACHE_VERSION).then_some(Extraction { item_id, topics: cached.topics, claims: cached.claims })
+    (cached.v == CACHE_VERSION && cached.hash == hash).then_some(Extraction { item_id, topics: cached.topics, claims: cached.claims })
 }
 
 /// Best effort: a cache that cannot be written only costs a model call next time.
-async fn write_cache(path: &Path, extraction: &Extraction) {
-    let cached = Cached { v: CACHE_VERSION, topics: extraction.topics.clone(), claims: extraction.claims.clone() };
+async fn write_cache(path: &Path, hash: &str, extraction: &Extraction) {
+    let cached = Cached { v: CACHE_VERSION, hash: hash.to_string(), topics: extraction.topics.clone(), claims: extraction.claims.clone() };
     let Ok(bytes) = serde_json::to_vec(&cached) else { return };
     let tmp = path.with_extension("json.tmp");
     if tokio::fs::write(&tmp, bytes).await.is_ok() && tokio::fs::rename(&tmp, path).await.is_err() {
@@ -316,7 +333,7 @@ mod tests {
     }
 
     fn pending(id: i64, title: &str, text: &str) -> Pending {
-        Pending { id, title: title.into(), text: text.into(), cache: None }
+        Pending { id, title: title.into(), text: text.into(), cache: None, hash: content_hash(title, text) }
     }
 
     #[test]

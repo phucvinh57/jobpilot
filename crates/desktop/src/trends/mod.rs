@@ -267,9 +267,8 @@ impl TrendsView {
     }
 
     fn fail(&mut self, message: String) {
-        let problem = health::classify(&message);
-        let job = Job::Resume(self.cadence.period());
-        self.notice = Some(Notice::Error { message, problem, job });
+        // Not a job: there is nothing to resume, so no Retry (it would restart a collection).
+        self.notice = Some(Notice::Info(format!("Could not read the saved data: {message}")));
     }
 
     fn on_progress(&mut self, progress: &Progress, cx: &mut Context<Self>) {
@@ -475,7 +474,7 @@ impl TrendsView {
                                     .compact()
                                     .icon(IconName::ExternalLink)
                                     .label("Open page")
-                                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                                    .when(report::is_web_url(&url), |b| b.on_click(move |_, _, cx| cx.open_url(&url))),
                             )
                             .child(
                                 Button::new(("trends-continue", i))

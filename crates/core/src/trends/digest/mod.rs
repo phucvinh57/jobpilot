@@ -14,11 +14,16 @@
 //!   in code against a fixed vocabulary (plus the user's own skills); the model never counts.
 //! - `synthesize` ([`synthesize`]): one model call: rising and falling skills, active domains,
 //!   funding and hiring signals, and what it means for the user's preferences. Each point carries
-//!   `citations[]` of item ids and may carry one verbatim `quote`.
+//!   `citations[]` of item ids and may carry one verbatim `quote`. The evidence in the prompt stays
+//!   within [`DigestLimits::evidence_chars`] (fewer claims per item, then fewer items), and only the
+//!   items shown can be cited.
 //! - `enforce_citations` ([`cite`]): in code, drops every point without a valid citation (an id
-//!   that is an item of this digest) and every point whose quote is not in a cited item.
+//!   that is an item of this digest) and every point whose quote is not in a cited item (a quote
+//!   that is a cited item's whole title always counts). It also enforces the prompt's limits: at
+//!   most 5 citations per point, 4 points per section, 20 in all.
 //! - `save_report` ([`cite`]): one row in `reports` (`weekly` / `quarterly`): `body_md` is the
-//!   readable digest, `citations_json` is [`DigestData`] (cited items, points, skill counts) for
+//!   readable digest (model-written text is escaped, the only links are the cited items' stored
+//!   http(s) addresses), `citations_json` is [`DigestData`] (cited items, points, skill counts) for
 //!   the view. Regenerating adds a row; the newest wins.
 //!
 //! Two graphs share these nodes: `trends` (collection, then the digest when the run was started
@@ -241,13 +246,16 @@ pub struct DigestLimits {
     pub concurrency: usize,
     /// Characters of one item's text the model sees.
     pub item_chars: usize,
+    /// Characters of evidence in the digest prompt, so it fits a small context: the claims per item
+    /// shrink first, then the last items are left out of the prompt (and cannot be cited).
+    pub evidence_chars: usize,
     /// All extraction calls together may take this long; the batches not done by then are left out.
     pub extract_budget: Duration,
 }
 
 impl Default for DigestLimits {
     fn default() -> Self {
-        Self { max_items: 120, batch_items: 6, concurrency: 3, item_chars: 4_000, extract_budget: Duration::from_secs(600) }
+        Self { max_items: 120, batch_items: 6, concurrency: 3, item_chars: 4_000, evidence_chars: 20_000, extract_budget: Duration::from_secs(600) }
     }
 }
 

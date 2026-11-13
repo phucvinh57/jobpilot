@@ -4,7 +4,7 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use jobpilot_core::chrono::Local;
+use jobpilot_core::chrono::{DateTime, Local, Utc};
 use jobpilot_core::store::Report;
 use jobpilot_core::trends::{Digest, DigestData, Point, Section, SkillCount, SkillCounts};
 
@@ -24,22 +24,60 @@ fn suggestion(section: Section, topic: &str) -> String {
     }
 }
 
-/// One line per skill: the count and how the latest month compares with the one before. Words, not
-/// only a bar length: the numbers are the chart's labels.
-fn describe(skill: &SkillCount) -> String {
+/// Documents a month needs before its share of them says anything.
+const MIN_DOCUMENTS: u32 = 10;
+/// Two months are compared only when neither holds more than this many times the documents of the
+/// other.
+const MAX_SIZE_RATIO: u32 = 2;
+/// Shares closer than this (percentage points) are the same.
+const SAME_POINTS: f64 = 0.5;
+
+/// Is the latest month of the counts not over at the time the digest was made? The documents of
+/// that month are then the first ones only. (`created` and `month` are `YYYY-MM`.)
+fn latest_month_is_partial(months: &[String], created: &str) -> bool {
+    months.last().is_some_and(|last| created <= last.as_str())
+}
+
+/// One line per skill: the count and, when it is fair, how a month's share of documents compares
+/// with the month before. A raw count would grow with the number of documents read, so the share
+/// (count / documents of that month) is compared, and only when both months are of a similar size
+/// and enough documents; otherwise the line says no more than the count. A month that is not over
+/// is shown as "so far" and left out of the comparison: the last two whole months are compared.
+fn describe(skill: &SkillCount, documents: &[u32], latest_partial: bool) -> String {
     let n = skill.by_month.len();
     let last = skill.by_month.last().copied().unwrap_or(0);
-    let before = if n >= 2 { skill.by_month[n - 2] } else { 0 };
-    let change = match last.cmp(&before) {
-        std::cmp::Ordering::Greater => format!("up {} on last month", last - before),
-        std::cmp::Ordering::Less => format!("down {} on last month", before - last),
-        std::cmp::Ordering::Equal => "same as last month".to_string(),
+    let skipped = usize::from(latest_partial);
+    let (this_month, prior) = if latest_partial { (format!("{last} so far this month"), "the month before") } else { (format!("{last} this month"), "last month") };
+    let line = |tail: &str| format!("{} in total \u{b7} {this_month}{tail}", skill.total);
+    if documents.len() != n || n < 2 + skipped {
+        return line("");
+    }
+    let (before_at, now_at) = (n - 2 - skipped, n - 1 - skipped);
+    let (docs_before, docs_now) = (documents[before_at], documents[now_at]);
+    if docs_before < MIN_DOCUMENTS || docs_now < MIN_DOCUMENTS {
+        return line(", too few documents to compare");
+    }
+    if docs_now.max(docs_before) > docs_now.min(docs_before).saturating_mul(MAX_SIZE_RATIO) {
+        return line(", months too different in size to compare");
+    }
+    let share = |count: u32, docs: u32| f64::from(count) * 100.0 / f64::from(docs);
+    let (now, before) = (share(skill.by_month[now_at], docs_now), share(skill.by_month[before_at], docs_before));
+    let change = if (now - before).abs() < SAME_POINTS {
+        format!("about the same as {prior} ({before:.1}%)")
+    } else if now > before {
+        format!("up from {before:.1}% {prior}")
+    } else {
+        format!("down from {before:.1}% {prior}")
     };
-    format!("{} in total \u{b7} {} this month, {}", skill.total, last, change)
+    if latest_partial {
+        line(&format!(" \u{b7} last month {now:.1}% of documents, {change}"))
+    } else {
+        format!("{} in total \u{b7} {now:.1}% of this month's documents, {change}", skill.total)
+    }
 }
 
 /// Only web addresses are opened, whatever the saved data says.
-fn is_web_url(url: &str) -> bool {
+pub(super) fn is_web_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
 }
 
@@ -64,7 +102,7 @@ impl TrendsView {
             None => when(report),
         };
         let body = match &digest.data {
-            Some(data) => self.render_data(data, c, cx),
+            Some(data) => self.render_data(data, &report.created_at, c, cx),
             None => self.render_plain(digest, c),
         };
         section(&report.title, &hint, cx).id("trends-digest").role(Role::Group).aria_label(report.title.clone()).child(body)
@@ -80,7 +118,7 @@ impl TrendsView {
             .children(digest.report.body_md.lines().map(|l| div().child(l.to_string())))
     }
 
-    fn render_data(&self, data: &DigestData, c: &Colors, cx: &Context<Self>) -> Div {
+    fn render_data(&self, data: &DigestData, created: &DateTime<Utc>, c: &Colors, cx: &Context<Self>) -> Div {
         let mut body = div().v_flex().gap_4();
         for sec in Section::ALL {
             let points: Vec<(usize, &Point)> = data.points.iter().enumerate().filter(|(_, p)| p.section == sec).collect();
@@ -98,7 +136,7 @@ impl TrendsView {
         if data.points.is_empty() {
             body = body.child(div().text_sm().text_color(c.muted).child("No point could be tied to a source this time."));
         }
-        if let Some(chart) = self.render_chart(&data.counts, c, cx) {
+        if let Some(chart) = self.render_chart(&data.counts, created, c, cx) {
             body = body.child(chart);
         }
         body.when(data.dropped > 0, |d| {
@@ -165,12 +203,14 @@ impl TrendsView {
     }
 
     /// Simple bars: one hue, the numbers beside each bar.
-    fn render_chart(&self, counts: &SkillCounts, c: &Colors, cx: &Context<Self>) -> Option<Stateful<Div>> {
+    fn render_chart(&self, counts: &SkillCounts, created: &DateTime<Utc>, c: &Colors, cx: &Context<Self>) -> Option<Stateful<Div>> {
         let max = counts.skills.first()?.total.max(1) as f32;
         let documents: u32 = counts.documents.iter().sum();
+        let partial = latest_month_is_partial(&counts.months, &created.format("%Y-%m").to_string());
         let rows = counts.skills.iter().take(CHART_ROWS).enumerate().map(|(i, skill)| {
             let share = (skill.total as f32 / max).clamp(0.02, 1.0);
-            let message = suggestion(Section::RisingSkills, &skill.skill);
+            // Any skill of the chart, rising or not: the message makes no claim about the trend.
+            let message = format!("Add the skill \"{}\" to my preferences.", skill.skill);
             div()
                 .h_flex()
                 .items_center()
@@ -185,7 +225,7 @@ impl TrendsView {
                         .bg(c.track)
                         .child(div().h_full().w(relative(share)).rounded_full().bg(c.primary)),
                 )
-                .child(div().w(px(300.)).flex_shrink_0().truncate().text_xs().text_color(c.muted).child(describe(skill)))
+                .child(div().w(px(430.)).flex_shrink_0().truncate().text_xs().text_color(c.muted).child(describe(skill, &counts.documents, partial)))
                 .child(
                     Button::new(("trends-suggest-skill", i))
                         .ghost()
@@ -255,20 +295,75 @@ impl TrendsView {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe, is_web_url, suggestion};
+    use super::{describe, is_web_url, latest_month_is_partial, suggestion};
     use jobpilot_core::trends::{Section, SkillCount};
 
     fn skill(by_month: &[u32]) -> SkillCount {
         SkillCount { skill: "Rust".into(), by_month: by_month.to_vec(), total: by_month.iter().sum() }
     }
 
+    const DOT: &str = "\u{b7}";
+
     #[test]
-    fn a_skill_is_described_in_words() {
-        assert_eq!(describe(&skill(&[1, 2, 5])), "8 in total \u{b7} 5 this month, up 3 on last month");
-        assert_eq!(describe(&skill(&[4, 1])), "5 in total \u{b7} 1 this month, down 3 on last month");
-        assert_eq!(describe(&skill(&[2, 2])), "4 in total \u{b7} 2 this month, same as last month");
-        assert_eq!(describe(&skill(&[3])), "3 in total \u{b7} 3 this month, up 3 on last month");
-        assert_eq!(describe(&skill(&[])), "0 in total \u{b7} 0 this month, same as last month");
+    fn a_skill_is_described_by_its_share_of_the_documents() {
+        // 20 of 100 documents last month, 30 of 100 this month: up.
+        assert_eq!(describe(&skill(&[10, 20, 30]), &[100, 100, 100], false), format!("60 in total {DOT} 30.0% of this month's documents, up from 20.0% last month"));
+        assert_eq!(describe(&skill(&[30, 10]), &[100, 100], false), format!("40 in total {DOT} 10.0% of this month's documents, down from 30.0% last month"));
+        assert_eq!(describe(&skill(&[20, 20]), &[100, 100], false), format!("40 in total {DOT} 20.0% of this month's documents, about the same as last month (20.0%)"));
+    }
+
+    #[test]
+    fn more_documents_alone_are_not_a_rise() {
+        // The count doubles, but so do the documents read: the share is the same.
+        let line = describe(&skill(&[10, 20]), &[50, 100], false);
+        assert!(line.contains("about the same as last month (20.0%)"), "{line}");
+        // The count falls, but the share rises.
+        let line = describe(&skill(&[20, 15]), &[100, 60], false);
+        assert!(line.contains("up from 20.0% last month") && line.contains("25.0% of this month's"), "{line}");
+    }
+
+    #[test]
+    fn a_month_that_is_not_over_is_left_out_of_the_comparison() {
+        // The last two whole months (10 -> 20 of 100 documents) are compared; this month is "so far".
+        let line = describe(&skill(&[10, 20, 30]), &[100, 100, 100], true);
+        assert_eq!(line, format!("60 in total {DOT} 30 so far this month {DOT} last month 20.0% of documents, up from 10.0% the month before"));
+        assert_eq!(describe(&skill(&[30, 10, 5]), &[100, 100, 100], true), format!("45 in total {DOT} 5 so far this month {DOT} last month 10.0% of documents, down from 30.0% the month before"));
+        assert!(describe(&skill(&[20, 20, 1]), &[100, 100, 100], true).contains("about the same as the month before (20.0%)"));
+        // The size of the month that is not over does not matter: only the whole months are compared.
+        assert!(describe(&skill(&[10, 20, 3]), &[100, 100, 4], true).contains("up from 10.0% the month before"));
+        // The same counts with the month over: the last two months are compared instead.
+        assert!(describe(&skill(&[10, 20, 3]), &[100, 100, 4], false).contains("too few documents"));
+    }
+
+    #[test]
+    fn nothing_is_said_about_the_trend_when_it_would_not_be_fair() {
+        let rising = skill(&[1, 2, 5]);
+        // Months of very different size (more than twice as many documents).
+        let line = describe(&rising, &[100, 40, 90], false);
+        assert!(line.ends_with("months too different in size to compare"), "{line}");
+        assert!(!line.contains("up from") && !line.contains('%'), "{line}");
+        let line = describe(&rising, &[40, 100, 90], true);
+        assert_eq!(line, format!("8 in total {DOT} 5 so far this month, months too different in size to compare"));
+        // Too few documents for a share to mean anything.
+        let line = describe(&rising, &[100, 100, 9], false);
+        assert!(line.ends_with("too few documents to compare"), "{line}");
+        let line = describe(&rising, &[100, 9, 100], true);
+        assert!(line.ends_with("so far this month, too few documents to compare"), "{line}");
+        // No document counts, too few months (a month that is not over needs two whole ones before it).
+        assert_eq!(describe(&rising, &[], false), format!("8 in total {DOT} 5 this month"));
+        assert_eq!(describe(&skill(&[3]), &[50], false), format!("3 in total {DOT} 3 this month"));
+        assert_eq!(describe(&skill(&[]), &[], false), format!("0 in total {DOT} 0 this month"));
+        assert_eq!(describe(&skill(&[3, 4]), &[50, 50], true), format!("7 in total {DOT} 4 so far this month"));
+        assert_eq!(describe(&skill(&[4]), &[50], true), format!("4 in total {DOT} 4 so far this month"));
+    }
+
+    #[test]
+    fn the_latest_month_is_partial_while_it_is_not_over() {
+        let months = vec!["2026-10".to_string(), "2026-11".to_string()];
+        assert!(latest_month_is_partial(&months, "2026-11"), "made in the month");
+        assert!(latest_month_is_partial(&months, "2026-10"), "made before the month");
+        assert!(!latest_month_is_partial(&months, "2026-12"), "made after it");
+        assert!(!latest_month_is_partial(&[], "2026-12"));
     }
 
     #[test]
