@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,12 +13,19 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_ARG: --profile ci
+
 jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history: PRs only check the paths changed since the base branch (needs origin/<base>).
+          fetch-depth: 0
 
       - uses: typst-community/setup-typst@v4
         with:
@@ -26,20 +34,34 @@ jobs:
       - name: Install Linux libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-xcb-dev libxcb1-dev libvulkan-dev libfontconfig-dev libfreetype-dev \
-            libdbus-1-dev libssl-dev libasound2-dev libzstd-dev
+            libdbus-1-dev
+
+      - uses: rui314/setup-mold@v1 # faster linking of the gpui binary
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
 
+      # One cache, written by main only; PRs restore it (a PR cache is not visible to other PRs).
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Check
         env:
           JOBPILOT_SECRETS: memory
-        run: scripts/check.sh --all
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [[ -n $BASE_REF ]]; then
+            scripts/check.sh "origin/$BASE_REF"
+          else
+            scripts/check.sh --all
+          fi
 
   ci-ok:
     name: CI OK

@@ -208,6 +208,7 @@ mod tests {
     }
 
     /// Scripted raw model: returns the queued texts in order, recording each user message.
+    #[allow(clippy::type_complexity)]
     fn scripted(
         texts: Vec<&'static str>,
     ) -> (Arc<Mutex<Vec<String>>>, impl FnMut(String) -> std::future::Ready<Result<String>>) {

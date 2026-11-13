@@ -343,13 +343,13 @@ mod tests {
         let managed = touch(dir.path(), "managed-chrome");
         let system = touch(dir.path(), "system-chrome");
 
-        let all = resolve_from(Some(env.clone().into()), Some(managed.clone()), &[system.clone()]).unwrap();
+        let all = resolve_from(Some(env.clone().into()), Some(managed.clone()), std::slice::from_ref(&system)).unwrap();
         assert_eq!(all, Chrome { path: env, source: ChromeSource::Env });
 
-        let no_env = resolve_from(None, Some(managed.clone()), &[system.clone()]).unwrap();
+        let no_env = resolve_from(None, Some(managed.clone()), std::slice::from_ref(&system)).unwrap();
         assert_eq!(no_env, Chrome { path: managed, source: ChromeSource::Managed });
 
-        let only_system = resolve_from(None, None, &[system.clone()]).unwrap();
+        let only_system = resolve_from(None, None, std::slice::from_ref(&system)).unwrap();
         assert_eq!(only_system, Chrome { path: system, source: ChromeSource::System });
     }
 

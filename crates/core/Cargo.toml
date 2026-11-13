@@ -23,7 +23,6 @@ chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 base64 = "0.22"
 rand = "0.8"
-urlencoding = "2"
 dom_smoothie = "0.19"
 html2text = "0.13"
 pdf-extract = "0.9"
