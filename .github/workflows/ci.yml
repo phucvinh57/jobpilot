@@ -24,8 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # PRs only check the paths changed since the base branch.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # Full history: PRs only check the paths changed since the base branch (needs origin/<base>).
+          fetch-depth: 0
 
       - uses: typst-community/setup-typst@v4
         with:
