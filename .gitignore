@@ -1,35 +1,9 @@
-# dependencies (bun install)
-node_modules
-
-# output
-out
-dist
-*.tgz
-
-# code coverage
-coverage
-*.lcov
-
-# logs
-logs
-_.log
-report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
-
-# dotenv environment variable files
+build/
+*.pdf
 .env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
-
-# caches
-.eslintcache
-.cache
-*.tsbuildinfo
-
-# IntelliJ based IDEs
+.DS_Store
 .idea
 
-# Finder (MacOS) folder config
-.DS_Store
-*.pdf
+# leftovers from the Reactive Resume stack (kept on disk, not tracked)
+data/
+backups/

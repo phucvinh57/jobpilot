@@ -1,32 +1,42 @@
 # private-resumes
 
-## CV Automation Scripts
+My CVs as YAML, compiled locally to PDF with [Typst](https://typst.app) using the
+[`basic-resume`](https://typst.app/universe/package/basic-resume) package.
 
-### Upload a JSON CV to local RxResume
-
-- Reads a CV JSON file.
-- Uses file name (without extension) as the resume name.
-- Creates or updates by slug derived from file name.
-
-```bash
-bun run cv:upload -- general.json
+```
+profile.yaml          master profile: everything I've done (source of truth)
+cvs/<slug>.yaml       one tailored CV per job description
+jds/<slug>.md         job descriptions
+template/cv.typ       shared renderer
+build/<slug>.pdf      output (gitignored)
 ```
 
-Env:
-
-- Required: `RXRESUME_API_KEY`
-- Optional: `RXRESUME_BASE_URL` (fallback to `APP_URL`, then `http://localhost:3000`)
-
-### Generate a tailored CV with OpenAI
-
-- Uses a prompt and a base CV JSON (`general.json` by default).
-- Outputs another full Reactive Resume JSON file.
+## Setup
 
 ```bash
-bun run cv:generate -- --prompt "Tailor this CV for a Senior DevOps role" --base general.json --out devops.json
+cargo install --locked typst-cli
 ```
 
-Env:
+The package is downloaded automatically on first compile.
 
-- Required: `OPENAI_API_KEY`
-- Optional: `OPENAI_MODEL` (default `gpt-5.2`)
+## Build
+
+```bash
+make profile                 # full CV from profile.yaml -> build/profile.pdf
+make cv NAME=<slug>          # cvs/<slug>.yaml -> build/<slug>.pdf
+make all                     # everything
+make watch NAME=<slug>       # rebuild on save (omit NAME for profile)
+```
+
+Optional per-file `style:` block: `font`, `font-size` (e.g. `"10pt"`), `accent-color` (hex), `paper`.
+
+## Tailoring a CV to a JD
+
+The `tailor-cv` skill (`.agents/skills/tailor-cv/SKILL.md`) reads the JD and
+`profile.yaml`, writes `cvs/<slug>.yaml`, and compiles it. It never adds facts
+that aren't in the profile.
+
+- **Claude Code**: `/tailor-cv <paste JD or path>` (via `.claude/skills/` symlink)
+- **OpenAI Codex**: `$tailor-cv <paste JD or path>` (reads `.agents/skills/`)
+
+New achievements go into `profile.yaml` first, so every future CV can use them.
