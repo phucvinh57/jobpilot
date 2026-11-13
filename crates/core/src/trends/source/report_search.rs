@@ -323,6 +323,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_api_key_is_not_sent_to_another_host_when_the_api_redirects() {
+        let fx = fixtures().await;
+        let other = Fixtures::start().await;
+        other.route("/steal", 200, "application/json", r#"{"web": {"results": []}}"#);
+        fx.redirect("/res/v1/web/search", 302, &format!("{}/steal", other.base()));
+        fx.redirect("/search", 307, &format!("{}/steal", other.base()));
+        let ctx = ctx(&fx, &[]);
+
+        for (provider, key) in [(SearchProvider::Brave, "brave-test-key-123"), (SearchProvider::Tavily, "tvly-test-key-456")] {
+            let err = format!("{:#}", collect(&ctx, provider, key, &query()).await.unwrap_err());
+            assert!(err.contains("not followed") && !err.contains(key), "{err}");
+        }
+        assert!(other.hits().is_empty(), "no key, no query reached the other host: {:?}", other.hits());
+    }
+
+    #[tokio::test]
     async fn results_on_this_machine_or_a_private_network_are_not_read() {
         let fx = fixtures().await;
         let mut c = ctx(&fx, &[]);

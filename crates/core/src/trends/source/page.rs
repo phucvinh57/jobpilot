@@ -26,25 +26,25 @@ pub struct Page {
 
 /// The readable text at `url`.
 pub async fn fetch_text(ctx: &Ctx, url: &str) -> Result<Page> {
-    let resp = ctx.http.get(url, &[("Accept", ACCEPT)]).await?;
-    let text = readable(&resp, ctx.limits().max_text_chars).await?;
+    let Response { url, content_type, body } = ctx.http.get(url, &[("Accept", ACCEPT)]).await?;
+    let text = readable(&content_type, &url, body, ctx.limits().max_text_chars).await?;
     ensure!(
         text.chars().count() >= MIN_TEXT_CHARS,
         "the page has too little readable text ({} characters; it may need a browser to render)",
         text.chars().count()
     );
-    Ok(Page { url: resp.url, text })
+    Ok(Page { url, text })
 }
 
-async fn readable(resp: &Response, max_chars: usize) -> Result<String> {
-    let kind = resp.content_type.split(';').next().unwrap_or_default().trim();
-    let body = resp.body.clone();
-    let url = resp.url.clone();
+/// The text of a response body (moved in: it is not copied).
+async fn readable(content_type: &str, url: &str, body: Vec<u8>, max_chars: usize) -> Result<String> {
+    let kind = content_type.split(';').next().unwrap_or_default().trim();
     let text = if kind == "application/pdf" || body.starts_with(b"%PDF-") {
         let raw = tokio::task::spawn_blocking(move || pdf_text(&body)).await.context("the PDF reader stopped")??;
         clean(&raw)
     } else if kind.is_empty() || kind.contains("html") || kind.contains("xml") {
-        let html = String::from_utf8_lossy(&body).into_owned();
+        let html = String::from_utf8(body).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+        let url = url.to_string();
         tokio::task::spawn_blocking(move || extract_html(&html, Some(&url))).await.context("the page reader stopped")?
     } else if kind.starts_with("text/") {
         clean(&String::from_utf8_lossy(&body))
@@ -110,6 +110,22 @@ mod tests {
 
         let err = fetch_text(&ctx, &format!("{}/blob", fx.base())).await.unwrap_err().to_string();
         assert!(err.contains("unsupported content type"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_host_guard_cannot_be_skipped_by_a_caller() {
+        let fx = Fixtures::start().await;
+        fx.route("/job", 200, "text/html", JOB_HTML);
+        let mut strict = ctx(&fx, &[]);
+        let mut config = (*strict.config).clone();
+        config.limits.allow_private_hosts = false;
+        strict.http = crate::trends::http::Http::new(&config.limits).unwrap();
+        strict.config = std::sync::Arc::new(config);
+
+        let err = fetch_text(&strict, &format!("{}/job", fx.base())).await.unwrap_err();
+        assert_eq!(err.downcast_ref::<FetchError>(), Some(&FetchError::Private));
+        assert!(collect(&strict, &format!("{}/job", fx.base())).await.is_err());
+        assert!(fx.hits().is_empty());
     }
 
     #[tokio::test]

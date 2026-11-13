@@ -19,6 +19,8 @@ struct Route {
     content_type: String,
     body: Vec<u8>,
     delay: Duration,
+    /// `Location` header of a redirect.
+    location: Option<String>,
 }
 
 /// One request the server saw.
@@ -77,10 +79,19 @@ impl Fixtures {
 
     /// Like [`route`](Self::route), answering only after `delay`.
     pub fn route_after(&self, path: &str, delay: Duration, status: u16, content_type: &str, body: impl Into<Vec<u8>>) -> &Self {
-        let route = Route { path: path.into(), status, content_type: content_type.into(), body: body.into(), delay };
+        let route = Route { path: path.into(), status, content_type: content_type.into(), body: body.into(), delay, location: None };
         let mut routes = self.routes.lock().unwrap();
         routes.retain(|r| r.path != route.path);
         routes.push(route);
+        self
+    }
+
+    /// Answer `path` with a redirect (`status` 301/302/303/307/308) to `location`.
+    pub fn redirect(&self, path: &str, status: u16, location: &str) -> &Self {
+        self.route(path, status, "text/plain", "moved");
+        if let Some(route) = self.routes.lock().unwrap().iter_mut().find(|r| r.path == path) {
+            route.location = Some(location.into());
+        }
         self
     }
 
@@ -132,10 +143,12 @@ impl Fixtures {
             content_type: "text/plain".into(),
             body: b"not found".to_vec(),
             delay: Duration::ZERO,
+            location: None,
         });
         tokio::time::sleep(route.delay).await;
+        let location = route.location.as_ref().map(|l| format!("Location: {l}\r\n")).unwrap_or_default();
         let head = format!(
-            "HTTP/1.1 {} X\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {} X\r\nContent-Type: {}\r\nContent-Length: {}\r\n{location}Connection: close\r\n\r\n",
             route.status,
             route.content_type,
             route.body.len()
