@@ -110,6 +110,10 @@ pub struct QueueView {
     dismiss: Option<DismissForm>,
     /// Threads of waiting sources being continued.
     continuing: BTreeSet<String>,
+    /// Threads whose browser window is being opened.
+    opening: BTreeSet<String>,
+    /// Why "Open browser" failed, by thread (cleared by the next try, Continue or Skip).
+    open_errors: HashMap<String, String>,
 }
 
 impl QueueView {
@@ -141,6 +145,8 @@ impl QueueView {
             note: None,
             dismiss: None,
             continuing: BTreeSet::new(),
+            opening: BTreeSet::new(),
+            open_errors: HashMap::new(),
         };
         view.watch(cx);
         view
@@ -411,11 +417,37 @@ impl QueueView {
         cx.notify();
     }
 
+    /// "Open browser" for a source that waits at a login, captcha or block page: a visible browser on
+    /// that page (in the source's bound session, if any). The user deals with the page; Continue goes on.
+    fn open_browser(&mut self, thread: String, cx: &mut Context<Self>) {
+        if !self.opening.insert(thread.clone()) {
+            return;
+        }
+        self.open_errors.remove(&thread);
+        let core = self.core(cx);
+        let t = thread.clone();
+        let rx = runtime::spawn(async move { core.discover_open_browser(&t).await });
+        cx.spawn(async move |this, cx| {
+            let result = rx.await.unwrap_or_else(|_| Err(anyhow!("the task was cancelled")));
+            this.update(cx, |this, cx| {
+                this.opening.remove(&thread);
+                if let Err(e) = result {
+                    this.open_errors.insert(thread, format!("{e:#}"));
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// Continue a source that waited for the user (a login, a captcha) or retry a failed one.
     fn continue_source(&mut self, thread: String, cx: &mut Context<Self>) {
         if !self.continuing.insert(thread.clone()) {
             return;
         }
+        self.open_errors.remove(&thread);
         let core = self.core(cx);
         let t = thread.clone();
         let rx = runtime::spawn(async move { core.discover_resume(&t).await });
@@ -435,6 +467,7 @@ impl QueueView {
     }
 
     fn skip_source(&mut self, thread: String, cx: &mut Context<Self>) {
+        self.open_errors.remove(&thread);
         let core = self.core(cx);
         let rx = runtime::spawn(async move { core.discover_cancel(&thread) });
         cx.spawn(async move |this, cx| {
@@ -551,8 +584,9 @@ impl QueueView {
         )
     }
 
-    /// One row per source waiting for the user: Continue, Skip (and, once the browser hand-off
-    /// exists, Open browser).
+    /// One row per source waiting for the user: Open browser (a visible window on the page), Continue
+    /// and Skip. When the window could not be opened, the reason and what to do about it
+    /// (no Chrome: Settings) come under the row.
     fn waiting_banner(&self, w: &WaitingSource, cx: &Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
         let (what, url) = match &w.reason {
@@ -561,16 +595,32 @@ impl QueueView {
             WaitReason::Blocked { url, .. } => ("blocks automated access", Some(url.clone())),
             _ => ("is waiting for you", None),
         };
-        let (thread, skip_thread) = (w.thread.clone(), w.thread.clone());
+        let (thread, skip_thread, open_thread) = (w.thread.clone(), w.thread.clone(), w.thread.clone());
+        let opening = self.opening.contains(&w.thread);
         let busy = self.continuing.contains(&w.thread);
         let id = w.source_id;
+        let open_error = self.open_errors.get(&w.thread).map(|message| {
+            let problem = health::classify(message);
+            let retry: RetryFn = {
+                let (this, thread) = (cx.entity(), w.thread.clone());
+                std::rc::Rc::new(move |_, cx| this.update(cx, |this, cx| this.open_browser(thread.clone(), cx)))
+            };
+            let help = problem::help(&format!("waiting-open-error-{id}"), problem, &self.state, Some(retry), cx);
+            div()
+                .id(("waiting-open-error", id as usize))
+                .role(Role::Paragraph)
+                .aria_label(format!("The browser could not be opened: {message}"))
+                .v_flex()
+                .gap_1()
+                .child(div().text_sm().text_color(theme.danger).child(format!("The browser could not be opened: {message}")))
+                .children(help)
+        });
         div()
             .id(("waiting", id as usize))
             .role(Role::Group)
             .aria_label(format!("{} {what}", w.source_name))
-            .h_flex()
-            .items_center()
-            .gap_3()
+            .v_flex()
+            .gap_2()
             .p_2()
             .rounded_md()
             .border_1()
@@ -578,40 +628,53 @@ impl QueueView {
             .bg(theme.warning.opacity(0.08))
             .child(
                 div()
-                    .v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().text_sm().font_semibold().child(format!("{} {what}", w.source_name)))
-                    .when_some(url.filter(|u| is_web_link(u)), |d, url| {
-                        d.child(div().text_xs().truncate().text_color(theme.muted_foreground).child(url))
-                    }),
-            )
-            .child(
-                div()
                     .h_flex()
-                    .gap_2()
-                    // TODO(P10 part B): "Open browser" goes here, next to Continue:
-                    //   Button::new(("waiting-open", id)).outline().compact().icon(IconName::ExternalLink)
-                    //       .label("Open browser").on_click(.. core.discover_open_browser(&thread) ..)
-                    // `Core::discover_open_browser` lands with discover/handoff.rs; wire it after both merge.
+                    .items_center()
+                    .gap_3()
                     .child(
-                        Button::new(SharedString::from(format!("waiting-continue-{id}")))
-                            .outline()
-                            .compact()
-                            .label("Continue")
-                            .loading(busy)
-                            .disabled(busy)
-                            .on_click(cx.listener(move |this, _, _, cx| this.continue_source(thread.clone(), cx))),
+                        div()
+                            .v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_sm().font_semibold().child(format!("{} {what}", w.source_name)))
+                            .when_some(url.filter(|u| is_web_link(u)), |d, url| {
+                                d.child(div().text_xs().truncate().text_color(theme.muted_foreground).child(url))
+                            }),
                     )
                     .child(
-                        Button::new(SharedString::from(format!("waiting-skip-{id}")))
-                            .ghost()
-                            .compact()
-                            .label("Skip")
-                            .disabled(busy)
-                            .on_click(cx.listener(move |this, _, _, cx| this.skip_source(skip_thread.clone(), cx))),
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new(SharedString::from(format!("waiting-open-{id}")))
+                                    .outline()
+                                    .compact()
+                                    .icon(IconName::ExternalLink)
+                                    .label("Open browser")
+                                    .loading(opening)
+                                    .disabled(opening || busy)
+                                    .on_click(cx.listener(move |this, _, _, cx| this.open_browser(open_thread.clone(), cx))),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("waiting-continue-{id}")))
+                                    .outline()
+                                    .compact()
+                                    .label("Continue")
+                                    .loading(busy)
+                                    .disabled(busy)
+                                    .on_click(cx.listener(move |this, _, _, cx| this.continue_source(thread.clone(), cx))),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("waiting-skip-{id}")))
+                                    .ghost()
+                                    .compact()
+                                    .label("Skip")
+                                    .disabled(busy)
+                                    .on_click(cx.listener(move |this, _, _, cx| this.skip_source(skip_thread.clone(), cx))),
+                            ),
                     ),
             )
+            .children(open_error)
     }
 
     /// "Prepare CV" failures: the message, what to do about it, Retry.

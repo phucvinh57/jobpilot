@@ -13,7 +13,9 @@
 //!
 //! Every rule that reads words is limited to **short pages** (an interstitial has a few sentences; a
 //! job posting does not), so a posting that mentions "access denied" or carries an invisible captcha
-//! badge for its apply form is not mistaken for a block page.
+//! badge for its apply form is not mistaken for a block page. Sentences count only on pages of
+//! [`PHRASE_MAX_CHARS`] characters or less; the title of the page ([`INTERSTITIAL_MAX_CHARS`]) and an
+//! HTTP status are the stronger signals that work on longer ones.
 
 use std::sync::OnceLock;
 
@@ -24,8 +26,13 @@ use serde::Deserialize;
 use super::probe::{looks_like_login_url, PASSWORD_JS};
 use crate::graph::nodes::ChallengeKind;
 
-/// Pages with at least this much text are real content for the word-based rules.
+/// Pages with at least this much text are real content for the rules that read a page's **title** or
+/// look for a visible captcha widget.
 pub const INTERSTITIAL_MAX_CHARS: usize = 800;
+/// Pages with at least this much text are real content for the rules that read **sentences** ("access
+/// denied", "bot activity", "sign in to continue"): an interstitial says one or two lines, while a
+/// job posting that talks about bots, traffic or sign-in is much longer than that.
+pub const PHRASE_MAX_CHARS: usize = 300;
 /// A visible password input counts as a login wall on pages up to this long (a login page has a
 /// form and a few lines; an article with a sign-in box in its sidebar is longer).
 const LOGIN_PAGE_MAX_CHARS: usize = 2_500;
@@ -202,23 +209,25 @@ pub struct PageFacts {
 /// `requested` is the address that was asked for: a final address that looks like a login page counts
 /// only when it is not the one that was asked for.
 pub fn classify(facts: &PageFacts, requested: Option<&str>) -> Option<ChallengeKind> {
+    // Titles and widgets are read on short pages, sentences only on very short ones.
     let short = facts.text_len < INTERSTITIAL_MAX_CHARS;
+    let brief = facts.text_len < PHRASE_MAX_CHARS;
     let title = facts.title.trim().to_lowercase();
     let text = facts.text.to_lowercase();
     let starts = |list: &[&str]| list.iter().any(|t| title.starts_with(t));
     let says = |list: &[&str]| list.iter().any(|p| text.contains(p));
 
-    if short && (facts.widget || starts(CAPTCHA_TITLES) || says(CAPTCHA_PHRASES)) {
+    if (short && (facts.widget || starts(CAPTCHA_TITLES))) || (brief && says(CAPTCHA_PHRASES)) {
         return Some(ChallengeKind::Captcha);
     }
     let login_url = looks_like_login_url(&facts.url) && requested.is_none_or(|r| !same_page(r, &facts.url) && !looks_like_login_url(r));
     if facts.status == 401 || login_url || (facts.password && facts.text_len < LOGIN_PAGE_MAX_CHARS) {
         return Some(ChallengeKind::Login);
     }
-    if matches!(facts.status, 403 | 429) || (short && (starts(BLOCK_TITLES) || says(BLOCK_PHRASES))) {
+    if matches!(facts.status, 403 | 429) || (short && starts(BLOCK_TITLES)) || (brief && says(BLOCK_PHRASES)) {
         return Some(ChallengeKind::Blocked);
     }
-    if short && says(LOGIN_PHRASES) {
+    if brief && says(LOGIN_PHRASES) {
         return Some(ChallengeKind::Login);
     }
     None
@@ -309,7 +318,7 @@ pub async fn detect_at(page: &Page, requested: Option<&str>) -> Option<Challenge
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn seen(title: &str, text: &str) -> PageFacts {
@@ -370,6 +379,31 @@ mod tests {
         assert_eq!(classify(&seen("Backend Engineer", "Short but fine"), None), None);
         assert_eq!(classify(&PageFacts { status: 404, ..seen("Not found", "Nothing here") }, None), None);
         assert_eq!(classify(&PageFacts { url: "https://x.test/jobs/login-engineer".into(), ..seen("", "Hello") }, Some("https://x.test/jobs/login-engineer")), None);
+    }
+
+    /// A normal posting (about 560 characters) that talks about the things block pages say.
+    pub(crate) const BOT_POSTING: &str = "Fraud Engineer at Acme. You will detect bot activity, unusual traffic, suspicious activity and \
+        automated access to our customers' accounts, and build the dashboards that show when too many requests come from one \
+        network. Access denied pages for blocked users are your first stop, and the sign in to continue screen is the message \
+        our login flow shows. We are verifying you are human is not our product. Rust, Postgres and Kafka experience required.";
+
+    #[test]
+    fn sentences_only_count_on_very_short_pages_so_a_posting_about_bots_is_content() {
+        assert!(BOT_POSTING.chars().count() > PHRASE_MAX_CHARS && BOT_POSTING.chars().count() < INTERSTITIAL_MAX_CHARS);
+        assert_eq!(classify(&seen("Fraud Engineer - Acme", BOT_POSTING), None), None);
+        assert_eq!(detect_text(None, BOT_POSTING), None);
+        assert_eq!(detect_text(Some(200), &format!("<html><head><title>Fraud Engineer</title></head><body><p>{BOT_POSTING}</p></body></html>")), None);
+        // The same sentences on a page that is nothing but the interstitial still count.
+        let wall = "Access denied. You have been blocked because of unusual traffic and bot activity from your network.";
+        assert!(wall.chars().count() < PHRASE_MAX_CHARS);
+        assert_eq!(detect_text(None, wall), Some(ChallengeKind::Blocked));
+        // The edge: a sentence on a page of 299 characters counts, on one of 300 it does not.
+        let pad = |n: usize| format!("Access denied. {}", "x".repeat(n - "Access denied. ".len()));
+        assert_eq!(classify(&seen("", &pad(PHRASE_MAX_CHARS - 1)), None), Some(ChallengeKind::Blocked));
+        assert_eq!(classify(&seen("", &pad(PHRASE_MAX_CHARS)), None), None);
+        // A title or a status still says it on a longer page.
+        assert_eq!(classify(&seen("Access Denied", BOT_POSTING), None), Some(ChallengeKind::Blocked));
+        assert_eq!(classify(&seen("Just a moment...", BOT_POSTING), None), Some(ChallengeKind::Captcha));
     }
 
     #[test]

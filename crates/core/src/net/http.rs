@@ -306,6 +306,26 @@ pub fn public_http_url(raw: &str, allow_private: bool) -> Result<url::Url> {
     Ok(url)
 }
 
+/// Where a connection to `url`'s host may go (for a client that connects by itself, like the
+/// browser guard): an IP address as it is, a name as every public address it resolves to (the
+/// resolver of this module, which drops private ones). `Err` when the host is not public or a name
+/// only resolves to private addresses.
+pub(crate) async fn public_socket_addrs(url: &url::Url) -> Result<Vec<std::net::SocketAddr>> {
+    if !is_public_host(url) {
+        bail!("addresses on this machine or a private network are not read");
+    }
+    let port = url.port_or_known_default().unwrap_or(80);
+    Ok(match url.host() {
+        Some(url::Host::Ipv4(ip)) => vec![std::net::SocketAddr::new(ip.into(), port)],
+        Some(url::Host::Ipv6(ip)) => vec![std::net::SocketAddr::new(ip.into(), port)],
+        Some(url::Host::Domain(name)) => {
+            let found = public_addrs(name.trim_end_matches('.')).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            found.into_iter().map(|a| std::net::SocketAddr::new(a.ip(), port)).collect()
+        }
+        None => bail!("the address has no host"),
+    })
+}
+
 fn is_public_host(url: &url::Url) -> bool {
     match url.host() {
         Some(url::Host::Domain(name)) => {
@@ -423,6 +443,18 @@ mod tests {
         ] {
             assert!(public_http_url(bad, false).is_err(), "{bad}");
             assert!(public_http_url(bad, true).is_ok(), "{bad} when allowed");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_client_that_connects_by_itself_gets_public_addresses_only() {
+        let url = |s: &str| url::Url::parse(s).unwrap();
+        let ok = public_socket_addrs(&url("https://93.184.216.34:8443/x")).await.unwrap();
+        assert_eq!(ok, vec!["93.184.216.34:8443".parse().unwrap()]);
+        assert_eq!(public_socket_addrs(&url("http://93.184.216.34/")).await.unwrap()[0].port(), 80);
+        for bad in ["http://127.0.0.1:8080/", "http://[::1]/", "http://10.1.2.3/", "http://localhost/", "http://intranet/", "http://printer.local/"] {
+            let err = public_socket_addrs(&url(bad)).await.unwrap_err().to_string();
+            assert!(err.contains("private network"), "{bad}: {err}");
         }
     }
 

@@ -1,0 +1,404 @@
+//! The request guard of the browsers that read third-party pages for job discovery.
+//!
+//! A page from the internet must not be able to make the browser reach this machine or the local
+//! network (its document, a redirect, an image, a script, a frame, a worker, an `fetch()` that posts
+//! the answer somewhere else). Checking requests inside the browser would miss some of those (frames
+//! and workers live in other targets) and would resolve names twice (so a name could answer with a
+//! public address first and a private one later). So the browser is pointed at a small **forward
+//! proxy on this machine** ([`Guard`]) and every connection it makes goes through it:
+//!
+//! - `CONNECT host:port` (https, and anything else tunnelled) and `GET http://host/...` (plain http)
+//!   are the only requests served;
+//! - the host gets the rules of [`net::http`](crate::net::http): not a machine-local or private name or
+//!   address, and a name is resolved by that module's resolver (private answers dropped);
+//! - the proxy connects to the address it resolved itself, so what was checked is what is used;
+//! - a refused request is answered `403` (a tunnel) or just dropped (plain http) and counted
+//!   ([`Guard::blocked`]), and nothing reaches the private host.
+//!
+//! The proxy only relays bytes (a TLS tunnel stays end to end); a plain http request is sent on in
+//! origin form with `Connection: close`. It listens on `127.0.0.1` on a free port, for one browser, and
+//! stops when the [`Guard`] is dropped. The browser must be started with [`Guard::chrome_args`], which
+//! also turns off QUIC and non-proxied WebRTC (UDP would go around a proxy) and removes Chrome's
+//! implicit "loopback is never proxied" rule.
+
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Context, Result};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::task::{JoinHandle, JoinSet};
+
+use crate::net::http::public_socket_addrs;
+
+/// Longest request head accepted.
+const HEAD_MAX: usize = 16 * 1024;
+/// How long the browser has to send a request head, and the proxy to connect.
+const STEP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Which hosts the guard lets the browser reach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Policy {
+    /// Public hosts only (the rules of `net::http`).
+    Public,
+    /// Everything (tests that read fixture pages on `127.0.0.1`).
+    Anything,
+    /// Tests: these local ports stand for public hosts, every other address is private.
+    #[cfg(test)]
+    OnlyPorts(Vec<u16>),
+}
+
+impl Policy {
+    /// `Anything` when `allow_private`, else `Public`.
+    pub(crate) fn new(allow_private: bool) -> Self {
+        if allow_private {
+            Policy::Anything
+        } else {
+            Policy::Public
+        }
+    }
+
+    /// May an address on this machine or a private network be *asked for* (the first check of a
+    /// page address, before the browser starts)?
+    pub(crate) fn allows_private_addresses(&self) -> bool {
+        !matches!(self, Policy::Public)
+    }
+}
+
+/// A running guard proxy. Dropping it stops the proxy and every connection through it.
+pub(crate) struct Guard {
+    addr: SocketAddr,
+    blocked: Arc<AtomicUsize>,
+    task: JoinHandle<()>,
+}
+
+impl Guard {
+    /// Start a proxy on a free local port that lets the browser reach what `policy` says.
+    pub(crate) async fn start(policy: Policy) -> Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.context("starting the request guard")?;
+        let addr = listener.local_addr().context("the request guard has no address")?;
+        let blocked = Arc::new(AtomicUsize::new(0));
+        let count = blocked.clone();
+        let task = tokio::spawn(async move {
+            // Dropping the set (the task is aborted) ends the connections too.
+            let mut conns = JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => match accepted {
+                        Ok((stream, _)) => {
+                            let (count, policy) = (count.clone(), policy.clone());
+                            conns.spawn(async move {
+                                if let Err(e) = serve(stream, &policy, &count).await {
+                                    tracing::debug!("request guard: {e:#}");
+                                }
+                            });
+                        }
+                        Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+                    },
+                    Some(_) = conns.join_next(), if !conns.is_empty() => {}
+                }
+            }
+        });
+        Ok(Self { addr, blocked, task })
+    }
+
+    /// `http://127.0.0.1:<port>`
+    pub(crate) fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    /// The Chrome flags that send every request through this proxy.
+    pub(crate) fn chrome_args(&self) -> Vec<String> {
+        vec![
+            format!("--proxy-server={}", self.url()),
+            // Chrome never proxies localhost and loopback addresses unless told so.
+            "--proxy-bypass-list=<-loopback>".to_string(),
+            "--disable-quic".to_string(),
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string(),
+        ]
+    }
+
+    /// How many requests were refused so far.
+    pub(crate) fn blocked(&self) -> usize {
+        self.blocked.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Why a request was not served.
+enum Refusal {
+    /// The host is private, local or only resolves to such addresses.
+    Private,
+    /// The host is public but could not be reached (or the request is malformed).
+    Failed(anyhow::Error),
+}
+
+/// What the browser asked for.
+enum Request {
+    /// A tunnel to `https://host:port` (the URL is only a parsed host and port).
+    Tunnel(url::Url),
+    /// A plain http request: where it goes and the head to send there.
+    Plain { url: url::Url, head: Vec<u8> },
+}
+
+async fn serve(mut client: TcpStream, policy: &Policy, blocked: &AtomicUsize) -> Result<()> {
+    let (head, rest) = tokio::time::timeout(STEP_TIMEOUT, read_head(&mut client)).await.context("no request head")??;
+    let request = parse(&head)?;
+    let url = match &request {
+        Request::Tunnel(url) | Request::Plain { url, .. } => url,
+    };
+    let mut upstream = match connect(url, policy).await {
+        Ok(upstream) => upstream,
+        Err(Refusal::Private) => {
+            blocked.fetch_add(1, Ordering::SeqCst);
+            tracing::info!("request guard: a request to a private address was refused");
+            if matches!(request, Request::Tunnel(_)) {
+                let _ = client.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+            }
+            return Ok(());
+        }
+        Err(Refusal::Failed(e)) => {
+            if matches!(request, Request::Tunnel(_)) {
+                let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+            }
+            return Err(e);
+        }
+    };
+    match request {
+        Request::Tunnel(_) => client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?,
+        Request::Plain { head, .. } => upstream.write_all(&head).await?,
+    }
+    upstream.write_all(&rest).await?;
+    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+    Ok(())
+}
+
+/// Read up to the end of a request head. Returns the head (with its blank line) and whatever came
+/// after it in the same reads.
+async fn read_head(client: &mut TcpStream) -> Result<(Vec<u8>, Vec<u8>)> {
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        if let Some(at) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            let rest = raw.split_off(at + 4);
+            return Ok((raw, rest));
+        }
+        if raw.len() > HEAD_MAX {
+            bail!("the request head is too long");
+        }
+        match client.read(&mut buf).await? {
+            0 => bail!("the browser closed the connection before sending a request"),
+            n => raw.extend_from_slice(&buf[..n]),
+        }
+    }
+}
+
+/// Hop-by-hop headers a plain request does not pass on.
+const HOP_HEADERS: [&str; 6] = ["proxy-connection", "connection", "keep-alive", "proxy-authorization", "upgrade", "te"];
+
+fn parse(head: &[u8]) -> Result<Request> {
+    let mut lines = head.split(|b| *b == b'\n').map(|l| l.strip_suffix(b"\r").unwrap_or(l));
+    let first = std::str::from_utf8(lines.next().unwrap_or_default()).map_err(|_| anyhow!("the request line is not text"))?;
+    let mut parts = first.split(' ');
+    let (method, target, version) = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(m), Some(t), Some(v), None) if v.starts_with("HTTP/1.") && !m.is_empty() => (m, t, v),
+        _ => bail!("not an HTTP proxy request"),
+    };
+    if method.eq_ignore_ascii_case("CONNECT") {
+        // `host:port` and nothing else (no userinfo, path or query to smuggle another host in).
+        if target.is_empty() || target.contains(['/', '@', '?', '#', '\\', ' ']) {
+            bail!("a tunnel target must be host:port");
+        }
+        let url = url::Url::parse(&format!("https://{target}")).map_err(|_| anyhow!("a tunnel target must be host:port"))?;
+        if url.host().is_none() {
+            bail!("a tunnel target must be host:port");
+        }
+        return Ok(Request::Tunnel(url));
+    }
+    let url = url::Url::parse(target).map_err(|_| anyhow!("a plain request must name its address in full"))?;
+    if url.scheme() != "http" || url.host().is_none() || !url.username().is_empty() {
+        bail!("only http addresses are sent plain");
+    }
+    let origin = match url.query() {
+        Some(q) => format!("{}?{q}", url.path()),
+        None => url.path().to_string(),
+    };
+    let mut out = format!("{method} {origin} {version}\r\n").into_bytes();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let name = line.split(|b| *b == b':').next().unwrap_or_default();
+        if HOP_HEADERS.iter().any(|h| name.eq_ignore_ascii_case(h.as_bytes())) {
+            continue;
+        }
+        out.extend_from_slice(line);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"Connection: close\r\n\r\n");
+    Ok(Request::Plain { url, head: out })
+}
+
+/// Connect to `url`'s host and port: to an address `policy` allows (by default the ones the net
+/// rules allow).
+async fn connect(url: &url::Url, policy: &Policy) -> Result<TcpStream, Refusal> {
+    let addrs = match policy {
+        Policy::Anything => any_addrs(url).await.map_err(Refusal::Failed)?,
+        Policy::Public => public_socket_addrs(url).await.map_err(|_| Refusal::Private)?,
+        #[cfg(test)]
+        Policy::OnlyPorts(ports) => match url.port_or_known_default() {
+            Some(port) if ports.contains(&port) => any_addrs(url).await.map_err(Refusal::Failed)?,
+            _ => return Err(Refusal::Private),
+        },
+    };
+    let mut last = anyhow!("the host has no address");
+    for addr in addrs {
+        match tokio::time::timeout(STEP_TIMEOUT, TcpStream::connect(addr)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(e)) => last = anyhow!("connecting: {e}"),
+            Err(_) => last = anyhow!("connecting: timed out"),
+        }
+    }
+    Err(Refusal::Failed(last))
+}
+
+/// Every address of `url`'s host, private or not.
+async fn any_addrs(url: &url::Url) -> Result<Vec<SocketAddr>> {
+    let port = url.port_or_known_default().unwrap_or(80);
+    Ok(match url.host() {
+        Some(url::Host::Ipv4(ip)) => vec![SocketAddr::new(ip.into(), port)],
+        Some(url::Host::Ipv6(ip)) => vec![SocketAddr::new(ip.into(), port)],
+        Some(url::Host::Domain(name)) => tokio::net::lookup_host((name, port)).await?.collect(),
+        None => bail!("the address has no host"),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::fixtures::Fixtures;
+
+    /// Send `raw` to the proxy and read until it closes the connection.
+    async fn ask(guard: &Guard, raw: &str) -> String {
+        let mut stream = TcpStream::connect(guard.addr).await.unwrap();
+        stream.write_all(raw.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut out)).await;
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    fn port_of(fx: &Fixtures) -> u16 {
+        url::Url::parse(fx.base()).unwrap().port().unwrap()
+    }
+
+    #[tokio::test]
+    async fn requests_to_private_and_local_hosts_are_refused_and_counted_and_never_sent() {
+        let fx = Fixtures::start().await;
+        fx.route("/secret", 200, "text/plain", "the admin console");
+        let port = port_of(&fx);
+        let guard = Guard::start(Policy::Public).await.unwrap();
+        assert!(guard.url().starts_with("http://127.0.0.1:"));
+
+        let mut refused = 0;
+        for target in [
+            format!("127.0.0.1:{port}"),
+            "[::1]:443".to_string(),
+            "localhost:80".to_string(),
+            "10.0.0.5:443".to_string(),
+            "192.168.1.1:8080".to_string(),
+            "169.254.169.254:80".to_string(),
+            "intranet:443".to_string(),
+            "printer.local:631".to_string(),
+        ] {
+            let answer = ask(&guard, &format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n")).await;
+            assert!(answer.starts_with("HTTP/1.1 403"), "{target}: {answer}");
+            refused += 1;
+        }
+        // Plain http is dropped without an answer, so the browser shows a network error.
+        let answer = ask(&guard, &format!("GET http://127.0.0.1:{port}/secret HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n")).await;
+        assert_eq!(answer, "");
+        refused += 1;
+        assert_eq!(guard.blocked(), refused);
+        assert!(fx.hits().is_empty(), "nothing reached the local server: {:?}", fx.hits());
+    }
+
+    #[tokio::test]
+    async fn malformed_and_unsupported_requests_are_dropped_without_being_counted_as_private() {
+        let guard = Guard::start(Policy::Anything).await.unwrap();
+        for raw in [
+            "GET /x HTTP/1.1\r\nHost: a.test\r\n\r\n",
+            "GET https://a.test/ HTTP/1.1\r\n\r\n",
+            "GET ftp://a.test/ HTTP/1.1\r\n\r\n",
+            "GET http://user:pw@a.test/ HTTP/1.1\r\n\r\n",
+            "CONNECT a.test:443@127.0.0.1:80 HTTP/1.1\r\n\r\n",
+            "CONNECT a.test/x:443 HTTP/1.1\r\n\r\n",
+            "CONNECT HTTP/1.1\r\n\r\n",
+            "garbage\r\n\r\n",
+        ] {
+            assert_eq!(ask(&guard, raw).await, "", "{raw:?}");
+        }
+        assert_eq!(guard.blocked(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_guard_that_allows_private_hosts_relays_plain_http_and_tunnels() {
+        let fx = Fixtures::start().await;
+        fx.route("/hello", 200, "text/plain", "hello from the fixture");
+        let (port, guard) = (port_of(&fx), Guard::start(Policy::Anything).await.unwrap());
+
+        // Plain http: sent on in origin form, hop-by-hop headers dropped, `Connection: close` added.
+        let answer = ask(
+            &guard,
+            &format!("GET http://127.0.0.1:{port}/hello?x=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nProxy-Connection: keep-alive\r\nAccept: text/html\r\n\r\n"),
+        )
+        .await;
+        assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("hello from the fixture"), "{answer}");
+        let hit = &fx.hits_on("/hello")[0];
+        assert_eq!((hit.method.as_str(), hit.target.as_str()), ("GET", "/hello?x=1"));
+        assert_eq!((hit.header("connection"), hit.header("accept"), hit.header("proxy-connection")), (Some("close"), Some("text/html"), None));
+
+        // A tunnel: after `200 Connection Established` the bytes go through untouched.
+        let tunnel = ask(&guard, &format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\nHost: x\r\n\r\nGET /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")).await;
+        assert!(tunnel.starts_with("HTTP/1.1 200 Connection Established\r\n\r\nHTTP/1.1 200"), "{tunnel}");
+        assert!(tunnel.ends_with("hello from the fixture"), "{tunnel}");
+        assert_eq!(guard.blocked(), 0);
+
+        // A closed port is a 502 for a tunnel, not a "private" refusal.
+        let dead = ask(&guard, "CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(dead.starts_with("HTTP/1.1 502"), "{dead}");
+        assert_eq!(guard.blocked(), 0);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_guard_stops_the_proxy() {
+        let guard = Guard::start(Policy::Public).await.unwrap();
+        let addr = guard.addr;
+        drop(guard);
+        let mut stopped = false;
+        for _ in 0..50 {
+            if TcpStream::connect(addr).await.is_err() {
+                stopped = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(stopped, "still listening");
+    }
+
+    #[test]
+    fn the_chrome_flags_proxy_everything_and_close_the_udp_side_doors() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let args = rt.block_on(async { Guard::start(Policy::Public).await.unwrap().chrome_args() });
+        assert!(args[0].starts_with("--proxy-server=http://127.0.0.1:"));
+        for flag in ["--proxy-bypass-list=<-loopback>", "--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"] {
+            assert!(args.iter().any(|a| a == flag), "{flag}");
+        }
+    }
+}

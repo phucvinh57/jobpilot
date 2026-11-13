@@ -2,7 +2,7 @@
 //! the links on it that are postings, and the same-site rule.
 //!
 //! **Code decides which pages are visited.** A link is only followed when it is on the same site as
-//! the page it was found on ([`same_site`]) and its address looks like a posting
+//! the address the user configured ([`same_site`]) and its address looks like a posting
 //! ([`looks_like_posting`]); the page's text never chooses a URL, and neither does the model.
 //!
 //! A listing is read with a plain HTTP request first; only when that fails with a wall (HTTP 401, 403,
@@ -21,6 +21,7 @@ use url::Url;
 use super::{html_to_text, one_line, Candidate};
 use crate::browser::challenge::ChallengeFound;
 use crate::browser::render::Renderer;
+use crate::mail::classify::{is_ats_host, registrable_domain};
 use crate::net::http::{checked_url, FetchError, Http};
 use crate::pipeline::ingest::NeedsBrowser;
 use crate::store::Source;
@@ -192,12 +193,58 @@ fn bare_host(url: &Url) -> String {
     host.strip_prefix("www.").map(str::to_string).unwrap_or(host)
 }
 
-/// Is `link` on the same site as `page`? The same host (ignoring `www.`), or one is a subdomain of
-/// the other (`careers.acme.com` and `acme.com`). Sibling subdomains and look-alike names
-/// (`notacme.com`) are other sites.
-pub(crate) fn same_site(page: &Url, link: &Url) -> bool {
-    let (a, b) = (bare_host(page), bare_host(link));
-    !a.is_empty() && (a == b || a.ends_with(&format!(".{b}")) || b.ends_with(&format!(".{a}")))
+/// Hosting platforms where every customer is a subdomain: the platform's own name stands for all of
+/// them. (Not exhaustive: a customer's own subdomain, `acme.github.io`, is fine.)
+const PLATFORM_ROOTS: [&str; 24] = [
+    "github.io", "gitlab.io", "vercel.app", "netlify.app", "pages.dev", "workers.dev", "herokuapp.com", "onrender.com", "fly.dev",
+    "web.app", "firebaseapp.com", "appspot.com", "azurewebsites.net", "cloudfront.net", "amazonaws.com", "blogspot.com",
+    "wordpress.com", "wixsite.com", "squarespace.com", "webflow.io", "notion.site", "myshopify.com", "carrd.co", "glitch.me",
+];
+
+/// Why `host` (without `www.`) cannot be the address of a site whose subdomains are all "the same
+/// site": it is a public suffix, a hosting platform or a job board shared by many companies. `None`
+/// for a company's own domain, a subdomain of a platform that is one customer's, and an IP address.
+pub(crate) fn shared_host(host: &str) -> Option<&'static str> {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return None;
+    }
+    if !host.contains('.') {
+        return Some("a single-word name, not a company site");
+    }
+    // `x.<host>` is its own registrable domain only under a public suffix (`co.uk`, `com.vn`).
+    let probe = format!("x.{host}");
+    if registrable_domain(&probe) == probe {
+        return Some("a public domain ending shared by many sites");
+    }
+    if PLATFORM_ROOTS.contains(&host.as_str()) {
+        return Some("a hosting platform shared by many sites");
+    }
+    if is_ats_host(&host) {
+        return Some("a job board shared by many companies");
+    }
+    None
+}
+
+/// Fail for an address whose site cannot be told from other companies' sites ([`shared_host`]).
+pub(crate) fn check_site(url: &Url) -> Result<()> {
+    match shared_host(&bare_host(url)) {
+        None => Ok(()),
+        Some(why) => bail!(
+            "`{}` is {why}: add the company's own careers page (for a Greenhouse, Lever or Ashby board use that source instead)",
+            url.host_str().unwrap_or_default()
+        ),
+    }
+}
+
+/// Is `link` on the site `site`, the address the user **configured**? The same host (ignoring
+/// `www.`), or a subdomain of it (`jobs.acme.com` under `acme.com`). The parent of a configured
+/// subdomain, its sibling subdomains and look-alike names (`notacme.com`) are other sites, and a
+/// `site` that is a public suffix, a hosting platform or a job board ([`shared_host`]) has no
+/// same-site links at all. Redirects and links found on a page do not move `site`.
+pub(crate) fn same_site(site: &Url, link: &Url) -> bool {
+    let (site, link) = (bare_host(site), bare_host(link));
+    !site.is_empty() && shared_host(&site).is_none() && (link == site || link.ends_with(&format!(".{site}")))
 }
 
 /// Path words that mark a place where jobs live.
@@ -206,12 +253,13 @@ const JOB_WORDS: [&str; 14] = [
     "postings", "role", "roles",
 ];
 
-/// Does `link` look like one posting of the listing at `listing`? On the same site, with a path that
-/// goes below a jobs-ish segment (`/careers/senior-engineer`, `/jobs/4011001`) or ends in a long id
-/// under a jobs-ish path, and not the listing itself nor a file. Anything else (about pages, the
-/// footer, `mailto:`) is not a posting; the model's scoring weeds out what slips through.
-pub(crate) fn looks_like_posting(listing: &Url, link: &Url) -> bool {
-    if !same_site(listing, link) {
+/// Does `link` look like one posting of the listing at `listing`? On the configured `site` (see
+/// [`same_site`]), with a path that goes below a jobs-ish segment (`/careers/senior-engineer`,
+/// `/jobs/4011001`) or ends in a long id under a jobs-ish path, and not the listing itself nor a
+/// file. Anything else (about pages, the footer, `mailto:`) is not a posting; the model's scoring
+/// weeds out what slips through.
+pub(crate) fn looks_like_posting(site: &Url, listing: &Url, link: &Url) -> bool {
+    if !same_site(site, link) {
         return false;
     }
     let segments: Vec<String> =
@@ -300,6 +348,8 @@ pub(crate) mod fake {
     pub(crate) struct FakePages {
         plain: HashMap<String, Result<String, u16>>,
         rendered: HashMap<String, Result<String, ChallengeKind>>,
+        /// Where a read of the key ends up after redirects.
+        moved: HashMap<String, String>,
         asked: Mutex<Vec<String>>,
     }
 
@@ -332,6 +382,16 @@ pub(crate) mod fake {
             self
         }
 
+        /// A read of `url` (plain or in the browser) redirects and ends at `to`.
+        pub(crate) fn moved(mut self, url: &str, to: &str) -> Self {
+            self.moved.insert(url.into(), to.into());
+            self
+        }
+
+        fn final_url(&self, url: &str) -> String {
+            self.moved.get(url).cloned().unwrap_or_else(|| url.to_string())
+        }
+
         /// Every read so far: `plain <url>` or `browser <url>`.
         pub(crate) fn asked(&self) -> Vec<String> {
             self.asked.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -343,7 +403,7 @@ pub(crate) mod fake {
         async fn plain(&self, url: &str) -> Result<Page> {
             self.asked.lock().unwrap_or_else(|e| e.into_inner()).push(format!("plain {url}"));
             match self.plain.get(url) {
-                Some(Ok(html)) => Ok(Page { url: url.to_string(), html: html.clone() }),
+                Some(Ok(html)) => Ok(Page { url: self.final_url(url), html: html.clone() }),
                 Some(Err(status)) => Err(anyhow::Error::new(NeedsBrowser { url: url.to_string(), reason: format!("HTTP {status}") })),
                 None => Err(anyhow!("fetching fixture: HTTP 404 Not Found")),
             }
@@ -352,7 +412,7 @@ pub(crate) mod fake {
         async fn rendered(&self, _source: &Source, url: &str) -> Result<Page> {
             self.asked.lock().unwrap_or_else(|e| e.into_inner()).push(format!("browser {url}"));
             match self.rendered.get(url) {
-                Some(Ok(html)) => Ok(Page { url: url.to_string(), html: html.clone() }),
+                Some(Ok(html)) => Ok(Page { url: self.final_url(url), html: html.clone() }),
                 Some(Err(kind)) => Err(anyhow::Error::new(ChallengeFound { kind: *kind, url: url.to_string() })),
                 None => Err(anyhow!("no browser fixture")),
             }
@@ -407,17 +467,46 @@ mod tests {
     }
 
     #[test]
-    fn the_same_site_rule_keeps_to_one_site() {
-        let page = url("https://www.acme.test/careers");
-        for yes in ["https://acme.test/jobs/1", "https://www.acme.test/jobs/1", "https://careers.acme.test/jobs/1", "http://ACME.test/x"] {
-            assert!(same_site(&page, &url(yes)), "{yes}");
+    fn the_same_site_rule_keeps_to_the_configured_site() {
+        let site = url("https://www.acme.test/careers");
+        for yes in ["https://acme.test/jobs/1", "https://www.acme.test/jobs/1", "https://careers.acme.test/jobs/1", "http://ACME.test/x", "https://a.b.acme.test/x"] {
+            assert!(same_site(&site, &url(yes)), "{yes}");
         }
-        for no in ["https://notacme.test/jobs/1", "https://acme.test.evil.test/jobs/1", "https://evil.test/acme.test", "https://boards.greenhouse.io/acme/jobs/1"] {
-            assert!(!same_site(&page, &url(no)), "{no}");
+        for no in ["https://notacme.test/jobs/1", "https://acme.test.evil.test/jobs/1", "https://evil.test/acme.test", "https://boards.greenhouse.io/acme/jobs/1", "https://acme.com/jobs/1"] {
+            assert!(!same_site(&site, &url(no)), "{no}");
         }
+        // A configured subdomain: its own subdomains are the same site, its parent and siblings are not.
         let sub = url("https://careers.acme.test/");
-        assert!(same_site(&sub, &url("https://acme.test/x")), "the parent site is the same site");
-        assert!(!same_site(&sub, &url("https://blog.acme.test/x")), "a sibling subdomain is not");
+        assert!(same_site(&sub, &url("https://careers.acme.test/x")) && same_site(&sub, &url("https://eu.careers.acme.test/x")));
+        assert!(!same_site(&sub, &url("https://acme.test/x")), "the parent site is another site");
+        assert!(!same_site(&sub, &url("https://www.acme.test/x")), "so is its www");
+        assert!(!same_site(&sub, &url("https://blog.acme.test/x")), "and a sibling subdomain");
+    }
+
+    #[test]
+    fn a_public_suffix_a_platform_or_a_job_board_is_not_a_site() {
+        // Nothing is "the same site" as one of these: they hold many unrelated companies.
+        for shared in [
+            "https://co.uk/", "https://com.vn/", "https://com/", "https://localhost/", "https://intranet/", "https://github.io/jobs",
+            "https://vercel.app/", "https://www.netlify.app/", "https://herokuapp.com/", "https://boards.greenhouse.io/acme",
+            "https://jobs.lever.co/acme", "https://www.linkedin.com/jobs", "https://acme.wd1.myworkdayjobs.com/en-US/careers",
+        ] {
+            let s = url(shared);
+            let host = s.host_str().unwrap();
+            assert!(!same_site(&s, &s), "{shared}");
+            assert!(!same_site(&s, &url(&format!("https://evil.{host}/jobs/1"))), "{shared}: a subdomain of it");
+            let err = check_site(&s).unwrap_err().to_string();
+            assert!(err.contains("careers page"), "{shared}: {err}");
+        }
+        // A customer's own subdomain on a platform, and a company domain under a public suffix, are sites.
+        assert!(same_site(&url("https://acme.github.io/"), &url("https://acme.github.io/jobs/1")));
+        assert!(!same_site(&url("https://acme.github.io/"), &url("https://evil.github.io/jobs/1")), "another tenant of the platform");
+        assert!(same_site(&url("https://acme.co.uk/careers"), &url("https://jobs.acme.co.uk/1")));
+        assert!(!same_site(&url("https://acme.co.uk/careers"), &url("https://other.co.uk/1")));
+        for ok in ["https://acme.test/careers", "https://acme.github.io/", "https://careers.acme.co.uk/", "http://127.0.0.1:8080/jobs"] {
+            assert!(check_site(&url(ok)).is_ok(), "{ok}");
+        }
+        assert!(shared_host("acme.com").is_none() && shared_host("co.uk").is_some() && shared_host("greenhouse.io").is_some());
     }
 
     #[test]
@@ -431,7 +520,7 @@ mod tests {
             "https://acme.test/company/careers/role-123456",
             "https://careers.acme.test/jobs/abc",
         ] {
-            assert!(looks_like_posting(&listing, &url(yes)), "{yes}");
+            assert!(looks_like_posting(&listing, &listing, &url(yes)), "{yes}");
         }
         for no in [
             "https://acme.test/careers",
@@ -445,8 +534,12 @@ mod tests {
             "https://other.test/jobs/4011001",
             "https://acme.test/privacy",
         ] {
-            assert!(!looks_like_posting(&listing, &url(no)), "{no}");
+            assert!(!looks_like_posting(&listing, &listing, &url(no)), "{no}");
         }
+        // The site is the configured one even when the listing was read at a redirected address.
+        let moved = url("https://evil.test/careers");
+        assert!(!looks_like_posting(&listing, &moved, &url("https://evil.test/careers/rust-engineer")));
+        assert!(looks_like_posting(&listing, &moved, &url("https://acme.test/careers/rust-engineer")));
     }
 
     #[test]

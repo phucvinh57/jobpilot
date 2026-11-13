@@ -37,6 +37,7 @@ use super::state::{
     SourceState, SourceStatus, DISCOVERY_GRAPH, LAST_RUN_KEY, SOURCE_GRAPH,
 };
 use crate::browser::challenge::ChallengeFound;
+use crate::browser::gate::SessionInUse;
 use crate::graph::nodes::{self, Challenge, ChallengeKind};
 use crate::graph::{GraphDef, Graphs, Limits, Outcome, END, START};
 use crate::health::{classify, Problem};
@@ -386,12 +387,16 @@ pub(super) fn without_url(e: anyhow::Error, url: &str) -> anyhow::Error {
 }
 
 /// Why a posting could not be read, as a label (the error's text is not kept).
-fn skip_kind(e: &anyhow::Error) -> &'static str {
+pub(super) fn skip_kind(e: &anyhow::Error) -> &'static str {
     if e.downcast_ref::<PageNeedsBrowser>().is_some() {
         return "needs_browser";
     }
     let text = format!("{e:#}");
-    if ["HTTP 404", "HTTP 410"].iter().any(|s| text.contains(s)) {
+    // The source's browser session is busy (its window is open for the user): nothing is wrong with
+    // the posting, and a later run reads it.
+    if e.downcast_ref::<SessionInUse>().is_some() || text.contains("the browser session is in use") {
+        "session_in_use"
+    } else if ["HTTP 404", "HTTP 410"].iter().any(|s| text.contains(s)) {
         "gone"
     } else if ["HTTP 401", "HTTP 403"].iter().any(|s| text.contains(s)) {
         "forbidden"

@@ -133,7 +133,7 @@ impl Core {
         }
         let runner = run::Runner::new(self, deps)?;
         // The user is done with the browser window: close it, so the next read can use its profile.
-        handoff::close_window(thread).await;
+        handoff::close_window(&self.paths, thread).await;
         self.store.set_source_status(source_id, "running")?;
         let outcome = self.graphs.resume(&runner.source, thread, |s| s.challenge = None).await;
         Ok(run::source_result(&self.store, thread, source_id, outcome))
@@ -143,7 +143,7 @@ impl Core {
     /// enabled and is searched again by the next run.
     pub fn discover_cancel(&self, thread: &str) -> Result<()> {
         let (_, source_id) = parse_source_thread(thread).context("not a discovery source thread")?;
-        handoff::discard_window(thread);
+        handoff::discard_window(&self.paths, thread);
         self.graphs.cancel(thread)?;
         // The source may be gone; its status is only a label.
         let _ = self.store.set_source_status(source_id, "cancelled");

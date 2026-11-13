@@ -86,7 +86,7 @@ impl Drop for TempProfile {
 }
 
 /// Accept only http(s) URLs (this also keeps the value from ever being parsed as a Chrome flag).
-pub(super) fn checked_url(raw: &str) -> Result<String> {
+fn checked_url(raw: &str) -> Result<String> {
     let url = url::Url::parse(raw.trim()).with_context(|| format!("`{}` is not a valid URL", raw.trim()))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         bail!("only http(s) links can be opened in the browser, got `{}`", raw.trim());
@@ -95,20 +95,19 @@ pub(super) fn checked_url(raw: &str) -> Result<String> {
 }
 
 /// Open `url` in a headless Chrome with a throwaway profile and return the rendered DOM as HTML.
+///
+/// This is the browser fallback of **JD ingest** (a link the user pasted), with the managed browser
+/// flags. Job discovery reads pages with [`render::Renderer`](super::render::Renderer) instead, which
+/// has its own, undisguised launch and the request guard.
 pub async fn rendered_html(paths: &Paths, url: &str) -> Result<String> {
-    Ok(render_checked(paths, url).await?.html)
-}
-
-/// [`rendered_html`] that also says whether a login, captcha or block page was shown instead of the
-/// page (see [`challenge::detect_at`]).
-pub async fn render_checked(paths: &Paths, url: &str) -> Result<Rendered> {
     let url = checked_url(url)?;
     let chrome = chrome::resolve(paths)
         .context("Chrome not found: install Chrome/Chromium or download the browser in Settings > Browser sessions")?;
     let profile = TempProfile::create(paths)?;
-    tokio::time::timeout(RENDER_TIMEOUT, render(&chrome.path, profile.path(), &url))
+    let rendered = tokio::time::timeout(RENDER_TIMEOUT, render(&chrome.path, profile.path(), &url))
         .await
-        .map_err(|_| anyhow!("the browser did not render the page within {} seconds (timed out)", RENDER_TIMEOUT.as_secs()))?
+        .map_err(|_| anyhow!("the browser did not render {url} within {} seconds", RENDER_TIMEOUT.as_secs()))??;
+    Ok(rendered.html)
 }
 
 async fn render(chrome: &Path, profile: &Path, url: &str) -> Result<Rendered> {

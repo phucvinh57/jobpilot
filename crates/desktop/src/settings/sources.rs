@@ -86,6 +86,10 @@ pub struct SourcesSection {
     waiting: Vec<i64>,
     /// Reload from the store on the next render.
     dirty: bool,
+    /// A reload is running on the core runtime.
+    loading: bool,
+    /// The first reload has finished (before that the list is not "empty", it is not there yet).
+    loaded: bool,
     initialised: bool,
     form_open: bool,
     kind: &'static str,
@@ -105,6 +109,8 @@ impl SourcesSection {
             sessions: Vec::new(),
             waiting: Vec::new(),
             dirty: true,
+            loading: false,
+            loaded: false,
             initialised: false,
             form_open: false,
             kind: JOB_SOURCE_KINDS[0].0,
@@ -128,18 +134,41 @@ impl SourcesSection {
         .detach();
     }
 
+    /// Read the sources, the sessions and the paused runs from the store on the core runtime (the UI
+    /// never reads the database itself). A change made while it runs sets `dirty` again, and the
+    /// render after it reloads once more.
     fn reload(&mut self, cx: &mut Context<Self>) {
         let core = self.state.read(cx).core.clone();
-        match core.job_sources() {
-            Ok(list) => self.sources = list,
-            Err(e) => self.error = Some(format!("{e:#}")),
-        }
-        match core.sessions().list() {
-            Ok(list) => self.sessions = list,
-            Err(e) => self.error = Some(format!("{e:#}")),
-        }
-        self.waiting = core.discover_waiting().map(|w| w.into_iter().map(|w| w.source_id).collect()).unwrap_or_default();
         self.dirty = false;
+        self.loading = true;
+        let rx = runtime::spawn(async move {
+            let waiting = core.discover_waiting().map(|w| w.into_iter().map(|w| w.source_id).collect::<Vec<_>>()).unwrap_or_default();
+            (core.job_sources(), core.sessions().list(), waiting)
+        });
+        cx.spawn(async move |this, cx| {
+            let loaded = rx.await;
+            this.update(cx, |this, cx| {
+                this.loading = false;
+                match loaded {
+                    Ok((sources, sessions, waiting)) => {
+                        match sources {
+                            Ok(list) => this.sources = list,
+                            Err(e) => this.error = Some(format!("{e:#}")),
+                        }
+                        match sessions {
+                            Ok(list) => this.sessions = list,
+                            Err(e) => this.error = Some(format!("{e:#}")),
+                        }
+                        this.waiting = waiting;
+                        this.loaded = true;
+                    }
+                    Err(_) => this.error = Some("the task was cancelled".into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Run `fut` on the core runtime; `on_ok` runs on the UI thread afterwards.
@@ -224,7 +253,7 @@ impl Render for SourcesSection {
         if !self.initialised {
             self.init(window, cx);
         }
-        if self.dirty {
+        if self.dirty && !self.loading {
             self.reload(cx);
         }
         let theme = cx.theme();
@@ -385,7 +414,7 @@ impl Render for SourcesSection {
             cx,
         )
         .child(div().v_flex().gap_2().children(rows))
-        .when(self.sources.is_empty() && !self.form_open, |d| {
+        .when(self.loaded && self.sources.is_empty() && !self.form_open, |d| {
             d.child(div().text_sm().text_color(muted).child("No sources yet. Add a company board, a careers page or Hacker News."))
         })
         .child(form)

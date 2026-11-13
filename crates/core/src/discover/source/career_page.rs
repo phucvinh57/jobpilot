@@ -2,8 +2,9 @@
 //! the same site are the candidates; the page is read plain first and rendered in the managed browser
 //! when it has no postings in its HTML (a job list that JavaScript draws) or answers with a wall.
 //!
-//! The model never picks a URL: only same-site links with a posting-shaped path are followed
-//! ([`web::looks_like_posting`]), and a posting's text is read by the runner's own fetch.
+//! The model never picks a URL: only links on the configured site ([`web::same_site`]: the host the user
+//! entered or a subdomain of it) with a posting-shaped path are followed ([`web::looks_like_posting`]), and
+//! a posting's text is read by the runner's own fetch.
 
 use std::sync::Arc;
 
@@ -11,7 +12,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use url::Url;
 
-use super::web::{links, looks_like_posting, normalize_page_url, page_url, read_listing, title_from_url, Page, Pages, is_generic};
+use super::web::{check_site, is_generic, links, looks_like_posting, normalize_page_url, page_url, read_listing, same_site, title_from_url, Page, Pages};
 use super::{page_of, title_fits_roles, Cached, Candidate, JobSource, SearchCtx, SearchPage, LISTING_TTL};
 use crate::prefs::Preferences;
 use crate::store::Source;
@@ -32,6 +33,7 @@ impl CareerPage {
     /// http(s) page.
     pub fn new(pages: Arc<dyn Pages>, source: &Source, company: &str) -> Result<Self> {
         let url = normalize_page_url(&source.url).context("career page source")?;
+        check_site(&url).context("career page source")?;
         Ok(Self { pages, source: source.clone(), url, company: company.to_string(), listing: Cached::new(LISTING_TTL) })
     }
 
@@ -44,9 +46,14 @@ impl CareerPage {
     /// The same-site, posting-shaped links of `page`, titled by their text (or their address).
     fn candidates(&self, page: &Page) -> Vec<Candidate> {
         let Ok(base) = page_url(page) else { return Vec::new() };
+        // The site is the one the user configured: a redirect to another site (or links that lead
+        // there) does not move it, and a page read from another site has no candidates at all.
+        if !same_site(&self.url, &base) {
+            return Vec::new();
+        }
         links(&page.html, &base)
             .into_iter()
-            .filter(|l| looks_like_posting(&base, &l.url))
+            .filter(|l| looks_like_posting(&self.url, &base, &l.url))
             .filter_map(|l| {
                 let title = if is_generic(&l.text) { title_from_url(&l.url)? } else { l.text };
                 Some(Candidate { url: l.url.to_string(), title, company: self.company.clone(), location: String::new(), snippet: String::new() })
@@ -154,6 +161,34 @@ mod tests {
         let page = Page { url: "https://careers.acme.test/open".into(), html: html.into() };
         let urls: Vec<_> = adapter.candidates(&page).into_iter().map(|c| c.url).collect();
         assert_eq!(urls, ["https://careers.acme.test/jobs/8812345", "https://acme.test/jobs/9912345"]);
+    }
+
+    #[tokio::test]
+    async fn a_listing_that_redirected_to_another_site_has_no_candidates() {
+        // The configured page answers from evil.test (a redirect): its links, relative or absolute,
+        // are evil.test's, and "same site" stays the configured acme.test.
+        let html = r#"<a href="/careers/rust-engineer">Rust Engineer</a><a href="https://evil.test/jobs/1234567">Evil</a><a href="https://acme.test/jobs/8812345">Acme job</a>"#;
+        let fake = pages(FakePages::new().plain(LIST, html).rendered(LIST, html).moved(LIST, "https://evil.test/careers"));
+        let adapter = CareerPage::new(fake.clone(), &source(LIST), "Acme").unwrap();
+        let page = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap();
+        assert!(page.candidates.is_empty(), "{:?}", page.candidates);
+        // Redirected within the site (to a subdomain of it), links on the configured site still count.
+        let moved = pages(FakePages::new().plain(LIST, html).moved(LIST, "https://careers.acme.test/open"));
+        let adapter = CareerPage::new(moved, &source(LIST), "Acme").unwrap();
+        let urls: Vec<_> = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap().candidates.into_iter().map(|c| c.url).collect();
+        assert_eq!(urls, ["https://careers.acme.test/careers/rust-engineer", "https://acme.test/jobs/8812345"]);
+    }
+
+    #[test]
+    fn a_site_shared_by_many_companies_is_not_accepted_as_a_careers_page() {
+        let fake = pages(FakePages::new());
+        for shared in ["https://boards.greenhouse.io/acme", "https://jobs.lever.co/acme", "https://www.linkedin.com/jobs", "https://github.io/careers", "https://co.uk/careers", "https://localhost/careers"] {
+            let err = CareerPage::new(fake.clone(), &source(shared), "Acme").err().expect(shared);
+            let text = format!("{err:#}");
+            assert!(text.starts_with("career page source") && text.contains("careers page"), "{shared}: {text}");
+        }
+        assert!(CareerPage::new(fake.clone(), &source("https://acme.github.io/careers"), "Acme").is_ok());
+        assert!(CareerPage::new(fake, &source("https://careers.acme.co.uk/"), "Acme").is_ok());
     }
 
     #[test]

@@ -44,7 +44,7 @@ impl Yc {
 
     async fn jobs(&self) -> Result<Arc<Vec<Candidate>>> {
         self.listing
-            .get_or_load(|| async { read_listing(self.pages.as_ref(), &self.source, self.url.as_str(), candidates).await })
+            .get_or_load(|| async { read_listing(self.pages.as_ref(), &self.source, self.url.as_str(), |page| candidates(page, &self.url)).await })
             .await
     }
 }
@@ -62,15 +62,16 @@ fn on_yc(url: &Url) -> bool {
     SITES.iter().filter_map(|s| Url::parse(s).ok()).any(|site| same_site(&site, url))
 }
 
-/// The job links of a listing page.
-fn candidates(page: &Page) -> Vec<Candidate> {
+/// The job links of a listing page, read for the listing the user configured (`site`): a page
+/// from any other site (a redirect) and links that lead elsewhere are not followed.
+fn candidates(page: &Page, site: &Url) -> Vec<Candidate> {
     let Ok(base) = page_url(page) else { return Vec::new() };
-    if !on_yc(&base) {
+    if !on_yc(&base) || !same_site(site, &base) {
         return Vec::new();
     }
     links(&page.html, &base)
         .into_iter()
-        .filter(|l| same_site(&base, &l.url))
+        .filter(|l| same_site(site, &l.url))
         .filter_map(|l| {
             let company = company_of(&l.url)?;
             let title = if is_generic(&l.text) { title_from_url(&l.url)? } else { l.text };
@@ -182,7 +183,22 @@ mod tests {
 
     #[test]
     fn a_page_on_another_site_has_no_candidates() {
+        let site = Url::parse(DEFAULT_URL).unwrap();
         let page = Page { url: "https://evil.test/jobs".into(), html: r#"<a href="/companies/x/jobs/1-a-b">Job</a>"#.into() };
-        assert!(candidates(&page).is_empty());
+        assert!(candidates(&page, &site).is_empty());
+        // A page of the other YC site than the configured one is not the configured listing either.
+        let other = Page { url: "https://www.workatastartup.com/jobs".into(), html: r#"<a href="/companies/x/jobs/1-a-b">Job</a>"#.into() };
+        assert!(candidates(&other, &site).is_empty());
+        let same = Page { url: DEFAULT_URL.into(), html: r#"<a href="/companies/x/jobs/1-a-b">Job</a><a href="https://www.workatastartup.com/companies/y/jobs/2-c-d">Other site</a>"#.into() };
+        let found: Vec<_> = candidates(&same, &site).into_iter().map(|c| c.url).collect();
+        assert_eq!(found, ["https://www.ycombinator.com/companies/x/jobs/1-a-b"], "links to the other YC site are not followed");
+    }
+
+    #[tokio::test]
+    async fn a_listing_that_redirected_to_another_site_has_no_candidates() {
+        let html = r#"<a href="/companies/x/jobs/1-a-b">Job</a>"#;
+        let fake = pages(FakePages::new().plain(DEFAULT_URL, html).rendered(DEFAULT_URL, html).moved(DEFAULT_URL, "https://evil.test/jobs"));
+        let page = Yc::new(fake, &source("")).unwrap().search(&Preferences::default(), &ctx()).await.unwrap();
+        assert!(page.candidates.is_empty(), "{:?}", page.candidates);
     }
 }

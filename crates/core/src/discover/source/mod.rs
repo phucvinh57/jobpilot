@@ -156,6 +156,7 @@ pub fn check_source(kind: &str, url: &str) -> Result<(String, String)> {
         }
         "career_page" => {
             let parsed = web::normalize_page_url(url).context("career page source")?;
+            web::check_site(&parsed).context("career page source")?;
             Ok((url.to_string(), parsed.host_str().unwrap_or_default().trim_start_matches("www.").to_string()))
         }
         other => bail!("no adapter for source kind `{other}` yet"),

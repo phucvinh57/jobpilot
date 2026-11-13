@@ -79,7 +79,7 @@ impl Core {
     pub fn remove_job_source(&self, id: i64) -> Result<()> {
         self.job_source(id)?;
         for waiting in self.discover_waiting()?.into_iter().filter(|w| w.source_id == id) {
-            handoff::discard_window(&waiting.thread);
+            handoff::discard_window(&self.paths, &waiting.thread);
             self.graphs.cancel(&waiting.thread)?;
         }
         self.store.delete_source(id)?;
@@ -151,6 +151,8 @@ mod tests {
             ("career_page", "", "no page address"),
             ("career_page", "javascript:alert(1)", "not a valid address"),
             ("career_page", "ftp://x.test/careers", "must be http"),
+            ("career_page", "https://boards.greenhouse.io/acme", "job board shared by many companies"),
+            ("career_page", "https://github.io/careers", "hosting platform"),
             ("yc", "https://evil.test/jobs", "not a ycombinator.com"),
             ("linkedin", "https://www.linkedin.com/jobs", "no adapter"),
         ] {
