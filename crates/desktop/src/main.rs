@@ -31,5 +31,7 @@ fn main() -> anyhow::Result<()> {
             .expect("failed to open the window");
         cx.activate(true);
     });
+    // The window is gone: do not leave an auto-apply Chrome running behind.
+    jobpilot_core::runtime::block_on(jobpilot_core::apply::close_all());
     Ok(())
 }

@@ -28,7 +28,7 @@ use crate::{Paths, Store};
 pub const NO_SANDBOX_ENV: &str = "JOBPILOT_NO_SANDBOX";
 
 /// How long page navigation may take in [`BrowserHandle::new_page`].
-const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Fixed launch flags of every managed browser (no sync, no extensions, no password manager, no
 /// "controlled by automated software" banner / webdriver flag).
@@ -211,7 +211,7 @@ impl BrowserHandle {
 }
 
 /// Wait until `document.readyState == "complete"` (errors while the page navigates are ignored).
-async fn wait_loaded(page: &Page, timeout: Duration) {
+pub(crate) async fn wait_loaded(page: &Page, timeout: Duration) {
     let poll = async {
         loop {
             if let Ok(res) = page.evaluate_expression("document.readyState").await {
@@ -467,7 +467,7 @@ fn normalize_start_url(raw: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
-fn browser_config(chrome: &Path, dir: &Path, headless: bool, start_url: Option<&str>) -> Result<BrowserConfig> {
+pub(crate) fn browser_config(chrome: &Path, dir: &Path, headless: bool, start_url: Option<&str>) -> Result<BrowserConfig> {
     let mut builder = BrowserConfig::builder()
         .chrome_executable(chrome)
         .user_data_dir(dir)
@@ -494,7 +494,7 @@ fn browser_config(chrome: &Path, dir: &Path, headless: bool, start_url: Option<&
 }
 
 /// `HeadlessChrome/..` -> `Chrome/..` so sites do not serve bot walls to the health check.
-async fn headless_user_agent(browser: &Browser) -> Option<String> {
+pub(crate) async fn headless_user_agent(browser: &Browser) -> Option<String> {
     let ua = browser.user_agent().await.ok()?;
     ua.contains("HeadlessChrome").then(|| ua.replace("HeadlessChrome", "Chrome"))
 }

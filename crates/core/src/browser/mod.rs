@@ -19,6 +19,7 @@
 
 pub mod chrome;
 pub mod fetch;
+pub mod form;
 #[cfg(test)]
 mod integration;
 pub mod lock;
@@ -30,6 +31,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 pub use chrome::{Chrome, ChromeSource, DownloadProgress};
+pub use form::FormBrowser;
 pub use lock::{LockError, ProfileLock};
 pub use session::{BrowserHandle, SessionManager, SessionStatus};
 
