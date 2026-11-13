@@ -1,7 +1,10 @@
 //! Pure logic of the queue screen (no GPUI, easy to test): the one primary button, score and time
 //! labels, source status lines.
 
+use std::collections::HashMap;
+
 use jobpilot_core::chrono::{DateTime, Utc};
+use jobpilot_core::discover::promote::Dismissed;
 use jobpilot_core::store::Source;
 
 /// The queue's primary action.
@@ -150,6 +153,33 @@ pub fn meta_line(location: &str, source: Option<&str>) -> String {
     }
 }
 
+/// What to tell the user after "Dismiss".
+pub fn dismissed_note(out: &Dismissed) -> String {
+    if let Some(why) = &out.not_excluded {
+        return format!("Lead dismissed, but the company could not be excluded: {why}");
+    }
+    let more = |n: usize| if n == 1 { "1 more job".to_string() } else { format!("{n} more jobs") };
+    let mut text = match out.also {
+        0 => "Lead dismissed.".to_string(),
+        n => format!("Lead dismissed, and {} from the same company.", more(n)),
+    };
+    if out.kept > 0 {
+        let verb = if out.kept == 1 { "was" } else { "were" };
+        text.push_str(&format!(" {} from that company {verb} kept: the CV is being prepared.", more(out.kept)));
+    }
+    text
+}
+
+/// A "Prepare CV" batch whose results stopped coming (the task ended early): its jobs that never
+/// reported leave the queue of running jobs and become failures the user can retry.
+pub fn drop_unreported<J>(jobs: &mut HashMap<i64, J>, failed: &mut HashMap<i64, String>, unreported: impl IntoIterator<Item = i64>) {
+    for id in unreported {
+        if jobs.remove(&id).is_some() {
+            failed.insert(id, "Preparing the CV stopped before it finished. Try again.".to_string());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use jobpilot_core::chrono::{Duration, TimeZone, Utc};
@@ -161,6 +191,35 @@ mod tests {
         let mut facts = QueueFacts { total: 5, shown: 5, targets: 1, idle_targets: 1, searching: false, sources: 2 };
         f(&mut facts);
         facts
+    }
+
+    #[test]
+    fn the_dismiss_note_says_what_else_went_and_what_was_kept() {
+        let note = |also, kept| dismissed_note(&Dismissed { also, kept, not_excluded: None });
+        assert_eq!(note(0, 0), "Lead dismissed.");
+        assert_eq!(note(1, 0), "Lead dismissed, and 1 more job from the same company.");
+        assert_eq!(note(3, 0), "Lead dismissed, and 3 more jobs from the same company.");
+        assert_eq!(note(0, 1), "Lead dismissed. 1 more job from that company was kept: the CV is being prepared.");
+        let failed = Dismissed { not_excluded: Some("disk full".into()), ..Dismissed::default() };
+        assert_eq!(dismissed_note(&failed), "Lead dismissed, but the company could not be excluded: disk full");
+        assert_eq!(
+            note(2, 2),
+            "Lead dismissed, and 2 more jobs from the same company. 2 more jobs from that company were kept: the CV is being prepared."
+        );
+    }
+
+    #[test]
+    fn jobs_that_never_reported_are_cleared_and_can_be_retried() {
+        let mut jobs: HashMap<i64, &str> = HashMap::from([(1, "running"), (2, "queued"), (3, "queued"), (9, "other batch")]);
+        let mut failed = HashMap::new();
+        // Lead 1 reported (and left `jobs` then); 2 and 3 never did; 1 is not in the list of unreported ones.
+        jobs.remove(&1);
+        drop_unreported(&mut jobs, &mut failed, [2, 3]);
+        assert_eq!(jobs.keys().copied().collect::<Vec<_>>(), [9], "only this batch's jobs are cleared");
+        assert_eq!(failed.keys().copied().collect::<std::collections::BTreeSet<_>>(), [2, 3].into());
+        assert!(failed[&2].contains("Try again"));
+        drop_unreported(&mut jobs, &mut failed, [2]);
+        assert_eq!(failed.len(), 2, "nothing to clear twice");
     }
 
     #[test]

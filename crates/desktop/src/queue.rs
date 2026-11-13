@@ -20,7 +20,7 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jobpilot_core::chrono::{DateTime, Utc};
-use jobpilot_core::discover::promote::{parse_prepare_thread, PREPARE_GRAPH};
+use jobpilot_core::discover::promote::{parse_prepare_thread, Dismissed, PREPARE_GRAPH};
 use jobpilot_core::discover::queue::{criteria_rows, filter_items, QueueFilter, QueueItem, QueueSnapshot};
 use jobpilot_core::discover::{WaitingSource, SOURCE_GRAPH};
 use jobpilot_core::graph::{ProgressEvent, WaitReason};
@@ -34,7 +34,7 @@ use crate::app::{AppState, Screen};
 use crate::detail::insight_brief;
 use crate::problem::{self, RetryFn};
 use logic::{
-    ago, is_web_link, meta_line, queue_primary_for, score_label, score_tone, source_name, source_needs_attention,
+    ago, dismissed_note, drop_unreported, is_web_link, meta_line, queue_primary_for, score_label, score_tone, source_name, source_needs_attention,
     source_status, QueueAction, QueueFacts, Tone,
 };
 
@@ -303,19 +303,30 @@ impl QueueView {
         self.checked.clear();
         let core = self.core(cx);
         let (tx, mut rx) = unbounded_channel();
+        let mut unreported: BTreeSet<i64> = ids.iter().copied().collect();
+        // The core holds every lead of the batch as "being prepared" from the start.
         drop(runtime::spawn(async move {
-            for id in ids {
-                let result = core.prepare_cv(id).await;
-                if tx.send((id, result)).is_err() {
-                    break;
-                }
-            }
+            core.prepare_cvs_each(&ids, |id, result| {
+                let _ = tx.send((id, result));
+            })
+            .await;
         }));
         cx.spawn(async move |this, cx| {
             while let Some((id, result)) = rx.recv().await {
+                unreported.remove(&id);
                 if this.update(cx, |this, cx| this.on_prepared(id, result, cx)).is_err() {
-                    break;
+                    return;
                 }
+            }
+            // The task ended without reporting these (it was cancelled or panicked): they are not
+            // running any more, whatever the list says.
+            if !unreported.is_empty() {
+                this.update(cx, |this, cx| {
+                    drop_unreported(&mut this.jobs, &mut this.failed, unreported);
+                    this.refresh(cx);
+                    cx.notify();
+                })
+                .ok();
             }
         })
         .detach();
@@ -378,22 +389,16 @@ impl QueueView {
         cx.notify();
     }
 
-    fn on_dismissed(&mut self, id: i64, result: Result<usize>, cx: &mut Context<Self>) {
+    fn on_dismissed(&mut self, id: i64, result: Result<Dismissed>, cx: &mut Context<Self>) {
         match result {
-            Ok(also) => {
+            Ok(out) => {
                 self.dismiss = None;
                 self.checked.remove(&id);
                 if self.selected_id(cx) == Some(id) {
                     let next = self.neighbour_of(id);
                     self.set_selected(next, cx);
                 }
-                self.note = Some(Note {
-                    ok: true,
-                    text: match also {
-                        0 => "Lead dismissed.".to_string(),
-                        n => format!("Lead dismissed, and {n} more from the same company."),
-                    },
-                });
+                self.note = Some(Note { ok: out.not_excluded.is_none(), text: dismissed_note(&out) });
                 self.refresh(cx);
             }
             Err(e) => {

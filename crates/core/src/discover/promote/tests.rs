@@ -224,13 +224,13 @@ fn dismissing_can_feed_the_preferences_back_but_never_promotes() {
     let more = add_lead(&core, 4, "Metabase", "Engineer", Some(50.0));
 
     // A plain dismissal keeps the reason and touches nothing else.
-    assert_eq!(core.dismiss_lead_with_reason(more.id, "  too junior ", false).unwrap(), 0);
+    assert_eq!(core.dismiss_lead_with_reason(more.id, "  too junior ", false).unwrap(), Dismissed::default());
     let got = core.store.get_lead(more.id).unwrap().unwrap();
     assert_eq!((got.state, got.dismiss_reason.as_deref()), (LeadState::Dismissed, Some("too junior")));
     assert!(core.preferences().unwrap().exclude_companies.is_empty());
 
     // "Don't show this company again": the preference grows and the company's other leads go too.
-    assert_eq!(core.dismiss_lead_with_reason(one.id, "not interested", true).unwrap(), 1);
+    assert_eq!(core.dismiss_lead_with_reason(one.id, "not interested", true).unwrap(), Dismissed { also: 1, ..Default::default() });
     assert_eq!(core.preferences().unwrap().exclude_companies, ["Acme"]);
     let got = core.store.get_lead(two.id).unwrap().unwrap();
     assert_eq!((got.state, got.dismiss_reason.as_deref()), (LeadState::Dismissed, Some("excluded company: Acme")));
@@ -248,6 +248,189 @@ fn dismissing_can_feed_the_preferences_back_but_never_promotes() {
     assert_eq!(core.preferences().unwrap(), before);
 
     assert!(core.store.list_applications().unwrap().is_empty(), "dismissing never promotes");
+}
+
+#[test]
+fn dismissing_a_company_leaves_the_leads_whose_cv_is_queued_or_being_written() {
+    let (_dir, core) = core();
+    let one = add_lead(&core, 1, "Acme", "Backend Engineer", Some(80.0));
+    let busy = add_lead(&core, 2, "Acme", "SRE", Some(70.0));
+    let idle = add_lead(&core, 3, "Acme", "Data Engineer", Some(60.0));
+
+    let held = Preparing::new(&core, busy.id);
+    assert!(core.is_preparing(busy.id) && !core.is_preparing(idle.id));
+    let out = core.dismiss_lead_with_reason(one.id, "", true).unwrap();
+    assert_eq!(out, Dismissed { also: 1, kept: 1, not_excluded: None }, "the one waiting for its CV stays");
+    let state = |id| core.store.get_lead(id).unwrap().unwrap().state;
+    assert_eq!((state(one.id), state(busy.id), state(idle.id)), (LeadState::Dismissed, LeadState::New, LeadState::Dismissed));
+    assert_eq!(core.preferences().unwrap().exclude_companies, ["Acme"], "the company is still excluded for later runs");
+
+    // The lead itself cannot be dismissed while its CV is on the way.
+    let err = core.dismiss_lead_with_reason(busy.id, "", false).unwrap_err();
+    assert!(err.to_string().contains("being prepared"), "{err:#}");
+    assert_eq!(state(busy.id), LeadState::New);
+
+    // Two holders (a batch and a retry) keep it busy until both are done.
+    let second = Preparing::new(&core, busy.id);
+    drop(held);
+    assert!(core.is_preparing(busy.id));
+    drop(second);
+    assert!(!core.is_preparing(busy.id));
+    core.dismiss_lead_with_reason(busy.id, "", false).unwrap();
+    assert_eq!(state(busy.id), LeadState::Dismissed);
+}
+
+#[tokio::test]
+async fn a_batch_holds_all_its_leads_until_each_one_is_done() {
+    let (_dir, core) = core();
+    let a = add_lead(&core, 1, "Acme", "Backend Engineer", Some(90.0));
+    let b = add_lead(&core, 2, "Foo", "Platform Engineer", Some(70.0));
+    let llm: Arc<dyn Llm> = Arc::new(FakeLlm::with_replies([analysis(), reply(), analysis(), reply()]));
+
+    let mut seen = Vec::new();
+    core.prepare_cvs_each_with(llm, &[a.id, b.id], |id, result| {
+        assert!(result.is_ok());
+        // The first is done and released, the second still waits its turn.
+        seen.push((id, core.is_preparing(a.id), core.is_preparing(b.id)));
+    })
+    .await;
+    assert_eq!(seen, [(a.id, false, true), (b.id, false, false)]);
+}
+
+#[tokio::test]
+async fn a_failed_prepare_leaves_a_draft_that_generate_can_finish_and_keeps_its_apply_page() {
+    let (_dir, core) = core();
+    let lead = add_lead(&core, 1, "iCreationsLab", "System Engineer", Some(88.0));
+
+    // The model's CV breaks the fact rules twice: the analysis was adopted, then the run failed.
+    let bad = json!({"yaml": "not: a cv", "emphasised": [], "omitted": [], "gaps": []});
+    let llm: Arc<dyn Llm> = Arc::new(FakeLlm::with_replies([analysis(), bad.clone(), bad]));
+    assert!(core.prepare_cv_with(llm, lead.id).await.is_err());
+    let app = core.store.list_applications().unwrap().remove(0);
+    assert_eq!(core.store.list_applications().unwrap().len(), 1);
+    assert!(app.analysis_json.is_some() && app.gaps_json.is_none(), "stopped before the result was saved");
+    assert_eq!(app.apply_url.as_deref(), Some(lead.url.as_str()), "the Draft still has somewhere to apply");
+
+    // The posting text is the Draft's own `jd.md`, laid out like any application's.
+    let jd = std::fs::read_to_string(app.jd_path()).unwrap();
+    assert!(jd.starts_with("# iCreationsLab — System Engineer\nSource: "), "{jd}");
+    assert!(read_jd_text(&app).unwrap().starts_with("iCreationsLab is hiring"));
+
+    // The sidebar's Generate (regenerate) works on that Draft.
+    let llm = FakeLlm::with_replies([reply()]);
+    let done = Pipeline::new(&core, &llm).regenerate(app.id, |_| {}).await.unwrap();
+    assert!(done.cv_yaml_path().is_file() && done.cv_pdf_path().is_file());
+}
+
+#[test]
+fn promote_writes_the_posting_as_jd_md_and_puts_it_back_if_it_is_lost() {
+    let (_dir, core) = core();
+    let lead = add_lead(&core, 1, "Acme", "Backend Engineer", Some(80.0));
+    let app = core.promote(lead.id).unwrap();
+    let want = format!("# Acme — Backend Engineer\nSource: {}\n\n{JD}\n", lead.url);
+    assert_eq!(std::fs::read_to_string(app.jd_path()).unwrap(), want);
+
+    // A crash after the application was created but before the file was written.
+    std::fs::remove_file(app.jd_path()).unwrap();
+    let again = core.promote(lead.id).unwrap();
+    assert_eq!(again.id, app.id);
+    assert_eq!(std::fs::read_to_string(app.jd_path()).unwrap(), want);
+}
+
+#[tokio::test]
+async fn files_without_a_saved_result_are_not_a_finished_cv_and_the_apply_page_is_kept_on_resume() {
+    let (_dir, core) = core();
+    let lead = add_lead(&core, 1, "iCreationsLab", "System Engineer", Some(88.0));
+    let down: Arc<dyn Llm> = Arc::new(FakeLlm::with_error("HTTP 503 Service Unavailable"));
+    assert!(core.prepare_cv_with(down, lead.id).await.is_err());
+    let app = core.store.list_applications().unwrap().remove(0);
+
+    // A run that died after rendering but before saving its result left CV files behind.
+    std::fs::write(app.cv_yaml_path(), "stale: true\n").unwrap();
+    std::fs::write(app.cv_pdf_path(), b"%PDF stale").unwrap();
+    let llm = Arc::new(FakeLlm::with_replies([analysis(), reply()]));
+    let shared: Arc<dyn Llm> = llm.clone();
+    let done = core.prepare_cv_with(shared, lead.id).await.unwrap();
+    assert_eq!(llm.calls().len(), 2, "the pipeline ran: the files were not taken for a result");
+    assert_eq!(std::fs::read_to_string(done.cv_yaml_path()).unwrap().trim_end(), EXAMPLE.trim_end());
+    assert!(done.gaps_json.is_some());
+
+    // A thread that failed after the result was saved: resuming only repairs the apply page.
+    let lead = add_lead(&core, 2, "iCreationsLab", "Site Reliability Engineer", Some(70.0));
+    let down: Arc<dyn Llm> = Arc::new(FakeLlm::with_error("HTTP 503 Service Unavailable"));
+    assert!(core.prepare_cv_with(down, lead.id).await.is_err());
+    let app = core.store.get_application(core.store.get_lead(lead.id).unwrap().unwrap().app_id.unwrap()).unwrap().unwrap();
+    let produced = FakeLlm::with_replies([analysis(), reply()]);
+    let mut app = Pipeline::new(&core, &produced).generate_into(app.id, JdInput::Text(JD.into()), |_| {}).await.unwrap();
+    assert!(app.gaps_json.is_some());
+    app.apply_url = None;
+    core.store.save_application(&app).unwrap();
+    assert!(matches!(core.graphs.status(&prepare_thread(lead.id)).unwrap().unwrap().status, ThreadStatus::Failed(_)));
+
+    let idle = Arc::new(FakeLlm::with_replies([]));
+    let shared: Arc<dyn Llm> = idle.clone();
+    let resumed = core.prepare_cv_with(shared, lead.id).await.unwrap();
+    assert!(idle.calls().is_empty(), "the saved CV is not written again");
+    assert_eq!(resumed.id, app.id);
+    assert_eq!(resumed.apply_url.as_deref(), Some(lead.url.as_str()), "the fix-up runs on resume too");
+    assert!(matches!(core.graphs.status(&prepare_thread(lead.id)).unwrap().unwrap().status, ThreadStatus::Done));
+}
+
+#[tokio::test]
+async fn a_lead_whose_application_was_deleted_can_be_prepared_again() {
+    let (_dir, core) = core();
+    let lead = add_lead(&core, 1, "iCreationsLab", "System Engineer", Some(88.0));
+    let down: Arc<dyn Llm> = Arc::new(FakeLlm::with_error("HTTP 503 Service Unavailable"));
+    assert!(core.prepare_cv_with(down, lead.id).await.is_err());
+    let first = core.store.list_applications().unwrap().remove(0);
+
+    // The user deletes the Draft: the lead is promoted with nothing behind it, and is back in the queue.
+    core.store.delete_application(first.id).unwrap();
+    let orphan = core.store.get_lead(lead.id).unwrap().unwrap();
+    assert_eq!((orphan.state, orphan.app_id), (LeadState::Promoted, None));
+    assert!(orphan.in_queue());
+    assert_eq!(core.queue_snapshot().unwrap().items.iter().map(|i| i.lead.id).collect::<Vec<_>>(), [lead.id]);
+    assert_eq!(core.queue_next().unwrap().unwrap().id, lead.id);
+
+    // The failed thread still points at the deleted application: it is dropped and the lead starts over.
+    let llm: Arc<dyn Llm> = Arc::new(FakeLlm::with_replies([analysis(), reply()]));
+    let second = core.prepare_cv_with(llm, lead.id).await.unwrap();
+    assert_ne!(second.id, first.id);
+    assert!(second.cv_pdf_path().is_file());
+    assert_eq!(core.store.list_applications().unwrap().len(), 1);
+    let got = core.store.get_lead(lead.id).unwrap().unwrap();
+    assert_eq!((got.state, got.app_id), (LeadState::Promoted, Some(second.id)));
+    assert!(core.queue_snapshot().unwrap().items.is_empty(), "linked again: out of the queue");
+
+    // A finished one deleted afterwards starts over too, and an orphan can also be dismissed.
+    core.store.delete_application(second.id).unwrap();
+    let again = core.promote(lead.id).unwrap();
+    assert_ne!(again.id, second.id);
+    assert!(again.jd_path().is_file());
+    core.store.delete_application(again.id).unwrap();
+    core.dismiss_lead_with_reason(lead.id, "no longer wanted", false).unwrap();
+    assert_eq!(core.store.get_lead(lead.id).unwrap().unwrap().state, LeadState::Dismissed);
+    assert!(core.queue_snapshot().unwrap().items.is_empty());
+}
+
+#[test]
+fn the_lead_is_dismissed_first_and_a_failing_exclusion_is_reported_not_hidden() {
+    let (_dir, core) = core();
+    let lead = add_lead(&core, 1, "Acme", "Backend Engineer", Some(80.0));
+    let other = add_lead(&core, 2, "Acme", "SRE", Some(70.0));
+    core.store
+        .with_conn(|c| {
+            c.execute("INSERT INTO preferences (id, json, updated_at) VALUES (1, 'not json', 'x')", [])?;
+            Ok(())
+        })
+        .unwrap();
+
+    let out = core.dismiss_lead_with_reason(lead.id, "no", true).unwrap();
+    assert!(out.not_excluded.as_deref().is_some_and(|e| e.contains("not valid JSON")), "{out:?}");
+    assert_eq!((out.also, out.kept), (0, 0));
+    let state = |id| core.store.get_lead(id).unwrap().unwrap().state;
+    assert_eq!(state(lead.id), LeadState::Dismissed, "the user's dismissal is never lost");
+    assert_eq!(state(other.id), LeadState::New, "nothing else changed");
 }
 
 /// Two postings, found by a fake source.

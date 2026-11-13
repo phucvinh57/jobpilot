@@ -16,7 +16,7 @@ use super::score::{Criterion, Scored};
 use super::state::RunSummary;
 use super::WaitingSource;
 use crate::pipeline::Insight;
-use crate::store::{Lead, LeadState, Source, SourcePurpose};
+use crate::store::{Lead, Source, SourcePurpose};
 use crate::Core;
 
 use super::promote::FailedPrepare;
@@ -133,7 +133,8 @@ pub fn filter_items<'a>(items: &'a [QueueItem], filter: &QueueFilter) -> Vec<&'a
 /// Everything the queue screen needs, read in one go.
 #[derive(Clone, Debug)]
 pub struct QueueSnapshot {
-    /// Leads in state `new`, best match first.
+    /// Leads waiting for the user (`new`, or promoted with the application since deleted), best
+    /// match first.
     pub items: Vec<QueueItem>,
     /// Leads promoted whose CV could not be written (retry or forget).
     pub failed: Vec<FailedPrepare>,
@@ -147,7 +148,7 @@ pub struct QueueSnapshot {
 impl Core {
     /// Read the queue screen's data. A database read: run it off the UI thread.
     pub fn queue_snapshot(&self) -> Result<QueueSnapshot> {
-        let mut leads = self.store.list_leads(LeadState::New)?;
+        let mut leads = self.store.list_queue_leads()?;
         sort_leads(&mut leads);
         Ok(QueueSnapshot {
             items: leads.into_iter().map(QueueItem::new).collect(),
@@ -160,7 +161,7 @@ impl Core {
 
     /// The best lead left in the queue, for "Next in queue".
     pub fn queue_next(&self) -> Result<Option<Lead>> {
-        let mut leads = self.store.list_leads(LeadState::New)?;
+        let mut leads = self.store.list_queue_leads()?;
         sort_leads(&mut leads);
         Ok(leads.into_iter().next())
     }

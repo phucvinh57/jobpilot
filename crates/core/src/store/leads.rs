@@ -18,6 +18,14 @@ pub enum LeadState {
     Promoted,
 }
 
+impl Lead {
+    /// Is the lead one the user can still act on: `new`, or `promoted` with its application gone
+    /// (deleted since), which makes it promotable again.
+    pub fn in_queue(&self) -> bool {
+        self.state == LeadState::New || (self.state == LeadState::Promoted && self.app_id.is_none())
+    }
+}
+
 impl LeadState {
     /// `new` / `dismissed` / `promoted` (as stored).
     pub fn as_str(self) -> &'static str {
@@ -165,6 +173,18 @@ impl Store {
         Ok(self.find_lead(url, dedup_key)?.is_some())
     }
 
+    /// The leads the queue shows: every `new` lead, plus promoted ones whose application was
+    /// deleted (they can be prepared again). Best score first (unscored last), then newest.
+    pub fn list_queue_leads(&self) -> Result<Vec<Lead>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(&format!(
+                "SELECT {COLS} FROM leads WHERE {IN_QUEUE} ORDER BY score DESC, found_at DESC, id DESC"
+            ))?;
+            let rows = stmt.query_map([], Lead::from_row)?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
     /// Leads in `state`, best score first (unscored last), then newest.
     pub fn list_leads(&self, state: LeadState) -> Result<Vec<Lead>> {
         self.with_conn(|c| {
@@ -181,21 +201,22 @@ impl Store {
         self.update_lead("jd_path = ?1", params![jd_path.to_string_lossy(), id], id, "")
     }
 
-    /// The user (or a filter) rejected the lead; `reason` may be empty. Only a `new` lead can be
-    /// dismissed: states move forward only.
+    /// The user (or a filter) rejected the lead; `reason` may be empty. Only a lead in the queue
+    /// can be dismissed (see [`Lead::in_queue`]): states move forward only.
     pub fn dismiss_lead(&self, id: i64, reason: &str) -> Result<()> {
-        self.update_lead("state = 'dismissed', dismiss_reason = ?1", params![reason, id], id, NEW_ONLY)
+        self.update_lead("state = 'dismissed', dismiss_reason = ?1", params![reason, id], id, &format!(" AND {IN_QUEUE}"))
     }
 
-    /// The lead became application `app_id`. Only a `new` lead can be promoted.
+    /// The lead became application `app_id`. Only a lead in the queue can be promoted.
     pub fn promote_lead(&self, id: i64, app_id: i64) -> Result<()> {
-        self.update_lead("state = 'promoted', app_id = ?1", params![app_id, id], id, NEW_ONLY)
+        self.update_lead("state = 'promoted', app_id = ?1", params![app_id, id], id, &format!(" AND {IN_QUEUE}"))
     }
 
     /// Create the Draft application `new` for a `new` lead and mark the lead promoted, in one
     /// transaction: a crash leaves either both or neither, so a second try never makes a second
     /// application. `insight_json` is copied to the application. A lead that is already promoted
-    /// returns its application and changes nothing.
+    /// returns its application and changes nothing, unless that application was deleted since: then
+    /// a new one is created and linked (the lead stays `promoted`).
     pub fn promote_lead_to_application(&self, id: i64, new: &NewApplication, insight_json: Option<&str>) -> Result<Application> {
         let app_id = self.with_tx(|tx| {
             let (state, app_id): (String, Option<i64>) = tx
@@ -203,8 +224,7 @@ impl Store {
                 .with_context(|| format!("lead {id} not found"))?;
             match (state.as_str(), app_id) {
                 ("promoted", Some(app_id)) => return Ok(app_id),
-                ("promoted", None) => anyhow::bail!("the application of lead {id} was deleted"),
-                ("new", _) => {}
+                ("promoted", None) | ("new", _) => {}
                 (other, _) => anyhow::bail!("lead {id} is {other}: only a new lead can be promoted"),
             }
             let app_id = applications::insert_application(tx, new)?;
@@ -221,14 +241,16 @@ impl Store {
     fn update_lead(&self, set: &str, args: &[&dyn rusqlite::ToSql], id: i64, guard: &str) -> Result<()> {
         self.with_conn(|c| {
             let n = c.execute(&format!("UPDATE leads SET {set} WHERE id = ?{}{guard}", args.len()), args)?;
-            anyhow::ensure!(n == 1, "lead {id} not found or not in state new");
+            anyhow::ensure!(n == 1, "lead {id} not found or no longer in the queue");
             Ok(())
         })
     }
 }
 
-/// Extra `WHERE` clause for a state change: leads only move forward from `new`.
-const NEW_ONLY: &str = " AND state = 'new'";
+/// A lead the user can act on: `new`, or `promoted` whose application was deleted.
+const IN_QUEUE: &str = "(state = 'new' OR (state = 'promoted' AND app_id IS NULL))";
+
+
 
 #[cfg(test)]
 mod tests {
@@ -313,6 +335,36 @@ mod tests {
         assert_eq!(store.get_lead(filtered.id).unwrap().unwrap().source_id, None);
         store.delete_application(app.id).unwrap();
         assert_eq!(store.get_lead(lead.id).unwrap().unwrap().app_id, None);
+    }
+
+    #[test]
+    fn a_promoted_lead_whose_application_was_deleted_is_back_in_the_queue() {
+        let store = Store::open_in_memory().unwrap();
+        let lead = store.add_lead(&new("https://a.test/1", "a-1", Some(70.0))).unwrap();
+        let spec = |slug: &str| NewApplication { slug: slug.into(), dir: format!("/tmp/{slug}").into(), ..Default::default() };
+        let first = store.promote_lead_to_application(lead.id, &spec("first"), None).unwrap();
+        let ids = |leads: Vec<Lead>| leads.into_iter().map(|l| l.id).collect::<Vec<_>>();
+        assert!(ids(store.list_queue_leads().unwrap()).is_empty(), "promoted with its application: not in the queue");
+        assert!(store.dismiss_lead(lead.id, "x").is_err() && store.promote_lead(lead.id, first.id).is_err());
+
+        store.delete_application(first.id).unwrap();
+        let orphan = store.get_lead(lead.id).unwrap().unwrap();
+        assert!(orphan.in_queue() && orphan.state == LeadState::Promoted);
+        assert_eq!(ids(store.list_queue_leads().unwrap()), [lead.id]);
+        assert!(ids(store.list_leads(LeadState::New).unwrap()).is_empty(), "list_leads keeps meaning the state");
+
+        // Promoting again makes a new application; asking once more returns it.
+        let second = store.promote_lead_to_application(lead.id, &spec("second"), Some("{}")).unwrap();
+        assert_ne!(second.id, first.id);
+        assert_eq!(second.insight_json.as_deref(), Some("{}"));
+        assert_eq!(store.promote_lead_to_application(lead.id, &spec("third"), None).unwrap().id, second.id);
+        assert_eq!(store.get_lead(lead.id).unwrap().unwrap().app_id, Some(second.id));
+
+        // An orphan can be dismissed; a dismissed lead never comes back.
+        store.delete_application(second.id).unwrap();
+        store.dismiss_lead(lead.id, "gone").unwrap();
+        assert!(store.list_queue_leads().unwrap().is_empty());
+        assert!(store.promote_lead_to_application(lead.id, &spec("fourth"), None).is_err());
     }
 
     #[test]

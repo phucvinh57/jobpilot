@@ -573,7 +573,7 @@ fn host_of(url: &str) -> Option<String> {
 }
 
 /// `jd.md`: `# company — role`, the source, a blank line, then the JD text.
-fn write_jd(app: &Application, text: &str) -> Result<()> {
+pub(crate) fn write_jd(app: &Application, text: &str) -> Result<()> {
     let mut body = format!("# {} — {}\n", app.company, app.role);
     if let Some(source) = &app.source {
         body.push_str(&format!("Source: {source}\n"));
