@@ -9,7 +9,8 @@ CI has no AI reviewer, so this skill is the review. Report evidence, not claims.
 
 ## 1. Scope
 
-- Never work on `main`. If the change isn't in a worktree under `.claude/worktrees/`, move it into one.
+- **Docs-only** (every changed path is under `docs/`, and none is `docs/REVIEW.md`): commit on `main`, `git push origin main`, report the commit and stop. No worktree, no PR, and CI ignores `docs/**`.
+- Otherwise never work on `main`. If the change isn't in a worktree under `.claude/worktrees/`, move it into one.
 - Read `git status --short` and `git diff main...HEAD --stat`, then pick the risk tier from `docs/REVIEW.md`.
 - Choose a shape:
   - **One PR** for one coherent change.
