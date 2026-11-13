@@ -32,6 +32,8 @@ Numbering continues the existing P1-P7 ownership scheme in `CLAUDE.md`.
 
 ## Execution flow
 
+Activity diagrams of the four flows, with the points where the app waits for the user: [activity-diagram.md](activity-diagram.md) (draft).
+
 ```
 Phase 0   P8 foundation                     alone, first (touches shared files once)
             |
