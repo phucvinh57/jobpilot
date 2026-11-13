@@ -18,6 +18,7 @@
 //! [`BrowserHandle`] (`new_page(url)` -> `chromiumoxide::Page`, `cookies()`, `close()`).
 
 pub mod chrome;
+pub mod fetch;
 #[cfg(test)]
 mod integration;
 pub mod lock;
