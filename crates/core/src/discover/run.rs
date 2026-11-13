@@ -36,6 +36,7 @@ use super::state::{
     parse_source_thread, source_thread, wait_label, DiscoveryState, RunSummary, SourceResult,
     SourceState, SourceStatus, DISCOVERY_GRAPH, LAST_RUN_KEY, SOURCE_GRAPH,
 };
+use crate::browser::challenge::ChallengeFound;
 use crate::graph::nodes::{self, Challenge, ChallengeKind};
 use crate::graph::{GraphDef, Graphs, Limits, Outcome, END, START};
 use crate::health::{classify, Problem};
@@ -193,16 +194,25 @@ fn source_graph(sh: &Arc<Shared>) -> GraphDef<SourceState> {
 }
 
 /// `search`: the next page of the adapter, from the saved cursor. The cursor itself moves on in
-/// `dedup`, so a page searched again after "Continue" is the same page.
+/// `dedup`, so a page searched again after "Continue" is the same page. An adapter that meets a
+/// login, captcha or block page in the browser ([`ChallengeFound`]) does not fail the source: the
+/// challenge is raised and the `challenge` node sends the source to `wait_human`.
 async fn search(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     let source = sh.source(s.source_id)?;
     let adapter = sh.adapter(&source)?;
     let prefs = sh.store.preferences()?;
     let page_size = sh.deps.limits.page_size.max(1);
-    let page = adapter
-        .search(&prefs, &SearchCtx { cursor: s.cursor.clone(), page_size })
-        .await
-        .with_context(|| format!("searching the {} source", source.kind))?;
+    let searched = adapter.search(&prefs, &SearchCtx { cursor: s.cursor.clone(), page_size }).await;
+    let page = match searched {
+        Ok(page) => page,
+        Err(e) => {
+            if let Some(found) = e.downcast_ref::<ChallengeFound>() {
+                raise(&sh, &mut s, &source, found.kind, found.url.clone())?;
+                return Ok(s);
+            }
+            return Err(e.context(format!("searching the {} source", source.kind)));
+        }
+    };
     s.page = page
         .candidates
         .into_iter()
@@ -215,20 +225,30 @@ async fn search(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     Ok(s)
 }
 
-/// `challenge` and `challenge_page`: ask the hook; on a hit remember it, mark the source and tell
-/// the user (unless this was the last strike).
+/// `challenge` and `challenge_page`: ask the hook; on a hit raise it. A challenge the search or the
+/// fetch already raised (a page the browser rendered) is not asked again, nor counted twice.
 async fn check(sh: Arc<Shared>, mut s: SourceState, stage: CheckStage) -> Result<SourceState> {
+    if s.challenge.is_some() {
+        return Ok(s);
+    }
     let source = sh.source(s.source_id)?;
     let (url, text) = match (&s.current, stage) {
         (Some(c), CheckStage::Posting) => (c.url.clone(), truncate_chars(&s.jd, CHECK_TEXT_CHARS).to_string()),
         _ => (source.url.clone(), String::new()),
     };
     let found = (sh.deps.challenge)(ChallengeCheck { source: source.clone(), stage, url: url.clone(), text }).await?;
-    let Some(kind) = found else {
+    match found {
+        Some(kind) => raise(&sh, &mut s, &source, kind, url)?,
         // The page or the posting went through: the challenges are not "in a row" any more.
-        s.strikes = 0;
-        return Ok(s);
-    };
+        None => s.strikes = 0,
+    }
+    Ok(s)
+}
+
+/// A login, captcha or block page was found at `url`: remember it in the state (the next node
+/// pauses the source), mark the source and tell the user (unless this was the last strike, which
+/// ends the source for the day instead).
+fn raise(sh: &Shared, s: &mut SourceState, source: &Source, kind: ChallengeKind, url: String) -> Result<()> {
     s.strikes += 1;
     s.challenge = Some(Challenge { kind, source_id: source.id, url });
     tracing::warn!(run = %s.run, source_id = source.id, kind = ?kind, strikes = s.strikes, "source needs the user");
@@ -237,7 +257,7 @@ async fn check(sh: Arc<Shared>, mut s: SourceState, stage: CheckStage) -> Result
         let name = if source.name.trim().is_empty() { source.kind.as_str() } else { source.name.trim() };
         (sh.deps.notify)("JobPilot needs you", &format!("{name}: {}", ask_of(kind)));
     }
-    Ok(s)
+    Ok(())
 }
 
 /// What the notification asks of the user.
@@ -310,9 +330,17 @@ async fn fetch(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     let adapter = sh.adapter(&source)?;
     let got = match adapter.posting(&candidate).await {
         Ok(Some(text)) => Ok(text),
-        Ok(None) => (sh.deps.fetch)(FetchRequest { source, candidate }).await,
+        Ok(None) => (sh.deps.fetch)(FetchRequest { source: source.clone(), candidate }).await,
         Err(e) => Err(e),
     };
+    // A login, captcha or block page is not a posting to skip: the posting stays the current one and
+    // the source waits for the user (`challenge_page` -> `wait_human`), then fetches it again.
+    let challenged = got.as_ref().err().and_then(|e| e.downcast_ref::<ChallengeFound>()).map(|f| (f.kind, f.url.clone()));
+    if let Some((kind, challenge_url)) = challenged {
+        s.jd.clear();
+        raise(&sh, &mut s, &source, kind, challenge_url)?;
+        return Ok(s);
+    }
     match got.map_err(|e| without_url(e, &url)) {
         Ok(text) if text.trim().chars().count() >= MIN_POSTING_CHARS => {
             s.jd = truncate_chars(text.trim(), MAX_POSTING_CHARS).to_string();

@@ -230,7 +230,7 @@ impl SessionsSection {
     }
 }
 
-fn ago(t: DateTime<Utc>) -> String {
+pub(super) fn ago(t: DateTime<Utc>) -> String {
     let d = Utc::now() - t;
     if d.num_minutes() < 1 {
         "just now".into()
@@ -244,7 +244,7 @@ fn ago(t: DateTime<Utc>) -> String {
 }
 
 /// Host shown under the session name.
-fn host(url: &str) -> String {
+pub(super) fn host(url: &str) -> String {
     url.split("://").nth(1).unwrap_or(url).split('/').next().unwrap_or(url).to_string()
 }
 

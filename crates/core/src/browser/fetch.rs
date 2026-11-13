@@ -17,8 +17,10 @@ use chromiumoxide::handler::viewport::Viewport;
 use chromiumoxide::{Browser, BrowserConfig};
 use futures::StreamExt;
 
+use super::challenge;
 use super::chrome;
 use super::session::NO_SANDBOX_ENV;
+use crate::graph::nodes::ChallengeKind;
 use crate::pipeline::ingest::MIN_PAGE_CHARS;
 use crate::pipeline::generate::shared_llm;
 use crate::pipeline::{JdInput, NeedsBrowser, Pipeline, Progress, Stage};
@@ -26,9 +28,9 @@ use crate::store::Application;
 use crate::{Core, Paths};
 
 /// Longest the whole render may take (launch + load + settle).
-const RENDER_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const RENDER_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long to wait for the page to reach `readyState == "complete"`.
-const LOAD_TIMEOUT: Duration = Duration::from_secs(25);
+pub(super) const LOAD_TIMEOUT: Duration = Duration::from_secs(25);
 /// How long a client-side app may take to put readable text on the page after load.
 const TEXT_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -52,18 +54,27 @@ const FLAGS: &[&str] = &[
 /// Visible text length of the page, to know when a client-side app has rendered.
 const TEXT_LEN_JS: &str = "(document.body ? document.body.innerText.length : 0)";
 
+/// A rendered page: its address after redirects, its DOM, and the login, captcha or block page that
+/// took its place, if any (see [`challenge`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rendered {
+    pub url: String,
+    pub html: String,
+    pub challenge: Option<ChallengeKind>,
+}
+
 /// A temp profile dir that is deleted when dropped.
-struct TempProfile(PathBuf);
+pub(super) struct TempProfile(PathBuf);
 
 impl TempProfile {
-    fn create(paths: &Paths) -> Result<Self> {
+    pub(super) fn create(paths: &Paths) -> Result<Self> {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let dir = paths.data_dir.join("tmp").join(format!("fetch-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         Ok(Self(dir))
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -75,7 +86,7 @@ impl Drop for TempProfile {
 }
 
 /// Accept only http(s) URLs (this also keeps the value from ever being parsed as a Chrome flag).
-fn checked_url(raw: &str) -> Result<String> {
+pub(super) fn checked_url(raw: &str) -> Result<String> {
     let url = url::Url::parse(raw.trim()).with_context(|| format!("`{}` is not a valid URL", raw.trim()))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         bail!("only http(s) links can be opened in the browser, got `{}`", raw.trim());
@@ -85,16 +96,22 @@ fn checked_url(raw: &str) -> Result<String> {
 
 /// Open `url` in a headless Chrome with a throwaway profile and return the rendered DOM as HTML.
 pub async fn rendered_html(paths: &Paths, url: &str) -> Result<String> {
+    Ok(render_checked(paths, url).await?.html)
+}
+
+/// [`rendered_html`] that also says whether a login, captcha or block page was shown instead of the
+/// page (see [`challenge::detect_at`]).
+pub async fn render_checked(paths: &Paths, url: &str) -> Result<Rendered> {
     let url = checked_url(url)?;
     let chrome = chrome::resolve(paths)
         .context("Chrome not found: install Chrome/Chromium or download the browser in Settings > Browser sessions")?;
     let profile = TempProfile::create(paths)?;
     tokio::time::timeout(RENDER_TIMEOUT, render(&chrome.path, profile.path(), &url))
         .await
-        .map_err(|_| anyhow!("the browser did not render {url} within {} seconds", RENDER_TIMEOUT.as_secs()))?
+        .map_err(|_| anyhow!("the browser did not render the page within {} seconds (timed out)", RENDER_TIMEOUT.as_secs()))?
 }
 
-async fn render(chrome: &Path, profile: &Path, url: &str) -> Result<String> {
+async fn render(chrome: &Path, profile: &Path, url: &str) -> Result<Rendered> {
     let mut builder = BrowserConfig::builder()
         .chrome_executable(chrome)
         .user_data_dir(profile)
@@ -121,7 +138,7 @@ async fn render(chrome: &Path, profile: &Path, url: &str) -> Result<String> {
     result
 }
 
-async fn read_page(browser: &Browser, url: &str) -> Result<String> {
+async fn read_page(browser: &Browser, url: &str) -> Result<Rendered> {
     let page = browser.new_page("about:blank").await.context("opening a tab")?;
     // Headless Chrome announces itself as `HeadlessChrome`, which job sites tend to refuse.
     if let Ok(ua) = browser.user_agent().await {
@@ -138,7 +155,13 @@ async fn read_page(browser: &Browser, url: &str) -> Result<String> {
             .is_some_and(|s| s == "complete")
     })
     .await;
-    // Client-side apps fetch the posting after load: wait for readable text, but never fail on it.
+    finish_page(&page, url).await
+}
+
+/// The rest of a render once the page has loaded: wait (a little, never failing) for a client-side
+/// app to put readable text on it, look for a challenge, and read the DOM. `requested` is the address
+/// that was asked for.
+pub(super) async fn finish_page(page: &chromiumoxide::Page, requested: &str) -> Result<Rendered> {
     wait_until(TEXT_TIMEOUT, || async {
         page.evaluate_expression(TEXT_LEN_JS)
             .await
@@ -147,7 +170,10 @@ async fn read_page(browser: &Browser, url: &str) -> Result<String> {
             .is_some_and(|n| n as usize >= MIN_PAGE_CHARS)
     })
     .await;
-    page.content().await.context("reading the page")
+    let challenge = challenge::detect_at(page, Some(requested)).await;
+    let url = page.url().await.ok().flatten().unwrap_or_else(|| requested.to_string());
+    let html = page.content().await.context("reading the page")?;
+    Ok(Rendered { url, html, challenge })
 }
 
 /// Poll `ready` every 200 ms until it is true or `timeout` passes.

@@ -16,7 +16,7 @@ pub const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_millis(1500);
 
 /// Visible `<input type=password>` anywhere in the page.
-const PASSWORD_JS: &str = r#"(() => Array.from(document.querySelectorAll('input[type="password"]')).some(e => {
+pub(super) const PASSWORD_JS: &str = r#"(() => Array.from(document.querySelectorAll('input[type="password"]')).some(e => {
     const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
 }))()"#;

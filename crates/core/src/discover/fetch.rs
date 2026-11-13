@@ -8,8 +8,10 @@ use anyhow::{Context, Result};
 use futures::FutureExt;
 
 use super::deps::PostingFetcher;
+use crate::browser::challenge::ChallengeFound;
+use crate::browser::render::Renderer;
 use crate::net::http::{checked_url, FetchError, Http};
-use crate::pipeline::ingest::{page_text, NeedsBrowser};
+use crate::pipeline::ingest::{extract_html, page_text, NeedsBrowser};
 
 /// Largest page read (the adapters' JSON answers have their own, larger cap).
 pub(crate) const MAX_POSTING_BYTES: usize = 10 * 1024 * 1024;
@@ -24,6 +26,33 @@ pub(crate) fn fetcher(http: Http) -> PostingFetcher {
         let http = http.clone();
         async move { posting_text(&http, &req.candidate.url).await }.boxed()
     })
+}
+
+/// [`fetcher`] with the managed browser as the fallback: a page the plain read cannot use
+/// ([`NeedsBrowser`]: a wall, or a page JavaScript draws) is rendered headless, in the source's
+/// bound session if it has one. A login, captcha or block page shown there is **not** skipped: it is
+/// returned as [`ChallengeFound`], so the run pauses and the user deals with it in the visible
+/// browser (`Core::discover_open_browser`). Any other browser failure is an ordinary error.
+pub(crate) fn fetcher_with_browser(http: Http, renderer: Renderer) -> PostingFetcher {
+    std::sync::Arc::new(move |req| {
+        let (http, renderer) = (http.clone(), renderer.clone());
+        async move {
+            match posting_text(&http, &req.candidate.url).await {
+                Err(e) if e.downcast_ref::<NeedsBrowser>().is_some() => browsed_text(&renderer, req.source.session_id, &req.candidate.url).await,
+                other => other,
+            }
+        }
+        .boxed()
+    })
+}
+
+/// The readable text of `url` rendered in the browser; [`ChallengeFound`] when a challenge is shown.
+async fn browsed_text(renderer: &Renderer, session_id: Option<i64>, url: &str) -> Result<String> {
+    let rendered = renderer.render(session_id, url).await?;
+    if let Some(kind) = rendered.challenge {
+        return Err(anyhow::Error::new(ChallengeFound { kind, url: url.to_string() }));
+    }
+    Ok(extract_html(&rendered.html, Some(&rendered.url)))
 }
 
 /// The readable text of the page at `url`. The answers `pipeline::ingest` gives: [`NeedsBrowser`]

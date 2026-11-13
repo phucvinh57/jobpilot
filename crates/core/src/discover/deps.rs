@@ -1,7 +1,7 @@
 //! What a discovery run needs from the outside, as values the caller can replace: the model, the
 //! source adapters, the posting fetch, the challenge detection, the insight step and the
-//! notification. [`DiscoverDeps::new`] has the real defaults; tests swap in fakes, and later parts
-//! of P10 plug into the hooks without touching the runner.
+//! notification. [`DiscoverDeps::new`] has the real defaults without a browser; [`DiscoverDeps::live`]
+//! adds the managed browser (page adapters, posting fallback) and the insight; tests swap in fakes.
 
 use std::sync::Arc;
 
@@ -10,8 +10,10 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 
 use super::fetch::{self, MAX_POSTING_BYTES};
+use super::handoff::text_probe;
 use super::limits::DiscoverLimits;
-use super::source::{adapter_for, Candidate, JobSource, NetHttp};
+use super::source::{adapter_for_pages, Candidate, JobSource, NetHttp, NetPages, Pages};
+use crate::browser::render::Renderer;
 use crate::graph::nodes::ChallengeKind;
 use crate::llm::Llm;
 use crate::net::http::{Http, HttpLimits};
@@ -40,9 +42,11 @@ pub struct ChallengeCheck {
     pub text: String,
 }
 
-/// The challenge hook: `Some(kind)` when the user has to step in. The API adapters of part A
-/// never meet one, so the default answers `None`; `browser/challenge.rs` (part B) fills it in for
-/// browser-driven sources. An `Err` fails the source's thread.
+/// The challenge hook: `Some(kind)` when the user has to step in. The default is
+/// [`text_probe`](super::handoff::text_probe): after a posting was fetched it reads the start of the
+/// text for a block, captcha or login page. A page rendered in the browser reports its own challenge
+/// (the adapter or the fetch returns `ChallengeFound`), which the runner treats the same way. An
+/// `Err` fails the source's thread.
 pub type ChallengeProbe =
     Arc<dyn Fn(ChallengeCheck) -> BoxFuture<'static, Result<Option<ChallengeKind>>> + Send + Sync>;
 
@@ -56,8 +60,9 @@ pub struct FetchRequest {
 /// The posting fetch hook: the page's readable text. An error that [`classify`]s as a network
 /// problem fails the thread (Retry); any other error skips that posting. The default reads the page
 /// through the shared safe client (`net::http`, which spaces requests to one host itself; a
-/// replacement fetcher does its own pacing) and extracts the text like `pipeline::ingest`; its
-/// `NeedsBrowser` answer skips the posting until a browser fallback is plugged in here.
+/// replacement fetcher does its own pacing) and extracts the text like `pipeline::ingest`. Its
+/// `NeedsBrowser` answer skips the posting, except in [`DiscoverDeps::live`], where the page is
+/// rendered in the managed browser and a challenge shown there (`ChallengeFound`) pauses the source.
 ///
 /// [`classify`]: crate::health::classify
 pub type PostingFetcher = Arc<dyn Fn(FetchRequest) -> BoxFuture<'static, Result<String>> + Send + Sync>;
@@ -95,23 +100,33 @@ pub struct DiscoverDeps {
 }
 
 impl DiscoverDeps {
-    /// The real adapters and fetch with `llm` and `limits`; no challenge detection and no insight
-    /// yet (the hooks are below), desktop notifications. The adapters' JSON calls and the posting
-    /// fetch go through one shared client, so they share its host check and per-host delays.
+    /// The real adapters and fetch with `llm` and `limits`; the text-based challenge probe, no
+    /// browser (a page that needs one is skipped) and no insight yet, desktop notifications. The
+    /// adapters' JSON calls, their page reads and the posting fetch go through one shared client, so
+    /// they share its host check and per-host delays.
     pub fn new(llm: Arc<dyn Llm>, limits: DiscoverLimits) -> Result<Self> {
+        Self::build(llm, limits, None)
+    }
+
+    fn build(llm: Arc<dyn Llm>, limits: DiscoverLimits, renderer: Option<Renderer>) -> Result<Self> {
         let client = Http::new(&HttpLimits {
             host_delay: limits.host_delay,
             max_bytes: JSON_MAX_BYTES,
             allow_private_hosts: limits.allow_private_hosts,
             ..HttpLimits::default()
         })?;
-        let pages = fetch::fetcher(client.with_max_bytes(MAX_POSTING_BYTES));
+        let pages_client = client.with_max_bytes(MAX_POSTING_BYTES);
+        let fetch = match &renderer {
+            Some(renderer) => fetch::fetcher_with_browser(pages_client.clone(), renderer.clone()),
+            None => fetch::fetcher(pages_client.clone()),
+        };
+        let pages: Arc<dyn Pages> = Arc::new(NetPages::new(pages_client, renderer));
         let json = Arc::new(NetHttp::new(client));
         Ok(Self {
             llm,
-            sources: Arc::new(move |source| adapter_for(source, json.clone())),
-            fetch: pages,
-            challenge: Arc::new(|_| async { Ok(None) }.boxed()),
+            sources: Arc::new(move |source| adapter_for_pages(source, json.clone(), pages.clone())),
+            fetch,
+            challenge: text_probe(),
             insight: Arc::new(|_| async { Ok(None) }.boxed()),
             notify: Arc::new(crate::notify::desktop_notify),
             limits,
@@ -119,10 +134,14 @@ impl DiscoverDeps {
     }
 
     /// The defaults for the running app: the default AI provider (`Err` with the "no AI provider"
-    /// message, which the UI shows as the setup problem, when there is none), default limits, and
-    /// the job insight of P11 (`pipeline::insight`) as the insight hook.
+    /// message, which the UI shows as the setup problem, when there is none), default limits, the
+    /// managed browser as the page reader of the `yc` and `career_page` sources and the fallback of the
+    /// posting fetch (it sees login, captcha and block pages, and the run waits for the user), and the
+    /// job insight of P11 (`pipeline::insight`) as the insight hook.
     pub fn live(core: &Core) -> Result<Self> {
-        let mut deps = Self::new(Arc::from(core.default_llm()?), DiscoverLimits::default())?;
+        let limits = DiscoverLimits::default();
+        let renderer = Renderer::new(core, limits.allow_private_hosts);
+        let mut deps = Self::build(Arc::from(core.default_llm()?), limits, Some(renderer))?;
         deps.insight = insight_hook(core, deps.llm.clone());
         Ok(deps)
     }

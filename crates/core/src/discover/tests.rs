@@ -954,3 +954,261 @@ async fn at_most_sources_in_parallel_sources_run_at_once() {
     assert_eq!(summary.sources.len(), 5);
     assert_eq!(peak.load(Ordering::SeqCst), 2);
 }
+
+// ---------------------------------------------------------------- challenges met in the browser (part B)
+
+use crate::browser::challenge::ChallengeFound;
+use crate::health::{Challenge, Problem};
+
+/// A source whose search meets a challenge in the browser until the user has dealt with it.
+struct Walled {
+    /// The page the challenge is at.
+    url: String,
+    candidates: Vec<Candidate>,
+    kind: ChallengeKind,
+    solved: Arc<AtomicBool>,
+    cursors: Mutex<Vec<Option<String>>>,
+}
+
+impl Walled {
+    fn new(kind: ChallengeKind, candidates: Vec<Candidate>) -> Arc<Self> {
+        Self::at("https://w.test/careers", kind, candidates)
+    }
+
+    fn at(url: &str, kind: ChallengeKind, candidates: Vec<Candidate>) -> Arc<Self> {
+        Arc::new(Self { url: url.into(), candidates, kind, solved: Arc::new(AtomicBool::new(false)), cursors: Mutex::default() })
+    }
+}
+
+#[async_trait]
+impl JobSource for Walled {
+    async fn search(&self, _: &Preferences, ctx: &SearchCtx) -> Result<SearchPage> {
+        self.cursors.lock().unwrap().push(ctx.cursor.clone());
+        if !self.solved.load(Ordering::SeqCst) {
+            // As the real adapters do: the error carries the challenge under some context.
+            return Err(anyhow::Error::new(ChallengeFound { kind: self.kind, url: self.url.clone() }).context("reading the listing"));
+        }
+        Ok(SearchPage { candidates: self.candidates.clone(), next: None })
+    }
+
+    async fn posting(&self, c: &Candidate) -> Result<Option<String>> {
+        Ok(Some(format!("{}\n\n{POSTING}", c.title)))
+    }
+}
+
+fn add_walled(core: &Core, deps: &mut DiscoverDeps, source: Arc<Walled>) -> i64 {
+    let id = core
+        .store
+        .add_source(&NewSource { kind: "walled".into(), name: "w".into(), url: source.url.clone(), purpose: SourcePurpose::Jobs, session_id: None })
+        .unwrap()
+        .id;
+    deps.sources = Arc::new(move |_| Ok(source.clone() as Arc<dyn JobSource>));
+    id
+}
+
+#[tokio::test]
+async fn a_challenge_an_adapter_met_in_the_browser_pauses_the_search_and_continue_searches_the_same_page() {
+    let h = Harness::new();
+    let core = h.open();
+    let source = Walled::new(ChallengeKind::Login, vec![cand("w.test", 1, "Acme", "Engineer")]);
+    let mut deps = h.deps();
+    let id = add_walled(&core, &mut deps, source.clone());
+
+    let summary = core.discover_now_with(deps.clone()).await.unwrap();
+    assert_eq!(result_of(&summary, id).status, SourceStatus::Waiting);
+    assert_eq!(result_of(&summary, id).note, "login");
+    let waiting = core.discover_waiting().unwrap();
+    assert_eq!(waiting[0].reason, WaitReason::Login { source_id: id, url: "https://w.test/careers".into() });
+    assert_eq!(crate::discover::needs_human(&waiting[0].reason), Some(Problem::NeedsHuman(Challenge::Login)));
+    assert_eq!(core.store.get_source(id).unwrap().unwrap().last_status.as_deref(), Some("needs_human"));
+    assert_eq!(h.notices.lock().unwrap().len(), 1);
+    assert!(h.notices.lock().unwrap()[0].contains("w: sign in"), "{:?}", h.notices);
+    assert!(leads(&core, LeadState::New).is_empty());
+
+    // "Continue" once the user has logged in: the same page is searched again.
+    source.solved.store(true, Ordering::SeqCst);
+    let done = core.discover_resume_with(deps, &waiting[0].thread).await.unwrap();
+    assert_eq!((done.status, done.saved), (SourceStatus::Done, 1));
+    assert_eq!(*source.cursors.lock().unwrap(), [None, None], "the first page twice, not the second");
+    assert_eq!(core.store.get_source(id).unwrap().unwrap().last_status.as_deref(), Some("ok"));
+}
+
+#[tokio::test]
+async fn three_challenges_met_in_the_browser_in_a_row_pause_the_source_for_the_day() {
+    let h = Harness::new();
+    let core = h.open();
+    let source = Walled::new(ChallengeKind::Captcha, vec![cand("w.test", 1, "Acme", "Engineer")]);
+    let mut deps = h.deps();
+    let id = add_walled(&core, &mut deps, source.clone());
+
+    let first = core.discover_now_with(deps.clone()).await.unwrap();
+    let thread = source_thread(&first.run, id);
+    assert_eq!(core.discover_resume_with(deps.clone(), &thread).await.unwrap().status, SourceStatus::Waiting);
+    let third = core.discover_resume_with(deps.clone(), &thread).await.unwrap();
+    assert_eq!((third.status, third.note.as_str()), (SourceStatus::Done, "paused for today after repeated challenges"));
+    assert_eq!(h.notices.lock().unwrap().len(), 2);
+    let next = core.discover_now_with(deps).await.unwrap();
+    assert_eq!(result_of(&next, id).status, SourceStatus::NotRun);
+    assert_eq!(source.cursors.lock().unwrap().len(), 3, "no fourth attempt today");
+}
+
+#[tokio::test]
+async fn a_challenge_the_fetch_met_in_the_browser_pauses_at_that_posting_and_continue_fetches_it_again() {
+    let h = Harness::new();
+    let core = h.open();
+    let adapter = Arc::new(FakeSource {
+        pages: vec![vec![cand("f.test", 1, "Acme", "Engineer"), cand("f.test", 2, "Initech", "Engineer")]],
+        failure: Mutex::new(None),
+        no_text: true,
+        searched: AtomicUsize::new(0),
+    });
+    let id = h.add_source(&core, "f", adapter);
+    let solved = Arc::new(AtomicBool::new(false));
+    let fetched = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mut deps = h.deps();
+    let (solved_in, fetched_in) = (solved.clone(), fetched.clone());
+    deps.fetch = Arc::new(move |req| {
+        let url = req.candidate.url.clone();
+        fetched_in.lock().unwrap().push(url.clone());
+        let blocked = !solved_in.load(Ordering::SeqCst) && url.ends_with("/jobs/1");
+        async move {
+            if blocked {
+                // The error travels under context, like a real fetch's.
+                return Err(anyhow::Error::new(ChallengeFound { kind: ChallengeKind::Captcha, url }).context("rendering the posting"));
+            }
+            Ok(POSTING.to_string())
+        }
+        .boxed()
+    });
+
+    let summary = core.discover_now_with(deps.clone()).await.unwrap();
+    assert_eq!((result_of(&summary, id).status, result_of(&summary, id).note.as_str()), (SourceStatus::Waiting, "captcha"));
+    assert_eq!(result_of(&summary, id).skipped, 0, "the posting is not skipped");
+    let waiting = core.discover_waiting().unwrap();
+    assert_eq!(waiting[0].reason, WaitReason::Captcha { source_id: id, url: "https://f.test/jobs/1".into() });
+    assert_eq!(crate::discover::needs_human(&waiting[0].reason), Some(Problem::NeedsHuman(Challenge::Captcha)));
+    assert!(h.notices.lock().unwrap()[0].contains("f: solve the captcha"), "{:?}", h.notices);
+    assert_eq!(*fetched.lock().unwrap(), ["https://f.test/jobs/1"], "the second posting waits behind the first");
+    assert!(leads(&core, LeadState::New).is_empty());
+
+    solved.store(true, Ordering::SeqCst);
+    let done = core.discover_resume_with(deps, &waiting[0].thread).await.unwrap();
+    assert_eq!((done.status, done.saved, done.skipped), (SourceStatus::Done, 2, 0));
+    assert_eq!(*fetched.lock().unwrap(), ["https://f.test/jobs/1", "https://f.test/jobs/1", "https://f.test/jobs/2"], "the same posting, then the next");
+}
+
+#[tokio::test]
+async fn the_default_probe_catches_a_block_page_served_as_a_posting() {
+    struct Interstitial {
+        solved: Arc<AtomicBool>,
+    }
+    #[async_trait]
+    impl JobSource for Interstitial {
+        async fn search(&self, _: &Preferences, _: &SearchCtx) -> Result<SearchPage> {
+            Ok(SearchPage { candidates: vec![cand("i.test", 1, "Acme", "Engineer")], next: None })
+        }
+        async fn posting(&self, _: &Candidate) -> Result<Option<String>> {
+            Ok(Some(if self.solved.load(Ordering::SeqCst) {
+                POSTING.to_string()
+            } else {
+                "Just a moment... Enable JavaScript and cookies to continue".to_string()
+            }))
+        }
+    }
+    let h = Harness::new();
+    let core = h.open();
+    let solved = Arc::new(AtomicBool::new(false));
+    let shared = Arc::new(Interstitial { solved: solved.clone() });
+    let id = core
+        .store
+        .add_source(&NewSource { kind: "i".into(), name: "i".into(), url: "https://i.test".into(), purpose: SourcePurpose::Jobs, session_id: None })
+        .unwrap()
+        .id;
+    let mut deps = h.deps();
+    deps.sources = Arc::new(move |_| Ok(shared.clone() as Arc<dyn JobSource>));
+    deps.challenge = text_probe();
+
+    let summary = core.discover_now_with(deps.clone()).await.unwrap();
+    assert_eq!((result_of(&summary, id).status, result_of(&summary, id).note.as_str()), (SourceStatus::Waiting, "captcha"));
+    assert_eq!(core.discover_waiting().unwrap()[0].reason, WaitReason::Captcha { source_id: id, url: "https://i.test/jobs/1".into() });
+    assert!(leads(&core, LeadState::New).is_empty(), "the interstitial was not scored as a posting");
+    assert_eq!(h.llm.calls().len(), 0);
+
+    solved.store(true, Ordering::SeqCst);
+    let done = core.discover_resume_with(deps, &core.discover_waiting().unwrap()[0].thread).await.unwrap();
+    assert_eq!((done.status, done.saved), (SourceStatus::Done, 1));
+}
+
+#[tokio::test]
+async fn open_browser_only_works_for_a_source_that_waits_for_the_user() {
+    let h = Harness::new();
+    let core = h.open();
+    let a = h.add_source(&core, "a", FakeSource::new(vec![vec![cand("a.test", 1, "Acme", "Engineer")]]));
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    // A finished source, a thread that is not a source's, and one that does not exist.
+    for thread in [source_thread(&summary.run, a), discovery_thread(&summary.run), "prefs".to_string(), "discover:1:9".to_string()] {
+        assert!(core.discover_open_browser(&thread).await.is_err(), "{thread}");
+    }
+    let err = core.discover_open_browser(&source_thread(&summary.run, a)).await.unwrap_err();
+    assert!(err.to_string().contains("not waiting"), "{err:#}");
+}
+
+/// The browser opens on the page the run paused at; "Continue" closes it. Needs a display.
+#[tokio::test]
+#[ignore = "opens a visible Chrome window"]
+async fn open_browser_shows_the_page_and_continue_closes_the_window() {
+    use crate::net::fixtures::Fixtures;
+    let fx = Fixtures::start().await;
+    fx.route("/wall", 200, "text/html", "<html><head><title>Sign in</title></head><body><h1>Sign in to continue</h1></body></html>");
+    let h = Harness::new();
+    let core = h.open();
+    let source = Walled::at(&format!("{}/wall", fx.base()), ChallengeKind::Login, vec![cand("w.test", 1, "Acme", "Engineer")]);
+    let mut deps = h.deps();
+    let id = add_walled(&core, &mut deps, source.clone());
+    let summary = core.discover_now_with(deps.clone()).await.unwrap();
+    let thread = source_thread(&summary.run, id);
+    assert_eq!(result_of(&summary, id).status, SourceStatus::Waiting);
+
+    // No session is bound: a throwaway visible window. Opening again while it is open does nothing.
+    core.discover_open_browser(&thread).await.unwrap();
+    core.discover_open_browser(&thread).await.unwrap();
+    assert!(super::handoff::has_window(&thread));
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert!(!fx.hits_on("/wall").is_empty(), "the window loaded the page the run paused at");
+
+    // Continue closes the window and goes on.
+    source.solved.store(true, Ordering::SeqCst);
+    let done = core.discover_resume_with(deps, &thread).await.unwrap();
+    assert_eq!(done.status, SourceStatus::Done);
+    assert!(!super::handoff::has_window(&thread));
+}
+
+/// With a bound session the window is that session's profile: it is locked while the window is open
+/// and free again after "Continue". Needs a display.
+#[tokio::test]
+#[ignore = "opens a visible Chrome window"]
+async fn open_browser_uses_the_bound_session_and_continue_frees_its_profile() {
+    use crate::net::fixtures::Fixtures;
+    let fx = Fixtures::start().await;
+    fx.route("/wall", 200, "text/html", "<html><head><title>Sign in</title></head><body><h1>Sign in to continue</h1></body></html>");
+    let h = Harness::new();
+    let core = h.open();
+    let source = Walled::at(&format!("{}/wall", fx.base()), ChallengeKind::Login, vec![cand("w.test", 1, "Acme", "Engineer")]);
+    let mut deps = h.deps();
+    let id = add_walled(&core, &mut deps, source.clone());
+    let session = core.sessions().create("Acme", "https://acme.test/login").await.unwrap();
+    core.set_job_source_session(id, Some(session.id)).unwrap();
+    let summary = core.discover_now_with(deps.clone()).await.unwrap();
+    let thread = source_thread(&summary.run, id);
+
+    core.discover_open_browser(&thread).await.unwrap();
+    assert!(core.sessions().is_open(session.id), "the window runs on the session's profile");
+    assert!(core.sessions().launch(session.id, true).await.is_err(), "a profile has one live browser");
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert!(!fx.hits_on("/wall").is_empty());
+
+    source.solved.store(true, Ordering::SeqCst);
+    assert_eq!(core.discover_resume_with(deps, &thread).await.unwrap().status, SourceStatus::Done);
+    assert!(!core.sessions().is_open(session.id));
+    core.sessions().launch(session.id, true).await.unwrap().close().await.unwrap();
+}
