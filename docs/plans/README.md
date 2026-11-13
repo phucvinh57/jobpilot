@@ -23,7 +23,7 @@ Numbering continues the existing P1-P7 ownership scheme in `CLAUDE.md`.
 
 | Plan | What | Owns |
 |------|------|------|
-| [P8](P8-foundation.md) | Shared groundwork: migration, navigation, multi-turn LLM call, `NeedsHuman` problem | `store/` new files, `app.rs` nav, `llm/mod.rs` (one method), `health` |
+| [P8](P8-foundation.md) | Shared groundwork: graph runtime ([library choice](graph-libraries.md)), migration, navigation, multi-turn LLM call, `NeedsHuman` problem | `core/graph/`, `store/` new files, `app.rs` nav, `llm/mod.rs` (one method), `health` |
 | [P9](P9-preferences-chat.md) | Preference chat + CV upload + saved preferences | `core/prefs/`, `desktop/prefs.rs`, `assets/prompts/preferences.md` |
 | [P10](P10-discovery.md) | Job sources, crawl runner, challenge hand-off, scoring | `core/discover/`, `browser/challenge.rs`, `settings/sources.rs` |
 | [P11](P11-job-insight.md) | Domain, company info, skills, interview process per job | `pipeline/insight.rs`, `detail/jd.rs` |

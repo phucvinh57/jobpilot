@@ -134,11 +134,11 @@ A challenge on a trend source uses the same interrupt as diagram 2.
 
 | Graph concept | In JobPilot |
 |---------------|-------------|
-| State | One typed struct per graph (`ChatState`, `DiscoveryState`, `ApplyState`, `TrendState`), saved in SQLite after every node |
+| State | One typed struct per graph (`ChatState`, `DiscoveryState`, `ApplyState`, `TrendState`), converted to the runtime's JSON state at the node boundary and saved in SQLite after every node |
 | Node | An async function `state -> state`, run through `runtime::spawn`; no UI code inside |
 | Edge | A plain Rust `match` on the state; the LLM fills state fields, it never picks the next node or a URL |
 | Parallel branch | Tasks joined before the next node (score + insight, trend sources) |
 | Interrupt | A node that saves the state and returns `WaitingForUser`; the UI shows the one primary button, and resuming reloads the state |
 | Retry | A failed node keeps the last saved state; Retry re-runs that node only |
 
-Proposed change to P8, not yet written into the P8 plan: add a small `core/graph` module (node trait, runner, checkpoint table) so P9-P13 share one runner instead of four hand-written loops. The existing `pipeline::generate` and `apply::flow` already follow this shape (stages, hand-off) and can move onto the runner later.
+The runtime is a shared `core/graph` module built in [P8](P8-foundation.md); the library choice is in [graph-libraries.md](graph-libraries.md). The existing `pipeline::generate` and `apply::flow` already follow this shape (stages, hand-off) and can move onto it later.
