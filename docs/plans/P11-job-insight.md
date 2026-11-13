@@ -27,6 +27,10 @@ Rule: unknown stays empty and the UI says "not found". Nothing is guessed.
 
 One `complete_json` call with a fixed schema; every text is passed as data.
 
+## Graph
+
+`insight` is a subgraph, reused as one node by `source_run` (P10) and callable directly for user-added JDs: `company_urls` (derived in code) -> `fetch_pages` (the pages in parallel, each optional, short timeout) -> `extract` (one LLM call) -> end. No interrupt: a page that needs a login or shows a captcha is skipped and the fields stay empty.
+
 ## Use
 
 - `insight(core, jd_text, url) -> Insight`, called by discovery for every lead that passes the hard filters and by the existing pipeline after `analyze` for user-added JDs.

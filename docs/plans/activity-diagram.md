@@ -1,6 +1,6 @@
 # Activity diagrams for P8-P13
 
-Status: **draft**.
+Status: flows confirmed; built on `adk-graph` (see [graph-libraries.md](graph-libraries.md)). Each plan lists its graph's nodes.
 
 "Graph engineering" is read here as: each feature is a **graph of small steps over a typed state**, with conditional edges, parallel branches, and **interrupt nodes** where the run stops and waits for the user. The diagrams below are those graphs.
 
@@ -132,13 +132,14 @@ A challenge on a trend source uses the same interrupt as diagram 2.
 
 ## How this maps to code
 
-| Graph concept | In JobPilot |
-|---------------|-------------|
-| State | One typed struct per graph (`ChatState`, `DiscoveryState`, `ApplyState`, `TrendState`), converted to the runtime's JSON state at the node boundary and saved in SQLite after every node |
-| Node | An async function `state -> state`, run through `runtime::spawn`; no UI code inside |
-| Edge | A plain Rust `match` on the state; the LLM fills state fields, it never picks the next node or a URL |
-| Parallel branch | Tasks joined before the next node (score + insight, trend sources) |
-| Interrupt | A node that saves the state and returns `WaitingForUser`; the UI shows the one primary button, and resuming reloads the state |
-| Retry | A failed node keeps the last saved state; Retry re-runs that node only |
+| Graph concept | `adk-graph` (names per its 2.3.0 docs, confirmed in the P8 spike) | In JobPilot |
+|---------------|------------|-------------|
+| State | channels with reducers (overwrite, append, sum) | One `serde` struct per graph; the `core/graph` facade converts it to and from channels |
+| Node | `node_fn` async closure | An async function over the typed state; calls `llm/`, `browser/`, `store/`; no UI code |
+| Edge | `add_edge`, `add_conditional_edges` with a router closure | Routers are Rust code over the state; the LLM fills state fields, it never picks the next node or a URL |
+| Parallel branch | nodes from one source run together; a node with several incoming edges waits for all | score + insight, trend collectors, one subgraph per job source |
+| Interrupt | `interrupt_with_data`, resume by re-invoking the thread id | `Outcome::Waiting(WaitReason)`; the UI shows the one primary button and calls `graph::resume` |
+| Checkpoint | `Checkpointer` trait | Our implementation over `rusqlite` (`graph_checkpoints` table); survives a restart |
+| Retry | re-invoke the thread | A failed node keeps the last checkpoint; Retry re-runs that node only |
 
-The runtime is a shared `core/graph` module built in [P8](P8-foundation.md); the library choice is in [graph-libraries.md](graph-libraries.md). The existing `pipeline::generate` and `apply::flow` already follow this shape (stages, hand-off) and can move onto it later.
+The runtime is a shared `core/graph` module built in [P8](P8-foundation.md); the library choice is in [graph-libraries.md](graph-libraries.md). The existing `pipeline::generate` and `apply::flow` keep their own status-driven flow and are called from graph nodes (see [P12](P12-queue.md)).

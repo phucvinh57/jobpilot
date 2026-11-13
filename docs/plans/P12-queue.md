@@ -18,6 +18,17 @@ Depends on: P10 (leads), P11 (insight). Reuses the existing pipeline and apply f
 - CVs are written only on demand (decision 2): nothing is promoted automatically. "Prepare CV" on several selected leads runs them one at a time.
 - From here on the job is a normal application: `Draft -> CvReady -> ...` in the sidebar, with the existing primary action chain.
 
+## Graph `prepare_cv` (thread `lead:<lead id>`)
+
+| Node | Does | Next |
+|------|------|------|
+| `promote` | create the application from the lead, copy the insight (idempotent) | `generate` |
+| `generate` | the existing `pipeline::generate`, forwarding its progress to the graph's progress stream | end, application at `CvReady` |
+
+"Prepare CV" on several leads starts one thread per lead with a concurrency of one. A failure (no provider, network) ends the thread as `Failed(Problem)` and Retry resumes at the failed node.
+
+After this graph the job is an application and the existing status-driven flow takes over: its checkpoint is `applications.status`, its interrupts are the Approve CV, Review & Submit and hand-off steps. Wrapping that flow in a second graph would keep the same state twice, so it is left out; moving `pipeline` and `apply` onto the runtime is a possible later plan, not part of P12.
+
 ## Apply (already built; verified here)
 
 Decision 3 keeps this flow:
@@ -32,6 +43,7 @@ The one-primary-button rule holds: in the queue the primary is "Prepare CV" (or 
 
 ## Checks
 
+- Graph test: `prepare_cv` resumes at `generate` after a failure without creating a second application.
 - Unit: promote is idempotent, no promotion without a user action, sorting and filters.
 - `primary_for` tests extended for the queue states.
 - End-to-end on a throwaway data dir: fake source -> lead -> Prepare CV -> approve -> dry-run apply on the local fixture form.
