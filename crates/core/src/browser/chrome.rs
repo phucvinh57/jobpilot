@@ -299,7 +299,7 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
         let Some(rel) = entry.enclosed_name() else {
             bail!("archive entry {:?} escapes the target directory", entry.name());
         };
-        let out = dest.join(rel);
+        let out = dest.join(&rel);
         if entry.is_dir() {
             std::fs::create_dir_all(&out)?;
             continue;
@@ -309,9 +309,18 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
         }
         #[cfg(unix)]
         if entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000) {
-            // symlink entry: the target is the entry body
-            let mut target = String::new();
-            std::io::Read::read_to_string(&mut entry, &mut target)?;
+            // symlink entry: the target is the entry body, a short path that must stay inside `dest`
+            use std::os::unix::ffi::OsStrExt;
+            const MAX_TARGET: u64 = 4096;
+            let mut target = Vec::new();
+            std::io::Read::read_to_end(&mut std::io::Read::take(&mut entry, MAX_TARGET + 1), &mut target)?;
+            if target.len() as u64 > MAX_TARGET {
+                bail!("symlink target of {:?} is too long", entry.name());
+            }
+            let target = Path::new(std::ffi::OsStr::from_bytes(&target));
+            if !stays_inside(rel.parent().unwrap_or(Path::new("")), target) {
+                bail!("symlink {:?} points outside the target directory", entry.name());
+            }
             std::os::unix::fs::symlink(target, &out)?;
             continue;
         }
@@ -326,9 +335,86 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Whether `target`, resolved lexically from the relative directory `base`, stays under its root.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn stays_inside(base: &Path, target: &Path) -> bool {
+    use std::path::Component;
+    let mut depth: usize = 0;
+    for c in base.components().chain(target.components()) {
+        match c {
+            Component::Normal(_) => depth += 1,
+            Component::CurDir => {}
+            Component::ParentDir => match depth.checked_sub(1) {
+                Some(d) => depth = d,
+                None => return false,
+            },
+            Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_zip(path: &Path, build: impl FnOnce(&mut zip::ZipWriter<std::fs::File>)) {
+        let mut w = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        build(&mut w);
+        w.finish().unwrap();
+    }
+
+    #[test]
+    fn extract_zip_keeps_files_modes_and_symlinks_and_refuses_escapes() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let tmp = tempfile::tempdir().unwrap();
+        let good = tmp.path().join("good.zip");
+        write_zip(&good, |w| {
+            w.add_directory("app/", SimpleFileOptions::default()).unwrap();
+            w.start_file("app/chrome", SimpleFileOptions::default().unix_permissions(0o755)).unwrap();
+            w.write_all(b"bin").unwrap();
+            #[cfg(unix)]
+            w.add_symlink("app/link", "chrome", SimpleFileOptions::default()).unwrap();
+        });
+        let out = tmp.path().join("out");
+        extract_zip(&good, &out).unwrap();
+        assert_eq!(std::fs::read(out.join("app/chrome")).unwrap(), b"bin");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(out.join("app/chrome")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+            assert_eq!(std::fs::read_link(out.join("app/link")).unwrap(), Path::new("chrome"));
+        }
+
+        let bad = tmp.path().join("bad.zip");
+        write_zip(&bad, |w| {
+            w.start_file("../evil", SimpleFileOptions::default()).unwrap();
+            w.write_all(b"x").unwrap();
+        });
+        assert!(extract_zip(&bad, &tmp.path().join("out2")).is_err());
+        assert!(!tmp.path().join("evil").exists());
+
+        #[cfg(unix)]
+        for target in ["../../outside", "/etc"] {
+            let sneaky = tmp.path().join("sneaky.zip");
+            write_zip(&sneaky, |w| {
+                w.add_symlink("app/link", target, SimpleFileOptions::default()).unwrap();
+            });
+            let err = extract_zip(&sneaky, &tmp.path().join("out3")).unwrap_err();
+            assert!(err.to_string().contains("points outside"), "{err}");
+        }
+    }
+
+    #[test]
+    fn stays_inside_is_lexical_and_strict() {
+        assert!(stays_inside(Path::new("a/b"), Path::new("../c")));
+        assert!(stays_inside(Path::new("a"), Path::new("./x/../y")));
+        assert!(!stays_inside(Path::new("a"), Path::new("../../x")));
+        assert!(!stays_inside(Path::new(""), Path::new("..")));
+        assert!(!stays_inside(Path::new("a"), Path::new("/etc")));
+    }
 
     fn touch(dir: &Path, name: &str) -> PathBuf {
         let p = dir.join(name);
