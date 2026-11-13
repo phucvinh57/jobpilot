@@ -25,6 +25,8 @@ use crate::Core;
 /// kv key: pages the CV may take (default 1).
 pub const MAX_PAGES_KEY: &str = "cv_max_pages";
 const DEFAULT_MAX_PAGES: usize = 1;
+/// The role of a placeholder row until the analysis names the job.
+const ANALYSING_ROLE: &str = "Analysing the job description";
 
 /// Coarse pipeline stage, for a progress line in the UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -458,7 +460,7 @@ impl<'a> Pipeline<'a> {
         self.core.store.create_application(&NewApplication {
             slug,
             company: hint,
-            role: "Analysing the job description".into(),
+            role: ANALYSING_ROLE.into(),
             source,
             apply_url: None,
             dir,
@@ -516,9 +518,10 @@ impl<'a> Pipeline<'a> {
             Err(e) => {
                 tracing::warn!(app = app_id, "pipeline: failed: {e:#}");
                 let _ = self.core.store.add_event(app_id, "error", &format!("{e:#}"));
-                // A row that never got analysed must not keep saying "Analysing...".
+                // A row that never got analysed must not keep saying "Analysing...". A row that
+                // was named from the start (a promoted lead) keeps its role.
                 if let Ok(Some(mut app)) = self.core.store.get_application(app_id) {
-                    if app.analysis_json.is_none() {
+                    if app.analysis_json.is_none() && app.role == ANALYSING_ROLE {
                         app.role = "Job description not loaded".into();
                         let _ = self.core.store.save_application(&app);
                     }
@@ -570,7 +573,7 @@ fn host_of(url: &str) -> Option<String> {
 }
 
 /// `jd.md`: `# company — role`, the source, a blank line, then the JD text.
-fn write_jd(app: &Application, text: &str) -> Result<()> {
+pub(crate) fn write_jd(app: &Application, text: &str) -> Result<()> {
     let mut body = format!("# {} — {}\n", app.company, app.role);
     if let Some(source) = &app.source {
         body.push_str(&format!("Source: {source}\n"));
@@ -591,7 +594,7 @@ pub fn read_jd_text(app: &Application) -> Result<String> {
     Ok(strip_jd_header(&raw).to_string())
 }
 
-fn strip_jd_header(raw: &str) -> &str {
+pub(crate) fn strip_jd_header(raw: &str) -> &str {
     if !raw.starts_with("# ") {
         return raw.trim();
     }

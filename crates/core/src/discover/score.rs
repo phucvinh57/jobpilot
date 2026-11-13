@@ -50,7 +50,7 @@ fn company_words(name: &str) -> Vec<String> {
 
 /// The company's name contains an excluded name as whole words (`Meta` excludes `Meta Platforms`
 /// but not `Metabase`).
-fn excluded_company(prefs: &Preferences, company: &str) -> Option<String> {
+pub(crate) fn excluded_company(prefs: &Preferences, company: &str) -> Option<String> {
     let have = company_words(company);
     if have.is_empty() {
         return None;

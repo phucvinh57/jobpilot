@@ -26,6 +26,8 @@ pub mod dedup;
 pub mod deps;
 mod fetch;
 pub mod limits;
+pub mod promote;
+pub mod queue;
 mod run;
 pub mod score;
 pub mod source;

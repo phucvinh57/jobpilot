@@ -73,30 +73,24 @@ pub struct NewApplication {
     pub dir: PathBuf,
 }
 
+/// The row and its `created` event, inside the caller's transaction.
+pub(super) fn insert_application(tx: &rusqlite::Transaction, new: &NewApplication) -> Result<i64> {
+    let at = now();
+    tx.execute(
+        "INSERT INTO applications (slug, company, role, source, apply_url, status, dir, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+        params![new.slug, new.company, new.role, new.source, new.apply_url, Status::Draft, new.dir.to_string_lossy(), at],
+    )
+    .with_context(|| format!("creating application `{}`", new.slug))?;
+    let id = tx.last_insert_rowid();
+    events::insert_event(tx, id, "created", "application created")?;
+    Ok(id)
+}
+
 impl Store {
     /// Insert a `Draft` application and a `created` event. Fails if the slug exists.
     pub fn create_application(&self, new: &NewApplication) -> Result<Application> {
-        let id = self.with_tx(|tx| {
-            let at = now();
-            tx.execute(
-                "INSERT INTO applications (slug, company, role, source, apply_url, status, dir, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-                params![
-                    new.slug,
-                    new.company,
-                    new.role,
-                    new.source,
-                    new.apply_url,
-                    Status::Draft,
-                    new.dir.to_string_lossy(),
-                    at
-                ],
-            )
-            .with_context(|| format!("creating application `{}`", new.slug))?;
-            let id = tx.last_insert_rowid();
-            events::insert_event(tx, id, "created", "application created")?;
-            Ok(id)
-        })?;
+        let id = self.with_tx(|tx| insert_application(tx, new))?;
         self.get_application(id)?.context("application vanished after insert")
     }
 
