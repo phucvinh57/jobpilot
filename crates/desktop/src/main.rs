@@ -8,7 +8,7 @@ mod sidebar;
 use std::sync::Arc;
 
 use gpui_kit::*;
-use jobpilot_core::Core;
+use jobpilot_core::{mail, Core};
 
 fn main() -> anyhow::Result<()> {
     let core = Arc::new(Core::open()?);
@@ -16,6 +16,9 @@ fn main() -> anyhow::Result<()> {
     if std::env::var_os("JOBPILOT_DEMO").is_some() {
         app::seed_demo(&core)?;
     }
+
+    // Gmail tracking: poll for replies while the app runs (no-op unless Gmail is connected).
+    mail::autostart(&core);
 
     gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);

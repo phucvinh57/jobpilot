@@ -26,7 +26,7 @@ impl SettingsView {
         Self {
             providers: cx.new(|_| ProvidersSection::new(state.clone())),
             sessions: cx.new(|_| SessionsSection::new(state.clone())),
-            gmail: cx.new(|_| GmailSection::new(state.clone())),
+            gmail: cx.new(|cx| GmailSection::new(state.clone(), cx)),
             state,
         }
     }

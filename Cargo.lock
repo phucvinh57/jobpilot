@@ -3744,6 +3744,7 @@ dependencies = [
  "html2text",
  "jsonschema",
  "keyring",
+ "notify-rust",
  "pdf-extract",
  "rand 0.8.8",
  "regex",
