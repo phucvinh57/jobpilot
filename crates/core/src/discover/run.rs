@@ -299,10 +299,13 @@ async fn next_candidate(_sh: Arc<Shared>, mut s: SourceState) -> Result<SourceSt
 }
 
 /// `fetch`: the posting's text, from the adapter when it has it, else through the fetch hook (whose
-/// default keeps the per-host delay). A network failure fails the thread (Retry); a posting that cannot be read is
-/// skipped and stays unknown, so a later run tries it again.
+/// default keeps the per-host delay). A network failure fails the thread (Retry); a posting that
+/// cannot be read, a bot check or login wall included, is skipped and stays unknown, so a later run
+/// tries it again. Whatever leaves this node as an error has the posting's address taken out
+/// ([`without_url`]): thread failures end up in notes, logs and the UI.
 async fn fetch(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     let Some(candidate) = s.current.clone() else { return Ok(s) };
+    let url = candidate.url.clone();
     let source = sh.source(s.source_id)?;
     let adapter = sh.adapter(&source)?;
     let got = match adapter.posting(&candidate).await {
@@ -310,20 +313,53 @@ async fn fetch(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
         Ok(None) => (sh.deps.fetch)(FetchRequest { source, candidate }).await,
         Err(e) => Err(e),
     };
-    match got {
+    match got.map_err(|e| without_url(e, &url)) {
         Ok(text) if text.trim().chars().count() >= MIN_POSTING_CHARS => {
             s.jd = truncate_chars(text.trim(), MAX_POSTING_CHARS).to_string();
         }
         Ok(_) => skip(&mut s, "too_short"),
-        Err(e) if classify(&format!("{e:#}")) == Problem::Network => return Err(e.context("fetching a posting")),
+        Err(e) if e.downcast_ref::<PageNeedsBrowser>().is_none() && classify(&format!("{e:#}")) == Problem::Network => {
+            return Err(e.context("fetching a posting"))
+        }
         Err(e) => skip(&mut s, skip_kind(&e)),
     }
     Ok(s)
 }
 
+/// A posting that cannot be read without a browser. Unlike [`NeedsBrowser`], whose text starts with
+/// the page's address, this carries the reason only, so it may sit in an error chain.
+#[derive(Debug)]
+pub(super) struct PageNeedsBrowser {
+    reason: String,
+}
+
+impl std::fmt::Display for PageNeedsBrowser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the page needs a browser to render: {}", self.reason)
+    }
+}
+
+impl std::error::Error for PageNeedsBrowser {}
+
+const URL_MASK: &str = "<posting>";
+
+/// `e` without the posting's address: [`NeedsBrowser`] becomes [`PageNeedsBrowser`], and any other
+/// error that mentions `url` has it masked (the chain is flattened to text then).
+pub(super) fn without_url(e: anyhow::Error, url: &str) -> anyhow::Error {
+    if let Some(nb) = e.downcast_ref::<NeedsBrowser>() {
+        let reason = nb.reason.replace(&nb.url, URL_MASK).replace(url, URL_MASK);
+        return anyhow::Error::new(PageNeedsBrowser { reason });
+    }
+    let text = format!("{e:#}");
+    if url.is_empty() || !text.contains(url) {
+        return e;
+    }
+    anyhow::anyhow!("{}", text.replace(url, URL_MASK))
+}
+
 /// Why a posting could not be read, as a label (the error's text is not kept).
 fn skip_kind(e: &anyhow::Error) -> &'static str {
-    if e.downcast_ref::<NeedsBrowser>().is_some() {
+    if e.downcast_ref::<PageNeedsBrowser>().is_some() {
         return "needs_browser";
     }
     let text = format!("{e:#}");

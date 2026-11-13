@@ -540,6 +540,78 @@ async fn skipped_postings_are_counted_by_kind() {
 }
 
 #[tokio::test]
+async fn a_bot_wall_skips_the_posting_and_does_not_fail_the_thread() {
+    let h = Harness::new();
+    let core = h.open();
+    let adapter = Arc::new(FakeSource {
+        pages: vec![vec![cand("w.test", 1, "Acme", "Engineer"), cand("w.test", 2, "Initech", "Engineer"), cand("w.test", 3, "Hooli", "Engineer")]],
+        failure: Mutex::new(None),
+        no_text: true,
+        searched: AtomicUsize::new(0),
+    });
+    let id = h.add_source(&core, "w", adapter);
+    let mut deps = h.deps();
+    // 429 and 503 read as network trouble to `health::classify`, but here they are a wall.
+    deps.fetch = Arc::new(|req| {
+        let code = if req.candidate.url.ends_with("/1") { 429 } else if req.candidate.url.ends_with("/2") { 503 } else { 403 };
+        let wall = crate::pipeline::ingest::NeedsBrowser {
+            url: req.candidate.url.clone(),
+            reason: format!("the server answered HTTP {code} (bot check or login wall)"),
+        };
+        async move { Err(anyhow::Error::new(wall)) }.boxed()
+    });
+    let summary = core.discover_now_with(deps).await.unwrap();
+    let result = result_of(&summary, id);
+    assert_eq!(result.status, SourceStatus::Done, "{}", result.note);
+    assert_eq!((result.saved, result.skipped), (0, 3));
+    assert_eq!(result.skip_kinds, BTreeMap::from([("needs_browser".to_string(), 3)]));
+    assert!(!result.note.contains("w.test"), "{}", result.note);
+}
+
+#[tokio::test]
+async fn a_failed_fetch_never_carries_the_posting_address_into_the_failure() {
+    let h = Harness::new();
+    let core = h.open();
+    let adapter = Arc::new(FakeSource {
+        pages: vec![vec![cand("f.test", 1, "Acme", "Engineer")]],
+        failure: Mutex::new(None),
+        no_text: true,
+        searched: AtomicUsize::new(0),
+    });
+    let id = h.add_source(&core, "f", adapter);
+    let mut deps = h.deps();
+    // A fetch hook whose network error repeats the address (with a token in the query).
+    deps.fetch = Arc::new(|req| {
+        let error = anyhow::anyhow!("error sending request for url ({}?token=tok-0123456789): connection refused", req.candidate.url);
+        async move { Err(error) }.boxed()
+    });
+    let summary = core.discover_now_with(deps).await.unwrap();
+    let result = result_of(&summary, id);
+    assert_eq!(result.status, SourceStatus::Failed);
+    assert!(result.note.contains("connection refused"), "the cause is kept: {}", result.note);
+    assert!(!result.note.contains("f.test/jobs/1") && !result.note.contains("tok-0123"), "{}", result.note);
+    let stored = core.graphs.status(&source_thread(&summary.run, id)).unwrap().expect("the thread exists");
+    let stored = format!("{:?}", stored.status);
+    assert!(!stored.contains("f.test/jobs/1") && !stored.contains("tok-0123"), "{stored}");
+}
+
+#[test]
+fn needs_browser_loses_its_address_before_it_travels() {
+    use crate::pipeline::ingest::NeedsBrowser;
+    let url = "https://acme.test/jobs/7?utm=abc";
+    let wall = anyhow::Error::new(NeedsBrowser { url: format!("{url}#x"), reason: format!("{url} answered HTTP 403 (bot check or login wall)") });
+    let cleaned = run::without_url(wall.context("reading the page"), url);
+    let text = format!("{cleaned:#}");
+    assert!(text.contains("HTTP 403") && !text.contains("acme.test"), "{text}");
+    assert!(cleaned.downcast_ref::<run::PageNeedsBrowser>().is_some(), "still recognisable as a wall");
+    // Any other error loses the address too; one without it is returned as it was.
+    let plain = run::without_url(anyhow::anyhow!("GET {url} failed: reset"), url);
+    assert_eq!(plain.to_string(), "GET <posting> failed: reset");
+    let other = run::without_url(anyhow::anyhow!("HTTP 404"), url);
+    assert_eq!(other.to_string(), "HTTP 404");
+}
+
+#[tokio::test]
 async fn a_posting_found_by_two_sources_is_counted_as_a_duplicate() {
     /// Holds each source's posting fetch until both have got there, so both pages went through
     /// dedup before either lead is saved.

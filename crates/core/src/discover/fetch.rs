@@ -31,8 +31,9 @@ pub(crate) fn fetcher(http: Http) -> PostingFetcher {
 /// (rendered by JavaScript); any other failure is an ordinary error (its text names the status or
 /// the network problem, never the URL).
 pub(crate) async fn posting_text(http: &Http, url: &str) -> Result<String> {
-    let url = checked_url(url)?.to_string();
-    let host = url::Url::parse(&url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default();
+    let parsed = checked_url(url)?;
+    let host = parsed.host_str().unwrap_or_default().to_string();
+    let url = parsed.to_string();
     let resp = match http.get(&url, &[("Accept", ACCEPT)]).await {
         Ok(resp) => resp,
         Err(FetchError::Status(code @ (401 | 403 | 429 | 503))) => {

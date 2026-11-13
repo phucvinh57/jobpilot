@@ -328,17 +328,55 @@ fn ip_is_public(ip: std::net::IpAddr) -> bool {
     }
 }
 
+/// A routable public IPv6 address. Addresses that wrap an IPv4 address (mapped, NAT64, 6to4,
+/// IPv4-compatible) are as public as the IPv4 address inside; special-use ranges are not public.
 fn ipv6_is_public(ip: std::net::Ipv6Addr) -> bool {
-    let first = ip.segments()[0];
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return ipv4_is_public(v4);
+    }
+    let seg = ip.segments();
+    let first = seg[0];
+    let embedded = |hi: u16, lo: u16| {
+        let [a, b] = hi.to_be_bytes();
+        let [c, d] = lo.to_be_bytes();
+        ipv4_is_public(std::net::Ipv4Addr::new(a, b, c, d))
+    };
+    // NAT64 64:ff9b::/96: the IPv4 address in the last 32 bits is where it leads (the rest of
+    // 64:ff9b::/32 is local-use space).
+    if first == 0x64 && seg[1] == 0xff9b {
+        return seg[2..6] == [0; 4] && embedded(seg[6], seg[7]);
+    }
+    // 6to4 2002::/16: the IPv4 address is in bits 16..48.
+    if first == 0x2002 {
+        return embedded(seg[1], seg[2]);
+    }
+    // IPv4-compatible ::a.b.c.d (also `::` and `::1`, whose "IPv4 address" is not public).
+    if seg[..6] == [0; 6] {
+        return embedded(seg[6], seg[7]);
+    }
+    let documentation = first == 0x2001 && seg[1] == 0x0db8;
     let unique_local = first & 0xfe00 == 0xfc00;
     let link_local = first & 0xffc0 == 0xfe80;
-    !(ip.is_loopback() || ip.is_unspecified() || unique_local || link_local) && ip.to_ipv4_mapped().is_none_or(ipv4_is_public)
+    let site_local = first & 0xffc0 == 0xfec0; // fec0::/10, deprecated but still private space
+    !(ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() || documentation || unique_local || link_local || site_local)
 }
 
 fn ipv4_is_public(ip: std::net::Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
-    let shared = a == 100 && (64..128).contains(&b); // carrier-grade NAT
-    !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || a == 0 || shared)
+    let [a, b, c, _] = ip.octets();
+    let shared = a == 100 && (64..128).contains(&b); // 100.64.0.0/10, carrier-grade NAT
+    let protocol = a == 192 && b == 0 && c == 0; // 192.0.0.0/24, IETF protocol assignments
+    let benchmarking = a == 198 && (18..20).contains(&b); // 198.18.0.0/15
+    !(ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || a == 0
+        || a >= 224 // 224.0.0.0/4 multicast and 240.0.0.0/4 reserved
+        || shared
+        || protocol
+        || benchmarking)
 }
 
 #[cfg(test)]
@@ -554,5 +592,30 @@ mod tests {
         let err = public_addrs("localhost").await.unwrap_err().to_string();
         assert!(err.contains("private network"), "{err}");
         assert!(ip_is_public("93.184.216.34".parse().unwrap()) && !ip_is_public("::1".parse().unwrap()) && !ip_is_public("10.1.2.3".parse().unwrap()));
+    }
+
+    #[test]
+    fn special_use_addresses_are_not_public_whatever_way_they_are_written() {
+        let ip = |s: &str| -> std::net::IpAddr { s.parse().unwrap() };
+        for private in [
+            // IPv4 special-use ranges
+            "192.0.0.8", "198.18.0.1", "198.19.255.254", "224.0.0.1", "239.255.255.250", "240.0.0.1", "255.255.255.255", "192.0.2.1", "198.51.100.7", "203.0.113.9",
+            "100.64.0.1", "169.254.169.254", "127.0.0.1", "0.1.2.3",
+            // IPv6: private, multicast, site-local, documentation
+            "::1", "::", "fd00::1", "fe80::1", "fec0::1", "ff02::1", "2001:db8::1",
+            // the same IPv4 addresses inside IPv6
+            "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::7f00:1", "::10.1.2.3", "::c0a8:101",
+            "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe", "64:ff9b::c0a8:1", "64:ff9b:1::1",
+            "2002:7f00:1::1", "2002:a9fe:a9fe::1", "2002:c0a8:101::", "2002:ac10::1",
+        ] {
+            assert!(!ip_is_public(ip(private)), "{private}");
+        }
+        for public in ["93.184.216.34", "8.8.8.8", "1.1.1.1", "2606:2800:220:1:248:1893:25c8:1946", "2001:4860:4860::8888", "64:ff9b::5db8:d822", "2002:5db8:d822::1", "::ffff:93.184.216.34", "::5db8:d822"] {
+            assert!(ip_is_public(ip(public)), "{public}");
+        }
+        // The URL check agrees, for the literals a posting link could carry.
+        for bad in ["http://[64:ff9b::7f00:1]/", "http://[2002:a9fe:a9fe::1]/", "http://[::7f00:1]/", "http://[fec0::1]/", "http://[ff02::1]/", "http://224.0.0.1/", "http://198.18.0.1/", "http://192.0.0.1/", "http://240.0.0.1/"] {
+            assert!(public_http_url(bad, false).is_err(), "{bad}");
+        }
     }
 }
