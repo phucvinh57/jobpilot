@@ -1,9 +1,10 @@
-//! Settings: exactly three sections, each in its own file
-//! (AI providers: P1, Browser sessions: P4, Gmail: P6).
+//! Settings: four sections, each in its own file
+//! (AI providers: P1, Browser sessions: P4, Job sources: P10, Gmail: P6).
 
 mod gmail;
 mod providers;
 mod sessions;
+mod sources;
 
 use gpui_kit::component::button::*;
 use gpui_kit::component::*;
@@ -13,15 +14,17 @@ use crate::app::{AppState, Screen};
 use gmail::GmailSection;
 use providers::ProvidersSection;
 use sessions::SessionsSection;
+use sources::SourcesSection;
 
 /// Section titles in display order; `settings_focus` names one of them. Child 0 is the header.
-const SECTIONS: [&str; 3] = ["AI providers", "Browser sessions", "Gmail"];
+const SECTIONS: [&str; 4] = ["AI providers", "Browser sessions", "Job sources", "Gmail"];
 
 pub struct SettingsView {
     scroll: ScrollHandle,
     state: Entity<AppState>,
     providers: Entity<ProvidersSection>,
     sessions: Entity<SessionsSection>,
+    sources: Entity<SourcesSection>,
     gmail: Entity<GmailSection>,
 }
 
@@ -31,6 +34,7 @@ impl SettingsView {
             scroll: ScrollHandle::new(),
             providers: cx.new(|_| ProvidersSection::new(state.clone())),
             sessions: cx.new(|_| SessionsSection::new(state.clone())),
+            sources: cx.new(|_| SourcesSection::new(state.clone())),
             gmail: cx.new(|cx| GmailSection::new(state.clone(), cx)),
             state,
         }
@@ -79,6 +83,7 @@ impl Render for SettingsView {
             )
             .child(self.providers.clone())
             .child(self.sessions.clone())
+            .child(self.sources.clone())
             .child(self.gmail.clone())
     }
 }

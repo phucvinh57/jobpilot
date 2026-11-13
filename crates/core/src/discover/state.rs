@@ -68,8 +68,8 @@ pub struct SourceState {
     pub dismissed: u32,
     /// Postings left alone: no readable text, or saved meanwhile by someone else.
     pub skipped: u32,
-    /// `skipped` by kind (`needs_browser`, `gone`, `forbidden`, `unreadable`, `too_short`,
-    /// `duplicate`): labels only, never page text.
+    /// `skipped` by kind (`needs_browser`, `session_in_use`, `gone`, `forbidden`, `unreadable`,
+    /// `too_short`, `duplicate`): labels only, never page text.
     pub skip_kinds: BTreeMap<String, u32>,
     /// What the user has to deal with before the source goes on.
     pub challenge: Option<Challenge>,

@@ -7,14 +7,22 @@
 //! | `lever` | `jobs.lever.co/acme` or slug | public postings JSON |
 //! | `ashby` | `jobs.ashbyhq.com/acme` or slug | public job-board JSON |
 //! | `hn_hiring` | unused | HN Algolia, the latest "Who is hiring?" thread, one comment per candidate |
+//! | `yc` | `https://www.ycombinator.com/jobs` (default) or a workatastartup.com page | the job links of the listing page; the browser (and a bound session) when the page needs it |
+//! | `career_page` | a careers page | the same-site links that look like postings; the browser when the page is drawn by JavaScript |
 //!
-//! Adapters read through [`Http`] and a base URL, so tests answer from saved fixture JSON.
+//! The API adapters read through [`Http`] and a base URL, so tests answer from saved fixture JSON; the
+//! page adapters read through [`Pages`] (plain HTTP, then the managed browser), so tests answer from
+//! fixture HTML. A login, captcha or block page met in the browser is a `ChallengeFound` error, which
+//! the runner turns into a pause for the user.
 
 mod ashby;
+mod career_page;
 mod greenhouse;
 mod hn_hiring;
 mod http;
 mod lever;
+mod web;
+mod yc;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -25,10 +33,13 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 pub use ashby::Ashby;
+pub use career_page::CareerPage;
 pub use greenhouse::Greenhouse;
 pub use hn_hiring::HnHiring;
 pub use http::{Http, NetHttp};
 pub use lever::Lever;
+pub use web::{NetPages, Page, Pages};
+pub use yc::Yc;
 
 #[cfg(test)]
 pub(crate) use http::fake::FakeHttp;
@@ -86,8 +97,9 @@ pub trait JobSource: Send + Sync {
     }
 }
 
-/// The adapter for a `sources` row. `Err` for a kind without an adapter and for a `url` the
-/// adapter cannot read, with a message the user can act on.
+/// The adapter for a `sources` row that reads a public API: `Err` for a kind without one (the page
+/// adapters, `yc` and `career_page`, are built by [`adapter_for_pages`]) and for a `url` the adapter
+/// cannot read, with a message the user can act on.
 pub fn adapter_for(source: &Source, http: Arc<dyn Http>) -> Result<Arc<dyn JobSource>> {
     let company = |slug: &str| if source.name.trim().is_empty() { slug.to_string() } else { source.name.trim().to_string() };
     Ok(match source.kind.as_str() {
@@ -106,6 +118,49 @@ pub fn adapter_for(source: &Source, http: Arc<dyn Http>) -> Result<Arc<dyn JobSo
         "hn_hiring" => Arc::new(HnHiring::new(http, hn_hiring::DEFAULT_BASE)),
         other => bail!("no adapter for source kind `{other}` yet"),
     })
+}
+
+/// [`adapter_for`] plus the adapters that read web pages through `pages`: `yc` and `career_page`.
+pub fn adapter_for_pages(source: &Source, http: Arc<dyn Http>, pages: Arc<dyn Pages>) -> Result<Arc<dyn JobSource>> {
+    Ok(match source.kind.as_str() {
+        "yc" => Arc::new(Yc::new(pages, source)?),
+        "career_page" => {
+            let company = match source.name.trim() {
+                "" => web::normalize_page_url(&source.url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default(),
+                name => name.to_string(),
+            };
+            Arc::new(CareerPage::new(pages, source, &company)?)
+        }
+        _ => return adapter_for(source, http),
+    })
+}
+
+/// Check a new source before it is stored: the adapter that would read it must accept its address.
+/// Returns the address to store (an empty one becomes the kind's default where there is one) and a
+/// name for it when the user gave none.
+pub fn check_source(kind: &str, url: &str) -> Result<(String, String)> {
+    let url = url.trim();
+    let slug_of = |hosts: &[&str], what: &str| -> Result<(String, String)> {
+        let slug = board_slug(url, hosts).context(what.to_string())?;
+        Ok((url.to_string(), slug))
+    };
+    match kind {
+        "greenhouse" => slug_of(&["greenhouse.io"], "Greenhouse source"),
+        "lever" => slug_of(&["lever.co"], "Lever source"),
+        "ashby" => slug_of(&["ashbyhq.com"], "Ashby source"),
+        "hn_hiring" => Ok((String::new(), "Hacker News: Who is hiring".to_string())),
+        "yc" => {
+            let url = if url.is_empty() { yc::DEFAULT_URL } else { url };
+            yc::check_url(url)?;
+            Ok((url.to_string(), "Y Combinator jobs".to_string()))
+        }
+        "career_page" => {
+            let parsed = web::normalize_page_url(url).context("career page source")?;
+            web::check_site(&parsed).context("career page source")?;
+            Ok((url.to_string(), parsed.host_str().unwrap_or_default().trim_start_matches("www.").to_string()))
+        }
+        other => bail!("no adapter for source kind `{other}` yet"),
+    }
 }
 
 /// The board name in a board URL (`https://boards.greenhouse.io/acme/jobs/1` -> `acme`) or a bare
@@ -351,6 +406,38 @@ mod tests {
         assert!(adapter_for(&add("hn_hiring", ""), http.clone()).is_ok());
         let err = |s: Source| format!("{:#}", adapter_for(&s, http.clone()).err().unwrap());
         assert!(err(add("greenhouse", "")).contains("no company board"));
-        assert!(err(add("yc", "")).contains("no adapter for source kind `yc`"));
+        assert!(err(add("nope", "")).contains("no adapter for source kind `nope`"));
+        assert!(err(add("yc", "")).contains("no adapter for source kind `yc`"), "the page adapters need `adapter_for_pages`");
+    }
+
+    #[test]
+    fn the_page_factory_builds_the_browser_adapters_and_hands_the_rest_on() {
+        let store = Store::open_in_memory().unwrap();
+        let add = |kind: &str, url: &str| {
+            store.add_source(&NewSource { kind: kind.into(), url: url.into(), purpose: SourcePurpose::Jobs, ..Default::default() }).unwrap()
+        };
+        let (http, pages) = (FakeHttp::with([]), web::fake::pages(web::fake::FakePages::new()));
+        let build = |s: Source| adapter_for_pages(&s, http.clone(), pages.clone());
+        assert!(build(add("yc", "")).is_ok(), "the default listing");
+        assert!(build(add("career_page", "acme.test/careers")).is_ok());
+        assert!(build(add("greenhouse", "acme")).is_ok(), "an API kind goes to adapter_for");
+        let err = |s: Source| format!("{:#}", build(s).err().unwrap());
+        assert!(err(add("career_page", "")).contains("no page address"));
+        assert!(err(add("career_page", "ftp://x.test")).contains("http"));
+        assert!(err(add("yc", "https://evil.test/jobs")).contains("not a ycombinator.com"));
+        assert!(err(add("nope", "")).contains("no adapter"));
+    }
+
+    #[test]
+    fn a_new_source_is_checked_and_named_before_it_is_stored() {
+        assert_eq!(check_source("greenhouse", " https://boards.greenhouse.io/acme ").unwrap(), ("https://boards.greenhouse.io/acme".into(), "acme".into()));
+        assert_eq!(check_source("lever", "acme").unwrap(), ("acme".into(), "acme".into()));
+        assert_eq!(check_source("ashby", "jobs.ashbyhq.com/acme").unwrap().1, "acme");
+        assert_eq!(check_source("hn_hiring", "ignored").unwrap().0, "");
+        assert_eq!(check_source("yc", "").unwrap(), (yc::DEFAULT_URL.into(), "Y Combinator jobs".into()));
+        assert_eq!(check_source("career_page", "https://www.acme.test/careers").unwrap(), ("https://www.acme.test/careers".into(), "acme.test".into()));
+        for (kind, url) in [("greenhouse", ""), ("lever", "https://evil.test/acme"), ("career_page", "javascript:x"), ("yc", "https://evil.test"), ("linkedin", "https://www.linkedin.com/jobs")] {
+            assert!(check_source(kind, url).is_err(), "{kind} {url}");
+        }
     }
 }

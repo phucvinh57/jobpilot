@@ -5,6 +5,9 @@
 //! - [`session`]: [`SessionManager`], the single owner of every launch. Each session is an app-owned
 //!   profile dir `sessions/<id>/`, guarded by a lock file ([`lock`]) so at most one browser runs on it.
 //! - [`probe`]: the logged-in health check (cookies for the start domain and not on a login page).
+//! - [`challenge`]: is a login, captcha or block page in the way? (detection only; the user deals with it)
+//! - [`render`]: render a page headless for discovery (throwaway profile or a session's) and run that check;
+//!   `guard` keeps those browsers off the local network and `gate` orders the uses of a session.
 //!
 //! Get the manager with [`Core::sessions`]; every method is async and `'static`, so the UI runs them with
 //! `runtime::spawn`:
@@ -17,13 +20,17 @@
 //! P5 launches automation browsers with [`SessionManager::launch`] and drives the returned
 //! [`BrowserHandle`] (`new_page(url)` -> `chromiumoxide::Page`, `cookies()`, `close()`).
 
+pub mod challenge;
 pub mod chrome;
 pub mod fetch;
 pub mod form;
+pub(crate) mod gate;
+pub(crate) mod guard;
 #[cfg(test)]
 mod integration;
 pub mod lock;
 pub mod probe;
+pub mod render;
 pub mod session;
 
 use std::collections::HashMap;
