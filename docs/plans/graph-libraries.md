@@ -1,6 +1,6 @@
 # Graph runtime: library choice
 
-Status: **recommendation, to be confirmed by the P8 spike**. Checked on 2026-11-13 (crates.io metadata and docs.rs pages; no code was compiled).
+Status: **decided on 2026-11-13: `adk-graph`**. The P8 spike verifies it before P9-P13 build on it. Checked on 2026-11-13 (crates.io metadata and docs.rs pages; no code was compiled).
 
 ## What the flows need
 
@@ -26,7 +26,7 @@ From [activity-diagram.md](activity-diagram.md):
 | `rig-core` 0.46 | Yes | Widely used LLM client library (4.3M downloads), but no graph runtime of its own; it points to `graph-flow`. We already have our own `llm/`. |
 | Own `core/graph` module | Yes | A few hundred lines for exactly the six needs, no dependency. We maintain it. |
 
-## Recommendation
+## Decision
 
 **Use `adk-graph`, behind a thin `core/graph` facade, with our own checkpointer on `rusqlite`.**
 
@@ -47,7 +47,7 @@ Build diagram 2 with fake nodes and confirm, before anything else depends on it:
 4. Cost of `adk-core`: added dependencies, build time, binary size; `cargo clippy` and `scripts/check.sh` still pass.
 5. Runs on the app's global tokio runtime (`runtime::spawn`).
 
-If 1, 2 or 3 fails, repeat the spike with `graph-flow`; if that fails too, write the own runner.
+If 1, 2 or 3 fails, stop and report to the user before switching; the prepared fallbacks are `graph-flow`, then an own runner.
 
 ## Sources
 

@@ -55,6 +55,7 @@ Phase 3   end-to-end run on demo data + fake LLM, update CLAUDE.md / README (Hig
 - **Untrusted text.** Job pages, HN comments and reports are data. Code decides which URLs are visited (source adapters, search results restricted to http/https, read-only). The LLM only extracts, scores and summarises into fixed schemas.
 - **Facts only from `profile.yaml`.** An uploaded CV is chat context; it never becomes CV facts by itself (see decision 4).
 - **Forward-only statuses stay as they are.** A found job is a `lead` (own table), not a new application status; it becomes an application when a CV is prepared.
+- **Flows are graphs.** Each plan lists its graph (nodes, edges, interrupts, thread id). Edges are Rust code over the state; a paused or failed run resumes from its checkpoint.
 - **Cost is bounded.** Discovery scores and summarises each lead (two LLM calls); a CV is written only when the user asks for it (decision 2).
 
 ## Decisions
@@ -65,3 +66,4 @@ Phase 3   end-to-end run on demo data + fake LLM, update CLAUDE.md / README (Hig
 4. **Uploaded CV (default, not yet confirmed).** context for the chat only; a separate, explicit "Import into profile" action shows a diff the user approves before `profile.yaml` changes.
 5. **When discovery runs (default, not yet confirmed).** a "Search now" button plus an optional daily run while the app is open.
 6. **Market reports search (confirmed).** Fixed APIs first (HN Algolia, YC directory, RSS, user URLs); general web search through an optional search API key (Brave / Tavily) rather than driving a search engine in the browser, which triggers captchas.
+7. **Graph runtime (confirmed).** Every new flow is an `adk-graph` graph behind the `core/graph` facade, with checkpoints in the app's SQLite file. See [graph-libraries.md](graph-libraries.md).

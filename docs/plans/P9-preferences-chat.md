@@ -27,6 +27,20 @@ Every field is optional; `Preferences::default()` is valid so P10/P11 work befor
 - Context given to the model: current `Preferences`, a compact view of `profile.yaml` (reuse `tailor::profile_for_prompt`), and the uploaded CV text if any.
 - History is stored in `chat_messages`; the conversation can be reopened later to change preferences ("I now also accept hybrid in Singapore").
 
+## Graph `prefs_chat` (thread `prefs`)
+
+State `ChatState { messages (append), preferences, cv_text, questions, complete }`.
+
+| Node | Does | Next |
+|------|------|------|
+| `load_context` | preferences, compact profile, uploaded CV text | `ask` |
+| `ask` | one `chat_json` turn: reply, questions, patch, complete | `merge` |
+| `merge` | merge the patch in code, save preferences | route: `complete` -> `confirm`, else `wait_user` |
+| `wait_user` | **interrupt** `UserMessage`; resume input = the user's message or an attached CV | `ask` |
+| `confirm` | **interrupt** `ConfirmPreferences`; resume input = accept or a correction | accept -> end, correction -> `ask` |
+
+The thread never expires: reopening the chat later resumes it with a new user message. A suggestion from the queue or from trends starts a turn with a seeded message.
+
 ## CV upload (`core/prefs/cv_upload.rs`)
 
 - Accept `.pdf`, `.md`, `.txt` (reuse the extraction in `pipeline/ingest`), size and length capped.
@@ -44,7 +58,7 @@ Every field is optional; `Preferences::default()` is valid so P10/P11 work befor
 ## Checks
 
 - Unit: patch merge (lists replace vs. append, weights renormalised), schema validation, upload limits.
-- Flow test with `llm::fake`: three scripted turns end with `complete` and a saved row.
+- Graph test with `llm::fake`: three scripted turns, each resumed from `wait_user`, end at `confirm` with a saved row; the thread resumes after the store is reopened.
 - UI: seeded chat history in demo mode, screenshot; chips clickable through agent-desktop.
 
 Risk: Medium for code, High for the prompt file. Size: medium.

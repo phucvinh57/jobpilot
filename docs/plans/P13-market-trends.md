@@ -26,10 +26,25 @@ Items go to `trend_items` (deduplicated by URL), text under `<data_dir>/trends/`
 - `desktop/trends.rs`: source list with add/remove, latest digest with clickable citations, a skill-frequency chart, history of past reports.
 - Link back to the job flow: "Add to preferences" on a skill or domain opens the chat with that suggestion.
 
+## Graph `trends` (thread `trends:<period>`)
+
+| Node | Does | Next |
+|------|------|------|
+| `plan` | enabled trend sources, period, queries built from preferences | the collectors, in parallel |
+| `hackernews`, `yc`, `feeds` | P13a adapters | join at `store_items` |
+| `report_search` | route first: no search API key -> skip | join at `store_items` |
+| `store_items` | deduplicate and store; waits for all collectors, with a timeout so a slow source is left out of this run | `extract` |
+| `extract` | per item: topics and claims with quotes (batched LLM calls, bounded concurrency) | `count` |
+| `count` | skill frequency in code | `synthesize` |
+| `synthesize` | one LLM call | `enforce_citations` |
+| `enforce_citations` | drop points without a citation, in code | `save_report` -> end |
+
+A collector that meets a login or captcha uses the shared `challenge` node and interrupts like a job source; the digest is built from the other collectors and can be regenerated after the user continues. P13a delivers the collectors and `store_items`; P13b the rest and the view.
+
 ## Checks
 
 - Unit: adapters against fixtures, dedup, citation enforcement, frequency counting.
-- Digest test with `llm::fake`: an uncited claim is removed.
+- Graph test with `llm::fake`: an uncited claim is removed; without a search API key `report_search` is skipped; a collector that times out does not fail the run.
 - Screenshot of the Trends view on demo data.
 
 Risk: Medium for code, High for the prompt file. Size: medium to large (two PRs: P13a, P13b).
