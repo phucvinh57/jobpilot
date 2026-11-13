@@ -462,6 +462,11 @@ impl PreferencesView {
         }
     }
 
+    /// Forget the attached CV (its text is read again from disk on every turn, so this is enough).
+    fn remove_cv(&mut self, cx: &mut Context<Self>) {
+        self.save_with(cv_upload::remove, cx);
+    }
+
     fn undo(&mut self, cx: &mut Context<Self>) {
         self.save_with(
             |core| {
@@ -682,7 +687,23 @@ impl PreferencesView {
             .children(self.render_chips(view, cx))
             .children(accepted)
             .when_some(self.notice.clone(), |d, notice| d.child(div().text_xs().text_color(cx.theme().warning).child(notice)))
-            .when_some(cv_line, |d, line| d.child(div().text_xs().text_color(muted).child(line)))
+            .when_some(cv_line, |d, line| {
+                d.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().flex_1().min_w_0().text_xs().text_color(muted).child(line))
+                        .child(
+                            Button::new("prefs-remove-cv")
+                                .ghost()
+                                .compact()
+                                .label("Remove CV")
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, _, cx| this.remove_cv(cx))),
+                        ),
+                )
+            })
             .child(
                 div()
                     .h_flex()

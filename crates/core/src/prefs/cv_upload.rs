@@ -66,9 +66,13 @@ pub async fn import(core: &Core, path: &Path) -> Result<UploadedCv> {
     tokio::fs::create_dir_all(dir).await.with_context(|| format!("creating {}", dir.display()))?;
     // Write beside the target, then rename: a crash never leaves a half-written CV.
     let tmp = file.with_extension("txt.tmp");
-    tokio::fs::write(&tmp, kept).await.with_context(|| format!("writing {}", tmp.display()))?;
+    // Private from the first byte (a leftover tmp file keeps its old mode, so `restrict` stays).
+    write_private(&tmp, kept.as_bytes()).await.with_context(|| format!("writing {}", tmp.display()))?;
     restrict(&tmp)?;
-    tokio::fs::rename(&tmp, &file).await.context("saving the CV text")?;
+    if let Err(e) = tokio::fs::rename(&tmp, &file).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e).context("saving the CV text");
+    }
     core.store.kv_set(NAME_KEY, &cv.name)?;
     tracing::info!(chars = cv.chars, truncated = cv.truncated, "preference chat: CV stored");
     Ok(cv)
@@ -94,6 +98,17 @@ pub fn remove(core: &Core) -> Result<()> {
         Err(e) => return Err(e).context("removing the stored CV text"),
     }
     core.store.kv_delete(NAME_KEY)
+}
+
+async fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).await?;
+    file.write_all(bytes).await?;
+    file.flush().await
 }
 
 /// The CV is personal: readable by the user only.

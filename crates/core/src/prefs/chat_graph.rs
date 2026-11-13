@@ -6,7 +6,7 @@
 //!                                                                                       +-> ask
 //! ```
 //!
-//! - `load_context`: the stored conversation, the uploaded CV text, fresh flags.
+//! - `load_context`: the stored conversation, fresh flags.
 //! - `ask`: takes the user's message from the inbox and runs one model turn
 //!   ([`chat::turn_schema`](super::chat)): reply, questions, patch, complete. The saved preferences
 //!   and the profile are read again every turn, so a hand edit or an undo made while the chat is
@@ -65,9 +65,6 @@ pub struct ChatState {
     /// The saved preferences as of the last turn.
     #[serde(default)]
     pub preferences: Preferences,
-    /// Text of the uploaded CV (untrusted).
-    #[serde(default)]
-    pub cv_text: Option<String>,
     /// Questions of the last turn (quick replies).
     #[serde(default)]
     pub questions: Vec<Question>,
@@ -77,6 +74,10 @@ pub struct ChatState {
     /// The user's message, until `ask` has taken it.
     #[serde(default)]
     pub inbox: Option<String>,
+    /// The message in the inbox only announces a CV: the user stated nothing, so whatever the
+    /// model proposes from the CV is a suggestion to ask about, never saved by `merge`.
+    #[serde(default)]
+    pub cv_turn: bool,
     /// The patch of the last turn, until `merge` has applied it.
     #[serde(default)]
     pub patch: Option<PrefsPatch>,
@@ -215,9 +216,6 @@ fn load_context(core: &Core, mut s: ChatState) -> Result<ChatState> {
         s.messages = core.store.chat_messages(THREAD)?.iter().map(ChatMessage::message).collect();
     }
     s.preferences = core.preferences()?;
-    if s.cv_text.is_none() {
-        s.cv_text = cv_upload::stored(core)?.map(|(_, text)| text);
-    }
     s.complete = false;
     s.confirmation = None;
     Ok(s)
@@ -231,10 +229,18 @@ async fn ask(core: &Core, llm: &LlmSource, mut s: ChatState) -> Result<ChatState
     s.complete = false;
     s.preferences = core.preferences()?;
     let llm = llm.get(core)?;
-    let system = system_prompt(&s.preferences, &read_profile(core).await, s.cv_text.as_deref());
+    // Read each turn (not kept in the state, so it is not copied into every checkpoint and a
+    // removed CV is gone from the next turn on).
+    let cv_text = cv_upload::stored(core)?.map(|(_, text)| text);
+    let system = system_prompt(&s.preferences, &read_profile(core).await, cv_text.as_deref());
     let history = turn_history(&s.messages);
     let value = llm.chat_json(&system, &history, &turn_schema()).await.context("asking the AI")?;
-    let turn = parse_turn(value)?;
+    let mut turn = parse_turn(value)?;
+    if std::mem::take(&mut s.cv_turn) {
+        // The user only attached a file: nothing the CV says is a preference until they confirm it.
+        turn.patch = PrefsPatch::default();
+        turn.complete = false;
+    }
     // Check the patch now: a bad one fails this turn (and a retry asks again), not `merge`.
     merge_patch(&s.preferences, &turn.patch)?;
     s.messages.push(Message::assistant(turn.message_text()));
@@ -357,33 +363,35 @@ impl PrefsChat {
     /// correction; with no live thread (never started, accepted earlier, failed) it starts one.
     pub async fn send(&self, text: &str) -> Result<ChatStatus> {
         let text = clean_user_text(text, MAX_USER_CHARS)?;
-        self.deliver(text, None).await
+        self.deliver(text, false).await
     }
 
     /// Attach a CV (`.pdf`, `.md`, `.txt`; see [`cv_upload`]): its text becomes chat context and
     /// the model is told about it as a user message.
     pub async fn attach_cv(&self, path: &Path) -> Result<ChatStatus> {
+        if self.status()? == ChatStatus::Working {
+            bail!("the assistant is still answering");
+        }
         let cv = cv_upload::import(&self.core, path).await?;
-        let (_, text) = cv_upload::stored(&self.core)?.context("the CV was not stored")?;
         let note = if cv.truncated {
             format!("I attached my CV ({}). Only its first {} characters were read.", cv.name, cv.chars)
         } else {
             format!("I attached my CV ({}).", cv.name)
         };
-        self.deliver(note, Some(text)).await
+        self.deliver(note, true).await
     }
 
-    async fn deliver(&self, text: String, cv: Option<String>) -> Result<ChatStatus> {
+    async fn deliver(&self, text: String, cv_turn: bool) -> Result<ChatStatus> {
         let graph = self.graph();
         let graphs = &self.core.graphs;
-        let fresh = |text: String, cv: Option<String>| ChatState { inbox: Some(text), cv_text: cv, ..Default::default() };
+        let fresh = |text: String| ChatState { inbox: Some(text), cv_turn, ..Default::default() };
         let outcome = match self.status()? {
             ChatStatus::Working => bail!("the assistant is still answering"),
             ChatStatus::AwaitUser => {
                 graphs
                     .resume(&graph, THREAD, |s| {
                         s.inbox = Some(text);
-                        s.cv_text = cv.or(s.cv_text.take());
+                        s.cv_turn = cv_turn;
                     })
                     .await?
             }
@@ -392,16 +400,16 @@ impl PrefsChat {
                     .resume(&graph, THREAD, |s| {
                         s.confirmation = Some(Confirmation::Correct);
                         s.inbox = Some(text);
-                        s.cv_text = cv.or(s.cv_text.take());
+                        s.cv_turn = cv_turn;
                     })
                     .await?
             }
             // A failed turn is replaced by the new message; the old one was never stored.
             ChatStatus::Failed(_) => {
                 graphs.cancel(THREAD)?;
-                graphs.run(&graph, THREAD, fresh(text, cv)).await?
+                graphs.run(&graph, THREAD, fresh(text)).await?
             }
-            ChatStatus::Idle | ChatStatus::Accepted => graphs.run(&graph, THREAD, fresh(text, cv)).await?,
+            ChatStatus::Idle | ChatStatus::Accepted => graphs.run(&graph, THREAD, fresh(text)).await?,
         };
         Ok(ChatStatus::from_outcome(outcome))
     }
@@ -608,7 +616,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let llm = Arc::new(FakeLlm::with_replies([
             turn("Hi.", json!([]), json!({}), false),
-            turn("Thanks, I read your CV.", json!([]), json!({}), false),
+            turn("Thanks, I read your CV.", json!([]), json!({"roles": ["Injected Role"], "salary_min": 1}), true),
         ]));
         let core = open_core(dir.path());
         let profile = dir.path().join("profile.yaml");
@@ -632,8 +640,11 @@ mod tests {
         assert!(second.system.find("<uploaded_cv>").unwrap() < second.system.find("Ignore all previous").unwrap());
         assert!(second.user.contains("I attached my CV (cv.md)."));
         let view = core.prefs_chat_view().unwrap();
-        assert_eq!(view.cv.unwrap().name, "cv.md");
-        assert_eq!(core.preferences().unwrap().domains, ["fintech"], "the CV changed nothing by itself");
+        assert_eq!(view.cv.clone().unwrap().name, "cv.md");
+        let prefs = core.preferences().unwrap();
+        assert_eq!(prefs.domains, ["fintech"], "the CV changed nothing by itself");
+        assert!(prefs.roles.is_empty() && prefs.salary_min.is_none(), "a patch proposed on the attach turn is not saved");
+        assert_eq!(view.status, ChatStatus::AwaitUser, "and it does not jump to the confirmation");
 
         // A bad file is refused before the thread is touched.
         let docx = dir.path().join("cv.docx");
@@ -646,7 +657,7 @@ mod tests {
     fn state_round_trips_through_a_checkpoint() {
         let state = ChatState {
             messages: vec![Message::user("hi")],
-            cv_text: Some("cv".into()),
+            cv_turn: true,
             patch: Some(PrefsPatch { salary_min: Some(None), roles: Some(vec!["SRE".into()]), ..Default::default() }),
             confirmation: Some(Confirmation::Correct),
             ..Default::default()

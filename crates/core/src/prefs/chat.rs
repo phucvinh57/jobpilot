@@ -283,7 +283,11 @@ pub fn merge_patch(current: &Preferences, patch: &PrefsPatch) -> Result<Preferen
         out.salary_min = salary.filter(|s| *s > 0);
     }
     if let Some(currency) = &patch.currency {
-        out.currency = currency.as_deref().map(|c| truncate_chars(c.trim(), 8).to_string());
+        out.currency = match currency.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(c) if c.len() == 3 && c.chars().all(|ch| ch.is_ascii_alphabetic()) => Some(c.to_ascii_uppercase()),
+            Some(_) => bail!("the AI proposed a currency that is not a 3-letter code"),
+        };
     }
     if let Some(visa) = patch.visa_needed {
         out.visa_needed = visa;
@@ -474,6 +478,8 @@ mod tests {
         assert!(merge_patch(&Preferences::default(), &patch(json!({"salary_min": 5_000_000_000u64}))).is_err());
         let zero = merge_patch(&Preferences { salary_min: Some(1), ..Default::default() }, &patch(json!({"salary_min": 0}))).unwrap();
         assert_eq!(zero.salary_min, None, "0 means not set");
+        assert!(merge_patch(&Preferences::default(), &patch(json!({"currency": "US dollars"}))).is_err());
+        assert_eq!(merge_patch(&Preferences::default(), &patch(json!({"currency": " eur "}))).unwrap().currency.as_deref(), Some("EUR"));
     }
 
     #[test]
