@@ -14,7 +14,11 @@ use gmail::GmailSection;
 use providers::ProvidersSection;
 use sessions::SessionsSection;
 
+/// Section titles in display order; `settings_focus` names one of them. Child 0 is the header.
+const SECTIONS: [&str; 3] = ["AI providers", "Browser sessions", "Gmail"];
+
 pub struct SettingsView {
+    scroll: ScrollHandle,
     state: Entity<AppState>,
     providers: Entity<ProvidersSection>,
     sessions: Entity<SessionsSection>,
@@ -24,6 +28,7 @@ pub struct SettingsView {
 impl SettingsView {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         Self {
+            scroll: ScrollHandle::new(),
             providers: cx.new(|_| ProvidersSection::new(state.clone())),
             sessions: cx.new(|_| SessionsSection::new(state.clone())),
             gmail: cx.new(|cx| GmailSection::new(state.clone(), cx)),
@@ -49,8 +54,14 @@ pub fn section(title: &str, hint: &str, cx: &App) -> Div {
 
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Opened from a call to action ("Open Settings > Browser sessions"): scroll to that section.
+        let target = self.state.update(cx, |state, _| state.settings_focus.take());
+        if let Some(ix) = target.and_then(|t| SECTIONS.iter().position(|s| *s == t)) {
+            self.scroll.scroll_to_item(ix + 1);
+        }
         div()
             .id("settings")
+            .track_scroll(&self.scroll)
             .v_flex()
             .size_full()
             .gap_4()

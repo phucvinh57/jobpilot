@@ -59,7 +59,7 @@ impl GmailSection {
                 if this.update(cx, |this, cx| this.refresh(cx)).is_err() {
                     break;
                 }
-                let _ = app_state.update(cx, |state, cx| state.reload(cx));
+                app_state.update(cx, |state, cx| state.reload(cx));
             }
         })
         .detach();

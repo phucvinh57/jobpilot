@@ -545,7 +545,7 @@ fn set_pref(root: &mut Value, dotted: &str, value: Value) {
         if !node.is_object() {
             *node = json!({});
         }
-        let map = node.as_object_mut().expect("just made an object");
+        let Some(map) = node.as_object_mut() else { return };
         if parts.peek().is_none() {
             map.insert(part.to_string(), value);
             return;
@@ -565,7 +565,7 @@ fn remove_path(path: &PathBuf) -> Result<()> {
 
 /// `remove_dir_all` with a few retries: a just-closed Chrome may still be flushing files for a moment.
 fn remove_dir_retry(dir: &Path) -> Result<()> {
-    let mut last = None;
+    let mut last: Option<std::io::Error> = None;
     for _ in 0..5 {
         match std::fs::remove_dir_all(dir) {
             Ok(()) => return Ok(()),
@@ -576,7 +576,10 @@ fn remove_dir_retry(dir: &Path) -> Result<()> {
             }
         }
     }
-    Err(anyhow!(last.expect("loop ran")).context(format!("removing {}", dir.display())))
+    match last {
+        Some(e) => Err(anyhow!(e).context(format!("removing {}", dir.display()))),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

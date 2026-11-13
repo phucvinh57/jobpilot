@@ -32,6 +32,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 futures = "0.3"
 url = "2"
 notify-rust = "4"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry", "tracing-log"] }
+tracing-appender = "0.2.5"
 
 [dev-dependencies]
 tempfile = "3"

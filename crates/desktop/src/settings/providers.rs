@@ -87,7 +87,7 @@ impl ProvidersSection {
     fn reload(&mut self, cx: &mut Context<Self>) {
         match self.state.read(cx).core.store.list_providers() {
             Ok(list) => self.providers = list,
-            Err(e) => eprintln!("failed to load providers: {e:#}"),
+            Err(e) => tracing::error!("failed to load providers: {e:#}"),
         }
         self.loaded = true;
     }

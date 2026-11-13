@@ -4,11 +4,13 @@
 //! label/value rows, attached PDF, screenshot) -> submitting -> done, or handoff (failure / CAPTCHA /
 //! unsupported ATS with "Open visible browser"). All browser work lives in `jobpilot_core::apply` and
 //! runs on the core runtime; this view only starts it and shows the result. Nothing is submitted
-//! except by the explicit "Submit application" click (or the detail pane's primary Submit button).
+//! except by the explicit click on the detail pane's one primary button (Review & Submit -> Submit);
+//! this tab only has secondary buttons (Discard, Open visible browser, Mark applied / failed).
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,10 +26,12 @@ use jobpilot_core::apply::{
     self, ApplyInfo, ApplyOptions, Edit, FieldKind, Handoff, Prepared, Review, Row, SessionState, Source, Submitted,
 };
 use jobpilot_core::browser::SessionStatus;
+use jobpilot_core::health;
 use jobpilot_core::runtime;
 use jobpilot_core::store::{Application, Status};
 
 use crate::app::AppState;
+use crate::problem::{self, RetryFn};
 
 use super::PrimaryAction;
 
@@ -42,6 +46,20 @@ enum Phase {
     Submitting,
     Done(Option<PathBuf>),
     Handoff { handoff: Handoff, headed: bool },
+}
+
+/// What this tab is doing for one application, as the detail pane's primary button needs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplyUi {
+    /// Nothing open: the primary button opens and fills the form.
+    Idle,
+    /// Opening / filling the form, submitting, or closing it: the primary button waits.
+    Working { submitting: bool },
+    /// The form is filled and open for review.
+    Review { complete: bool, dry_run: bool, missing: usize },
+    /// Stopped for a human (failure, CAPTCHA, unsupported step).
+    Handoff,
+    Done,
 }
 
 /// How one review row is edited.
@@ -102,17 +120,42 @@ impl ApplyTab {
         Self { state, views: HashMap::new(), dry_run: false, current: None, url_input: None }
     }
 
-    /// Called by the detail pane's primary button for `ReviewAndSubmit` and `Submit`
-    /// (the pane has already switched to this tab).
+    /// What this tab is doing for `app_id` (read-only; used to label and enable the primary button).
+    pub fn ui_state(&self, app_id: i64, cx: &App) -> ApplyUi {
+        let live = || match apply::live(&self.core(cx), app_id) {
+            apply::Live::Idle => ApplyUi::Idle,
+            apply::Live::Review(r) => {
+                ApplyUi::Review { complete: r.complete, dry_run: r.dry_run, missing: r.missing_required() }
+            }
+            apply::Live::Handoff { .. } => ApplyUi::Handoff,
+        };
+        let Some(v) = self.views.get(&app_id) else { return live() };
+        if v.busy.is_some() {
+            return ApplyUi::Working { submitting: false };
+        }
+        match &v.phase {
+            Phase::Idle => live(),
+            Phase::Preparing => ApplyUi::Working { submitting: false },
+            Phase::Submitting => ApplyUi::Working { submitting: true },
+            Phase::Review => match &v.review {
+                Some(r) => ApplyUi::Review { complete: r.complete, dry_run: r.dry_run, missing: self.missing(app_id, cx) },
+                None => ApplyUi::Idle,
+            },
+            Phase::Done(_) => ApplyUi::Done,
+            Phase::Handoff { .. } => ApplyUi::Handoff,
+        }
+    }
+
+    /// Called by the detail pane's primary button (the pane has already switched to this tab).
+    /// The explicit confirmation is the click on `Submit` / `Continue` while the form is open; anything
+    /// else opens and fills the form and never submits.
     pub fn on_primary(&mut self, action: PrimaryAction, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(app_id) = self.state.read(cx).selected else { return };
         let phase = self.view(app_id).phase.clone();
         match (action, phase) {
             (_, Phase::Preparing | Phase::Submitting) => {}
-            // Status says "waiting for confirmation" and the form is open: this click is the confirmation.
-            (PrimaryAction::Submit, Phase::Review) => self.confirm(app_id, cx),
+            (PrimaryAction::Submit | PrimaryAction::Continue, Phase::Review) => self.confirm(app_id, cx),
             // Nothing is open (the app was restarted, or this is a retry): open and fill the form again.
-            // Never submits.
             _ => self.start_prepare(app_id, cx),
         }
     }
@@ -217,9 +260,9 @@ impl ApplyTab {
             .rows
             .iter()
             .filter(|r| r.editable)
-            .filter_map(|r| {
+            .map(|r| {
                 let value = v.inputs.get(&r.id).map(|i| input_value(i, cx)).unwrap_or_else(|| r.value.clone());
-                Some(Edit { id: r.id.clone(), value, remember: v.remember.contains(&r.id) })
+                Edit { id: r.id.clone(), value, remember: v.remember.contains(&r.id) }
             })
             .collect()
     }
@@ -460,13 +503,13 @@ fn host(url: &str) -> String {
 }
 
 /// Screenshot preview, scaled to the pane width.
-fn preview(path: &PathBuf, cx: &App) -> Div {
+fn preview(path: &std::path::Path, cx: &App) -> Div {
     div()
         .rounded_md()
         .border_1()
         .border_color(cx.theme().border)
         .overflow_hidden()
-        .child(img(path.clone()).w_full())
+        .child(img(path.to_path_buf()).w_full())
 }
 
 impl Render for ApplyTab {
@@ -508,9 +551,22 @@ impl Render for ApplyTab {
 // ---- rendering ----
 
 impl ApplyTab {
-    fn error_line(&mut self, app_id: i64, cx: &App) -> Option<Div> {
-        let err = self.view(app_id).error.clone()?;
-        Some(div().text_sm().text_color(cx.theme().danger).child(err))
+    /// The failure of the last action, with what to do about it (Settings shortcut, install hint, Retry).
+    fn error_line(&mut self, app_id: i64, cx: &Context<Self>) -> Option<Div> {
+        let v = self.view(app_id);
+        let err = v.error.clone()?;
+        let opening = matches!(v.phase, Phase::Idle);
+        let problem = health::classify(&err);
+        // Retry only re-opens and re-fills the form (never submits); a failed submit is retried with the
+        // Submit button itself.
+        let retry: Option<RetryFn> = opening.then(|| {
+            let weak = cx.weak_entity();
+            Rc::new(move |_: &mut Window, cx: &mut App| {
+                weak.update(cx, |this, cx| this.start_prepare(app_id, cx)).ok();
+            }) as RetryFn
+        });
+        let help = problem::help(&format!("apply-err-{app_id}"), problem, &self.state, retry, cx);
+        Some(div().v_flex().gap_1().child(div().text_sm().text_color(cx.theme().danger).child(err)).children(help))
     }
 
     fn render_idle(&mut self, app: &Application, cx: &mut Context<Self>) -> AnyElement {
@@ -532,7 +588,7 @@ impl ApplyTab {
                     .h_flex()
                     .gap_2()
                     .children(self.url_input.clone().map(|i| div().flex_1().child(Input::new(&i))))
-                    .child(Button::new("save-apply-url").primary().label("Save").on_click(cx.listener(move |this, _, _, cx| this.save_url(app_id, cx)))),
+                    .child(Button::new("save-apply-url").outline().label("Save").on_click(cx.listener(move |this, _, _, cx| this.save_url(app_id, cx)))),
             ),
         };
         let session_line = match &info.session {
@@ -549,7 +605,6 @@ impl ApplyTab {
             SessionState::Matched { status: SessionStatus::Expired, .. } => theme.warning,
             _ => muted,
         };
-        let blocker = info.blocker();
         let forced = info.dry_run_forced;
         let dry = self.dry_run || forced;
         let proof = applied.then(|| apply::latest_proof(&core, &app.slug)).flatten();
@@ -572,7 +627,7 @@ impl ApplyTab {
             .child(div().text_sm().text_color(muted).child(if applied {
                 "This application was sent. Replies are tracked from your email."
             } else {
-                "Press Review & Submit to open the form and fill it in. You review every answer first; nothing is sent until you confirm."
+                "Press Review & Submit (bottom right) to open the form and fill it in. You review every answer first; nothing is sent until you press Submit."
             }))
             .when(!applied, |d| {
                 d.child(
@@ -587,7 +642,6 @@ impl ApplyTab {
                 )
                 .when(forced, |d| d.child(div().text_xs().text_color(muted).child("JOBPILOT_DRY_RUN is set: submitting is disabled.")))
             })
-            .when_some(blocker, |d, why| d.child(div().text_sm().text_color(theme.warning).child(why)))
             .when_some(proof, |d, p| d.child(div().text_sm().font_semibold().child("Confirmation")).child(preview(&p, cx)))
             .children(self.error_line(app.id, cx))
             .into_any_element()
@@ -623,7 +677,6 @@ impl ApplyTab {
         let editable = review.rows.iter().filter(|r| r.editable).count();
         let needs = review.rows.iter().filter(|r| r.editable && (r.needs_input || r.warning.is_some())).count();
 
-        let (action_label, action_ready) = if review.complete { ("Submit application", !review.dry_run) } else { ("Continue", true) };
         let header = div()
             .h_flex()
             .gap_2()
@@ -650,23 +703,14 @@ impl ApplyTab {
                             .disabled(busy.is_some())
                             .on_click(cx.listener(move |this, _, _, cx| this.discard(app_id, cx))),
                     )
-                    .when(action_ready, |d| {
-                        d.child(
-                            Button::new("submit-review")
-                                .primary()
-                                .label(action_label)
-                                .disabled(missing > 0 || busy.is_some())
-                                .on_click(cx.listener(move |this, _, _, cx| this.confirm(app_id, cx))),
-                        )
-                    }),
             );
 
         let banner = if review.dry_run {
             Some("Dry run: the form is filled but will never be submitted.".to_string())
         } else if !review.complete {
-            Some("This form has more steps. Fill the highlighted fields, then press Continue (nothing is submitted yet).".to_string())
+            Some("This form has more steps. Fill the highlighted fields, then press Continue below (nothing is submitted yet).".to_string())
         } else if missing > 0 {
-            Some(format!("{missing} required field(s) still empty: fill them to enable Submit."))
+            Some(format!("{missing} required field(s) still empty: fill them to enable the Submit button below."))
         } else {
             None
         };
@@ -683,7 +727,11 @@ impl ApplyTab {
             .child(header)
             .when_some(banner, |d, b| d.child(div().text_sm().p_2().rounded_md().bg(theme.warning.opacity(0.12)).child(b)))
             .children(self.error_line(app_id, cx))
-            .children(notes.into_iter().map(|n| div().text_sm().text_color(theme.warning).child(n)))
+            .children(notes.into_iter().enumerate().map(|(i, n)| {
+                let problem = health::classify(&n);
+                let help = problem::help(&format!("apply-note-{i}"), problem, &self.state, None, cx);
+                div().v_flex().gap_1().child(div().text_sm().text_color(theme.warning).child(n)).children(help)
+            }))
             .child(div().v_flex().gap_2().children(rows))
             .when_some(attached, |d, name| {
                 d.child(div().h_flex().gap_2().items_center().child(Tag::secondary().child("attached")).child(div().text_sm().child(name)))
@@ -841,7 +889,7 @@ impl ApplyTab {
                     .items_center()
                     .child(
                         Button::new("open-visible")
-                            .primary()
+                            .outline()
                             .label(if headed { "Reopen visible browser" } else { "Open visible browser" })
                             .loading(busy == Some("Opening the browser..."))
                             .disabled(busy.is_some())

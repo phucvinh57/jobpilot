@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>JobPilot</title>
+  <rect width="256" height="256" rx="56" fill="#1f3a5f"/>
+  <!-- document -->
+  <path d="M70 44h78l38 38v130a12 12 0 0 1-12 12H70a12 12 0 0 1-12-12V56a12 12 0 0 1 12-12z" fill="#f4f7fb"/>
+  <path d="M148 44l38 38h-26a12 12 0 0 1-12-12z" fill="#c5d3e6"/>
+  <rect x="80" y="112" width="86" height="9" rx="4.5" fill="#9fb3cf"/>
+  <rect x="80" y="134" width="64" height="9" rx="4.5" fill="#9fb3cf"/>
+  <!-- paper-plane / pilot arrow -->
+  <path d="M104 196l92-52-30 80-18-28z" fill="#2f9e6e"/>
+  <path d="M148 196l18 28 4-12z" fill="#1f7a53"/>
+</svg>

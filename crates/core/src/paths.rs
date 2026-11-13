@@ -23,6 +23,8 @@ pub struct Paths {
     pub sessions_dir: PathBuf,
     /// Screenshots.
     pub shots_dir: PathBuf,
+    /// `logs/jobpilot.log.<date>` (no secrets, see `logging`).
+    pub logs_dir: PathBuf,
 }
 
 impl Paths {
@@ -34,6 +36,7 @@ impl Paths {
             applications_dir: data_dir.join("applications"),
             sessions_dir: data_dir.join("sessions"),
             shots_dir: data_dir.join("shots"),
+            logs_dir: data_dir.join("logs"),
             data_dir,
         }
     }
@@ -49,7 +52,7 @@ impl Paths {
 
     /// Create all directories (`sessions/` is private to the user).
     pub fn ensure(&self) -> Result<()> {
-        for dir in [&self.data_dir, &self.applications_dir, &self.sessions_dir, &self.shots_dir] {
+        for dir in [&self.data_dir, &self.applications_dir, &self.sessions_dir, &self.shots_dir, &self.logs_dir] {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         #[cfg(unix)]

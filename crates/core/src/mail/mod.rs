@@ -5,7 +5,7 @@
 //!   the poller and the apply/review logic; `account`: `impl Core` (connect, disconnect, state).
 //!
 //! Public API (UI and other sub-plans):
-//! ```ignore
+//! ```text
 //! core.gmail_save_client(client_id, Some(secret))?;      // client id -> kv, secret -> keyring
 //! let email = core.gmail_connect().await?;                // opens the system browser, <= 5 min
 //! let report = mail::sync_once(&core).await?;             // SyncReport { fetched, matched, status_changes, needs_review, .. }

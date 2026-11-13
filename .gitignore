@@ -9,3 +9,6 @@ target/
 data/
 backups/
 .claude/worktrees/
+
+# release packages (scripts/package.sh)
+dist/

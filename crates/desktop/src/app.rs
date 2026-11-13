@@ -10,6 +10,7 @@ use anyhow::Result;
 use gpui_kit::component::*;
 use gpui_kit::*;
 use jobpilot_core::browser::fetch::generate_with_browser;
+use jobpilot_core::health::{self, Health, Problem};
 use jobpilot_core::pipeline::{self, JdInput, Progress};
 use jobpilot_core::store::{Application, NewApplication, Status};
 use jobpilot_core::{mail, runtime, Core};
@@ -24,6 +25,13 @@ use jobs::{generate_plan, progress_label, GeneratePlan};
 pub enum Screen {
     Detail,
     Settings,
+}
+
+/// What to run again when a job failed and the user presses Retry.
+#[derive(Clone, Debug)]
+enum Job {
+    Generate,
+    Revise(String),
 }
 
 /// State shared by every view: wrap in `Entity<AppState>` and `cx.observe` it to re-render.
@@ -43,6 +51,14 @@ pub struct AppState {
     inputs: HashMap<i64, JdInput>,
     /// Bumped when a job rewrote an application's CV files, so the CV tab reloads them.
     cv_epochs: HashMap<i64, u64>,
+    /// The last job started per application, for Retry.
+    last_jobs: HashMap<i64, Job>,
+    /// The last input pasted or dropped in the sidebar (Retry for an input that never became a Draft).
+    last_input: Option<JdInput>,
+    /// Prerequisites (AI provider, typst, Chrome); `None` until the first check finished.
+    pub health: Option<Health>,
+    /// Settings section to scroll to the next time Settings is shown.
+    pub settings_focus: Option<&'static str>,
 }
 
 impl AppState {
@@ -57,6 +73,10 @@ impl AppState {
             input_error: None,
             inputs: HashMap::new(),
             cv_epochs: HashMap::new(),
+            last_jobs: HashMap::new(),
+            last_input: None,
+            health: None,
+            settings_focus: None,
         };
         state.load();
         state.selected = state.applications.first().map(|a| a.id);
@@ -66,7 +86,7 @@ impl AppState {
     fn load(&mut self) {
         match self.core.store.list_applications() {
             Ok(apps) => self.applications = apps,
-            Err(e) => eprintln!("failed to load applications: {e:#}"),
+            Err(e) => tracing::error!("failed to load applications: {e:#}"),
         }
     }
 
@@ -83,8 +103,42 @@ impl AppState {
     }
 
     pub fn show(&mut self, screen: Screen, cx: &mut Context<Self>) {
+        let leaving_settings = self.screen == Screen::Settings && screen != Screen::Settings;
         self.screen = screen;
+        if leaving_settings {
+            // A provider, Chrome or typst may have been set up meanwhile.
+            self.refresh_health(cx);
+        }
         cx.notify();
+    }
+
+    /// Show Settings, scrolled to `section` (`"AI providers"`, `"Browser sessions"`, `"Gmail"`).
+    pub fn open_settings(&mut self, section: Option<&'static str>, cx: &mut Context<Self>) {
+        self.settings_focus = section;
+        self.show(Screen::Settings, cx);
+    }
+
+    /// Re-check the prerequisites in the background (also at startup).
+    pub fn refresh_health(&mut self, cx: &mut Context<Self>) {
+        let core = self.core.clone();
+        let rx = runtime::spawn(async move { core.health().await });
+        cx.spawn(async move |this, cx| {
+            if let Ok(health) = rx.await {
+                this.update(cx, |state, cx| {
+                    if state.health.as_ref() != Some(&health) {
+                        state.health = Some(health);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Prerequisites that block the main flow (empty until the first check finished).
+    pub fn blockers(&self) -> Vec<Problem> {
+        self.health.as_ref().map(Health::blockers).unwrap_or_default()
     }
 
     pub fn selected_app(&self) -> Option<&Application> {
@@ -115,6 +169,26 @@ impl AppState {
         }
     }
 
+    /// Retry: run the failed job again (Generate, or the same "Ask AI" instruction).
+    pub fn retry(&mut self, id: i64, cx: &mut Context<Self>) {
+        match self.last_jobs.get(&id).cloned() {
+            Some(Job::Revise(instruction)) => self.revise(id, instruction, cx),
+            _ => self.run_generate(id, cx),
+        }
+    }
+
+    /// Retry for an input that never became a Draft (the link could not be fetched).
+    pub fn retry_input(&mut self, cx: &mut Context<Self>) {
+        if let Some(input) = self.last_input.clone() {
+            self.submit_input(input, cx);
+        }
+    }
+
+    /// The failed input can be retried.
+    pub fn can_retry_input(&self) -> bool {
+        self.last_input.is_some()
+    }
+
     /// Counter that changes whenever a job rewrote this application's `cv.yaml` / previews.
     pub fn cv_epoch(&self, id: i64) -> u64 {
         self.cv_epochs.get(&id).copied().unwrap_or(0)
@@ -124,6 +198,7 @@ impl AppState {
     /// selected) with the first progress event.
     pub fn submit_input(&mut self, input: JdInput, cx: &mut Context<Self>) {
         self.input_error = None;
+        self.last_input = Some(input.clone());
         let run_input = input.clone();
         self.start_job(
             None,
@@ -143,6 +218,7 @@ impl AppState {
         if self.is_busy(id) {
             return;
         }
+        self.last_jobs.insert(id, Job::Generate);
         let Some(app) = self.applications.iter().find(|a| a.id == id).cloned() else { return };
         match generate_plan(&app, self.inputs.get(&id)) {
             GeneratePlan::Regenerate => self.start_job(
@@ -182,6 +258,7 @@ impl AppState {
         if self.is_busy(id) || instruction.trim().is_empty() {
             return;
         }
+        self.last_jobs.insert(id, Job::Revise(instruction.clone()));
         self.start_job(
             Some(id),
             None,
@@ -269,19 +346,31 @@ impl AppState {
                         self.inputs.remove(&id);
                     }
                     Err(e) => {
-                        self.errors.insert(id, format!("{e:#}"));
+                        let message = format!("{e:#}");
+                        self.last_jobs.entry(id).or_insert(Job::Generate);
+                        self.needs_recheck(&message, cx);
+                        self.errors.insert(id, message);
                     }
                 }
             }
             // Refused before a Draft existed (bad link, no AI provider).
             None => {
                 if let Err(e) = result {
-                    self.input_error = Some(format!("{e:#}"));
+                    let message = format!("{e:#}");
+                    self.needs_recheck(&message, cx);
+                    self.input_error = Some(message);
                 }
             }
         }
         self.load();
         cx.notify();
+    }
+
+    /// A failure that says a prerequisite is missing: re-run the health check so the banner is right.
+    fn needs_recheck(&mut self, message: &str, cx: &mut Context<Self>) {
+        if matches!(health::classify(message), Problem::NoProvider | Problem::NoTypst | Problem::NoChrome) {
+            self.refresh_health(cx);
+        }
     }
 
     /// "Approve CV": Draft -> CvReady.
@@ -348,7 +437,10 @@ impl JobPilot {
     pub fn new(core: Arc<Core>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let state = cx.new(|_| AppState::new(core));
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
-        state.update(cx, |state, cx| state.watch_mail(cx));
+        state.update(cx, |state, cx| {
+            state.watch_mail(cx);
+            state.refresh_health(cx);
+        });
         Self {
             sidebar: cx.new(|cx| Sidebar::new(state.clone(), window, cx)),
             detail: cx.new(|cx| Detail::new(state.clone(), window, cx)),
@@ -384,7 +476,15 @@ impl Render for JobPilot {
                 });
             }))
             .child(self.sidebar.clone())
-            .child(div().flex_1().min_w_0().h_full().child(main))
+            .child(
+                div()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .children(crate::problem::setup_banner(&self.state, cx))
+                    .child(div().flex_1().min_h_0().child(main)),
+            )
     }
 }
 

@@ -486,6 +486,7 @@ impl<'a> Pipeline<'a> {
         match work.await {
             Ok(v) => Ok(v),
             Err(e) => {
+                tracing::warn!(app = app_id, "pipeline: failed: {e:#}");
                 let _ = self.core.store.add_event(app_id, "error", &format!("{e:#}"));
                 // A row that never got analysed must not keep saying "Analysing...".
                 if let Ok(Some(mut app)) = self.core.store.get_application(app_id) {
@@ -506,6 +507,7 @@ enum Task<'a> {
 }
 
 fn emit(notify: Notify<'_>, app_id: i64, stage: Stage, detail: &str) {
+    tracing::info!(app = app_id, "pipeline: {}{}{detail}", stage.label(), if detail.is_empty() { "" } else { ": " });
     notify(Progress { app_id, stage, detail: detail.to_string() });
 }
 

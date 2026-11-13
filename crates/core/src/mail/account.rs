@@ -142,6 +142,7 @@ impl Core {
         self.store.kv_delete(KV_LAST_SYNC)?;
         self.store.kv_delete(KV_LAST_REPORT)?;
         self.store.kv_set(KV_ACCOUNT, &profile.email_address)?;
+        tracing::info!("gmail: connected");
         Ok(profile.email_address)
     }
 

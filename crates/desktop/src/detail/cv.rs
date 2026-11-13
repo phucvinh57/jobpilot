@@ -398,19 +398,27 @@ impl Render for CvTab {
             .gap_2()
             .child(div().h_flex().flex_1().min_h_0().gap_3().child(editor_pane).child(preview_pane))
             .when_some(self.problem.clone(), |d, problem| {
+                // A missing typst gets its install hint and a "Check again" button next to the error.
+                let help = crate::problem::help("cv-problem", jobpilot_core::health::classify(&problem), &self.state, None, cx);
                 d.child(
                     div()
-                        .id("cv-problem")
-                        .max_h(px(110.))
-                        .overflow_y_scroll()
+                        .v_flex()
+                        .gap_2()
                         .p_2()
                         .rounded_md()
                         .border_1()
                         .border_color(theme.danger)
-                        .font_family("monospace")
-                        .text_xs()
-                        .text_color(theme.danger)
-                        .child(problem),
+                        .child(
+                            div()
+                                .id("cv-problem")
+                                .max_h(px(110.))
+                                .overflow_y_scroll()
+                                .font_family("monospace")
+                                .text_xs()
+                                .text_color(theme.danger)
+                                .child(problem),
+                        )
+                        .children(help),
                 )
             })
             .when(!self.warnings.is_empty(), |d| {

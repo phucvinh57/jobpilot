@@ -49,9 +49,23 @@ pub struct RenderResult {
     pub page_count: usize,
 }
 
-/// `JOBPILOT_TYPST` or `typst` from `PATH`.
+/// `JOBPILOT_TYPST`, else `typst` on `PATH`, else the usual install spots (`~/.cargo/bin` is rarely on the
+/// `PATH` of an app started from the desktop menu), else plain `typst` (which then fails with a clear message).
 pub fn typst_binary() -> PathBuf {
-    std::env::var_os(TYPST_ENV).filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| "typst".into())
+    if let Some(path) = std::env::var_os(TYPST_ENV).filter(|v| !v.is_empty()) {
+        return PathBuf::from(path);
+    }
+    let on_path = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .map(|dir| dir.join("typst"));
+    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".cargo")));
+    let usual = cargo_home
+        .map(|c| c.join("bin/typst"))
+        .into_iter()
+        .chain(dirs::home_dir().map(|h| h.join(".local/bin/typst")))
+        .chain(["/usr/local/bin/typst", "/usr/bin/typst", "/snap/bin/typst"].map(PathBuf::from));
+    on_path.chain(usual).find(|p| p.is_file()).unwrap_or_else(|| "typst".into())
 }
 
 /// Render `yaml_path` into `out_dir`: `<stem>.pdf` and `page-<n>.png`. The YAML is copied into
@@ -119,8 +133,9 @@ async fn typst_compile(bin: &Path, root: &Path, yaml_name: &str, extra: &[&str],
     let child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!(
-                "typst was not found ({}): install it from https://typst.app or set {TYPST_ENV} to its path",
-                bin.display()
+                "typst was not found ({}): install it with `{}` (or from https://typst.app), or set {TYPST_ENV} to its path",
+                bin.display(),
+                crate::health::TYPST_INSTALL_HINT
             )
         } else {
             anyhow::Error::new(e).context(format!("starting {}", bin.display()))

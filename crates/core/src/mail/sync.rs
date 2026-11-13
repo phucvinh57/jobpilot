@@ -101,13 +101,24 @@ pub async fn sync_once(core: &Core) -> Result<SyncReport> {
     let result = run_sync(core).await;
     match &result {
         Ok(report) => {
+            tracing::info!(
+                "gmail: synced {} new message(s), {} matched, {} status change(s), {} need review{}",
+                report.fetched,
+                report.matched,
+                report.status_changes.len(),
+                report.needs_review,
+                if report.full { " (full listing)" } else { "" }
+            );
             let _ = core.store.kv_set(KV_LAST_SYNC, &chrono::Utc::now().to_rfc3339());
             save_summary(core, &report.summary());
             if report.touched_data() {
                 change_tx().send_modify(|n| *n += 1);
             }
         }
-        Err(e) => save_summary(core, &ReportSummary { error: Some(format!("{e:#}")), ..Default::default() }),
+        Err(e) => {
+            tracing::warn!("gmail: sync failed: {e:#}");
+            save_summary(core, &ReportSummary { error: Some(format!("{e:#}")), ..Default::default() })
+        }
     }
     result
 }
@@ -130,7 +141,7 @@ where
                 match sync_once(&core).await {
                     Ok(report) if report.touched_data() => on_change(report),
                     Ok(_) => {}
-                    Err(e) => tracing::warn!("Gmail sync failed: {e:#}"),
+                    Err(_) => {} // already logged by sync_once
                 }
             }
             tokio::time::sleep(every).await;

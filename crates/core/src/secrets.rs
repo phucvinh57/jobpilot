@@ -45,17 +45,23 @@ impl Secrets {
 
     /// `Ok(None)` when the key is not set.
     pub fn get(&self, key: &str) -> Result<Option<String>> {
-        match &self.backend {
+        let value = match &self.backend {
             Backend::Memory(m) => Ok(lock(m).get(key).cloned()),
             Backend::Keyring => match entry(key)?.get_password() {
                 Ok(v) => Ok(Some(v)),
                 Err(keyring::Error::NoEntry) => Ok(None),
                 Err(e) => Err(e).with_context(|| format!("reading secret `{key}` from the keyring")),
             },
+        };
+        // Whatever leaves the keyring is scrubbed from logs from now on.
+        if let Ok(Some(v)) = &value {
+            crate::redact::register(v);
         }
+        value
     }
 
     pub fn set(&self, key: &str, value: &str) -> Result<()> {
+        crate::redact::register(value);
         match &self.backend {
             Backend::Memory(m) => {
                 lock(m).insert(key.to_string(), value.to_string());

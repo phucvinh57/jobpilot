@@ -9,10 +9,13 @@
 pub mod apply;
 pub mod browser;
 pub mod facade;
+pub mod health;
 pub mod llm;
+pub mod logging;
 pub mod mail;
 pub mod paths;
 pub mod pipeline;
+pub mod redact;
 pub mod runtime;
 pub mod secrets;
 pub mod store;

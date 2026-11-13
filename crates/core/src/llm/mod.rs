@@ -1,6 +1,6 @@
 //! P1 - AI providers: OpenAI-compatible and Anthropic clients with JSON-schema output.
 //!
-//! ```ignore
+//! ```text
 //! let llm = core.default_llm()?;                       // or core.llm_for(provider_id)
 //! let out = llm.complete_json(system, user, &schema).await?;   // serde_json::Value, validated
 //! ```
@@ -79,6 +79,15 @@ pub fn from_provider(provider: &Provider, api_key: Option<String>) -> Box<dyn Ll
 
 /// Run a tiny `{ok: boolean}` request: `Ok(())` when the provider answered as asked.
 pub async fn test_llm(llm: &dyn Llm) -> Result<()> {
+    let result = test_llm_inner(llm).await;
+    match &result {
+        Ok(()) => tracing::info!("llm: provider test passed"),
+        Err(e) => tracing::warn!("llm: provider test failed: {e:#}"),
+    }
+    result
+}
+
+async fn test_llm_inner(llm: &dyn Llm) -> Result<()> {
     let schema = json!({
         "type": "object",
         "properties": {"ok": {"type": "boolean"}},

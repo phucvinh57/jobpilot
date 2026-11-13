@@ -1,6 +1,6 @@
 //! P5 - auto-apply: review -> confirm -> submit.
 //!
-//! ```ignore
+//! ```text
 //! // Apply tab, idle: what would happen?
 //! let info = core.apply_info(app_id)?;                // ATS, apply URL, session, dry-run
 //!
@@ -101,6 +101,17 @@ pub struct ApplyInfo {
 }
 
 impl ApplyInfo {
+    /// The Settings section that fixes the [`blocker`](Self::blocker), if one does.
+    pub fn blocker_settings(&self) -> Option<&'static str> {
+        if self.apply_url.is_none() {
+            None
+        } else if matches!(self.session, SessionState::Missing { .. }) || !self.chrome {
+            Some("Browser sessions")
+        } else {
+            None
+        }
+    }
+
     /// Why a run cannot start (shown in the idle state), or `None`.
     pub fn blocker(&self) -> Option<String> {
         if self.apply_url.is_none() {
@@ -141,7 +152,7 @@ pub fn pick_session(ats: Ats, url: &str, sessions: &[Session]) -> SessionState {
         .iter()
         .filter(|s| {
             s.domains().iter().any(|d| covers(d))
-                || url::Url::parse(&s.start_url).ok().and_then(|u| u.host_str().map(|h| covers(h))).unwrap_or(false)
+                || url::Url::parse(&s.start_url).ok().and_then(|u| u.host_str().map(covers)).unwrap_or(false)
         })
         .collect();
     matching.sort_by_key(|s| match s.session_status() {

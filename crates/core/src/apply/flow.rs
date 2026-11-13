@@ -313,6 +313,7 @@ fn clean_shots(core: &Core, slug: &str, kind: &str) {
 }
 
 fn event(core: &Core, app_id: i64, message: &str) {
+    tracing::info!(app = app_id, "apply: {message}");
     if let Err(e) = core.store.add_event(app_id, "apply", message) {
         tracing::warn!("could not record an apply event: {e:#}");
     }
@@ -585,6 +586,7 @@ pub async fn prepare(
     opts: ApplyOptions,
     progress: impl Fn(Stage) + Send + Sync,
 ) -> Result<Prepared> {
+    tracing::info!(app = app_id, dry_run = opts.dry_run, "apply: preparing the form");
     let llm = core.default_llm().ok();
     prepare_with(core, app_id, opts, llm.as_deref(), progress).await
 }
@@ -767,7 +769,7 @@ async fn apply_edits(run: &mut Run, edits: &[Edit]) -> Result<Vec<(String, Strin
     if !changes.is_empty() {
         let page = run.page.clone().context("the browser page is gone")?;
         let items: Vec<FillItem> = {
-            let last = run.steps.last().expect("checked above");
+            let last = run.steps.last().context("there is no open form step")?;
             changes
                 .iter()
                 .filter(|(_, v)| !v.is_empty())
@@ -775,7 +777,7 @@ async fn apply_edits(run: &mut Run, edits: &[Edit]) -> Result<Vec<(String, Strin
                 .collect()
         };
         let results = if items.is_empty() { Vec::new() } else { form::fill(&page, &items).await? };
-        let last = run.steps.last_mut().expect("checked above");
+        let last = run.steps.last_mut().context("there is no open form step")?;
         for (i, value) in changes {
             let id = last.fields[i].id.clone();
             let failed = results.iter().find(|r| r.id == id && !r.ok).map(|r| r.error.clone().unwrap_or_else(|| "the page did not keep the value".into()));
@@ -784,7 +786,7 @@ async fn apply_edits(run: &mut Run, edits: &[Edit]) -> Result<Vec<(String, Strin
     }
 
     // Answers to remember: the edit asked for it, and the field's current value is what will be sent.
-    let last = run.steps.last().expect("checked above");
+    let last = run.steps.last().context("there is no open form step")?;
     let mut remember = Vec::new();
     for edit in edits.iter().filter(|e| e.remember) {
         if let Some(idx) = last.fields.iter().position(|f| f.id == edit.id) {
@@ -899,8 +901,16 @@ async fn retire_to_handoff(core: &Core, run: &mut Run, mut h: Handoff) -> Handof
 /// The explicit confirmation: apply the user's final edits, click the submit button, detect the result
 /// and save a proof screenshot. A dry run returns [`Submitted::DryRun`] without touching the page.
 pub async fn submit(core: &Core, app_id: i64, edits: Vec<Edit>) -> Result<Submitted> {
+    tracing::info!(app = app_id, edits = edits.len(), "apply: submit confirmed by the user");
     let llm = core.default_llm().ok();
-    submit_with(core, app_id, edits, llm.as_deref()).await
+    let result = submit_with(core, app_id, edits, llm.as_deref()).await;
+    match &result {
+        Ok(Submitted::Applied { .. }) => tracing::info!(app = app_id, "apply: submitted"),
+        Ok(Submitted::DryRun) => tracing::info!(app = app_id, "apply: dry run, nothing was sent"),
+        Ok(Submitted::Handoff(h)) => tracing::warn!(app = app_id, "apply: needs the user: {}", h.reason),
+        Err(e) => tracing::warn!(app = app_id, "apply: submit failed: {e:#}"),
+    }
+    result
 }
 
 pub(crate) async fn submit_with(core: &Core, app_id: i64, edits: Vec<Edit>, llm: Option<&dyn Llm>) -> Result<Submitted> {
@@ -1138,6 +1148,7 @@ pub async fn finish_manually(core: &Core, app_id: i64, applied: bool) -> Result<
 /// Close the browser and drop the review without submitting. An application waiting for confirmation
 /// goes back to `CvReady`.
 pub async fn discard(core: &Core, app_id: i64) -> Result<()> {
+    tracing::info!(app = app_id, "apply: review discarded");
     discard_run(core, app_id).await;
     if let Some(app) = core.store.get_application(app_id)? {
         if app.status == Status::Submitting {

@@ -356,7 +356,7 @@ return f ? f.src : null;
 "#;
 
 fn compose(body: &str, args: &serde_json::Value) -> String {
-    let json = serde_json::to_string(args).expect("serializing JSON cannot fail");
+    let json = serde_json::to_string(args).unwrap_or_else(|_| "null".into());
     format!("(() => {{\n{LIB}\n{}\n}})()", body.replace("__ARGS__", &json))
 }
 

@@ -1,6 +1,6 @@
 //! P2 - JD ingest, CV generation, fact guard and Typst rendering.
 //!
-//! ```ignore
+//! ```text
 //! // UI side (inside runtime::spawn):
 //! let app = pipeline::generate(&core, JdInput::Url(url), |p| tx.send(p)).await?;   // Draft + cv.yaml + cv.pdf
 //! pipeline::revise(&core, app.id, "shorter, stress Rust", |p| ..).await?;           // "Ask AI"
