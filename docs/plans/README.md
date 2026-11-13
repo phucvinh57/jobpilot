@@ -2,6 +2,23 @@
 
 Status: **decisions 1, 2, 3 and 6 confirmed on 2026-11-13**; 4 and 5 use the recommended default until changed.
 
+## Status
+
+Updated 2026-11-14, after the end-to-end check (Phase 3). On `main` unless noted.
+
+| Plan | PR | State | Notes |
+|------|----|-------|-------|
+| P8 foundation | #10 (tables, preferences model, `chat_json`, `NeedsHuman`, nav), #11 (graph runtime) | merged | |
+| P9 preference chat | #13 | **open, awaiting human review** (High: prompt file) | `core/prefs/` has only the `Preferences` model on main; the Preferences screen is a placeholder |
+| P10 discovery | #15 (runner, ATS and HN sources, scoring, `net::http`), #18 (challenge hand-off, SSRF guard proxy, YC and career-page sources, Settings > Job sources) | merged | Daily run while the app is open (decision 5) is not built; only "Search now" |
+| P11 job insight | #14 | merged | |
+| P12 queue | #17 | merged | Queue, Prepare CV, Dismiss with exclusion, Next in queue |
+| P13a trend collection | #12 | merged | `core/trends/` collectors and the `trends` graph; no screen |
+| P13b digest and view | #16 | **open, awaiting human review** (High: prompt file) | The Trends screen is a placeholder on main |
+| Phase 3 end-to-end and docs | this change | open | `crates/core/tests/e2e_discovery.rs`, CLAUDE.md / README updates |
+
+End-to-end check (fake provider and fake Greenhouse board on loopback, real typst, real Chrome for the apply step): source -> `discover_now` -> leads with score and insight -> `prepare_cv` -> Approve CV -> dry-run apply on a local form passes. Checked with P9 and P13b absent: discovery and the queue work with default preferences, as planned. Still unchecked: any live site, the live provider, Gmail, and the pending P9 / P13b code.
+
 ## Intent vs. what exists today
 
 | # | Intent | Today | Gap |
@@ -41,7 +58,7 @@ Phase 1   P9 chat | P10 discovery | P11 insight | P13a trend collection     in p
             |          |               |             |
 Phase 2   P12 queue (needs P10 + P11)   |   P13b digest + view (uses P9 preferences if present)
             |
-Phase 3   end-to-end run on demo data + fake LLM, update CLAUDE.md / README (High: human review)
+Phase 3   end-to-end run on demo data + fake LLM, update CLAUDE.md / README (High: human review)   <- done for what is on main, see Status
 ```
 
 - P8 goes first so that no Phase 1 plan edits `store/mod.rs`, `app.rs` or the `Llm` trait.
