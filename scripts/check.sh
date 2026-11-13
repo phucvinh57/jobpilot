@@ -15,8 +15,13 @@ cd "$root"
 
 changed=""
 if ! $all; then
+  git rev-parse -q --verify "$base" >/dev/null || base="origin/$base"
+  if ! mb=$(git merge-base "$base" HEAD); then
+    echo "No merge base with $base. Pass a base ref or use --all."
+    exit 1
+  fi
   changed=$({
-    git diff --name-only "$(git merge-base "$base" HEAD)"
+    git diff --name-only "$mb"
     git ls-files --others --exclude-standard
   } | sort -u)
 fi
@@ -88,7 +93,7 @@ for f in "${all_cvs[@]}"; do
   fi
 done
 
-if touches '^(profile\.yaml$|template/|Makefile$)'; then
+if touches '^(profile\.yaml$|template/|Makefile$|scripts/)'; then
   run build make -B all && run page-limit check_pages "${all_cvs[@]}"
 elif ((${#changed_cvs[@]} > 0)); then
   run build build_cvs "${changed_cvs[@]}" && run page-limit check_pages "${changed_cvs[@]}"

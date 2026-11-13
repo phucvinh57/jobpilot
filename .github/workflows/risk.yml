@@ -42,7 +42,8 @@ jobs:
             exit 1
           fi
 
-          high=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' | grep -E "$HIGH_PATHS" || true)
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | .filename, (.previous_filename // empty)')
+          high=$(grep -E "$HIGH_PATHS" <<<"$files" || true)
           if [[ -n $high && $risk != high ]]; then
             echo "::error::These paths are High risk (docs/REVIEW.md), so label the PR risk: high:"
             echo "$high"
