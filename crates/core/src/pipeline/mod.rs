@@ -12,7 +12,7 @@
 //! Layers, each usable on its own:
 //! - [`ingest`]: URL / file / text -> JD text ([`NeedsBrowser`] when a plain fetch is not enough).
 //! - [`analyze`]: JD -> [`Analysis`] (LLM step 1).
-//! - [`insight`]: JD + the company's pages -> [`Insight`], a brief per job (LLM, optional, in parallel with step 2).
+//! - [`insight`]: JD + the company's pages -> [`Insight`], a brief per job (LLM, optional, started in the background next to step 2).
 //! - [`tailor`]: profile + JD -> CV YAML, plus revise / repair / trim rounds (LLM step 2).
 //! - [`cv`] + [`guard`]: typed CV and the deterministic fact guard.
 //! - [`render`]: YAML -> PDF + PNG previews with the `typst` CLI.

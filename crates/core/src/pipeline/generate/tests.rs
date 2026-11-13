@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::llm::fake::FakeLlm;
+use crate::llm::Llm;
 use crate::pipeline::ingest::tests::{serve, JOB_HTML};
 use crate::pipeline::insight::Insight;
 use crate::store::Status;
@@ -329,32 +330,70 @@ fn brief_reply() -> Value {
     json!({
         "domain": "Warehouse robotics", "business_summary": "Builds robots for warehouses.",
         "company": {"size": "", "stage": "", "funding": "", "hq": "", "founded": ""},
-        "interview": {"stages": [], "notes": "", "found": false}, "source_pages": [1]
+        "interview": {"stages": [], "notes": "", "found": false}, "source_pages": []
     })
 }
 
+/// A model that answers the brief only once its gate is opened.
+struct Gated {
+    gate: Arc<tokio::sync::Notify>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl Llm for Gated {
+    fn complete_json<'a>(&'a self, _: &'a str, _: &'a str, _: &'a Value) -> crate::llm::LlmFuture<'a, Value> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            self.gate.notified().await;
+            Ok(brief_reply())
+        })
+    }
+
+    fn list_models(&self) -> crate::llm::LlmFuture<'_, Vec<String>> {
+        Box::pin(std::future::ready(Ok(Vec::new())))
+    }
+}
+
+/// The brief runs detached on the global runtime: wait (up to 5 s) until `done` holds.
+async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+fn stored_brief(core: &Core, id: i64) -> Option<Insight> {
+    core.store.get_application(id).unwrap().unwrap().insight_json.as_deref().and_then(Insight::from_json)
+}
+
 #[tokio::test]
-async fn generate_writes_the_company_brief_next_to_the_cv() {
+async fn the_company_brief_runs_detached_and_never_delays_the_cv() {
     let (_dir, core) = core();
     core.store.kv_set(MAX_PAGES_KEY, "2").unwrap();
-    // The local server answers every path with the job page: the company pages are all that page.
     let url = serve(200, "text/html; charset=utf-8", JOB_HTML.to_string()).await;
     let llm = FakeLlm::with_replies([analysis(), reply(EXAMPLE, &[])]);
-    let brief_llm = Arc::new(FakeLlm::with_replies([brief_reply()]));
-    let app = Pipeline::new(&core, &llm)
-        .with_insight(brief_llm.clone())
-        .generate(JdInput::Url(url.clone()), |_| {})
-        .await
-        .unwrap();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let brief_llm = Arc::new(Gated { gate: gate.clone(), calls: Default::default() });
+    let app =
+        Pipeline::new(&core, &llm).with_insight(brief_llm.clone()).generate(JdInput::Url(url.clone()), |_| {}).await.unwrap();
 
+    // The CV is done while the brief is still waiting for its model.
     assert_eq!(llm.calls().len(), 2, "the brief has its own client: the CV's scripted answers are untouched");
-    assert_eq!(brief_llm.calls().len(), 1);
     assert!(app.cv_pdf_path().is_file());
-    let brief = Insight::from_json(app.insight_json.as_deref().unwrap()).unwrap();
+    assert!(app.insight_json.is_none());
+    eventually("the brief to start", || brief_llm.calls.load(std::sync::atomic::Ordering::SeqCst) == 1).await;
+    assert!(stored_brief(&core, app.id).is_none());
+
+    gate.notify_one();
+    eventually("the brief to be stored", || stored_brief(&core, app.id).is_some()).await;
+    let brief = stored_brief(&core, app.id).unwrap();
     assert_eq!(brief.domain, "Warehouse robotics");
     assert_eq!(brief.skills.required, ["Linux administration", "Nginx"], "the analysis' skills");
-    assert_eq!(brief.sources, [url.clone(), url.replace("/job", "/")], "the posting and the page the model used");
-    assert_eq!(core.store.get_application(app.id).unwrap().unwrap().insight_json, app.insight_json);
+    // The JD's own URL is the source; a local address is not a company site, so no page was read.
+    assert_eq!(brief.sources, [url]);
 }
 
 #[tokio::test]
@@ -365,23 +404,24 @@ async fn a_failed_brief_never_fails_generation_and_regenerate_fills_it_in() {
     let llm = FakeLlm::with_replies([analysis(), reply(EXAMPLE, &[])]);
     let down = Arc::new(FakeLlm::with_error("HTTP 503 Service Unavailable"));
     let app = Pipeline::new(&core, &llm).with_insight(down.clone()).generate(JdInput::Url(url), |_| {}).await.unwrap();
-    assert_eq!(down.calls().len(), 1);
+    eventually("the failing brief to run", || down.calls().len() == 1).await;
     assert!(app.insight_json.is_none() && app.cv_pdf_path().is_file());
     assert!(!event_text(&core, app.id).contains("[error]"), "{}", event_text(&core, app.id));
 
-    // Regenerate has the stored analysis and writes the missing brief.
+    // Regenerate has the stored analysis and starts the missing brief.
     let llm = FakeLlm::with_replies([reply(EXAMPLE, &[])]);
     let up = Arc::new(FakeLlm::with_replies([brief_reply()]));
     let app = Pipeline::new(&core, &llm).with_insight(up.clone()).regenerate(app.id, |_| {}).await.unwrap();
+    eventually("the brief to be stored", || stored_brief(&core, app.id).is_some()).await;
     assert_eq!(up.calls().len(), 1);
-    assert!(app.insight_json.is_some());
 
     // ...and leaves an existing one alone.
+    let before = core.store.get_application(app.id).unwrap().unwrap().insight_json;
     let llm = FakeLlm::with_replies([reply(EXAMPLE, &[])]);
     let unused = Arc::new(FakeLlm::with_error("must not be called"));
     let again = Pipeline::new(&core, &llm).with_insight(unused.clone()).regenerate(app.id, |_| {}).await.unwrap();
     assert!(unused.calls().is_empty());
-    assert_eq!(again.insight_json, app.insight_json);
+    assert_eq!(again.insight_json, before);
 }
 
 #[tokio::test]

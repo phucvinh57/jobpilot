@@ -19,7 +19,7 @@ const MIN_TEXT_CHARS: usize = 20;
 /// Hard cap for a downloaded page.
 const MAX_DOWNLOAD_BYTES: usize = 10 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
-const USER_AGENT: &str =
+pub(crate) const USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 /// What the user gave us.

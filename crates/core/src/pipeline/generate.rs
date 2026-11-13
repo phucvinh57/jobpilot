@@ -9,12 +9,12 @@ use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures::future::{select, Either};
 use rusqlite::params;
 
 use super::analyze::{analyze, valid_http_url, Analysis};
 use super::cv::Cv;
 use super::guard::{format_violations, guard, Violation};
+use super::insight;
 use super::ingest::{ingest, precheck, JdInput, JdText};
 use super::render::{render, RenderResult, TypstError};
 use super::tailor::{self, JdContext, TailorOutput};
@@ -169,8 +169,9 @@ impl<'a> Pipeline<'a> {
         Self { core, llm, insight: None }
     }
 
-    /// Also write the job brief (P11) of an application that has none, next to the CV, with `llm`
-    /// (normally a clone of the handle `llm` was borrowed from). It never fails the pipeline.
+    /// Also write the job brief (P11) of an application that has none, with `llm` (normally a clone
+    /// of the handle `llm` was borrowed from). The brief runs detached: it never delays or fails the
+    /// pipeline, and lands in `insight_json` when done (the UI shows it on its next refresh).
     pub fn with_insight(mut self, llm: Arc<dyn Llm>) -> Self {
         self.insight = Some(llm);
         self
@@ -214,7 +215,8 @@ impl<'a> Pipeline<'a> {
                     a
                 }
             };
-            self.with_brief(&app, self.produce(app.clone(), &analysis, &jd_text, Task::Fresh, notify)).await
+            self.start_brief(&app);
+            self.produce(app, &analysis, &jd_text, Task::Fresh, notify).await
         })
         .await
     }
@@ -265,39 +267,16 @@ impl<'a> Pipeline<'a> {
         emit(notify, app.id, Stage::Analyzing, "");
         let analysis = analyze(self.llm, &jd.text, jd.source.as_deref()).await?;
         app = self.adopt_analysis(app, &analysis, &jd)?;
-        self.with_brief(&app, self.produce(app.clone(), &analysis, &jd.text, Task::Fresh, notify)).await
+        self.start_brief(&app);
+        self.produce(app, &analysis, &jd.text, Task::Fresh, notify).await
     }
 
-    /// Run `work` (the CV) and, in parallel, write the job brief of `app` when it has none and an
-    /// insight provider is set. A failed brief is only logged. Once the CV is done the brief gets to
-    /// finish (it is usually done first); when the CV fails the brief is dropped. The result is
-    /// reloaded so that it carries the brief.
-    async fn with_brief(
-        &self,
-        app: &Application,
-        work: impl Future<Output = Result<Application>>,
-    ) -> Result<Application> {
-        let llm = match (&self.insight, &app.insight_json) {
-            (Some(llm), None) => llm.clone(),
-            _ => return work.await,
-        };
-        let id = app.id;
-        let brief = async {
-            if let Err(e) = self.core.compute_insight(id, llm).await {
-                tracing::warn!(app = id, "insight: failed: {e:#}");
-            }
-        };
-        futures::pin_mut!(work, brief);
-        let produced = match select(work, brief).await {
-            Either::Left((produced, brief)) => {
-                if produced.is_ok() {
-                    brief.await;
-                }
-                produced
-            }
-            Either::Right(((), work)) => work.await,
-        };
-        produced.and_then(|app| self.load(app.id))
+    /// Start the job brief of `app` in the background when an insight provider is set and the
+    /// application has none. Needs `jd.md` and the analysis, which both exist by now.
+    fn start_brief(&self, app: &Application) {
+        if let (Some(llm), None) = (&self.insight, &app.insight_json) {
+            insight::spawn_compute(self.core, app.id, llm.clone());
+        }
     }
 
     /// Tailor/revise, check, repair once, render, trim once, persist and report.

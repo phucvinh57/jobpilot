@@ -2,28 +2,33 @@
 //! process), built from the JD and the company's own pages.
 //!
 //! ```text
-//! // P10 discovery calls it for every lead; the pipeline calls it for user-added JDs:
+//! // P10 discovery calls it for every lead; the pipeline starts it for user-added JDs:
 //! let brief = pipeline::insight::insight(&core, llm, &jd_text, Some(&posting_url), Some(&analysis)).await?;
 //! // For a stored application (reads jd.md and the analysis, stores `applications.insight_json`):
 //! let brief = core.compute_insight(app_id, llm).await?;
 //! ```
 //!
 //! Rule: unknown stays empty and the UI says "not found"; nothing is guessed. The model only
-//! extracts from texts it is given, and the code drops what it cannot ground (numbers that are in
-//! none of the texts, sources it did not read).
+//! extracts from texts it is given, and the code drops what it cannot ground: a number must be a
+//! whole number of one of the texts, a stage or headquarters must be written in one of them, and
+//! sources are only pages that were read. `domain` and `business_summary` are summaries, so they
+//! are kept as written; the JD is never blank (a blank one is refused), so there is always a text
+//! they come from, and the prompt allows only what the texts state.
 //!
-//! The flow is the `insight` graph: `company_urls` (derived in code, never by the model) ->
-//! `fetch_pages` (plain fetch of each page, in parallel, each optional) -> `extract` (one
-//! `complete_json`). There is no interrupt: a page that needs a browser, a login or a captcha is
-//! skipped and its fields stay empty. The graph runs as a throwaway thread (its checkpoints hold
-//! page text, so they are deleted as soon as the run ends).
+//! The flow is the `insight` graph: `company_urls` (derived in code) -> `fetch_pages` (plain fetch
+//! of each page, in parallel, each optional) -> `extract` (one `complete_json`). There is no
+//! interrupt: a page that needs a browser, a login or a captcha is skipped and its fields stay
+//! empty. The graph runs as a throwaway thread (its checkpoints hold page text, so they are deleted
+//! as soon as the run ends).
 //!
-//! The company site comes from the posting URL (its own domain; a careers subdomain such as
-//! `careers.acme.com` maps to `acme.com`). A posting on an ATS board or a job site names no
-//! company site, so the first link in the JD text that is not an ATS, social or private address
-//! is used, else no page is read at all.
+//! Which pages are read is decided by code from one address only: the posting URL the user gave
+//! (an application's `source`, a lead's URL). The registrable domain of its host is the company
+//! site; an ATS board or job site (greenhouse, lever, linkedin, ...) encodes a slug, not a domain,
+//! so for those no page is read. JD text, the analysis (`apply_url`) and the model never choose a
+//! URL. Every fetch, redirects included, follows the rules in `fetch.rs`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -34,21 +39,19 @@ use serde_json::{json, Value};
 
 use super::analyze::{truncate_chars, valid_http_url, Analysis};
 use super::generate::read_jd_text;
-use super::ingest::{ingest, JdInput};
-use crate::graph::{GraphDef, Limits, Outcome, END, START};
+use self::fetch::Policy;
+use crate::graph::{GraphDef, Graphs, Limits, Outcome, END, START};
 use crate::llm::Llm;
-use crate::mail::classify::is_ats_host;
+use crate::mail::classify::url_company_domain;
 use crate::store::Application;
-use crate::{Core, Store};
+use crate::{runtime, Core, Store};
+
+mod fetch;
 
 /// Longest JD (in characters) sent to the model.
 const MAX_JD_CHARS: usize = 12_000;
 /// Longest text taken from one company page.
 const MAX_PAGE_CHARS: usize = 5_000;
-/// Most pages read per job.
-const MAX_PAGES: usize = 4;
-/// Longest one page may take (the fetch helper's own timeout is 30 s).
-const PAGE_TIMEOUT: Duration = Duration::from_secs(12);
 /// Longest the model call may take.
 const EXTRACT_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -119,15 +122,61 @@ impl Insight {
 
 // ---------------------------------------------------------------- the public entry
 
-/// The brief for one job. `url` is the posting address (it decides which company pages are read);
+/// The brief for one job. `url` is the posting address the user (or a source) gave: it alone
+/// decides which company pages are read, and only when it is on the company's own domain.
 /// `analysis` supplies the skill lists, so the model is not asked for them.
 ///
 /// Runs the `insight` graph on a thread of its own, so it can be called from anywhere, including
-/// from a node of another graph (P10's lead scoring). Costs one model call and up to
-/// four page fetches; the fetches are optional, so the only error is the model's (or an
-/// empty JD). `llm` is owned because graph nodes outlive the call's borrows.
+/// from a node of another graph (P10's lead scoring). Costs one model call and up to three page
+/// fetches; the fetches are optional, so the only error is the model's (or an empty JD). `llm` is
+/// owned because graph nodes outlive the call's borrows.
 pub async fn insight(
     core: &Core,
+    llm: Arc<dyn Llm>,
+    jd_text: &str,
+    url: Option<&str>,
+    analysis: Option<&Analysis>,
+) -> Result<Insight> {
+    run_insight(&Env::of(core), llm, jd_text, url, analysis).await
+}
+
+impl Core {
+    /// Research the company behind application `app_id` (JD from `jd.md`, skills from the stored
+    /// analysis, pages from its `source` URL) and store the brief in `applications.insight_json`.
+    pub async fn compute_insight(&self, app_id: i64, llm: Arc<dyn Llm>) -> Result<Insight> {
+        store_insight(&Env::of(self), app_id, llm).await
+    }
+}
+
+/// [`Core::compute_insight`] in the background: the caller does not wait, a failure is only
+/// logged, and the brief lands in `applications.insight_json` when it is done.
+pub(crate) fn spawn_compute(core: &Core, app_id: i64, llm: Arc<dyn Llm>) {
+    let env = Env::of(core);
+    // Dropping the receiver detaches the task; it still runs to the end.
+    drop(runtime::spawn(async move {
+        if let Err(e) = store_insight(&env, app_id, llm).await {
+            tracing::warn!(app = app_id, "insight: failed: {e:#}");
+        }
+    }));
+}
+
+/// What a run needs of the app: the graph runtime and the store (cheap handles, so a run can be
+/// detached from the caller's `&Core`), and which addresses may be fetched.
+#[derive(Clone)]
+struct Env {
+    graphs: Graphs,
+    store: Store,
+    policy: Policy,
+}
+
+impl Env {
+    fn of(core: &Core) -> Self {
+        Self { graphs: core.graphs.clone(), store: core.store.clone(), policy: Policy::PUBLIC }
+    }
+}
+
+async fn run_insight(
+    env: &Env,
     llm: Arc<dyn Llm>,
     jd_text: &str,
     url: Option<&str>,
@@ -143,8 +192,8 @@ pub async fn insight(
         ..State::default()
     };
     let thread = new_thread_id();
-    let _forget = Forget { store: core.store.clone(), thread: thread.clone() };
-    match core.graphs.run(&insight_graph(llm), &thread, state).await? {
+    let _forget = Forget { store: env.store.clone(), thread: thread.clone() };
+    match env.graphs.run(&insight_graph(llm, env.policy), &thread, state).await? {
         Outcome::Done(state) => state.insight.context("the insight graph ended without a result"),
         Outcome::Failed(failure) => bail!("{}", failure.message),
         Outcome::Waiting(_) => bail!("the insight graph paused, which it never should"),
@@ -152,31 +201,25 @@ pub async fn insight(
     }
 }
 
-impl Core {
-    /// Research the company behind application `app_id` (JD from `jd.md`, skills from the stored
-    /// analysis) and store the brief in `applications.insight_json`.
-    pub async fn compute_insight(&self, app_id: i64, llm: Arc<dyn Llm>) -> Result<Insight> {
-        let app = self
-            .store
-            .get_application(app_id)?
-            .with_context(|| format!("application {app_id} no longer exists"))?;
-        let jd_text = read_jd_text(&app)?;
-        let analysis: Option<Analysis> = app.analysis_json.as_deref().and_then(|j| serde_json::from_str(j).ok());
-        let url = posting_url(&app);
-        let brief = insight(self, llm, &jd_text, url.as_deref(), analysis.as_ref()).await?;
-        let json = serde_json::to_string_pretty(&brief).context("writing the company brief")?;
-        self.store.set_insight_json(app_id, Some(&json))?;
-        tracing::info!(app = app_id, sources = brief.sources.len(), "insight: stored");
-        Ok(brief)
-    }
+async fn store_insight(env: &Env, app_id: i64, llm: Arc<dyn Llm>) -> Result<Insight> {
+    let app = env
+        .store
+        .get_application(app_id)?
+        .with_context(|| format!("application {app_id} no longer exists"))?;
+    let jd_text = read_jd_text(&app)?;
+    let analysis: Option<Analysis> = app.analysis_json.as_deref().and_then(|j| serde_json::from_str(j).ok());
+    let url = posting_url(&app);
+    let brief = run_insight(env, llm, &jd_text, url.as_deref(), analysis.as_ref()).await?;
+    let json = serde_json::to_string_pretty(&brief).context("writing the company brief")?;
+    env.store.set_insight_json(app_id, Some(&json))?;
+    tracing::info!(app = app_id, sources = brief.sources.len(), "insight: stored");
+    Ok(brief)
 }
 
-/// The address that tells the company site: the first of the source and the apply link that is not
-/// an ATS or job board, else the first web address there is.
+/// The address that tells the company site: the application's `source`, which the user gave. Never
+/// `apply_url`: the analysis model writes that from the JD text, which is untrusted.
 fn posting_url(app: &Application) -> Option<String> {
-    let urls: Vec<String> =
-        [app.source.as_deref(), app.apply_url.as_deref()].into_iter().flatten().filter_map(valid_http_url).collect();
-    urls.iter().find(|u| Site::parse(u, false).is_some()).or(urls.first()).cloned()
+    app.source.as_deref().and_then(valid_http_url)
 }
 
 // ---------------------------------------------------------------- the graph
@@ -198,15 +241,15 @@ struct Page {
     text: String,
 }
 
-fn insight_graph(llm: Arc<dyn Llm>) -> GraphDef<State> {
+fn insight_graph(llm: Arc<dyn Llm>, policy: Policy) -> GraphDef<State> {
     GraphDef::new("insight")
-        .node("company_urls", |mut s: State| async move {
-            s.urls = company_urls(s.url.as_deref(), &s.jd_text);
+        .node("company_urls", move |mut s: State| async move {
+            s.urls = company_urls(s.url.as_deref(), policy);
             tracing::info!(urls = s.urls.len(), "insight: company pages chosen");
             Ok(s)
         })
-        .node("fetch_pages", |mut s: State| async move {
-            s.pages = fetch_pages(&s.urls).await;
+        .node("fetch_pages", move |mut s: State| async move {
+            s.pages = fetch_pages(&s.urls, policy).await;
             tracing::info!(pages = s.pages.len(), of = s.urls.len(), "insight: company pages read");
             Ok(s)
         })
@@ -244,138 +287,42 @@ impl Drop for Forget {
 
 // ---------------------------------------------------------------- company pages
 
-/// Labels of subdomains that only host job listings: `careers.acme.com` belongs to `acme.com`.
-const CAREER_LABELS: &[&str] = &[
-    "careers", "career", "jobs", "job", "apply", "hire", "hiring", "talent", "recruiting", "recruitment", "work", "join",
-    "team",
-];
-
 /// Pages of a company site worth reading, after its root.
 const COMPANY_PATHS: &[&str] = &["about", "careers"];
 
-/// Hosts a JD links to that are not the company (social networks, short links, reference sites).
-const NOT_COMPANY: &[&str] = &[
-    "linkedin.com",
-    "facebook.com",
-    "twitter.com",
-    "x.com",
-    "instagram.com",
-    "youtube.com",
-    "youtu.be",
-    "tiktok.com",
-    "reddit.com",
-    "github.com",
-    "gitlab.com",
-    "medium.com",
-    "t.me",
-    "discord.gg",
-    "discord.com",
-    "google.com",
-    "goo.gl",
-    "bit.ly",
-    "calendly.com",
-    "forms.gle",
-    "notion.so",
-    "w3.org",
-    "schema.org",
-    "apple.com",
-    "wikipedia.org",
-    "crunchbase.com",
-];
-
-/// The company pages to read: its site root, `/about` and `/careers`, plus the careers subdomain
-/// the posting is on, if any (at most four; http(s) only). Chosen by code from the
-/// posting URL, or, when that is an ATS board or job site, from the first company link in the JD
-/// text; empty when there is none.
-pub fn company_urls(posting_url: Option<&str>, jd_text: &str) -> Vec<String> {
-    let site = posting_url
-        .and_then(|u| Site::parse(u, false))
-        .or_else(|| text_links(jd_text).find_map(|u| Site::parse(&u, true)));
-    site.map(|s| s.pages()).unwrap_or_default()
-}
-
-/// A company's website, as far as the posting tells.
-struct Site {
-    scheme: String,
-    /// The site's own host, without `www.` or a careers label.
-    host: String,
-    port: Option<u16>,
-    /// The careers subdomain the posting is on (`careers.acme.com`), if it is on one.
-    careers_host: Option<String>,
-}
-
-impl Site {
-    /// `None` for anything but a web address on a host that can be a company's: an ATS board or job
-    /// site never is. `from_text` (a link found in the JD, so untrusted) also refuses social and
-    /// reference sites and any host that is not a public name (IP address, `localhost`, no dot).
-    fn parse(raw: &str, from_text: bool) -> Option<Site> {
-        let url = url::Url::parse(raw.trim()).ok()?;
-        if !matches!(url.scheme(), "http" | "https") {
-            return None;
-        }
-        let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
-        let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
-        if host.is_empty() || is_ats_host(&host) {
-            return None;
-        }
-        if from_text && (NOT_COMPANY.iter().any(|d| host_is(&host, d)) || !is_public_name(&host)) {
-            return None;
-        }
-        let (host, careers_host) = match host.split_once('.') {
-            Some((label, rest)) if CAREER_LABELS.contains(&label) && rest.contains('.') => {
-                (rest.to_string(), Some(host.clone()))
-            }
-            _ => (host, None),
-        };
-        Some(Site { scheme: url.scheme().to_string(), host, port: url.port(), careers_host })
-    }
-
-    fn root(&self, host: &str) -> String {
-        match self.port {
-            Some(port) => format!("{}://{host}:{port}/", self.scheme),
-            None => format!("{}://{host}/", self.scheme),
-        }
-    }
-
-    fn pages(&self) -> Vec<String> {
-        let root = self.root(&self.host);
-        let mut urls = vec![root.clone()];
-        urls.extend(COMPANY_PATHS.iter().map(|path| format!("{root}{path}")));
-        urls.extend(self.careers_host.iter().map(|host| self.root(host)));
-        urls.truncate(MAX_PAGES);
-        urls
-    }
-}
-
-fn host_is(host: &str, domain: &str) -> bool {
-    host == domain || host.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.'))
-}
-
-/// A DNS name on the public internet, as far as its spelling tells.
-fn is_public_name(host: &str) -> bool {
-    const PRIVATE_SUFFIXES: &[&str] = &[".local", ".localhost", ".internal", ".lan", ".home", ".corp", ".intranet"];
-    host.contains('.')
-        && host != "localhost"
-        && host.parse::<std::net::IpAddr>().is_err()
-        && !PRIVATE_SUFFIXES.iter().any(|s| host.ends_with(s))
-}
-
-/// The web addresses in a text, in order (at most 50).
-fn text_links(text: &str) -> impl Iterator<Item = String> + '_ {
-    static LINK: OnceLock<Regex> = OnceLock::new();
-    let link = LINK.get_or_init(|| Regex::new(r#"https?://[^\s<>()\[\]"'`]+"#).expect("static regex"));
-    link.find_iter(text)
-        .map(|m| m.as_str().trim_end_matches(['.', ',', ';', ':', '!', '?', '*', '_']).to_string())
-        .take(50)
+/// The company pages to read: the root of the posting's company domain, `/about` and `/careers`
+/// (same scheme as the posting). Empty when the posting is missing, is not an http(s) address the
+/// `policy` allows, or is on an ATS board or job site, whose URLs carry a company slug and no
+/// domain. A subdomain such as `careers.acme.com` maps to `acme.com`.
+fn company_urls(posting_url: Option<&str>, policy: Policy) -> Vec<String> {
+    let Some(url) = posting_url.and_then(|u| url::Url::parse(u.trim()).ok()).filter(|u| policy.allows(u)) else {
+        return Vec::new();
+    };
+    let root = match url.host() {
+        Some(url::Host::Domain(_)) => match url_company_domain(url.as_str()) {
+            Some(domain) => format!("{}://{domain}/", url.scheme()),
+            None => return Vec::new(),
+        },
+        // An IP literal gets this far only under the test policy: fixtures serve all pages on one port.
+        Some(_) => match (url.host_str(), url.port()) {
+            (Some(host), Some(port)) => format!("{}://{host}:{port}/", url.scheme()),
+            (Some(host), None) => format!("{}://{host}/", url.scheme()),
+            _ => return Vec::new(),
+        },
+        None => return Vec::new(),
+    };
+    let mut urls = vec![root.clone()];
+    urls.extend(COMPANY_PATHS.iter().map(|path| format!("{root}{path}")));
+    urls
 }
 
 // ---------------------------------------------------------------- fetch
 
-/// Read every page at once; a page that cannot be read (404, timeout, needs a browser, login or
-/// captcha wall) is left out, and so is one that repeats an earlier page's text (`/about`
-/// redirecting to `/`).
-async fn fetch_pages(urls: &[String]) -> Vec<Page> {
-    let fetched = futures::future::join_all(urls.iter().map(|url| fetch_page(url))).await;
+/// Read every page at once; a page that cannot be read (refused address, 404, timeout, needs a
+/// browser, login or captcha wall) is left out, and so is one that repeats an earlier page's text
+/// (`/about` redirecting to `/`).
+async fn fetch_pages(urls: &[String], policy: Policy) -> Vec<Page> {
+    let fetched = futures::future::join_all(urls.iter().map(|url| fetch_page(url, policy))).await;
     let mut pages: Vec<Page> = Vec::new();
     for page in fetched.into_iter().flatten() {
         if !pages.iter().any(|p| p.text == page.text) {
@@ -385,15 +332,14 @@ async fn fetch_pages(urls: &[String]) -> Vec<Page> {
     pages
 }
 
-/// Plain fetch with the JD ingest helper. A page that needs a browser (JS app, HTTP 401/403/429/
-/// 503) comes back as an error and is skipped: opening Chrome for every page of every lead is not
-/// worth it.
-async fn fetch_page(url: &str) -> Option<Page> {
-    let jd = tokio::time::timeout(PAGE_TIMEOUT, ingest(JdInput::Url(url.to_string()))).await.ok()?.ok()?;
-    if is_wall(&jd.text) {
+/// Plain fetch under the [`fetch`] rules. A page that needs a browser (JS app, HTTP 401/403/429/
+/// 503) is skipped: opening Chrome for every page of every lead is not worth it.
+async fn fetch_page(url: &str, policy: Policy) -> Option<Page> {
+    let text = fetch::fetch_text(url, policy).await?;
+    if is_wall(&text) {
         return None;
     }
-    Some(Page { url: url.to_string(), text: truncate_chars(&jd.text, MAX_PAGE_CHARS).to_string() })
+    Some(Page { url: url.to_string(), text: truncate_chars(&text, MAX_PAGE_CHARS).to_string() })
 }
 
 /// A short page that is a captcha, bot check or login prompt rather than company content.
@@ -528,15 +474,10 @@ fn fence(tag: &str, attrs: &str, text: &str) -> String {
 fn assemble(raw: Extracted, state: &State, known: Option<&Analysis>) -> Insight {
     let texts: Vec<&str> =
         std::iter::once(state.jd_text.as_str()).chain(state.pages.iter().map(|p| p.text.as_str())).collect();
-    // A number the model states must be in a text it was given.
-    let number = |s: &str| {
-        let s = tidy(s, 80);
-        if numbers_grounded(&s, &texts) {
-            s
-        } else {
-            String::new()
-        }
-    };
+    let evidence = Evidence::new(&texts);
+    // What the model states about the company must be written in a text it was given.
+    let figure = |s: &str| Some(tidy(s, 80)).filter(|s| evidence.has_figure(s)).unwrap_or_default();
+    let phrase = |s: &str, max| Some(tidy(s, max)).filter(|s| evidence.has_phrase(s)).unwrap_or_default();
     let skills = match known {
         Some(a) => Skills { required: tidy_list(&a.must_have, 30, 80), preferred: tidy_list(&a.nice_to_have, 30, 80) },
         None => Skills {
@@ -555,11 +496,11 @@ fn assemble(raw: Extracted, state: &State, known: Option<&Analysis>) -> Insight 
         domain: tidy(&raw.domain, 100),
         business_summary: tidy(&raw.business_summary, 500),
         company: CompanyFacts {
-            size: number(&raw.company.size),
-            stage: tidy(&raw.company.stage, 80),
-            funding: number(&raw.company.funding),
-            hq: tidy(&raw.company.hq, 100),
-            founded: number(&raw.company.founded),
+            size: figure(&raw.company.size),
+            stage: phrase(&raw.company.stage, 80),
+            funding: figure(&raw.company.funding),
+            hq: phrase(&raw.company.hq, 100),
+            founded: figure(&raw.company.founded),
         },
         skills,
         interview: Interview { stages, notes, found },
@@ -582,8 +523,7 @@ fn assemble(raw: Extracted, state: &State, known: Option<&Analysis>) -> Insight 
 
 /// One line, at most `max` characters.
 fn tidy(text: &str, max: usize) -> String {
-    let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate_chars(&one_line, max).to_string()
+    truncate_chars(&one_line(text), max).to_string()
 }
 
 /// Tidy items without blanks or repeats (case aside), at most `count` of them.
@@ -598,17 +538,56 @@ fn tidy_list(items: &[String], count: usize, max: usize) -> Vec<String> {
     out
 }
 
-/// Does every number in `value` ("50-200", "$12M", "2015") appear in one of the `texts` (thousands
-/// separators aside)? A value without numbers is not checked.
-fn numbers_grounded(value: &str, texts: &[&str]) -> bool {
+/// The numbers in `text`, as whole numbers without thousands separators ("1,200." is `1200`).
+fn numbers_in(text: &str) -> impl Iterator<Item = String> + '_ {
     static NUMBER: OnceLock<Regex> = OnceLock::new();
     let number = NUMBER.get_or_init(|| Regex::new(r"\d[\d,.]*").expect("static regex"));
-    let haystacks: Vec<String> = texts.iter().map(|t| t.replace(',', "")).collect();
-    number.find_iter(value).all(|m| {
-        let n = m.as_str().replace(',', "");
-        let n = n.trim_end_matches('.');
-        haystacks.iter().any(|h| h.contains(n))
-    })
+    number.find_iter(text).map(|m| m.as_str().replace(',', "").trim_end_matches('.').to_string())
+}
+
+/// What the texts the model was given say, to check its claims against.
+struct Evidence {
+    /// Each text on one line, lower case.
+    lines: Vec<String>,
+    numbers: HashSet<String>,
+}
+
+impl Evidence {
+    fn new(texts: &[&str]) -> Self {
+        Self {
+            lines: texts.iter().map(|t| one_line(t).to_lowercase()).collect(),
+            numbers: texts.iter().flat_map(|t| numbers_in(t)).collect(),
+        }
+    }
+
+    /// Is `value` written in a text: the same whole words in a row, in any case ("Series B" is not
+    /// in "Series Bravo")?
+    fn has_phrase(&self, value: &str) -> bool {
+        let value = one_line(value).to_lowercase();
+        !value.is_empty()
+            && self.lines.iter().any(|line| {
+                line.match_indices(&value).any(|(at, found)| {
+                    let before = line[..at].chars().next_back();
+                    let after = line[at + found.len()..].chars().next();
+                    !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+                })
+            })
+    }
+
+    /// Is every number of `value` a whole number of a text (50 is not in "150", 2015 is not in
+    /// "20150")? A value without numbers has to be written in a text, like a phrase.
+    fn has_figure(&self, value: &str) -> bool {
+        let mut numbers = numbers_in(value).peekable();
+        if numbers.peek().is_none() {
+            return self.has_phrase(value);
+        }
+        numbers.all(|n| self.numbers.contains(&n))
+    }
+}
+
+/// The text on one line.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
