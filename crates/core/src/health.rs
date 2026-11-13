@@ -15,6 +15,29 @@ use crate::Core;
 /// The command that installs the Typst CLI.
 pub const TYPST_INSTALL_HINT: &str = "cargo install --locked typst-cli";
 
+/// Why a site cannot be used without the user: something only they may do in the visible browser.
+/// The app never solves or evades these (see `docs/plans/README.md`, rules).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Challenge {
+    /// The site wants a login.
+    Login,
+    /// The site shows a captcha.
+    Captcha,
+    /// The site refuses automated access (403/429, block page).
+    Blocked,
+}
+
+impl Challenge {
+    /// `login` / `captcha` / `blocked`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Challenge::Login => "login",
+            Challenge::Captcha => "captcha",
+            Challenge::Blocked => "blocked",
+        }
+    }
+}
+
 /// Why an operation failed, in terms the user can act on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Problem {
@@ -26,6 +49,9 @@ pub enum Problem {
     NoChrome,
     /// The network (or the remote server) did not answer: trying again may help.
     Network,
+    /// A site waits for the user (login, captcha, blocked): open the browser, do it, continue.
+    /// Which source and page it is travels with the paused run, not with the problem.
+    NeedsHuman(Challenge),
     Other,
 }
 
@@ -50,6 +76,16 @@ impl Problem {
                 "Install Typst with `{TYPST_INSTALL_HINT}` (or set JOBPILOT_TYPST to the binary), then try again."
             )),
             Problem::Network => Some("The connection failed. Check your network and try again.".into()),
+            Problem::NeedsHuman(Challenge::Login) => {
+                Some("This site needs you to sign in. Open the browser, log in, then continue.".into())
+            }
+            Problem::NeedsHuman(Challenge::Captcha) => {
+                Some("This site shows a captcha. Open the browser, solve it yourself, then continue.".into())
+            }
+            Problem::NeedsHuman(Challenge::Blocked) => Some(
+                "This site is blocking automated access. Open the browser to look at the page, then continue or skip this source."
+                    .into(),
+            ),
             Problem::Other => None,
         }
     }
@@ -164,6 +200,21 @@ mod tests {
         assert!(Problem::Network.retryable() && !Problem::NoProvider.retryable());
         assert!(Problem::NoTypst.advice().unwrap().contains("cargo install --locked typst-cli"));
         assert_eq!(Problem::NoChrome.settings_section(), Some("Browser sessions"));
+    }
+
+    #[test]
+    fn needs_human_asks_the_user_to_act_in_the_browser() {
+        for challenge in [Challenge::Login, Challenge::Captcha, Challenge::Blocked] {
+            let problem = Problem::NeedsHuman(challenge);
+            let advice = problem.advice().unwrap();
+            assert!(advice.contains("browser"), "{advice}");
+            assert!(!problem.retryable(), "trying again without the user changes nothing");
+            assert_eq!(problem.settings_section(), None);
+        }
+        assert!(Problem::NeedsHuman(Challenge::Captcha).advice().unwrap().contains("captcha"));
+        assert_eq!(Challenge::Blocked.as_str(), "blocked");
+        // Error text never classifies as NeedsHuman: only a paused run says so.
+        assert_eq!(classify("the site shows a captcha"), Problem::Other);
     }
 
     #[test]

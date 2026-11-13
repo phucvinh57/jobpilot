@@ -2,17 +2,23 @@
 //!
 //! Each table lives in its own file as `impl Store { .. }` so sub-plans can extend
 //! their table without touching others: `applications`/`events`/`status` (P2/P3),
-//! `providers` (P1), `sessions` (P4), `emails` (P6), `kv` (shared settings).
+//! `providers` (P1), `sessions` (P4), `emails` (P6), `kv` (shared settings); P8 adds `preferences`,
+//! `chat` (preference chat), `sources`, `leads` (discovery) and `trends` (trend items + reports).
 //!
 //! Schema changes: append a new entry to [`MIGRATIONS`] (never edit an existing one).
 
 mod applications;
+mod chat;
 mod emails;
 mod events;
 mod kv;
+mod leads;
+mod preferences;
 mod providers;
 mod sessions;
+mod sources;
 mod status;
+mod trends;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -21,11 +27,15 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, Transaction};
 
 pub use applications::{Application, NewApplication};
+pub use chat::ChatMessage;
 pub use emails::Email;
 pub use events::Event;
+pub use leads::{Lead, LeadState, NewLead};
 pub use providers::{NewProvider, Provider, ProviderKind};
 pub use sessions::{NewSession, Session};
+pub use sources::{NewSource, Source, SourcePurpose};
 pub use status::Status;
+pub use trends::{NewReport, NewTrendItem, Report, TrendItem};
 
 /// Ordered migrations; `PRAGMA user_version` holds how many have been applied.
 const MIGRATIONS: &[&str] = &[
@@ -88,6 +98,72 @@ const MIGRATIONS: &[&str] = &[
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
+    ",
+    // 2: P8 foundation (preferences, discovery leads, market trends, per-application insight)
+    "
+    CREATE TABLE preferences (
+        id         INTEGER PRIMARY KEY CHECK (id = 1),
+        json       TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE chat_messages (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread  TEXT NOT NULL,
+        role    TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+        content TEXT NOT NULL,
+        at      TEXT NOT NULL
+    );
+    CREATE INDEX chat_messages_thread ON chat_messages(thread, id);
+    CREATE TABLE sources (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind        TEXT NOT NULL,
+        name        TEXT NOT NULL DEFAULT '',
+        url         TEXT NOT NULL DEFAULT '',
+        purpose     TEXT NOT NULL CHECK (purpose IN ('jobs', 'trends')),
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        session_id  INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+        last_run_at TEXT,
+        last_status TEXT
+    );
+    CREATE TABLE leads (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_id      INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+        url            TEXT NOT NULL UNIQUE,
+        dedup_key      TEXT NOT NULL DEFAULT '',
+        company        TEXT NOT NULL DEFAULT '',
+        role           TEXT NOT NULL DEFAULT '',
+        location       TEXT NOT NULL DEFAULT '',
+        jd_path        TEXT,
+        score          REAL,
+        score_json     TEXT,
+        insight_json   TEXT,
+        state          TEXT NOT NULL DEFAULT 'new' CHECK (state IN ('new', 'dismissed', 'promoted')),
+        dismiss_reason TEXT,
+        app_id         INTEGER REFERENCES applications(id) ON DELETE SET NULL,
+        found_at       TEXT NOT NULL
+    );
+    CREATE INDEX leads_dedup ON leads(dedup_key);
+    CREATE INDEX leads_state_score ON leads(state, score DESC);
+    CREATE TABLE trend_items (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_id    INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+        url          TEXT NOT NULL UNIQUE,
+        title        TEXT NOT NULL DEFAULT '',
+        published_at TEXT,
+        text_path    TEXT,
+        fetched_at   TEXT NOT NULL
+    );
+    CREATE TABLE reports (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind           TEXT NOT NULL,
+        period         TEXT NOT NULL DEFAULT '',
+        title          TEXT NOT NULL DEFAULT '',
+        body_md        TEXT NOT NULL DEFAULT '',
+        citations_json TEXT NOT NULL DEFAULT '[]',
+        created_at     TEXT NOT NULL
+    );
+    CREATE INDEX reports_kind ON reports(kind, id);
+    ALTER TABLE applications ADD COLUMN insight_json TEXT;
     ",
 ];
 
@@ -193,6 +269,46 @@ mod tests {
         assert_eq!(store.list_applications().unwrap().len(), 1);
         assert!(store.create_application(&new_app("acme-backend")).is_err(), "slug is unique");
         assert_eq!(store.unique_slug("acme-backend").unwrap(), "acme-backend-2");
+    }
+
+    #[test]
+    fn an_existing_database_is_migrated_and_keeps_its_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        {
+            // A database as the first release left it: only migration 1 applied.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute(
+                "INSERT INTO applications (slug, company, role, status, dir, created_at, updated_at)
+                 VALUES ('old-app', 'Acme', 'Dev', 'applied', '/tmp/old-app', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO kv (key, value) VALUES ('profile_path', '/x/profile.yaml')", []).unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        let version: usize = store.with_conn(|c| Ok(c.pragma_query_value(None, "user_version", |r| r.get(0))?)).unwrap();
+        assert_eq!(version, MIGRATIONS.len());
+
+        let app = store.get_application_by_slug("old-app").unwrap().unwrap();
+        assert_eq!((app.company.as_str(), app.status, app.insight_json.as_deref()), ("Acme", Status::Applied, None));
+        assert_eq!(store.kv_get("profile_path").unwrap().as_deref(), Some("/x/profile.yaml"));
+
+        // The new column and tables are usable.
+        store.set_insight_json(app.id, Some(r#"{"domain": "payments"}"#)).unwrap();
+        assert_eq!(store.get_application(app.id).unwrap().unwrap().insight_json.as_deref(), Some(r#"{"domain": "payments"}"#));
+        store.save_preferences(&Default::default()).unwrap();
+        store.add_chat_message("prefs", crate::llm::Role::User, "hi").unwrap();
+        store.add_source(&NewSource { kind: "lever".into(), ..Default::default() }).unwrap();
+        store.add_lead(&NewLead { url: "https://a.test/1".into(), ..Default::default() }).unwrap();
+        store.add_report(&NewReport { kind: "weekly".into(), ..Default::default() }).unwrap();
+
+        // Reopening applies nothing twice.
+        drop(store);
+        assert!(Store::open(&path).unwrap().get_application_by_slug("old-app").unwrap().is_some());
     }
 
     #[test]

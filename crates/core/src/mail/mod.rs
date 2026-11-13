@@ -21,10 +21,11 @@
 mod account;
 pub mod classify;
 pub mod gmail;
-mod notify;
 pub mod oauth;
 pub mod sync;
 
+/// Desktop notifications moved to [`crate::notify`]; kept here for existing callers.
+pub use crate::notify;
 pub use account::{
     GmailState, KV_ACCOUNT, KV_CLIENT_ID, KV_HISTORY_ID, KV_LAST_REPORT, KV_LAST_SYNC, KV_POLL_MINUTES,
     SECRET_CLIENT_SECRET, SECRET_REFRESH_TOKEN,
