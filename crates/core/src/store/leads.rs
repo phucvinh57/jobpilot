@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension, Row};
 
-use super::{now, Store};
+use super::{applications, now, Application, NewApplication, Store};
 
 /// Where a found job stands. A lead becomes an application only through `Promoted`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -190,6 +190,31 @@ impl Store {
     /// The lead became application `app_id`. Only a `new` lead can be promoted.
     pub fn promote_lead(&self, id: i64, app_id: i64) -> Result<()> {
         self.update_lead("state = 'promoted', app_id = ?1", params![app_id, id], id, NEW_ONLY)
+    }
+
+    /// Create the Draft application `new` for a `new` lead and mark the lead promoted, in one
+    /// transaction: a crash leaves either both or neither, so a second try never makes a second
+    /// application. `insight_json` is copied to the application. A lead that is already promoted
+    /// returns its application and changes nothing.
+    pub fn promote_lead_to_application(&self, id: i64, new: &NewApplication, insight_json: Option<&str>) -> Result<Application> {
+        let app_id = self.with_tx(|tx| {
+            let (state, app_id): (String, Option<i64>) = tx
+                .query_row("SELECT state, app_id FROM leads WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .with_context(|| format!("lead {id} not found"))?;
+            match (state.as_str(), app_id) {
+                ("promoted", Some(app_id)) => return Ok(app_id),
+                ("promoted", None) => anyhow::bail!("the application of lead {id} was deleted"),
+                ("new", _) => {}
+                (other, _) => anyhow::bail!("lead {id} is {other}: only a new lead can be promoted"),
+            }
+            let app_id = applications::insert_application(tx, new)?;
+            if insight_json.is_some() {
+                tx.execute("UPDATE applications SET insight_json = ?1 WHERE id = ?2", params![insight_json, app_id])?;
+            }
+            tx.execute("UPDATE leads SET state = 'promoted', app_id = ?1 WHERE id = ?2", params![app_id, id])?;
+            Ok(app_id)
+        })?;
+        self.get_application(app_id)?.context("application vanished after insert")
     }
 
     /// `SET <assignments> WHERE id = ?N<guard>`, where N is the last parameter.

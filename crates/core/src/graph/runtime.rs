@@ -124,6 +124,12 @@ pub enum ProgressEvent {
         node: String,
         message: String,
     },
+    /// Free-text progress of a running node ("Tailoring the CV"), from [`Graphs::note`]. Labels
+    /// only: never page, posting or CV text.
+    Detail {
+        node: String,
+        text: String,
+    },
     /// The thread paused.
     Waiting(WaitReason),
     Done,
@@ -248,6 +254,12 @@ impl Graphs {
 
     fn emit(&self, thread: &str, graph: &str, event: ProgressEvent) {
         let _ = self.inner.tx.send(Progress { thread: thread.into(), graph: graph.into(), event });
+    }
+
+    /// Tell subscribers what a running node is doing now. A node that wraps a long operation with
+    /// its own progress (the CV pipeline) forwards it here, so the UI follows one stream.
+    pub fn note(&self, thread: &str, graph: &str, node: &str, text: &str) {
+        self.emit(thread, graph, ProgressEvent::Detail { node: node.into(), text: redact(text).into_owned() });
     }
 
     /// Progress events of every thread (nodes started, finished, failed; threads done, waiting,

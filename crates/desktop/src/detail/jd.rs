@@ -115,7 +115,7 @@ fn tag_row(label: &'static str, items: &[String], must: bool, muted: Hsla) -> Di
 
 /// The company brief: domain, business, company facts, skills, interview process and sources, with
 /// "not found" for what the texts did not say.
-fn brief(insight: &Insight, cx: &App) -> Div {
+pub(crate) fn brief(insight: &Insight, cx: &App) -> Div {
     let theme = cx.theme();
     let (muted, link) = (theme.muted_foreground, theme.link);
     let not_found = || div().text_color(muted).child(NOT_FOUND).into_any_element();

@@ -10,10 +10,16 @@ use anyhow::Result;
 use gpui_kit::component::*;
 use gpui_kit::*;
 use jobpilot_core::browser::fetch::generate_with_browser;
+use jobpilot_core::chrono::{Duration, Utc};
 use jobpilot_core::health::{self, Health, Problem};
+use jobpilot_core::discover::dedup::dedup_key;
+use jobpilot_core::discover::lead_dir;
+use jobpilot_core::discover::score::{Criteria, Criterion, Scored};
+use jobpilot_core::discover::{RunSummary, LAST_RUN_KEY};
 use jobpilot_core::pipeline::insight::{CompanyFacts, Interview, Skills};
+use jobpilot_core::prefs::Weights;
 use jobpilot_core::pipeline::{self, Insight, JdInput, Progress};
-use jobpilot_core::store::{Application, NewApplication, Status};
+use jobpilot_core::store::{Application, LeadState, NewApplication, NewLead, NewSource, SourcePurpose, Status};
 use jobpilot_core::{mail, runtime, Core};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
@@ -70,6 +76,10 @@ pub struct AppState {
     pub health: Option<Health>,
     /// Settings section to scroll to the next time Settings is shown.
     pub settings_focus: Option<&'static str>,
+    /// The lead open in the queue (P12).
+    pub queue_selected: Option<i64>,
+    /// Bumped whenever the queue is shown, so it reads its leads again.
+    pub queue_epoch: u64,
 }
 
 impl AppState {
@@ -88,6 +98,8 @@ impl AppState {
             last_input: None,
             health: None,
             settings_focus: None,
+            queue_selected: None,
+            queue_epoch: 0,
         };
         state.load();
         state.selected = state.applications.first().map(|a| a.id);
@@ -115,6 +127,9 @@ impl AppState {
 
     pub fn show(&mut self, screen: Screen, cx: &mut Context<Self>) {
         let leaving_settings = self.screen == Screen::Settings && screen != Screen::Settings;
+        if screen == Screen::Queue {
+            self.queue_epoch += 1;
+        }
         self.screen = screen;
         if leaving_settings {
             // A provider, Chrome or typst may have been set up meanwhile.
@@ -378,10 +393,32 @@ impl AppState {
     }
 
     /// A failure that says a prerequisite is missing: re-run the health check so the banner is right.
-    fn needs_recheck(&mut self, message: &str, cx: &mut Context<Self>) {
+    pub fn needs_recheck(&mut self, message: &str, cx: &mut Context<Self>) {
         if matches!(health::classify(message), Problem::NoProvider | Problem::NoTypst | Problem::NoChrome) {
             self.refresh_health(cx);
         }
+    }
+
+    /// "Next in queue": show the queue with its best lead open (after a submit or a dismissal).
+    pub fn next_in_queue(&mut self, cx: &mut Context<Self>) {
+        let core = self.core.clone();
+        let rx = runtime::spawn(async move { core.queue_next() });
+        cx.spawn(async move |this, cx| {
+            let next = match rx.await {
+                Ok(Ok(lead)) => lead.map(|l| l.id),
+                Ok(Err(e)) => {
+                    tracing::warn!("reading the next lead failed: {e:#}");
+                    None
+                }
+                Err(_) => None,
+            };
+            this.update(cx, |state, cx| {
+                state.queue_selected = next;
+                state.show(Screen::Queue, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// "Approve CV": Draft -> CvReady.
@@ -459,7 +496,7 @@ impl JobPilot {
             sidebar: cx.new(|cx| Sidebar::new(state.clone(), window, cx)),
             detail: cx.new(|cx| Detail::new(state.clone(), window, cx)),
             settings: cx.new(|cx| SettingsView::new(state.clone(), cx)),
-            queue: cx.new(|_| QueueView::new(state.clone())),
+            queue: cx.new(|cx| QueueView::new(state.clone(), window, cx)),
             prefs: cx.new(|_| PreferencesView::new(state.clone())),
             trends: cx.new(|_| TrendsView::new(state.clone())),
             state,
@@ -510,6 +547,11 @@ impl Render for JobPilot {
 
 /// Insert a few sample applications when the store is empty (`JOBPILOT_DEMO=1`).
 pub fn seed_demo(core: &Core) -> Result<()> {
+    seed_demo_applications(core)?;
+    seed_demo_queue(core)
+}
+
+fn seed_demo_applications(core: &Core) -> Result<()> {
     if !core.store.list_applications()?.is_empty() {
         return Ok(());
     }
@@ -534,6 +576,115 @@ pub fn seed_demo(core: &Core) -> Result<()> {
             core.store.set_insight_json(app.id, Some(&json))?;
         }
     }
+    Ok(())
+}
+
+/// Job sources and scored leads for the queue (skipped when the queue has something already).
+fn seed_demo_queue(core: &Core) -> Result<()> {
+    if !core.store.list_sources(SourcePurpose::Jobs)?.is_empty() || !core.store.list_leads(LeadState::New)?.is_empty() {
+        return Ok(());
+    }
+    let source = |kind: &str, name: &str, url: &str| {
+        core.store.add_source(&NewSource {
+            kind: kind.into(),
+            name: name.into(),
+            url: url.into(),
+            purpose: SourcePurpose::Jobs,
+            session_id: None,
+        })
+    };
+    let greenhouse = source("greenhouse", "Acme careers", "https://boards.greenhouse.io/acme")?;
+    let lever = source("lever", "Foo jobs", "https://jobs.lever.co/foo")?;
+    let hn = source("hn_hiring", "HN: Who is hiring", "https://news.ycombinator.com/item?id=1")?;
+    core.store.set_source_run(greenhouse.id, "ok")?;
+    core.store.set_source_run(lever.id, "ok")?;
+    core.store.set_source_status(hn.id, "needs_human")?;
+
+    // (source, company, role, location, [skills, domain, location, salary, seniority])
+    type Row = (u32, bool, &'static str);
+    let jobs: [(i64, &str, &str, &str, [Row; 5]); 6] = [
+        (greenhouse.id, "Acme", "Senior Backend Engineer", "Singapore", [
+            (92, true, "Rust, PostgreSQL and distributed systems are all in your profile."),
+            (80, true, "Payments infrastructure is close to your fintech interest."),
+            (70, true, "Hybrid in Singapore, one of your cities."),
+            (0, false, "No salary stated."),
+            (90, true, "Senior, as you look for."),
+        ]),
+        (lever.id, "Foo", "Platform Engineer", "Remote (APAC)", [
+            (78, true, "Kubernetes and Linux match; Terraform is not in your profile."),
+            (55, true, "Developer tools, not a listed domain."),
+            (100, true, "Fully remote."),
+            (60, true, "Pay range is near your minimum."),
+            (80, true, "Mid to senior."),
+        ]),
+        (greenhouse.id, "Acme", "Site Reliability Engineer", "Ho Chi Minh City, Vietnam", [
+            (70, true, "Linux, Nginx and observability match."),
+            (80, true, "Same company as the payments role."),
+            (100, true, "On-site in Ho Chi Minh City, where you live."),
+            (0, false, "No salary stated."),
+            (60, true, "Mid-level title."),
+        ]),
+        (hn.id, "Quark Labs", "Staff Systems Engineer", "Berlin, Germany", [
+            (60, true, "C++ and Rust asked; embedded work is not in your profile."),
+            (30, true, "Robotics is an avoided domain."),
+            (20, true, "On-site in Berlin."),
+            (0, false, "No salary stated."),
+            (40, true, "Staff level is above your experience."),
+        ]),
+        (lever.id, "Bar", "DevOps Engineer", "Remote", [
+            (66, true, "Docker, CI/CD and AWS match."),
+            (50, true, "E-commerce is neutral."),
+            (100, true, "Fully remote."),
+            (0, false, "No salary stated."),
+            (65, true, "Mid-level."),
+        ]),
+        (hn.id, "Nimbus", "Backend Developer", "", [
+            (0, false, "The posting is too short to judge."),
+            (0, false, "No domain stated."),
+            (0, false, "No location stated."),
+            (0, false, "No salary stated."),
+            (0, false, "No level stated."),
+        ]),
+    ];
+    let weights = Weights::default();
+    for (i, (source_id, company, role, location, rows)) in jobs.into_iter().enumerate() {
+        let criterion = |(score, known, reason): Row| Criterion { score, known, reason: reason.into() };
+        let [skills, domain, loc, salary, seniority] = rows.map(criterion);
+        let criteria = Criteria { skills, domain, location: loc, salary, seniority };
+        let scored = Scored { total: criteria.weighted(&weights), criteria, weights };
+        let slug = format!("{}-{i}", company.to_lowercase().replace(' ', "-"));
+        let url = format!("https://jobs.example.com/{slug}");
+        let lead = core.store.add_lead(&NewLead {
+            source_id: Some(source_id),
+            dedup_key: dedup_key(company, role),
+            url: url.clone(),
+            company: company.into(),
+            role: role.into(),
+            location: location.into(),
+            score: scored.total,
+            score_json: scored.total.map(|_| scored.to_json()).transpose()?,
+            insight_json: (i % 3 == 0).then(|| serde_json::to_string(&demo_insight(&slug))).transpose()?,
+            ..NewLead::default()
+        })?;
+        let dir = lead_dir(&core.paths, lead.id);
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("jd.md");
+        let text = format!(
+            "# {company} \u{2014} {role}\nSource: {url}\n\nWe are hiring a {role} at {company}. You will design, build and run backend services, \
+             own their reliability, and work with a small team. Requirements: Linux, networking, a systems language and clear English.\n"
+        );
+        std::fs::write(&path, text)?;
+        core.store.set_lead_jd_path(lead.id, &path)?;
+    }
+    let summary = RunSummary {
+        run: "demo".into(),
+        started_at: (Utc::now() - Duration::minutes(12)).to_rfc3339(),
+        finished_at: (Utc::now() - Duration::minutes(10)).to_rfc3339(),
+        saved: 6,
+        waiting: 1,
+        ..RunSummary::default()
+    };
+    core.store.kv_set(LAST_RUN_KEY, &serde_json::to_string(&summary)?)?;
     Ok(())
 }
 

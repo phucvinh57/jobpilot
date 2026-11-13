@@ -23,6 +23,9 @@ use cv::CvTab;
 use jd::JdTab;
 use timeline::TimelineTab;
 
+/// The company brief card, shared with the queue's lead view.
+pub(crate) use jd::brief as insight_brief;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DetailTab {
     Jd,
@@ -147,6 +150,13 @@ pub fn primary_for(
     }
 }
 
+/// After the application was sent (or while its confirmation shows), a plain "Next in queue" button
+/// keeps the user moving: it opens the best lead left in the queue.
+pub fn next_in_queue_offered(status: Status, apply: &ApplyUi) -> bool {
+    matches!(apply, ApplyUi::Done)
+        || matches!(status, Status::Applied | Status::Interview | Status::Rejected | Status::Offer)
+}
+
 /// Why the form cannot be opened, and which Settings section helps.
 pub struct Blocker {
     pub message: String,
@@ -252,6 +262,9 @@ impl Render for Detail {
             &|| apply_blocker(&core, &app),
         );
 
+        // Read-only (sent): the one primary is gone, "Next in queue" is a plain button in its place.
+        let show_next = primary.is_none() && next_in_queue_offered(app.status, &apply_ui);
+
         let content = match self.tab {
             DetailTab::Jd => self.jd.clone().into_any_element(),
             DetailTab::Cv => self.cv.clone().into_any_element(),
@@ -342,6 +355,13 @@ impl Render for Detail {
                     .children(DetailTab::ALL.iter().map(|t| Tab::new().label(t.label()))),
             )
             .child(div().flex_1().min_h_0().child(content))
+            .when(show_next, |d| {
+                d.child(div().h_flex().justify_end().child(
+                    Button::new("next-in-queue").outline().icon(IconName::Inbox).label("Next in queue").on_click(
+                        cx.listener(|this, _, _, cx| this.state.update(cx, |state, cx| state.next_in_queue(cx))),
+                    ),
+                ))
+            })
             .when_some(primary, |d, primary| {
                 let action = primary.action;
                 let settings_help = primary.settings.map(|section| {
@@ -397,6 +417,20 @@ mod tests {
         assert_eq!(idle(Status::Failed, true).unwrap().action, PrimaryAction::ReviewAndSubmit);
         for status in [Status::Applied, Status::Interview, Status::Rejected, Status::Offer] {
             assert_eq!(idle(status, true), None, "{status:?} is read-only");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn next_in_queue_is_offered_once_the_application_was_sent() {
+        for status in [Status::Applied, Status::Interview, Status::Rejected, Status::Offer] {
+            assert!(next_in_queue_offered(status, &ApplyUi::Idle), "{status:?}");
+            assert_eq!(idle(status, true), None, "it replaces the primary button, never joins it");
+        }
+        // Right after Submit, while the confirmation shows.
+        assert!(next_in_queue_offered(Status::Submitting, &ApplyUi::Done));
+        for status in [Status::Draft, Status::CvReady, Status::Failed, Status::Submitting] {
+            assert!(!next_in_queue_offered(status, &ApplyUi::Idle), "{status:?} still has work to do");
+            assert!(!next_in_queue_offered(status, &ApplyUi::Handoff));
         }
     }
 
