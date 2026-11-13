@@ -1,20 +1,21 @@
 //! [`Graphs`]: runs graphs, resumes paused or failed threads, reports progress.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use adk_graph::{Checkpoint, ExecutionConfig, GraphError, Interrupt};
 use anyhow::{bail, ensure, Context, Result};
 use chrono::{DateTime, Utc};
-use futures::future::{AbortHandle, AbortRegistration, Abortable};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use super::def::GraphDef;
-use super::state::{diff, from_map, to_map, GraphState};
+use super::state::{diff, from_map, from_object, to_map, GraphState};
 use crate::health::{classify, Problem};
 use crate::redact::redact;
 use crate::store::{GRAPH_DONE, GRAPH_FAILED, GRAPH_RUNNING, GRAPH_WAITING};
@@ -39,6 +40,10 @@ pub enum WaitReason {
     Captcha { source_id: i64, url: String },
     /// A source blocks the app at `url`.
     Blocked { source_id: i64, url: String },
+    /// The reason cannot be read (saved by another version of the app). The thread can still be
+    /// resumed or cancelled.
+    #[serde(other)]
+    Unknown,
 }
 
 /// A thread that ended with an error.
@@ -133,17 +138,36 @@ struct StoredFailure {
     message: String,
 }
 
-impl StoredFailure {
-    fn into_failure(self) -> Failure {
-        Failure { problem: classify(&self.message), node: self.node, message: self.message }
-    }
-}
-
 struct Inner {
     store: Store,
     tx: broadcast::Sender<Progress>,
-    /// Threads running in this process, with the handle that stops them.
-    active: Mutex<HashMap<String, AbortHandle>>,
+    /// Threads running in this process.
+    active: Mutex<HashMap<String, ActiveRun>>,
+    next_run: AtomicU64,
+    /// Whether the one-time prune of old threads was started.
+    pruned: AtomicBool,
+}
+
+/// A run in progress: its id (a thread can be cancelled and started again while the old run is
+/// still winding down) and the token that stops it.
+struct ActiveRun {
+    id: u64,
+    token: CancellationToken,
+}
+
+tokio::task_local! {
+    static CANCEL: CancellationToken;
+}
+
+/// The cancellation token of the graph thread the caller runs in: cancelled by
+/// [`Graphs::cancel`]. A node that hands work to a task of its own (`runtime::spawn`, a child
+/// process) clones it and stops that work when it fires:
+/// `tokio::select! { _ = graph::cancel_token().cancelled() => .., r = work => .. }`.
+/// Outside a graph run it returns a token that never fires.
+///
+/// The node's own future needs no help: it is dropped when the thread is cancelled.
+pub fn cancel_token() -> CancellationToken {
+    CANCEL.try_with(CancellationToken::clone).unwrap_or_default()
 }
 
 /// The graph runtime. Cheap to clone; one per app (see `Core::graphs`).
@@ -159,37 +183,67 @@ pub struct Graphs {
 struct ActiveGuard {
     graphs: Graphs,
     thread: String,
+    id: u64,
 }
 
 impl Drop for ActiveGuard {
     fn drop(&mut self) {
-        self.graphs.active().remove(&self.thread);
+        let mut active = self.graphs.active();
+        // `cancel` may have removed the entry, and a new run of the thread may have taken its place.
+        if active.get(&self.thread).is_some_and(|run| run.id == self.id) {
+            active.remove(&self.thread);
+        }
     }
 }
 
 impl Graphs {
-    /// The runtime over `store`. Deletes finished threads older than 30 days.
+    /// The runtime over `store`. Does no I/O: old threads are removed by [`prune`](Self::prune),
+    /// which also runs in the background the first time a graph is run or resumed.
     pub fn new(store: Store) -> Self {
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(FINISHED_TTL_DAYS);
-        match store.graph_prune(cutoff) {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(threads = n, "pruned finished graph threads"),
-            Err(e) => tracing::warn!(error = %e, "pruning graph threads failed"),
-        }
         let (tx, _) = broadcast::channel(PROGRESS_BUFFER);
-        Self { inner: Arc::new(Inner { store, tx, active: Mutex::new(HashMap::new()) }) }
+        let inner = Inner {
+            store,
+            tx,
+            active: Mutex::new(HashMap::new()),
+            next_run: AtomicU64::new(0),
+            pruned: AtomicBool::new(false),
+        };
+        Self { inner: Arc::new(inner) }
     }
 
-    fn active(&self) -> std::sync::MutexGuard<'_, HashMap<String, AbortHandle>> {
+    /// Delete finished (done or failed) threads that were last touched more than 30 days ago, and
+    /// threads a crash left `running`; returns how many. Waiting threads never expire. A database
+    /// call: run it off the UI thread.
+    pub fn prune(&self) -> Result<usize> {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(FINISHED_TTL_DAYS);
+        self.inner.store.graph_prune(cutoff)
+    }
+
+    /// Start the one-time background prune (needs the tokio runtime, which `run` and `resume` have).
+    fn prune_once(&self) {
+        if self.inner.pruned.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let graphs = self.clone();
+        tokio::task::spawn_blocking(move || match graphs.prune() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(threads = n, "pruned old graph threads"),
+            Err(e) => tracing::warn!(error = %e, "pruning graph threads failed"),
+        });
+    }
+
+    fn active(&self) -> std::sync::MutexGuard<'_, HashMap<String, ActiveRun>> {
         self.inner.active.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn begin(&self, thread: &str) -> Result<(ActiveGuard, AbortRegistration)> {
+    fn begin(&self, thread: &str) -> Result<(ActiveGuard, CancellationToken)> {
+        self.prune_once();
         let mut active = self.active();
         ensure!(!active.contains_key(thread), "graph thread `{thread}` is already running");
-        let (handle, registration) = AbortHandle::new_pair();
-        active.insert(thread.to_string(), handle);
-        Ok((ActiveGuard { graphs: self.clone(), thread: thread.to_string() }, registration))
+        let id = self.inner.next_run.fetch_add(1, Ordering::Relaxed);
+        let token = CancellationToken::new();
+        active.insert(thread.to_string(), ActiveRun { id, token: token.clone() });
+        Ok((ActiveGuard { graphs: self.clone(), thread: thread.to_string(), id }, token))
     }
 
     fn emit(&self, thread: &str, graph: &str, event: ProgressEvent) {
@@ -207,7 +261,7 @@ impl Graphs {
     /// A finished (done) thread of the same id is replaced. A thread that is running, waiting or
     /// failed is not: [`resume`](Self::resume) or [`cancel`](Self::cancel) it first.
     pub async fn run<S: GraphState>(&self, graph: &GraphDef<S>, thread: &str, input: S) -> Result<Outcome<S>> {
-        let (_guard, registration) = self.begin(thread)?;
+        let (_guard, token) = self.begin(thread)?;
         let store = &self.inner.store;
         if let Some(existing) = store.graph_thread(thread)? {
             ensure!(
@@ -217,14 +271,14 @@ impl Graphs {
             );
             store.graph_delete_thread(thread)?;
         }
-        let compiled = graph.compile(store, &self.inner.tx)?;
+        let compiled = graph.compile(store, &self.inner.tx, &token)?;
         // Saved before the first node runs, so a thread that fails in its first step can be resumed.
         let first = Checkpoint::new(thread, to_map(&input)?.into_iter().collect(), 0, compiled.get_entry_nodes());
         if let Some(checkpointer) = compiled.checkpointer() {
             checkpointer.save(&first).await.context("saving the first checkpoint")?;
         }
         tracing::info!(graph = %graph.name, %thread, "graph run started");
-        self.drive(graph, compiled, thread, adk_graph::State::new(), registration).await
+        self.drive(graph, compiled, thread, adk_graph::State::new(), token).await
     }
 
     /// Continue a waiting or failed `thread`.
@@ -239,25 +293,25 @@ impl Graphs {
         thread: &str,
         change: impl FnOnce(&mut S),
     ) -> Result<Outcome<S>> {
-        let (_guard, registration) = self.begin(thread)?;
+        let (_guard, token) = self.begin(thread)?;
         let store = &self.inner.store;
         let info = store.graph_thread(thread)?.with_context(|| format!("no graph thread `{thread}`"))?;
         ensure!(info.graph == graph.name, "graph thread `{thread}` belongs to `{}`, not `{}`", info.graph, graph.name);
         let row = store.graph_latest_checkpoint(thread)?.context("the thread has no checkpoint")?;
         let saved: Value = serde_json::from_str(&row.state_json).context("reading the saved state")?;
-        let before: S = serde_json::from_value(saved)
-            .map_err(|e| anyhow::anyhow!("saved state does not fit the graph's type ({:?})", e.classify()))?;
+        let Value::Object(saved) = saved else { bail!("the saved state is not an object") };
+        let before: S = from_object(saved)?;
         if info.status == GRAPH_DONE {
             return Ok(Outcome::Done(before));
         }
         let before_map = to_map(&before)?;
         let mut after = before;
         change(&mut after);
-        let input = diff(&before_map, &to_map(&after)?, &graph.appends())?;
-        let compiled = graph.compile(store, &self.inner.tx)?;
-        store.graph_set_status(thread, GRAPH_RUNNING, None)?;
+        let input = diff(&before_map, &to_map(&after)?, graph.appends())?;
+        let compiled = graph.compile(store, &self.inner.tx, &token)?;
+        store.graph_set_status(thread, GRAPH_RUNNING, None, || !token.is_cancelled())?;
         tracing::info!(graph = %graph.name, %thread, "graph run resumed");
-        self.drive(graph, compiled, thread, input, registration).await
+        self.drive(graph, compiled, thread, input, token).await
     }
 
     /// Run `graph` once per `(thread, input)`, each as its own thread, at most `concurrency` at a
@@ -279,11 +333,18 @@ impl Graphs {
             .await
     }
 
-    /// Stop `thread` (if it runs in this process) and forget it, with its checkpoints.
+    /// Stop `thread` and forget it, with its checkpoints. Its node futures are dropped and its
+    /// [`cancel_token`] fires, so work a node handed to tasks of its own can stop too; the run's
+    /// `run` / `resume` call returns [`Outcome::Cancelled`]. The thread id is free at once: it can
+    /// be run again right away. Child threads a node started with [`run_each`](Self::run_each) are
+    /// dropped with it but keep their rows (as threads the app closed on): cancel them by id.
     pub fn cancel(&self, thread: &str) -> Result<()> {
         let graph = self.inner.store.graph_thread(thread)?.map(|t| t.graph);
-        if let Some(handle) = self.active().get(thread) {
-            handle.abort();
+        // The token first: once it fires no checkpoint or status of that run is written, so the
+        // delete below leaves nothing behind (see `Store::graph_save_checkpoint`).
+        let run = self.active().remove(thread);
+        if let Some(run) = &run {
+            run.token.cancel();
         }
         self.inner.store.graph_delete_thread(thread)?;
         tracing::info!(%thread, "graph thread cancelled");
@@ -295,43 +356,40 @@ impl Graphs {
 
     /// The status of `thread`, or `None` if there is no such thread.
     pub fn status(&self, thread: &str) -> Result<Option<ThreadInfo>> {
-        self.inner.store.graph_thread(thread)?.map(|t| self.info(t)).transpose()
+        Ok(self.inner.store.graph_thread(thread)?.map(|t| self.info(t)))
     }
 
     /// Threads paused at an interrupt, oldest first: what the "needs you" banner lists. Survives a
-    /// restart.
+    /// restart. A thread whose reason cannot be read is listed with [`WaitReason::Unknown`].
     pub fn waiting(&self) -> Result<Vec<Waiting>> {
         let rows = self.inner.store.graph_threads_with_status(GRAPH_WAITING)?;
         Ok(rows
             .into_iter()
-            .filter_map(|t| {
-                let reason = serde_json::from_str(t.detail_json.as_deref()?).ok()?;
-                Some(Waiting { thread: t.thread, graph: t.graph, reason, since: t.updated_at })
+            .map(|t| Waiting {
+                reason: read_wait_reason(&t.thread, t.detail_json.as_deref()),
+                thread: t.thread,
+                graph: t.graph,
+                since: t.updated_at,
             })
             .collect())
     }
 
-    fn info(&self, t: crate::store::GraphThread) -> Result<ThreadInfo> {
-        let detail = t.detail_json.as_deref().unwrap_or("null");
+    fn info(&self, t: crate::store::GraphThread) -> ThreadInfo {
+        let detail = t.detail_json.as_deref();
         let status = match t.status.as_str() {
             GRAPH_DONE => ThreadStatus::Done,
-            GRAPH_WAITING => ThreadStatus::Waiting(serde_json::from_str(detail).context("reading the wait reason")?),
-            GRAPH_FAILED => ThreadStatus::Failed(
-                serde_json::from_str::<StoredFailure>(detail).context("reading the failure")?.into_failure(),
-            ),
+            GRAPH_WAITING => ThreadStatus::Waiting(read_wait_reason(&t.thread, detail)),
+            GRAPH_FAILED => ThreadStatus::Failed(read_failure(&t.thread, detail)),
             _ if self.active().contains_key(&t.thread) => ThreadStatus::Running,
-            _ => ThreadStatus::Failed(
-                StoredFailure { node: String::new(), message: "the app closed while this was running".into() }
-                    .into_failure(),
-            ),
+            _ => ThreadStatus::Failed(stored_failure("", "the app closed while this was running")),
         };
-        Ok(ThreadInfo {
+        ThreadInfo {
             thread: t.thread,
             graph: t.graph,
             step: u64::try_from(t.step).unwrap_or(0),
             status,
             updated_at: t.updated_at,
-        })
+        }
     }
 
     /// Run the compiled graph on the thread's saved checkpoint and record how it ended.
@@ -341,38 +399,43 @@ impl Graphs {
         compiled: adk_graph::CompiledGraph,
         thread: &str,
         input: adk_graph::State,
-        registration: AbortRegistration,
+        token: CancellationToken,
     ) -> Result<Outcome<S>> {
         let store = &self.inner.store;
         let config = ExecutionConfig::new(thread).with_recursion_limit(graph.limits.max_steps);
         let started = Instant::now();
-        let ended = Abortable::new(compiled.invoke(input, config), registration).await;
+        let run = CANCEL.scope(token.clone(), compiled.invoke(input, config));
+        // Cancelling drops the run, and with it every node future.
+        let ended = tokio::select! {
+            biased;
+            () = token.cancelled() => None,
+            ended = run => Some(ended),
+        };
         let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let (outcome, event) = match ended {
-            Err(_aborted) => {
-                // `cancel` deleted the thread; a step that was mid-save may have written again.
-                store.graph_delete_thread(thread)?;
-                return Ok(Outcome::Cancelled);
-            }
-            Ok(Ok(state)) => {
-                store.graph_set_status(thread, GRAPH_DONE, None)?;
+        let live = || !token.is_cancelled();
+        // `cancel` deleted the thread, and a cancelled run writes nothing more.
+        let Some(ended) = ended else { return Ok(Outcome::Cancelled) };
+        let (outcome, event, status, detail) = match ended {
+            Ok(state) => {
                 tracing::info!(graph = %graph.name, %thread, ms, "graph run done");
-                (Outcome::Done(from_map(&state)?), ProgressEvent::Done)
+                (Outcome::Done(from_map(&state)?), ProgressEvent::Done, GRAPH_DONE, None)
             }
-            Ok(Err(GraphError::Interrupted(paused))) => {
+            Err(GraphError::Interrupted(paused)) => {
                 let reason = wait_reason(&paused.interrupt)?;
-                store.graph_set_status(thread, GRAPH_WAITING, Some(&serde_json::to_string(&reason)?))?;
                 tracing::info!(graph = %graph.name, %thread, ms, "graph run waiting");
-                (Outcome::Waiting(reason.clone()), ProgressEvent::Waiting(reason))
+                let detail = serde_json::to_string(&reason)?;
+                (Outcome::Waiting(reason.clone()), ProgressEvent::Waiting(reason), GRAPH_WAITING, Some(detail))
             }
-            Ok(Err(error)) => {
+            Err(error) => {
                 let failure = failure(&error);
-                let stored = StoredFailure { node: failure.node.clone(), message: failure.message.clone() };
-                store.graph_set_status(thread, GRAPH_FAILED, Some(&serde_json::to_string(&stored)?))?;
                 tracing::warn!(graph = %graph.name, %thread, ms, node = %failure.node, "graph run failed");
-                (Outcome::Failed(failure), ProgressEvent::Failed)
+                let stored = StoredFailure { node: failure.node.clone(), message: failure.message.clone() };
+                (Outcome::Failed(failure), ProgressEvent::Failed, GRAPH_FAILED, Some(serde_json::to_string(&stored)?))
             }
         };
+        if !store.graph_set_status(thread, status, detail.as_deref(), live)? {
+            return Ok(Outcome::Cancelled);
+        }
         self.emit(thread, &graph.name, event);
         Ok(outcome)
     }
@@ -394,6 +457,29 @@ fn failure(error: &GraphError) -> Failure {
         GraphError::NodeExecutionFailed { node, message } => (node.clone(), message.clone()),
         other => (String::new(), other.to_string()),
     };
-    let message = redact(&message).into_owned();
-    Failure { problem: classify(&message), node, message }
+    stored_failure(&node, &message)
+}
+
+fn stored_failure(node: &str, message: &str) -> Failure {
+    let message = redact(message).into_owned();
+    Failure { problem: classify(&message), node: node.into(), message }
+}
+
+/// The wait reason of a stored thread; one that cannot be read becomes [`WaitReason::Unknown`].
+fn read_wait_reason(thread: &str, detail: Option<&str>) -> WaitReason {
+    detail.and_then(|d| serde_json::from_str(d).ok()).unwrap_or_else(|| {
+        tracing::warn!(%thread, "unreadable wait reason");
+        WaitReason::Unknown
+    })
+}
+
+/// The failure of a stored thread; one that cannot be read becomes a generic failure.
+fn read_failure(thread: &str, detail: Option<&str>) -> Failure {
+    match detail.and_then(|d| serde_json::from_str::<StoredFailure>(d).ok()) {
+        Some(f) => stored_failure(&f.node, &f.message),
+        None => {
+            tracing::warn!(%thread, "unreadable failure record");
+            stored_failure("", "the failure record cannot be read")
+        }
+    }
 }

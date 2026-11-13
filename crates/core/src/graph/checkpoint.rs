@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::store::{GraphCheckpointRow, Store};
 
@@ -15,12 +16,18 @@ const KEEP: usize = 3;
 
 /// Saves graph checkpoints in the `graph_checkpoints` table, tagged with the graph's name.
 ///
-/// The store calls are short synchronous SQLite statements, so they run inline in the async
-/// methods.
+/// The store calls are single short statements on a local WAL database behind the store's
+/// connection mutex, like every other store call the app makes from async code, so they run inline
+/// in the async methods instead of through `spawn_blocking`.
+///
+/// Once its [cancellation token](Self::with_cancel) is set, `save` is refused (inside the
+/// transaction, see [`Store::graph_save_checkpoint`]), so a cancelled thread cannot be written
+/// back after it was deleted.
 #[derive(Clone)]
 pub struct SqliteCheckpointer {
     store: Store,
     graph: String,
+    cancel: CancellationToken,
 }
 
 /// The parts of a library checkpoint besides the state, kept as one JSON column.
@@ -40,7 +47,13 @@ struct Rest {
 impl SqliteCheckpointer {
     /// A checkpointer for the graph called `graph`.
     pub fn new(store: Store, graph: impl Into<String>) -> Self {
-        Self { store, graph: graph.into() }
+        Self { store, graph: graph.into(), cancel: CancellationToken::new() }
+    }
+
+    /// Refuse saves once `token` is cancelled.
+    pub fn with_cancel(mut self, token: CancellationToken) -> Self {
+        self.cancel = token;
+        self
     }
 
     fn to_row(&self, cp: &Checkpoint) -> Result<GraphCheckpointRow> {
@@ -87,8 +100,9 @@ fn failed(e: anyhow::Error) -> GraphError {
 impl Checkpointer for SqliteCheckpointer {
     async fn save(&self, checkpoint: &Checkpoint) -> adk_graph::Result<String> {
         let row = self.to_row(checkpoint).map_err(failed)?;
-        self.store.graph_insert_checkpoint(&row).map_err(failed)?;
-        self.store.graph_keep_latest(&row.thread, KEEP).map_err(failed)?;
+        if !self.store.graph_save_checkpoint(&row, KEEP, || !self.cancel.is_cancelled()).map_err(failed)? {
+            return Err(GraphError::CheckpointError("the thread was cancelled".into()));
+        }
         Ok(row.id)
     }
 

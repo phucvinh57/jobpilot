@@ -458,7 +458,7 @@ fn a_thread_left_running_by_a_crash_reads_as_failed_and_can_resume() {
     // A run that never finished: the first checkpoint is saved, then the process dies.
     {
         let store = Store::open(&path).unwrap();
-        let compiled = graph.compile(&store, &tokio::sync::broadcast::channel(1).0).unwrap();
+        let compiled = graph.compile(&store, &tokio::sync::broadcast::channel(1).0, &Default::default()).unwrap();
         let first = adk_graph::Checkpoint::new(
             "crash",
             to_state(&Flow { n: 1, ..Flow::default() }),
@@ -589,4 +589,257 @@ fn a_node_can_fan_out_to_child_threads() {
     let waiting = graphs.waiting().unwrap();
     assert_eq!(waiting.len(), 1, "the paused source is its own thread");
     assert_eq!(waiting[0].thread, "d:2");
+}
+
+#[test]
+fn a_cancelled_thread_id_can_be_run_again_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let graphs = graphs_at(&db(dir.path()));
+    let long = GraphDef::<Flow>::new("long")
+        .node("sleep", |s: Flow| async move {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok(s)
+        })
+        .edge(START, "sleep")
+        .edge("sleep", END);
+    let quick = GraphDef::<Flow>::new("quick").node("x", step(&Runs::default(), "x")).edge(START, "x").edge("x", END);
+    runtime::block_on(async {
+        // Polled by hand, so the cancelled run is not woken before the thread id is used again.
+        let mut old = Box::pin(graphs.run(&long, "c", Flow::default()));
+        assert!(futures::poll!(old.as_mut()).is_pending(), "the node is running");
+        graphs.cancel("c").unwrap();
+        // No "already running", although the cancelled run has not been polled again yet.
+        let mut newer = Box::pin(graphs.run(&long, "c", Flow::default()));
+        assert!(futures::poll!(newer.as_mut()).is_pending());
+
+        // The old run winds down now; it must leave the new run's entry and rows alone.
+        assert_eq!(old.await.unwrap(), Outcome::Cancelled);
+        assert_eq!(graphs.status("c").unwrap().unwrap().status, ThreadStatus::Running);
+        assert!(graphs.run(&quick, "c", Flow::default()).await.is_err(), "the new run still owns the thread");
+
+        graphs.cancel("c").unwrap();
+        assert_eq!(newer.await.unwrap(), Outcome::Cancelled);
+        assert!(graphs.status("c").unwrap().is_none());
+        assert_eq!(logged(graphs.run(&quick, "c", Flow::default()).await.unwrap()), ["x"]);
+    });
+}
+
+#[test]
+fn cancel_reaches_work_a_node_handed_to_its_own_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let graphs = graphs_at(&db(dir.path()));
+    let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let graph = GraphDef::<Flow>::new("detached")
+        .node("spawn", {
+            let stopped = stopped.clone();
+            move |s: Flow| {
+                let (token, stopped) = (cancel_token(), stopped.clone());
+                async move {
+                    // Work that outlives the node's future, like a browser step on its own task.
+                    runtime::spawn(async move {
+                        token.cancelled().await;
+                        stopped.store(true, Ordering::SeqCst);
+                    });
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Ok(s)
+                }
+            }
+        })
+        .edge(START, "spawn")
+        .edge("spawn", END);
+    let mut events = graphs.subscribe();
+    let run = {
+        let graphs = graphs.clone();
+        runtime::spawn(async move { graphs.run(&graph, "d", Flow::default()).await })
+    };
+    runtime::block_on(async {
+        while events.recv().await.unwrap().event != (ProgressEvent::NodeStarted { node: "spawn".into() }) {}
+        assert!(!stopped.load(Ordering::SeqCst));
+        graphs.cancel("d").unwrap();
+        for _ in 0..100 {
+            if stopped.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+    assert!(stopped.load(Ordering::SeqCst), "the spawned work saw the cancellation");
+    assert_eq!(runtime::block_on(run).unwrap().unwrap(), Outcome::Cancelled);
+    assert!(!cancel_token().is_cancelled(), "outside a run the token never fires");
+}
+
+#[test]
+fn a_cancelled_run_writes_nothing_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store_at(&db(dir.path()));
+    let token = tokio_util::sync::CancellationToken::new();
+    let checkpointer = SqliteCheckpointer::new(store.clone(), "g").with_cancel(token.clone());
+    let save = |n: usize| {
+        let cp = adk_graph::Checkpoint::new("t", adk_graph::State::new(), n, vec![]);
+        runtime::block_on(adk_graph::Checkpointer::save(&checkpointer, &cp))
+    };
+    save(0).unwrap();
+    token.cancel();
+    store.graph_delete_thread("t").unwrap();
+    assert!(save(1).is_err(), "a cancelled thread is not written back");
+    assert!(store.graph_thread("t").unwrap().is_none());
+}
+
+#[test]
+fn cancelling_in_the_middle_of_a_busy_run_leaves_no_thread_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let graphs = graphs_at(&db(dir.path()));
+    // Many short steps that yield, so cancel lands at different points of the run.
+    let busy = GraphDef::<Flow>::new("busy")
+        .node("tick", |mut s: Flow| async move {
+            tokio::task::yield_now().await;
+            s.n += 1;
+            Ok(s)
+        })
+        .edge(START, "tick")
+        .route("tick", |s| if s.n < 200 { "tick" } else { END }, &["tick", END]);
+    runtime::block_on(async {
+        for i in 0..30u64 {
+            let thread = format!("busy{i}");
+            let run = {
+                let (graphs, busy, thread) = (graphs.clone(), busy.clone(), thread.clone());
+                runtime::spawn(async move { graphs.run(&busy, &thread, Flow::default()).await })
+            };
+            tokio::time::sleep(Duration::from_micros(i * 150)).await;
+            graphs.cancel(&thread).unwrap();
+            let outcome = run.await.unwrap().unwrap();
+            assert!(matches!(outcome, Outcome::Cancelled | Outcome::Done(_)), "{outcome:?}");
+            assert!(graphs.status(&thread).unwrap().is_none(), "no rows left for {thread}");
+        }
+    });
+}
+
+#[test]
+fn unreadable_wait_reasons_are_listed_and_can_be_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db(dir.path());
+    let graphs = graphs_at(&path);
+    let store = store_at(&path);
+    let rows = [("garbled", "not json"), ("future", r#"{"kind":"from_a_newer_version"}"#)];
+    for (thread, detail) in rows {
+        let row = crate::store::GraphCheckpointRow {
+            id: thread.into(),
+            thread: thread.into(),
+            graph: "demo".into(),
+            step: 1,
+            state_json: "{}".into(),
+            rest_json: r#"{"pending_nodes":[]}"#.into(),
+            created_at: chrono::Utc::now(),
+        };
+        assert!(store.graph_save_checkpoint(&row, 3, || true).unwrap());
+        store.graph_set_status(thread, crate::store::GRAPH_WAITING, Some(detail), || true).unwrap();
+    }
+    let waiting = graphs.waiting().unwrap();
+    assert_eq!(waiting.len(), 2, "neither thread is dropped");
+    assert!(waiting.iter().all(|w| w.reason == WaitReason::Unknown));
+    for w in &waiting {
+        let info = graphs.status(&w.thread).unwrap().unwrap();
+        assert_eq!(info.status, ThreadStatus::Waiting(WaitReason::Unknown), "status agrees with waiting()");
+        graphs.cancel(&w.thread).unwrap();
+    }
+    assert!(graphs.waiting().unwrap().is_empty());
+}
+
+#[test]
+fn old_threads_are_pruned_in_the_background_not_when_the_runtime_is_created() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db(dir.path());
+    let store = store_at(&path);
+    let old = chrono::Utc::now() - chrono::Duration::days(40);
+    let row = crate::store::GraphCheckpointRow {
+        id: "old-1".into(),
+        thread: "old".into(),
+        graph: "demo".into(),
+        step: 1,
+        state_json: "{}".into(),
+        rest_json: r#"{"pending_nodes":[]}"#.into(),
+        created_at: old,
+    };
+    assert!(store.graph_save_checkpoint(&row, 3, || true).unwrap());
+    store.graph_set_status("old", crate::store::GRAPH_DONE, None, || true).unwrap();
+    store.with_conn(|c| Ok(c.execute("UPDATE graph_checkpoints SET updated_at = ?1", [old])?)).unwrap();
+
+    let graphs = Graphs::new(store.clone());
+    assert!(store.graph_thread("old").unwrap().is_some(), "creating the runtime does no database work");
+
+    // The first run starts the prune in the background.
+    let runs = Runs::default();
+    runtime::block_on(async {
+        graphs.run(&demo(&runs), "new", Flow::default()).await.unwrap();
+        for _ in 0..100 {
+            if store.graph_thread("old").unwrap().is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+    assert!(store.graph_thread("old").unwrap().is_none());
+    assert!(store.graph_thread("new").unwrap().is_some());
+    assert_eq!(graphs.prune().unwrap(), 0, "and `prune` can be called by hand");
+}
+
+/// A field that serializes only when set and has no `Option` type: clearing it must not break the
+/// state (a cleared channel is stored as null).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Notes {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extra: Option<String>,
+    approved: bool,
+    cleared_by_node: bool,
+}
+
+#[test]
+fn a_field_cleared_by_a_resume_or_a_node_reads_back_as_its_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let graphs = graphs_at(&db(dir.path()));
+    let graph = GraphDef::<Notes>::new("notes")
+        .wait("ask", |s| (!s.approved).then_some(WaitReason::UserMessage))
+        .node("clear", |mut s: Notes| {
+            s.notes.clear();
+            s.extra = None;
+            s.cleared_by_node = true;
+            ready(Ok(s))
+        })
+        .node("check", |s: Notes| {
+            ready(if s.notes.is_empty() && s.cleared_by_node { Ok(s) } else { Err(anyhow!("bad")) })
+        })
+        .edge(START, "ask")
+        .edge("ask", "clear")
+        .edge("clear", "check")
+        .edge("check", END);
+    let input = Notes { notes: vec!["a".into()], title: "t".into(), extra: Some("x".into()), ..Notes::default() };
+    runtime::block_on(async {
+        assert_eq!(graphs.run(&graph, "n", input.clone()).await.unwrap(), Outcome::Waiting(WaitReason::UserMessage));
+        // The resume clears two fields; the node afterwards clears the rest.
+        let done = graphs
+            .resume(&graph, "n", |s| {
+                s.approved = true;
+                s.title.clear();
+            })
+            .await
+            .unwrap();
+        let Outcome::Done(s) = done else { panic!("expected Done, got {done:?}") };
+        assert_eq!((s.notes.len(), s.title.as_str(), s.extra.as_deref()), (0, "", None));
+
+        // Clearing during the resume itself, with the node reading the state straight away.
+        graphs.cancel("n").unwrap();
+        graphs.run(&graph, "n", input).await.unwrap();
+        let done = graphs
+            .resume(&graph, "n", |s| {
+                s.approved = true;
+                s.notes.clear();
+            })
+            .await
+            .unwrap();
+        assert!(matches!(done, Outcome::Done(s) if s.cleared_by_node));
+    });
 }

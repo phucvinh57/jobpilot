@@ -75,10 +75,24 @@ impl GraphThread {
 }
 
 impl Store {
-    /// Append a checkpoint; the thread's status becomes `running`.
-    pub fn graph_insert_checkpoint(&self, row: &GraphCheckpointRow) -> Result<()> {
-        self.with_conn(|c| {
-            c.execute(
+    /// Append a checkpoint and keep only the `keep` newest of its thread, in one transaction; the
+    /// thread's status becomes `running`.
+    ///
+    /// `live` is asked inside the transaction: when it says no (the thread was cancelled), nothing
+    /// is written and the answer is `false`. Because [`graph_delete_thread`](Self::graph_delete_thread)
+    /// takes the same lock, a cancelled thread whose token is set before the delete cannot get a
+    /// row written afterwards.
+    pub fn graph_save_checkpoint(
+        &self,
+        row: &GraphCheckpointRow,
+        keep: usize,
+        live: impl FnOnce() -> bool,
+    ) -> Result<bool> {
+        self.with_tx(|tx| {
+            if !live() {
+                return Ok(false);
+            }
+            tx.execute(
                 "INSERT INTO graph_checkpoints (id, thread, graph, step, state_json, rest_json, status, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
@@ -93,7 +107,12 @@ impl Store {
                     now()
                 ],
             )?;
-            Ok(())
+            tx.execute(
+                "DELETE FROM graph_checkpoints WHERE thread = ?1 AND seq NOT IN
+                 (SELECT seq FROM graph_checkpoints WHERE thread = ?1 ORDER BY seq DESC LIMIT ?2)",
+                params![row.thread, i64::try_from(keep).unwrap_or(i64::MAX)],
+            )?;
+            Ok(true)
         })
     }
 
@@ -130,17 +149,6 @@ impl Store {
         })
     }
 
-    /// Keep only the `keep` newest checkpoints of a thread; returns how many were deleted.
-    pub fn graph_keep_latest(&self, thread: &str, keep: usize) -> Result<usize> {
-        self.with_conn(|c| {
-            Ok(c.execute(
-                "DELETE FROM graph_checkpoints WHERE thread = ?1 AND seq NOT IN
-                 (SELECT seq FROM graph_checkpoints WHERE thread = ?1 ORDER BY seq DESC LIMIT ?2)",
-                params![thread, i64::try_from(keep).unwrap_or(i64::MAX)],
-            )?)
-        })
-    }
-
     /// Forget a thread completely.
     pub fn graph_delete_thread(&self, thread: &str) -> Result<()> {
         self.with_conn(|c| {
@@ -149,15 +157,26 @@ impl Store {
         })
     }
 
-    /// Set the status (and its detail) of a thread: written on its newest checkpoint.
-    pub fn graph_set_status(&self, thread: &str, status: &str, detail_json: Option<&str>) -> Result<()> {
+    /// Set the status (and its detail) of a thread: written on its newest checkpoint, if `live`
+    /// (asked inside the lock, see [`graph_save_checkpoint`](Self::graph_save_checkpoint)) says so.
+    /// Returns whether it was written.
+    pub fn graph_set_status(
+        &self,
+        thread: &str,
+        status: &str,
+        detail_json: Option<&str>,
+        live: impl FnOnce() -> bool,
+    ) -> Result<bool> {
         self.with_conn(|c| {
+            if !live() {
+                return Ok(false);
+            }
             c.execute(
                 "UPDATE graph_checkpoints SET status = ?2, detail_json = ?3, updated_at = ?4
                  WHERE seq = (SELECT MAX(seq) FROM graph_checkpoints WHERE thread = ?1)",
                 params![thread, status, detail_json, now()],
             )?;
-            Ok(())
+            Ok(true)
         })
     }
 
@@ -185,17 +204,17 @@ impl Store {
         })
     }
 
-    /// Delete finished (`done` or `failed`) threads last touched before `before`; returns the
-    /// number of threads removed. Waiting threads never expire.
+    /// Delete finished (`done` or `failed`) threads, and `running` ones orphaned by a crash, last
+    /// touched before `before`; returns the number of threads removed. Waiting threads never expire.
     pub fn graph_prune(&self, before: DateTime<Utc>) -> Result<usize> {
         self.with_tx(|tx| {
             let threads: Vec<String> = {
                 let mut stmt = tx.prepare(
                     "SELECT thread FROM graph_checkpoints c
-                     WHERE status IN (?1, ?2) AND updated_at < ?3
+                     WHERE status IN (?1, ?2, ?4) AND updated_at < ?3
                        AND seq = (SELECT MAX(seq) FROM graph_checkpoints WHERE thread = c.thread)",
                 )?;
-                let rows = stmt.query_map(params![GRAPH_DONE, GRAPH_FAILED, before], |r| r.get(0))?;
+                let rows = stmt.query_map(params![GRAPH_DONE, GRAPH_FAILED, before, GRAPH_RUNNING], |r| r.get(0))?;
                 rows.collect::<rusqlite::Result<_>>()?
             };
             for t in &threads {
@@ -222,6 +241,10 @@ mod tests {
         }
     }
 
+    fn save(store: &Store, row: &GraphCheckpointRow) {
+        assert!(store.graph_save_checkpoint(row, 100, || true).unwrap());
+    }
+
     #[test]
     fn migration_applies_on_a_database_at_the_previous_version() {
         let dir = tempfile::tempdir().unwrap();
@@ -234,7 +257,7 @@ mod tests {
         }
         let store = Store::open(&path).unwrap();
         assert_eq!(store.kv_get("keep").unwrap().as_deref(), Some("me"));
-        store.graph_insert_checkpoint(&row("t", 0)).unwrap();
+        save(&store, &row("t", 0));
         assert!(store.graph_thread("t").unwrap().is_some());
         let version: usize =
             store.with_conn(|c| Ok(c.pragma_query_value(None, "user_version", |r| r.get(0))?)).unwrap();
@@ -246,9 +269,9 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         assert!(store.graph_latest_checkpoint("t").unwrap().is_none());
         for step in 0..4 {
-            store.graph_insert_checkpoint(&row("t", step)).unwrap();
+            save(&store, &row("t", step));
         }
-        store.graph_insert_checkpoint(&row("other", 0)).unwrap();
+        save(&store, &row("other", 0));
 
         assert_eq!(store.graph_latest_checkpoint("t").unwrap().unwrap().step, 3);
         assert_eq!(store.graph_checkpoint_by_id("t-1").unwrap().unwrap().state_json, r#"{"step":1}"#);
@@ -257,17 +280,15 @@ mod tests {
         let thread = store.graph_thread("t").unwrap().unwrap();
         assert_eq!((thread.graph.as_str(), thread.step, thread.status.as_str()), ("g", 3, GRAPH_RUNNING));
 
-        store.graph_set_status("t", GRAPH_WAITING, Some(r#"{"kind":"user_message"}"#)).unwrap();
+        assert!(store.graph_set_status("t", GRAPH_WAITING, Some(r#"{"kind":"user_message"}"#), || true).unwrap());
         let waiting = store.graph_threads_with_status(GRAPH_WAITING).unwrap();
         assert_eq!(waiting.len(), 1);
         assert_eq!(waiting[0].detail_json.as_deref(), Some(r#"{"kind":"user_message"}"#));
         assert_eq!(store.graph_thread("other").unwrap().unwrap().status, GRAPH_RUNNING, "other thread untouched");
 
         // A new checkpoint makes the thread `running` again: only the newest row counts.
-        store.graph_insert_checkpoint(&row("t", 4)).unwrap();
+        assert!(store.graph_save_checkpoint(&row("t", 4), 2, || true).unwrap(), "saved, and trimmed to two");
         assert!(store.graph_threads_with_status(GRAPH_WAITING).unwrap().is_empty());
-
-        assert_eq!(store.graph_keep_latest("t", 2).unwrap(), 3);
         let kept: Vec<_> = store.graph_checkpoints("t").unwrap().iter().map(|r| r.step).collect();
         assert_eq!(kept, [3, 4]);
 
@@ -280,13 +301,30 @@ mod tests {
     fn prune_removes_finished_threads_only() {
         let store = Store::open_in_memory().unwrap();
         for (thread, status) in [("done", GRAPH_DONE), ("failed", GRAPH_FAILED), ("waiting", GRAPH_WAITING)] {
-            store.graph_insert_checkpoint(&row(thread, 0)).unwrap();
-            store.graph_insert_checkpoint(&row(thread, 1)).unwrap();
-            store.graph_set_status(thread, status, None).unwrap();
+            save(&store, &row(thread, 0));
+            save(&store, &row(thread, 1));
+            store.graph_set_status(thread, status, None, || true).unwrap();
         }
         assert_eq!(store.graph_prune(now() - chrono::Duration::days(1)).unwrap(), 0, "too recent");
         assert_eq!(store.graph_prune(now() + chrono::Duration::days(1)).unwrap(), 2);
         assert!(store.graph_thread("done").unwrap().is_none() && store.graph_thread("failed").unwrap().is_none());
         assert_eq!(store.graph_checkpoints("waiting").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_dead_thread_gets_no_writes() {
+        let store = Store::open_in_memory().unwrap();
+        save(&store, &row("t", 0));
+        assert!(!store.graph_save_checkpoint(&row("t", 1), 3, || false).unwrap());
+        assert!(!store.graph_set_status("t", GRAPH_DONE, None, || false).unwrap());
+        assert_eq!(store.graph_checkpoints("t").unwrap().len(), 1);
+        assert_eq!(store.graph_thread("t").unwrap().unwrap().status, GRAPH_RUNNING);
+    }
+
+    #[test]
+    fn running_threads_orphaned_by_a_crash_are_pruned_too() {
+        let store = Store::open_in_memory().unwrap();
+        save(&store, &row("orphan", 0));
+        assert_eq!(store.graph_prune(now() + chrono::Duration::days(1)).unwrap(), 1);
     }
 }

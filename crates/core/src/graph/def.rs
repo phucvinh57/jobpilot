@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use super::runtime::{Progress, ProgressEvent, WaitReason};
 use super::state::{diff, from_map, to_map, GraphState};
@@ -89,8 +90,8 @@ impl<S: GraphState> GraphDef<S> {
         &self.name
     }
 
-    pub(crate) fn appends(&self) -> Vec<&'static str> {
-        self.appends.clone()
+    pub(crate) fn appends(&self) -> &[&'static str] {
+        &self.appends
     }
 
     /// A node: an async function from the state to the new state. An `Err` fails the thread at
@@ -173,13 +174,23 @@ impl<S: GraphState> GraphDef<S> {
     }
 
     /// The library graph, with checkpoints in `store` and progress sent on `tx`.
-    pub(crate) fn compile(&self, store: &Store, tx: &broadcast::Sender<Progress>) -> Result<CompiledGraph> {
+    pub(crate) fn compile(
+        &self,
+        store: &Store,
+        tx: &broadcast::Sender<Progress>,
+        cancel: &CancellationToken,
+    ) -> Result<CompiledGraph> {
         let mut schema = StateSchema::builder();
         for field in &self.appends {
             schema = schema.list_channel(field);
         }
         let mut graph = StateGraph::new(schema.build());
-        let env = Arc::new(NodeEnv { graph: self.name.clone(), tx: tx.clone(), appends: self.appends.clone() });
+        let env = Arc::new(NodeEnv {
+            graph: self.name.clone(),
+            tx: tx.clone(),
+            appends: self.appends.clone(),
+            cancel: cancel.clone(),
+        });
         for node in &self.nodes {
             let (env, name, run) = (env.clone(), node.name.clone(), node.run.clone());
             let timeout = (self.timeouts.iter().rev())
@@ -203,7 +214,7 @@ impl<S: GraphState> GraphDef<S> {
         let compiled = graph
             .compile()
             .with_context(|| format!("graph `{}` is invalid", self.name))?
-            .with_checkpointer(SqliteCheckpointer::new(store.clone(), &self.name))
+            .with_checkpointer(SqliteCheckpointer::new(store.clone(), &self.name).with_cancel(cancel.clone()))
             .with_max_concurrency(self.limits.max_concurrency);
         Ok(compiled)
     }
@@ -214,6 +225,7 @@ struct NodeEnv {
     graph: String,
     tx: broadcast::Sender<Progress>,
     appends: Vec<&'static str>,
+    cancel: CancellationToken,
 }
 
 impl NodeEnv {
@@ -232,6 +244,10 @@ async fn run_node<S: GraphState>(
     ctx: NodeContext,
 ) -> adk_graph::Result<NodeOutput> {
     let thread = ctx.config.thread_id.clone();
+    // The run may be cancelled between two steps that finish without yielding to the runtime.
+    if env.cancel.is_cancelled() {
+        return Err(adk_graph::GraphError::Other("the thread was cancelled".into()));
+    }
     env.emit(&thread, ProgressEvent::NodeStarted { node: node.clone() });
     let started = Instant::now();
     let result: Result<NodeOutput> = async {

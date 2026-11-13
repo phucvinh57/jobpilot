@@ -34,6 +34,8 @@
 //!   interrupt, so a paused branch holds back the downstream nodes of its siblings in the same
 //!   run. Work that must go on independently runs as its own thread: a parent node calls
 //!   [`Graphs::run_each`] with one thread id per item.
+//! - **Cancel**: [`Graphs::cancel`] drops the running node futures, fires the thread's
+//!   [`cancel_token`] (for work a node handed to tasks of its own) and deletes the thread.
 //! - **Checkpoints** are written after every step to `graph_checkpoints` through
 //!   [`SqliteCheckpointer`], so paused and failed threads survive a restart. A failed node keeps
 //!   the checkpoint before its step, so [`Graphs::resume`] re-runs that step only.
@@ -53,7 +55,9 @@ mod tests;
 
 pub use checkpoint::SqliteCheckpointer;
 pub use def::{GraphDef, Limits};
-pub use runtime::{Failure, Graphs, Outcome, Progress, ProgressEvent, ThreadInfo, ThreadStatus, WaitReason, Waiting};
+pub use runtime::{
+    cancel_token, Failure, Graphs, Outcome, Progress, ProgressEvent, ThreadInfo, ThreadStatus, WaitReason, Waiting,
+};
 pub use state::GraphState;
 
 /// Entry point of a graph: `edge(START, "first")`.
