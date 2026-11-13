@@ -33,6 +33,7 @@ adk-graph = "=2.3.0"
 async-trait = "0.1"
 tokio-util = "0.7"
 url = "2"
+quick-xml = "0.41"
 notify-rust = "4"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry", "tracing-log"] }
 tracing-appender = "0.2.5"

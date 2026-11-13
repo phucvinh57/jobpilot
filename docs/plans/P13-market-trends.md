@@ -18,6 +18,14 @@ Sources are rows in `sources` (purpose `trends`), added by the user in the Trend
 
 Items go to `trend_items` (deduplicated by URL), text under `<data_dir>/trends/`. Same politeness limits and challenge hand-off as P10.
 
+As built (P13a, `core/trends/`):
+
+- Source rows (`purpose = trends`) have kind `hackernews`, `yc`, `rss` or `page`; `report_search` has no row, it runs while a key is saved in the keyring (`trends:brave_api_key` or `trends:tavily_api_key`, Brave first). Helpers: `Core::{add,remove}_trend_source`, `set_search_key`; run with `Core::collect_trends(period)`; `Period` is an ISO week (`2026-W46`) or a quarter (`2026-Q4`).
+- `yc` reads the community `yc-oss` mirror of the directory (`meta.json`, `batches/<slug>.json`): YC has no JSON API of its own. The root is injectable (`Endpoints`).
+- No-key skip is the first thing the `report_search` node does, not a route in front of it: the library only joins unconditional edges, so a skipped branch that never reaches `store_items` would hold it back forever.
+- Slow sources: each source has a timeout and each collector a budget (`CollectLimits`); what runs out is left out (`SourceStatus::TimedOut`) and the run still ends. `wait_human` (shared `challenge` node) follows `store_items`; P13b continues after it. Only `page` detects a wall (HTTP 401 / 403 / 429 / 503) until P10's `browser/challenge.rs` exists.
+- Search results and feed entries are fetched only when http(s) and on a public host.
+
 ## P13b Digest and view - Phase 2
 
 - `trends::digest(period)`: map-reduce over the period's items. Per item: `{ topics[], claims[{text, quote}] }`. Then one synthesis call: rising / falling skills, active domains, funding and hiring signals, what it means for this user's preferences. Each point carries `citations[]` (item ids); points without a citation are dropped in code.
