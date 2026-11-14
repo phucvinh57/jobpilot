@@ -17,7 +17,7 @@ Updated 2026-11-14: every plan is merged. On `main` unless noted.
 | P13b digest and view | #16 | merged | |
 | Phase 3 end-to-end and docs | #19 | merged | `crates/core/tests/e2e_discovery.rs`, CLAUDE.md / README updates |
 | No browser disguise | #21 | merged | The login, apply and JD-reading browsers no longer hide automation either |
-| P14 structured job sources | | planned | SmartRecruiters, Recruitee, Personio, Workday adapters; JSON-LD, sitemap and board detection for career pages |
+| P14 structured job sources | #35 (SmartRecruiters, Recruitee, Personio), #33 (Workday), #34 (JSON-LD, sitemap), board detection (this PR) | merged | SmartRecruiters, Recruitee, Personio, Workday adapters; JSON-LD, sitemap and board detection for career pages |
 
 End-to-end check (fake provider and fake Greenhouse board on loopback, real typst, real Chrome for the apply step): source -> `discover_now` -> leads with score and insight -> `prepare_cv` -> Approve CV -> dry-run apply on a local form passes. It was checked before P9 and P13b merged: discovery and the queue work with default preferences, as planned. Still unchecked end to end: any live site, the live provider, Gmail, and the P9 / P13b screens with a live provider.
 

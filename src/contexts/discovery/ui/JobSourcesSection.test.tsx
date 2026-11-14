@@ -18,6 +18,7 @@ beforeEach(() => {
   mocked.setSourceSession.mockResolvedValue(undefined);
   mocked.removeSource.mockResolvedValue(undefined);
   mocked.setDaily.mockResolvedValue(undefined);
+  mocked.suggestBoards.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -107,6 +108,66 @@ describe("Settings > Job sources", () => {
     await user.click(screen.getByRole("button", { name: "Add" }));
     expect(mocked.addSource).toHaveBeenCalledWith("career_page", "Beta", "beta.test/careers");
     await waitFor(() => expect(screen.getByRole("button", { name: "Add source" })).toBeTruthy());
+  });
+
+  it("offers the job board behind a careers page with a plain button", async () => {
+    const user = userEvent.setup();
+    const board = { kind: "greenhouse", label: "Greenhouse", input: "boards.greenhouse.io/beta" };
+    mocked.suggestBoards.mockImplementation((url) => Promise.resolve(url === "beta.test/careers" ? [board] : []));
+    mocked.addSource.mockResolvedValue({ ...SOURCE, id: 3, name: "beta", kind: "greenhouse" });
+    render(<JobSourcesSection />);
+    await user.click(await screen.findByRole("button", { name: "Add source" }));
+    await user.click(screen.getByRole("button", { name: "Career page" }));
+    const address = screen.getByLabelText("Board name or address");
+    await user.type(address, "beta.test/careers");
+    await user.tab();
+
+    const text = "This page lists its jobs on Greenhouse (boards.greenhouse.io/beta). Add it as a Greenhouse source instead?";
+    const banner = await screen.findByRole("group", { name: text });
+    expect(mocked.suggestBoards).toHaveBeenCalledWith("beta.test/careers");
+    const offer = within(banner).getByRole("button", { name: "Add Greenhouse source" });
+    expect(offer.id).toBe("suggest-board-greenhouse-0");
+    // A plain button: the suggestion never takes the form's main action.
+    expect(offer.className).not.toContain("bg-accent");
+
+    await user.click(offer);
+    expect(mocked.addSource).toHaveBeenCalledWith("greenhouse", "", "boards.greenhouse.io/beta");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add source" })).toBeTruthy());
+  });
+
+  it("shows no suggestion without a board, or for another kind", async () => {
+    const user = userEvent.setup();
+    render(<JobSourcesSection />);
+    await user.click(await screen.findByRole("button", { name: "Add source" }));
+    await user.type(screen.getByLabelText("Board name or address"), "boards.greenhouse.io/acme");
+    await user.tab();
+    expect(mocked.suggestBoards, "a board kind is not a careers page").not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Career page" }));
+    await user.click(screen.getByLabelText("Board name or address"));
+    await user.tab();
+    await waitFor(() => expect(mocked.suggestBoards).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("group", { name: /lists its jobs on/ })).toBeNull();
+  });
+
+  it("shows nothing when the page cannot be read, and asks again later", async () => {
+    const user = userEvent.setup();
+    mocked.suggestBoards.mockRejectedValue(new CommandError("network is unreachable"));
+    render(<JobSourcesSection />);
+    await user.click(await screen.findByRole("button", { name: "Add source" }));
+    await user.click(screen.getByRole("button", { name: "Career page" }));
+    await user.type(screen.getByLabelText("Board name or address"), "beta.test/careers");
+    await user.tab();
+    await waitFor(() => expect(mocked.suggestBoards).toHaveBeenCalled());
+    expect(screen.queryByRole("group", { name: /lists its jobs on/ })).toBeNull();
+    expect(screen.queryByText("network is unreachable"), "not an error the user must act on").toBeNull();
+
+    // The failure is not remembered: leaving the field again asks again.
+    mocked.suggestBoards.mockResolvedValue([{ kind: "lever", label: "Lever", input: "jobs.lever.co/beta" }]);
+    await user.click(screen.getByLabelText("Board name or address"));
+    await user.tab();
+    expect(await screen.findByRole("group", { name: /lists its jobs on Lever/ })).toBeTruthy();
+    expect(mocked.suggestBoards).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the form open and says why a source was refused", async () => {

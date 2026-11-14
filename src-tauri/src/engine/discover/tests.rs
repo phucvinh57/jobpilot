@@ -37,11 +37,13 @@ struct FakeSource {
     /// `posting` returns `None` (so the runner's fetch hook is used) instead of text.
     no_text: bool,
     searched: AtomicUsize,
+    /// What `board_hints` answers.
+    hints: Vec<source::BoardHint>,
 }
 
 impl FakeSource {
     fn new(pages: Vec<Vec<Candidate>>) -> Arc<Self> {
-        Arc::new(Self { pages, failure: Mutex::new(None), no_text: false, searched: AtomicUsize::new(0) })
+        Arc::new(Self { pages, failure: Mutex::new(None), no_text: false, searched: AtomicUsize::new(0), hints: Vec::new() })
     }
 
     fn failing(message: &str) -> Arc<Self> {
@@ -67,6 +69,10 @@ impl JobSource for FakeSource {
 
     async fn posting(&self, c: &Candidate) -> Result<Option<String>> {
         Ok((!self.no_text).then(|| format!("{}\n\n{POSTING}", c.title)))
+    }
+
+    fn board_hints(&self) -> Vec<source::BoardHint> {
+        self.hints.clone()
     }
 }
 
@@ -467,6 +473,7 @@ async fn postings_without_text_use_the_fetch_hook_and_unreadable_ones_are_skippe
         failure: Mutex::new(None),
         no_text: true,
         searched: AtomicUsize::new(0),
+        hints: Vec::new(),
     });
     let id = h.add_source(&core, "f", adapter);
 
@@ -490,7 +497,7 @@ async fn postings_without_text_use_the_fetch_hook_and_unreadable_ones_are_skippe
     *h.fetch_answer.lock().unwrap() = Ok("Just a moment...".to_string());
     h.sources.lock().unwrap().insert(
         "f".into(),
-        Arc::new(FakeSource { pages: vec![vec![cand("f.test", 3, "Hooli", "Engineer")]], failure: Mutex::new(None), no_text: true, searched: AtomicUsize::new(0) }),
+        Arc::new(FakeSource { pages: vec![vec![cand("f.test", 3, "Hooli", "Engineer")]], failure: Mutex::new(None), no_text: true, searched: AtomicUsize::new(0), hints: Vec::new() }),
     );
     let summary = core.discover_now_with(h.deps()).await.unwrap();
     assert_eq!((result_of(&summary, id).saved, result_of(&summary, id).skipped), (0, 1));
@@ -511,6 +518,7 @@ async fn skipped_postings_are_counted_by_kind() {
         failure: Mutex::new(None),
         no_text: true,
         searched: AtomicUsize::new(0),
+        hints: Vec::new(),
     });
     let id = h.add_source(&core, "k", adapter);
     let mut deps = h.deps();
@@ -548,6 +556,7 @@ async fn a_bot_wall_skips_the_posting_and_does_not_fail_the_thread() {
         failure: Mutex::new(None),
         no_text: true,
         searched: AtomicUsize::new(0),
+        hints: Vec::new(),
     });
     let id = h.add_source(&core, "w", adapter);
     let mut deps = h.deps();
@@ -577,6 +586,7 @@ async fn a_failed_fetch_never_carries_the_posting_address_into_the_failure() {
         failure: Mutex::new(None),
         no_text: true,
         searched: AtomicUsize::new(0),
+        hints: Vec::new(),
     });
     let id = h.add_source(&core, "f", adapter);
     let mut deps = h.deps();
@@ -604,6 +614,7 @@ async fn a_posting_whose_session_is_in_use_is_skipped_by_kind_and_read_again_nex
         failure: Mutex::new(None),
         no_text: true,
         searched: AtomicUsize::new(0),
+        hints: Vec::new(),
     });
     let id = h.add_source(&core, "f", adapter);
     // What the browser read says while the user's window is open on the session.
@@ -734,6 +745,7 @@ async fn a_network_failure_while_fetching_fails_the_thread_and_retry_goes_on() {
         failure: Mutex::new(None),
         no_text: true,
         searched: AtomicUsize::new(0),
+        hints: Vec::new(),
     });
     let id = h.add_source(&core, "f", adapter);
     *h.fetch_answer.lock().unwrap() = Err("fetching f.test: error sending request for url".into());
@@ -907,7 +919,7 @@ async fn postings_of_one_host_are_fetched_one_delay_apart_by_the_default_fetch()
         .collect();
     let h = Harness::new();
     let core = h.open();
-    let adapter = Arc::new(FakeSource { pages: vec![candidates], failure: Mutex::new(None), no_text: true, searched: AtomicUsize::new(0) });
+    let adapter = Arc::new(FakeSource { pages: vec![candidates], failure: Mutex::new(None), no_text: true, searched: AtomicUsize::new(0), hints: Vec::new() });
     h.add_source(&core, "f", adapter);
     let mut deps = h.deps();
     // The real fetch hook, with a delay between requests to one host and the local fixture allowed.
@@ -931,6 +943,7 @@ async fn the_default_fetch_never_reads_a_private_address() {
         failure: Mutex::new(None),
         no_text: true,
         searched: AtomicUsize::new(0),
+        hints: Vec::new(),
     });
     h.add_source(&core, "f", adapter);
     let mut deps = h.deps();
@@ -1082,6 +1095,7 @@ async fn a_challenge_the_fetch_met_in_the_browser_pauses_at_that_posting_and_con
         failure: Mutex::new(None),
         no_text: true,
         searched: AtomicUsize::new(0),
+        hints: Vec::new(),
     });
     let id = h.add_source(&core, "f", adapter);
     let solved = Arc::new(AtomicBool::new(false));
@@ -1309,4 +1323,23 @@ async fn a_run_in_progress_is_running_and_not_due() {
     run.await.unwrap().unwrap();
     assert!(!core.discover_running().unwrap());
     assert!(!core.discover_due(chrono::Utc::now()).unwrap(), "it just ran");
+}
+
+#[tokio::test]
+async fn a_source_without_postings_that_points_to_a_board_says_so_in_its_status() {
+    let h = Harness::new();
+    let core = h.open();
+    let hint = source::BoardHint { kind: "greenhouse", input: "boards.greenhouse.io/acme".into() };
+    let empty = Arc::new(FakeSource { hints: vec![hint], ..Arc::into_inner(FakeSource::new(vec![vec![]])).unwrap() });
+    let pointing = h.add_source(&core, "a", empty);
+    let plain = h.add_source(&core, "c", FakeSource::new(vec![vec![]]));
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!(result_of(&summary, pointing).status, SourceStatus::Done);
+    assert_eq!(
+        core.store.get_source(pointing).unwrap().unwrap().last_status.as_deref(),
+        Some("No postings on the page. It links to a Greenhouse board: add it as a Greenhouse source")
+    );
+    assert_eq!(core.store.get_source(plain).unwrap().unwrap().last_status.as_deref(), Some("ok"));
+    // Only a suggestion: no source was added for the board.
+    assert_eq!(core.job_sources().unwrap().len(), 2);
 }

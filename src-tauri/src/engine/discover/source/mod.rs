@@ -20,6 +20,7 @@
 //! the runner turns into a pause for the user.
 
 mod ashby;
+pub mod boards;
 mod career_page;
 mod greenhouse;
 mod hn_hiring;
@@ -30,7 +31,7 @@ mod personio;
 mod recruitee;
 mod sitemap;
 mod smartrecruiters;
-mod web;
+pub(crate) mod web;
 mod workday;
 mod yc;
 
@@ -43,6 +44,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 pub use ashby::Ashby;
+pub use boards::{detect_boards, kind_for_host, BoardHint};
 pub use career_page::CareerPage;
 pub use greenhouse::Greenhouse;
 pub use hn_hiring::HnHiring;
@@ -108,6 +110,12 @@ pub trait JobSource: Send + Sync {
     /// (all of the API adapters do); `None` makes the runner fetch the page.
     async fn posting(&self, _candidate: &Candidate) -> Result<Option<String>> {
         Ok(None)
+    }
+
+    /// The job boards its last listing read pointed to when that read found no postings (a careers
+    /// page that embeds a Greenhouse board). Only a suggestion for the user: nothing reads them.
+    fn board_hints(&self) -> Vec<BoardHint> {
+        Vec::new()
     }
 }
 
@@ -198,6 +206,12 @@ pub fn check_source(kind: &str, url: &str) -> Result<(String, String)> {
     }
 }
 
+/// A board name that is safe in an API path: `[A-Za-z0-9._-]`, not empty, and not starting with a dot
+/// (`.` and `..`, and anything starting with a dot, would walk out of the API path).
+pub(crate) fn is_board_name(s: &str) -> bool {
+    !s.is_empty() && !s.starts_with('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 /// The board name in a board URL (`https://boards.greenhouse.io/acme/jobs/1` -> `acme`) or a bare
 /// slug. `hosts` are the registrable domains a board URL may have.
 pub(crate) fn board_slug(input: &str, hosts: &[&str]) -> Result<String> {
@@ -205,10 +219,7 @@ pub(crate) fn board_slug(input: &str, hosts: &[&str]) -> Result<String> {
     if input.is_empty() {
         bail!("no company board is set: enter the board URL or its short name");
     }
-    // `.` and `..` (and anything starting with a dot) would walk out of the API path.
-    let valid = |s: &str| {
-        !s.is_empty() && !s.starts_with('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    };
+    let valid = is_board_name;
     if !input.contains('/') && !input.contains(':') {
         return if valid(input) { Ok(input.to_string()) } else { bail!("`{input}` is not a board name") };
     }

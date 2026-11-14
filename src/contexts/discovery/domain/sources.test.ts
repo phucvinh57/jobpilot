@@ -31,6 +31,14 @@ describe("a source's status line", () => {
     expect(Array.from(line).length < STATUS_CHARS + 20 && line.includes("..."), line).toBe(true);
   });
 
+  it("shows a whole 'links to a board' note", () => {
+    const note = "No postings on the page. It links to a SmartRecruiters board: add it as a SmartRecruiters source";
+    expect(statusLine(source(hoursAgo(1), note), NOW)).toEqual({ line: `${note} - 1h ago`, outcome: "boardHint" });
+    expect(sourceTag("boardHint", false)).toEqual({ text: "see note", tone: "accent" });
+    expect(sourceTag("boardHint", true).text, "a paused source still needs the user").toBe("needs you");
+    expect(statusLine(source(hoursAgo(1), "No postings on this page"), NOW).outcome).toBe("other");
+  });
+
   it("points a paused source to the Jobs page", () => {
     expect(statusLine(source(null, "needs_human"), NOW).line).toContain("Jobs");
   });

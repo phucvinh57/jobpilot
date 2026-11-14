@@ -5,10 +5,12 @@
 
 import { useState } from "react";
 
-import { Button, Caption, ErrorBanner, Field, FilterChip, Section, Switch, Tag, TextInput } from "@/shared";
+import { Banner, Button, Caption, ErrorBanner, Field, FilterChip, Section, Switch, Tag, TextInput } from "@/shared";
 
+import { shownSuggestions, suggestionText } from "../domain/boards";
 import { rowAddress, rowName, sourceTag, statusLine } from "../domain/sources";
 import type { SessionOption, Source, SourceKind } from "../domain/types";
+import { useBoardSuggestion } from "../hooks/useBoardSuggestion";
 import { useJobSources } from "../hooks/useJobSources";
 
 function SourceRow({
@@ -80,6 +82,7 @@ function AddForm({
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const hint = kinds.find((k) => k.kind === kind)?.hint ?? "";
+  const suggestion = useBoardSuggestion(kind, url);
   return (
     <div className="flex flex-col gap-3 border border-border bg-surface-alt p-3">
       <div className="flex flex-col gap-1">
@@ -96,9 +99,29 @@ function AddForm({
         <TextInput id="new-source-name" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
       <Field label="Board name or address">
-        <TextInput id="new-source-url" placeholder="Board name or address" value={url} onChange={(e) => setUrl(e.target.value)} />
+        <TextInput
+          id="new-source-url"
+          placeholder="Board name or address"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onBlur={suggestion.flush}
+        />
       </Field>
       <Caption>{hint}</Caption>
+      {shownSuggestions(suggestion.hints).map(({ hint: board, bannerId, buttonId }) => (
+        <Banner
+          key={bannerId}
+          id={bannerId}
+          tone="accent"
+          title={suggestionText(board)}
+          body="You can still add the careers page itself."
+          actions={
+            <Button id={buttonId} size="compact" disabled={adding} onClick={() => onAdd(board.kind, name, board.input)}>
+              {`Add ${board.label} source`}
+            </Button>
+          }
+        />
+      ))}
       <div className="flex gap-2">
         <Button id="save-source" busy={adding} disabled={adding} onClick={() => onAdd(kind, name, url)}>
           Add

@@ -13,7 +13,7 @@ use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
 
 use super::dto::{
-    AddedLeadDto, DismissedDto, JobSourcesDto, LeadInput, PrepareOutcomeDto, QueueDto,
+    AddedLeadDto, BoardHintDto, DismissedDto, JobSourcesDto, LeadInput, PrepareOutcomeDto, QueueDto,
     RunSummaryDto, SessionOptionDto, SourceDto, SourceKindDto,
 };
 use super::rules;
@@ -226,6 +226,24 @@ pub async fn discovery_add_source(
     .await
 }
 
+/// The job boards a careers page points to (one plain read of the page, no browser), for the add
+/// form to offer as sources instead. Read-only: nothing is added and no board is read.
+#[tauri::command]
+pub async fn discovery_suggest_boards(
+    core: State<'_, Arc<Core>>,
+    url: String,
+) -> CommandResult<Vec<BoardHintDto>> {
+    let core = core.inner().clone();
+    run(async move {
+        let hints = match super::demo::board_hints(&url) {
+            Some(demo) => demo,
+            None => core.suggest_boards(&url).await?,
+        };
+        Ok(hints.iter().map(BoardHintDto::from).collect())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn discovery_set_source_enabled(
     core: State<'_, Arc<Core>>,
@@ -278,6 +296,7 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         discovery_skip,
         discovery_job_sources,
         discovery_add_source,
+        discovery_suggest_boards,
         discovery_set_source_enabled,
         discovery_set_source_session,
         discovery_remove_source,

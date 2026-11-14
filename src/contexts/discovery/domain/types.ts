@@ -143,6 +143,16 @@ export interface SourceKind {
   hint: string;
 }
 
+/** A job board a careers page points to: offered as a source to add instead (never added by itself). */
+export interface BoardHint {
+  /** The source kind to add (`greenhouse`, `lever`, ...). */
+  kind: string;
+  /** The kind's label (`Greenhouse`). */
+  label: string;
+  /** The board address to add; the shell's check for the kind accepts it. */
+  input: string;
+}
+
 export interface SessionOption {
   id: number;
   name: string;
