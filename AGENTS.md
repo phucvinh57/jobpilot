@@ -16,18 +16,33 @@ scripts/a11y-hold.py       keeps an AT client connected so accessibility ids sta
 crates/core  (jobpilot-core, lib jobpilot_core)   no UI
   paths      data dir ($XDG_DATA_HOME/jobpilot, override JOBPILOT_DATA_DIR), profile path, logs_dir
   runtime    global tokio runtime; spawn(fut) -> oneshot::Receiver
-  store/     SQLite (rusqlite), one file per table: applications, events, providers, sessions, emails, kv, status
+  store/     SQLite (rusqlite), one file per table: applications, events, providers, sessions, emails, kv, status, sources, leads, preferences, chat, trends, graph
   secrets    OS keyring wrapper (JOBPILOT_SECRETS=memory for tests); every value read/written is registered with redact
   redact     mask secrets in any text (key shapes, bearer/OAuth tokens, exact registered values)
   logging    tracing: stderr + rolling <data_dir>/logs/jobpilot.log.<date> (14 kept), both through redact
   health     startup checks (typst, provider, Chrome) -> Health/Problem; classify(error text) -> Problem kind (network, no provider, ...)
   facade     Core { paths, store, secrets }, Core::open()
-  llm        P1   pipeline  P2   browser  P4   apply  P5   mail  P6
+  llm        P1   (`complete_json`, `chat_json` for multi-turn)
+  pipeline   P2   analyze -> tailor -> guard -> render; `insight` (P11) = per-job brief: domain, company facts, skills, interview process
+  browser    P4   managed Chrome sessions; P10 adds `challenge` (detect login/captcha/block, never solve), `render` (discovery pages, visible window for the user),
+                  `guard` (local forward proxy: discovery browsers cannot reach private hosts), `gate` (one use of a session profile at a time)
+  apply      P5   review -> confirm -> submit, dry run, manual hand-off
+  mail       P6   Gmail sync, reply classification
+  graph      P8   flows as graphs (`GraphDef` facade over adk-graph, the only code that names it): run/resume/cancel/waiting/subscribe,
+                  SQLite checkpoints, `nodes::challenge` interrupt shared by discovery and trends
+  net        P8/P10   `net::http`: the one safe HTTP client for third-party data (public hosts only, per-host delay, size cap, hop-by-hop redirects)
+  notify     P8   desktop notifications (best effort)
+  prefs      P8   `Preferences` model + `Core::preferences/save_preferences` (the chat that fills it is P9, open PR)
+  discover   P10/P12   `source/` (greenhouse, lever, ashby, hn_hiring, yc, career_page), `run` (graphs `discovery` and `source_run`), `score`, `dedup`, `handoff`,
+                  `sources`, `queue` (QueueSnapshot), `promote` (graph `prepare_cv`, dismiss)
+  trends     P13a collection only: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`; the digest is P13b (open PR)
 crates/desktop (package `jobpilot`)               GPUI views only
   main.rs    logging init, window (app id `jobpilot`)
   app.rs     AppState (Arc<Core>, selection, screen, health, retry), root view + setup banner
   problem.rs Problem -> help text / call-to-action / Retry (shared by every view)
-  sidebar.rs detail/{mod,jd,cv,apply,timeline}.rs   settings/{providers,sessions,gmail}.rs
+  sidebar.rs detail/{mod,jd,cv,apply,timeline}.rs   settings/{providers,sessions,sources,gmail}.rs
+  queue.rs   queue/logic.rs: Queue screen (leads by score, brief + score breakdown, Prepare CV / Dismiss / Open posting, Search now, "needs you" banner)
+  prefs.rs   trends.rs: screens that are placeholders on main until P9 / P13b merge
   detail/mod.rs  the ONE primary action (primary_for: Generate -> Approve CV -> Review & Submit -> Submit); the rest are plain buttons
 ```
 
@@ -36,6 +51,7 @@ crates/desktop (package `jobpilot`)               GPUI views only
 - Run: `cargo run -p jobpilot` (sample data: `JOBPILOT_DEMO=1`; throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory`)
 - Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace`
 - Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-core -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
+- End-to-end without real services: `cargo test -p jobpilot-core --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
 - Package: `scripts/package.sh` -> `dist/`
 - Needs: Rust, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (wayland/xkbcommon/vulkan, libdbus for the keyring).
 - Pre-PR checks: `scripts/check.sh [--all]` (paths changed since main: clippy + test, typst render); CI adds `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps) and restores the cache saved by main; `git config core.hooksPath .githooks` once per clone runs it before every push.
@@ -50,7 +66,7 @@ env -u WAYLAND_DISPLAY JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory JOBPILO
 import -window JobPilot /tmp/jp.png        # ImageMagick; matches the window title
 ```
 
-For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form.
+For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), so a fake job board cannot be driven from the GUI: that path is covered by `crates/core/tests/e2e_discovery.rs`, and the GUI check of Queue, a lead, Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
 
 ### Driving it with agent-desktop (accessibility)
 
@@ -82,7 +98,25 @@ GPUI exposes elements through AccessKit (AT-SPI). An element is visible only wit
 - Failures the user can act on become a `health::Problem` (no provider, no Chrome, no typst, network) and are shown with a call to action; network errors get a Retry.
 - Log key steps at `info!` with ids/counts only (no page, JD, email or CV text); failures at `warn!`/`error!`.
 - Exactly one primary button at a time (`detail/mod.rs::primary_for`, unit-tested); it is disabled while work runs. Secondary actions are plain buttons.
+- Outgoing HTTP to a URL that is not the user's own (job boards, feeds, postings, search results) goes through `net::http`; discovery browsers go through `browser::guard`. Both refuse machine-local and private hosts. `allow_private_hosts` exists for tests only.
+- Discovery browsers never disguise automation (no hidden webdriver flag, no user-agent change), and a login, captcha or block page is never solved, evaded or waited out: the source pauses and the user deals with it in the visible browser.
+- Graphs (`core/graph`): state is one `serde` struct, nodes return the new state and must be idempotent (a resume re-runs the node). A node with several plain incoming edges is an AND join and waits for all of them, so a loop or an alternative path must use `route`, never a second edge. A paused branch holds back its siblings in the same run: independent work runs as its own thread (`Graphs::run_each`). Parallel nodes only share a field declared with `append`.
+- Leads are not applications: a found job is a `leads` row; it becomes an application only when the user presses Prepare CV (`Core::promote`, idempotent). Discovery never promotes and never writes a CV.
+- Doc examples that are not compilable use ```` ```text ````, not ```` ```ignore ````: `cargo test -- --ignored` (the Chrome tests) also runs ignored doctests, and they fail to compile.
+- Desktop tests: never `use super::*` in a test module of a file that glob-imports `gpui_kit` (the glob brings gpui's `test` attribute and shadows `#[test]`); import the names you need.
+- Untrusted text (postings, feed items, company pages) reaches the model only between markers, as data, and the model fills fixed schemas; URLs come from adapters in code.
 
 ## Ownership (parallel work)
 
 Each sub-plan edits only its own files: `llm/` P1 + `settings/providers.rs`; `pipeline/` P2; `detail/{jd,cv,timeline}.rs` + `sidebar.rs` P3; `browser/` + `settings/sessions.rs` P4; `apply/` + `detail/apply.rs` P5; `mail/` + `settings/gmail.rs` P6; `health`, `logging`, `redact`, `problem.rs`, packaging and docs P7. Add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
+
+The product plans (`docs/plans/`, status table in `docs/plans/README.md`):
+
+- P8 foundation: `core/graph/`, the new `store/` files and migrations, `notify.rs`, `Llm::chat_json`, `Problem::NeedsHuman`, `app.rs` navigation.
+- P9 preference chat: `core/prefs/` (chat), `desktop/prefs.rs`, `assets/prompts/preferences.md`.
+- P10 discovery: `core/discover/` except `promote.rs` and `queue.rs`, `core/net/`, `browser/{challenge,render,guard,gate}.rs`, `settings/sources.rs`.
+- P11 job insight: `pipeline/insight*`, the brief in `detail/jd.rs`.
+- P12 queue: `desktop/queue*`, `core/discover/{promote,queue}.rs`.
+- P13 trends: `core/trends/`, `desktop/trends.rs`, `assets/prompts/trends.md`.
+
+Prompts under `assets/prompts/` are High risk (a human reads the diff).

@@ -5,7 +5,7 @@
 //! names it; everything else uses the types below, so the library can be swapped without touching
 //! the flows.
 //!
-//! ```ignore
+//! ```text
 //! let graph = GraphDef::<Chat>::new("prefs_chat")
 //!     .node("ask", |mut s| async move { s.reply = Some("...".into()); Ok(s) })
 //!     .wait("wait_user", |s| s.message.is_none().then_some(WaitReason::UserMessage))

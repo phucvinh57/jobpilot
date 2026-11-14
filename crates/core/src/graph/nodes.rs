@@ -47,7 +47,7 @@ pub trait Challenged {
 
 /// The shared interrupt of discovery and trends: pause while the state holds a [`Challenge`].
 ///
-/// ```ignore
+/// ```text
 /// graph.wait("wait_human", nodes::challenge)
 /// // the UI's "Continue" clears it:
 /// graphs.resume(&graph, thread, |s| s.challenge = None).await

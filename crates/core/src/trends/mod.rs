@@ -3,7 +3,7 @@
 //! collected into `trend_items` by the `trends` graph ([`collect`]). The digest, the LLM calls and
 //! the view are part B.
 //!
-//! ```ignore
+//! ```text
 //! core.add_trend_source(SourceKind::HackerNews, "", "")?;
 //! core.add_trend_source(SourceKind::Rss, "Eng blog", "https://blog.example.com/feed.xml")?;
 //! core.set_search_key(SearchProvider::Brave, "BSA...")?;            // keyring only
