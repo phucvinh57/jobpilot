@@ -280,6 +280,9 @@ export function addInput(input: LeadInput): boolean {
 /** Start reading `input` (nothing else is being read). */
 function startAdd(input: LeadInput): void {
   set({ adding: input });
+  // Where the user was when they added it: the new lead opens only if they are still there.
+  const before = useNav.getState();
+  const was = { screen: before.screen, stage: before.stage, drawer: before.drawer };
   api.addLead(input).then(
     (added) => {
       set({ addFailures: clearFailureOf(get().addFailures, input, sameInput) });
@@ -294,7 +297,15 @@ function startAdd(input: LeadInput): void {
         // Show the new lead, whatever the filters were, once the list holds it (the drawer closes
         // on a lead that is not listed).
         set({ filter: NO_FILTER });
-        void read.then(() => selectLead(added.leadId));
+        void read.then(() => {
+          const now = useNav.getState();
+          const moved = now.screen !== was.screen || now.stage !== was.stage || now.drawer !== was.drawer;
+          const listed = get().queue?.items.some((lead) => lead.id === added.leadId) ?? false;
+          // The user went elsewhere meanwhile, or the list could not be read: leave the page as it is.
+          if (!moved && listed) {
+            selectLead(added.leadId);
+          }
+        });
       }
       readNext();
     },
@@ -380,8 +391,9 @@ export async function prepare(requested: number[]): Promise<void> {
     delete failed[id];
     jobBatch.set(id, batch);
   }
-  // The leads prepared are no longer ticked; the other ticks stay.
-  set({ jobs, failed, checked: state.checked.filter((id) => !ids.includes(id)) });
+  // The leads asked for are no longer ticked (also one hidden by a filter or already running);
+  // the other ticks stay.
+  set({ jobs, failed, checked: state.checked.filter((id) => !requested.includes(id)) });
   try {
     // Each outcome arrives as an event while the batch goes on; the final list is the safety net.
     for (const outcome of await api.prepareCvs(ids)) {

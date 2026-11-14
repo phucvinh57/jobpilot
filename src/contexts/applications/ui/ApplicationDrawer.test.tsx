@@ -164,11 +164,11 @@ describe("the application drawer", () => {
     expect(rejected.className).toContain("text-danger");
     await user.click(within(marks).getByRole("button", { name: "Offer" }));
     expect(mocked.mark).not.toHaveBeenCalled();
-    await user.click(within(marks).getByRole("button", { name: "Mark as Offer" }));
+    await user.click(within(marks).getByRole("button", { name: "Confirm" }));
     expect(mocked.mark).toHaveBeenCalledWith(7, "offer");
     expect(await within(marks).findByText("an offer cannot go back to an interview")).toBeTruthy();
     await user.click(within(marks).getByRole("button", { name: "Rejected" }));
-    await user.click(within(marks).getByRole("button", { name: "Mark as Rejected" }));
+    await user.click(within(marks).getByRole("button", { name: "Confirm" }));
     expect(mocked.mark).toHaveBeenLastCalledWith(7, "rejected");
   });
 
@@ -178,9 +178,9 @@ describe("the application drawer", () => {
     const marks = within(drawer).getByRole("region", { name: "The company answered" });
 
     await user.click(within(marks).getByRole("button", { name: "Offer" }));
-    const ask = within(marks).getByRole("group", { name: "Mark as Offer" });
-    expect(within(ask).getByText("Mark as Offer? This can't be undone.")).toBeTruthy();
-    const confirm = within(ask).getByRole("button", { name: "Mark as Offer" });
+    const ask = within(marks).getByRole("group", { name: "Confirm: Offer" });
+    expect(within(ask).getByText("Record “Offer”? This can't be undone.")).toBeTruthy();
+    const confirm = within(ask).getByRole("button", { name: "Confirm" });
     expect(confirm.id).toBe("mark-confirm");
     expect(confirm.className, "a plain button").not.toContain("text-danger");
     expect(primaryButtons(), "never a second primary").toEqual([]);
@@ -188,19 +188,19 @@ describe("the application drawer", () => {
 
     // Cancel: nothing is marked, the marks are back.
     await user.click(within(ask).getByRole("button", { name: "Cancel" }));
-    expect(within(marks).queryByRole("group", { name: "Mark as Offer" })).toBeNull();
+    expect(within(marks).queryByRole("group", { name: "Confirm: Offer" })).toBeNull();
     expect(mocked.mark).not.toHaveBeenCalled();
 
     // Rejected asks with a red confirm.
     await user.click(within(marks).getByRole("button", { name: "Rejected" }));
-    const reject = within(marks).getByRole("button", { name: "Mark as Rejected" });
+    const reject = within(marks).getByRole("button", { name: "Confirm" });
     expect(reject.id).toBe("mark-confirm");
     expect(reject.className).toContain("text-danger");
     expect(primaryButtons()).toEqual([]);
     expect(document.getElementById("mark-cancel")).toBeTruthy();
     await user.click(reject);
     expect(mocked.mark).toHaveBeenCalledWith(7, "rejected");
-    await waitFor(() => expect(within(marks).queryByRole("group", { name: "Mark as Rejected" })).toBeNull());
+    await waitFor(() => expect(within(marks).queryByRole("group", { name: "Confirm: Rejected" })).toBeNull());
   });
 
   it("keeps a failed mark to the application it was made on", async () => {
@@ -208,7 +208,7 @@ describe("the application drawer", () => {
     mocked.mark.mockRejectedValueOnce(new CommandError("the database is locked"));
     const drawer = await open(INTERVIEW);
     await user.click(within(drawer).getByRole("button", { name: "Offer" }));
-    await user.click(within(drawer).getByRole("button", { name: "Mark as Offer" }));
+    await user.click(within(drawer).getByRole("button", { name: "Confirm" }));
     expect(await within(drawer).findByText("the database is locked")).toBeTruthy();
 
     mocked.readApplication.mockImplementation(async (id) => header({ ...INTERVIEW, id, company: "Globex" }));
@@ -244,7 +244,7 @@ describe("the application drawer", () => {
     expect(useNav.getState().stage).toBe("applied");
     mocked.mark.mockResolvedValue(header(INTERVIEW));
     await user.click(within(drawer).getByRole("button", { name: "Got an interview" }));
-    await user.click(within(drawer).getByRole("button", { name: "Mark as Got an interview" }));
+    await user.click(within(drawer).getByRole("button", { name: "Confirm" }));
     expect(mocked.mark).toHaveBeenCalledWith(7, "interview");
 
     // The shell says the application changed: the drawer reads it again, and the page follows.

@@ -156,10 +156,10 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
 const buttonLook = cva("cursor-pointer border font-medium transition-colors disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-55", {
   variants: {
     variant: {
-      primary: "border-accent bg-accent text-on-fill hover:border-accent-dark hover:bg-accent-dark",
-      secondary: "border-control-border bg-surface text-ink hover:bg-track",
-      ghost: "border-transparent bg-transparent text-muted hover:bg-track hover:text-ink",
-      danger: "border-danger/50 bg-surface text-danger hover:bg-danger-bg",
+      primary: "border-accent bg-accent text-on-fill enabled:hover:border-accent-dark enabled:hover:bg-accent-dark",
+      secondary: "border-control-border bg-surface text-ink enabled:hover:bg-track",
+      ghost: "border-transparent bg-transparent text-muted enabled:hover:bg-track enabled:hover:text-ink",
+      danger: "border-danger/50 bg-surface text-danger enabled:hover:bg-danger-bg",
     },
     size: {
       regular: "h-9 px-4 text-body",

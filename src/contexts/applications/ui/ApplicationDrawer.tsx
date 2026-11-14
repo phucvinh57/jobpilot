@@ -98,8 +98,8 @@ function Marks({ header, mark }: { header: ApplicationHeader; mark: ApplicationM
           ))}
         </div>
       ) : (
-        <div role="group" aria-label={`Mark as ${pending.label}`} className="flex flex-col gap-2 border border-border bg-surface-alt p-3">
-          <p className="text-body text-ink">Mark as {pending.label}? This can&apos;t be undone.</p>
+        <div role="group" aria-label={`Confirm: ${pending.label}`} className="flex flex-col gap-2 border border-border bg-surface-alt p-3">
+          <p className="text-body text-ink">Record &ldquo;{pending.label}&rdquo;? This can&apos;t be undone.</p>
           <div className="flex flex-wrap gap-2">
             <Button
               id="mark-confirm"
@@ -109,7 +109,7 @@ function Marks({ header, mark }: { header: ApplicationHeader; mark: ApplicationM
               disabled={mark.busy}
               onClick={() => void mark.run(pending.key).then(() => setAsking(undefined))}
             >
-              Mark as {pending.label}
+              Confirm
             </Button>
             <Button id="mark-cancel" size="compact" variant="ghost" disabled={mark.busy} onClick={() => setAsking(undefined)}>
               Cancel

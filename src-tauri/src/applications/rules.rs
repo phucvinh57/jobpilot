@@ -116,12 +116,16 @@ pub const MAX_ROUNDS: usize = 8;
 /// [`DEFAULT_ROUNDS`] when that leaves none.
 pub fn round_options(insight_steps: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for step in insight_steps {
-        let Some(step) = clean_round(Some(step)) else {
+    for raw in insight_steps {
+        // The offer step is recognised on the whole text, before it is cut.
+        if raw.to_lowercase().contains("offer") {
+            continue;
+        }
+        let Some(step) = clean_round(Some(raw)) else {
             continue;
         };
         let lower = step.to_lowercase();
-        if lower.contains("offer") || out.iter().any(|o| o.to_lowercase() == lower) {
+        if out.iter().any(|o| o.to_lowercase() == lower) {
             continue;
         }
         out.push(step);
@@ -205,6 +209,12 @@ fn next(label: &str, tone: Tone) -> NextAction {
 /// (in interviews: the round the user marked): `busy` = a generate / revise job is running for it,
 /// `has_cv` = its `cv.yaml` exists.
 pub fn next_action(status: Status, has_cv: bool, busy: bool, round: Option<&str>) -> NextAction {
+    // How an application ended stays visible, even while its CV is being revised.
+    match status {
+        Status::Offer => return next("Offer", Tone::Ok),
+        Status::Rejected => return next("Rejected", Tone::Danger),
+        _ => {}
+    }
     if busy {
         return next(if has_cv { "Working" } else { "Generating" }, Tone::Neutral);
     }
@@ -1027,6 +1037,14 @@ mod tests {
     }
 
     #[test]
+    fn an_offer_step_is_left_out_even_when_offer_comes_after_the_cut() {
+        let step = "Final conversation with the VP of Engineering and the team, then a written offer".to_string();
+        assert!(step.chars().count() > crate::engine::store::ROUND_MAX_CHARS);
+        let rounds = round_options(&[step, "Technical screen".to_string()]);
+        assert_eq!(rounds, vec!["Technical screen".to_string()]);
+    }
+
+    #[test]
     fn without_a_process_the_usual_rounds_are_offered() {
         assert_eq!(round_options(&[]), strings(&DEFAULT_ROUNDS));
         assert_eq!(round_options(&strings(&["Offer", "  "])), strings(&DEFAULT_ROUNDS));
@@ -1138,6 +1156,9 @@ mod tests {
         assert_eq!(next_action(Status::Draft, false, true, None).label, "Generating");
         assert_eq!(next_action(Status::Draft, true, true, None).label, "Working");
         assert_eq!(next_action(Status::CvReady, true, true, None).label, "Working");
+        // How it ended stays visible while a CV job runs.
+        assert_eq!(next_action(Status::Offer, true, true, None).label, "Offer");
+        assert_eq!(next_action(Status::Rejected, true, true, None).label, "Rejected");
         assert_eq!(next_action(Status::Draft, false, true, None).tone, Tone::Neutral);
     }
 

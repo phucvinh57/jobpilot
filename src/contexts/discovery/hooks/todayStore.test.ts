@@ -264,6 +264,22 @@ describe("Prepare CV", () => {
     expect(mocked.forgetFailure).toHaveBeenCalledWith(1);
   });
 
+  it("unticks every lead asked for, also one already running", async () => {
+    enter();
+    await settle();
+    const batch = deferred<PrepareOutcome[]>();
+    mocked.prepareCvs.mockReturnValue(batch.promise);
+    const first = prepare([1]);
+    setChecked(1, true);
+    setChecked(2, true);
+    setChecked(3, true);
+    const second = prepare([1, 2]);
+    expect(useTodayStore.getState().checked).toEqual([3]);
+    batch.resolve([ready(1, 3), ready(2, 4)]);
+    await first;
+    await second;
+  });
+
   it("skips leads that are already being prepared", async () => {
     enter();
     await settle();
@@ -322,6 +338,19 @@ describe("the link box", () => {
     expect(s.adding).toBeUndefined();
     expect(s.filter).toEqual({ sourceId: null, minScore: null, location: "" });
     expect(useNav.getState().drawer).toEqual({ kind: "lead", id: 3 });
+  });
+
+  it("leaves the page alone when the user moved on while a posting was read", async () => {
+    enter();
+    await settle();
+    mocked.parseInput.mockResolvedValue(url);
+    const read = deferred<AddedLead>();
+    mocked.addLead.mockReturnValue(read.promise);
+    expect(await submitLink("https://a.test/jobs/9")).toBe(true);
+    useNav.getState().openAppDrawer(5, "applied");
+    read.resolve({ leadId: 3, state: "new", applicationId: null });
+    await settle();
+    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 5 });
   });
 
   it("does nothing for a blank box", async () => {
