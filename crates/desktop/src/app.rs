@@ -25,19 +25,23 @@ use jobpilot_core::{mail, runtime, Core};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use crate::detail::Detail;
+use crate::pipeline::PipelineView;
 use crate::queue::QueueView;
 use crate::settings::SettingsView;
 use crate::sidebar::Sidebar;
 use crate::trends::TrendsView;
+use crate::ui;
 use jobs::{generate_plan, progress_label, GeneratePlan};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
     /// The selected application.
     Detail,
     Settings,
-    /// The Job list: found jobs sorted by match, and the box that turns a pasted link into one (P12).
+    /// Today (the Job list): found jobs sorted by match, and the box that turns a pasted link into one (P12).
     Jobs,
+    /// The kanban board of every application, and the latest activity.
+    Pipeline,
     /// Market trends and reports (P13).
     Trends,
 }
@@ -50,6 +54,7 @@ impl Screen {
             Screen::Settings => 1,
             Screen::Jobs => 2,
             Screen::Trends => 3,
+            Screen::Pipeline => 4,
         }
     }
 }
@@ -89,9 +94,19 @@ pub struct AppState {
     pub queue_selected: Option<i64>,
     /// Bumped whenever the Job list is shown, so it reads its leads again.
     pub queue_epoch: u64,
-    /// New leads in the Job list (the badge on the sidebar entry), kept current by
-    /// [`refresh_lead_count`](Self::refresh_lead_count) whichever screen is shown.
+    /// Bumped whenever the Pipeline is shown or the stored data was reloaded (mail sync, approval),
+    /// so it reads the latest activity again.
+    pub pipeline_epoch: u64,
+    /// The screen an open application was opened from (Today or the Pipeline): the sidebar
+    /// highlights it and the breadcrumb leads back to it.
+    pub detail_from: Screen,
+    /// New leads in the Job list (the badge on the Today entry when nothing needs the user), kept
+    /// current by [`refresh_lead_count`](Self::refresh_lead_count) whichever screen is shown.
     pub lead_count: usize,
+    /// What waits for the user on Today: the number its "NEEDS YOU" header shows (sources paused
+    /// at a login / captcha / block page, failed or finished CVs). Today writes it with
+    /// [`set_needs_you`](Self::set_needs_you); it is the badge on the Today entry.
+    pub needs_you: usize,
     /// Counts started so far: only the answer of the latest one is shown.
     lead_count_reads: u64,
     /// A file dropped on the window (or why it was refused), waiting for the Job list to turn it into
@@ -117,7 +132,10 @@ impl AppState {
             settings_focus: None,
             queue_selected: None,
             queue_epoch: 0,
+            pipeline_epoch: 0,
+            detail_from: Screen::Pipeline,
             lead_count: 0,
+            needs_you: 0,
             lead_count_reads: 0,
             dropped: None,
             prefs_saved: false,
@@ -143,11 +161,16 @@ impl AppState {
     /// of the Job list.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.load();
+        // New mail or an approval may have added events without moving an application.
+        self.pipeline_epoch += 1;
         self.refresh_lead_count(cx);
         cx.notify();
     }
 
+    /// Open application `id`, remembering the screen it was opened from (see
+    /// [`detail_from`](Self::detail_from)).
     pub fn select(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.detail_from = detail_origin(self.screen, self.detail_from);
         self.selected = Some(id);
         self.screen = Screen::Detail;
         cx.notify();
@@ -155,8 +178,10 @@ impl AppState {
 
     pub fn show(&mut self, screen: Screen, cx: &mut Context<Self>) {
         let leaving_settings = self.screen == Screen::Settings && screen != Screen::Settings;
-        if screen == Screen::Jobs {
-            self.queue_epoch += 1;
+        match screen {
+            Screen::Jobs => self.queue_epoch += 1,
+            Screen::Pipeline => self.pipeline_epoch += 1,
+            _ => {}
         }
         self.screen = screen;
         if leaving_settings {
@@ -198,31 +223,41 @@ impl AppState {
         .detach();
     }
 
-    /// Read the number of leads in the Job list again (the sidebar badge), off the UI thread and
-    /// without the Job list screen: call it once at startup and after anything that adds, prepares
-    /// or dismisses leads (a search, the daily run, an add by hand). An older answer that arrives
-    /// after a newer one is dropped.
+    /// Read the number of new leads again (the Today badge when nothing needs the user), off the UI
+    /// thread and without the Job list screen: call it once at startup and after anything that adds,
+    /// prepares or dismisses leads. An older answer that arrives after a newer one is dropped, and
+    /// nothing is redrawn when the number did not change.
     pub fn refresh_lead_count(&mut self, cx: &mut Context<Self>) {
         self.lead_count_reads += 1;
         let read = self.lead_count_reads;
         let core = self.core.clone();
         let rx = runtime::spawn(async move { core.new_lead_count() });
         cx.spawn(async move |this, cx| {
-            match rx.await {
-                Ok(Ok(count)) => {
-                    this.update(cx, |state, cx| {
-                        if is_latest_read(read, state.lead_count_reads) && state.lead_count != count {
-                            state.lead_count = count;
+            let Ok(leads) = rx.await else { return };
+            this.update(cx, |state, cx| {
+                if !is_latest_read(read, state.lead_count_reads) {
+                    return;
+                }
+                match leads {
+                    Ok(count) => {
+                        if set_if_changed(&mut state.lead_count, count) {
                             cx.notify();
                         }
-                    })
-                    .ok();
+                    }
+                    Err(e) => tracing::warn!("counting the new leads failed: {e:#}"),
                 }
-                Ok(Err(e)) => tracing::warn!("counting the new leads failed: {e:#}"),
-                Err(_) => {}
-            }
+            })
+            .ok();
         })
         .detach();
+    }
+
+    /// Today tells the sidebar how many things wait for the user (the number in its "NEEDS YOU"
+    /// header); redraws only when it changed.
+    pub fn set_needs_you(&mut self, count: usize, cx: &mut Context<Self>) {
+        if set_if_changed(&mut self.needs_you, count) {
+            cx.notify();
+        }
     }
 
     /// Prerequisites that block the main flow (empty until the first check finished).
@@ -456,22 +491,28 @@ impl AppState {
     }
 }
 
-/// Colour of the status dot.
+/// Store `value` in `slot`; `true` when that changed it (so the view needs a redraw).
+pub(crate) fn set_if_changed<T: PartialEq>(slot: &mut T, value: T) -> bool {
+    if *slot == value {
+        return false;
+    }
+    *slot = value;
+    true
+}
+
+/// The screen an application opened from `current` came from: Today or the Pipeline when it was
+/// opened from one of them, else (opened from the open application, or from somewhere that has no
+/// list of applications) the one before, `previous`.
+pub(crate) fn detail_origin(current: Screen, previous: Screen) -> Screen {
+    match current {
+        Screen::Jobs | Screen::Pipeline => current,
+        Screen::Detail | Screen::Settings | Screen::Trends => previous,
+    }
+}
+
 /// The answer of read number `read` is the one to show only while it is the latest started.
 pub(crate) fn is_latest_read(read: u64, latest: u64) -> bool {
     read == latest
-}
-
-pub fn status_color(status: Status, theme: &Theme) -> Hsla {
-    match status {
-        Status::Draft => theme.muted_foreground,
-        Status::CvReady => theme.info,
-        Status::Submitting => theme.warning,
-        Status::Applied => theme.primary,
-        Status::Interview => theme.success,
-        Status::Offer => theme.success,
-        Status::Rejected | Status::Failed => theme.danger,
-    }
 }
 
 /// Root view: sidebar on the left, the current [`Screen`] on the right (fading in when it changes).
@@ -481,6 +522,7 @@ pub struct JobPilot {
     detail: Entity<Detail>,
     settings: Entity<SettingsView>,
     queue: Entity<QueueView>,
+    pipeline: Entity<PipelineView>,
     trends: Entity<TrendsView>,
 }
 
@@ -498,6 +540,7 @@ impl JobPilot {
             detail: cx.new(|cx| Detail::new(state.clone(), window, cx)),
             settings: cx.new(|cx| SettingsView::new(state.clone(), cx)),
             queue: cx.new(|cx| QueueView::new(state.clone(), window, cx)),
+            pipeline: cx.new(|cx| PipelineView::new(state.clone(), cx)),
             trends: cx.new(|cx| TrendsView::new(state.clone(), window, cx)),
             state,
         }
@@ -511,15 +554,16 @@ impl Render for JobPilot {
             Screen::Detail => self.detail.clone().into_any_element(),
             Screen::Settings => self.settings.clone().into_any_element(),
             Screen::Jobs => self.queue.clone().into_any_element(),
+            Screen::Pipeline => self.pipeline.clone().into_any_element(),
             Screen::Trends => self.trends.clone().into_any_element(),
         };
-        let theme = cx.theme();
-        let highlight = theme.accent;
+        let p = ui::palette(cx);
+        let highlight = p.accent_soft;
         div()
             .h_flex()
             .size_full()
-            .bg(theme.background)
-            .text_color(theme.foreground)
+            .bg(p.bg)
+            .text_color(p.ink)
             // Drop a .md/.txt/.html/.pdf file anywhere on the window to add it to the Job list as a lead.
             .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(highlight))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
@@ -728,11 +772,31 @@ fn demo_insight(slug: &str) -> Insight {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: it would pull in gpui's `test` attribute and shadow the standard one.
-    use super::is_latest_read;
+    use super::{detail_origin, is_latest_read, set_if_changed, Screen};
 
     #[test]
     fn only_the_latest_lead_count_is_shown() {
         assert!(is_latest_read(3, 3));
         assert!(!is_latest_read(2, 3), "an older answer arriving late is dropped");
+    }
+
+    #[test]
+    fn a_value_is_stored_and_reported_only_when_it_changes() {
+        let mut count = 2;
+        assert!(!set_if_changed(&mut count, 2), "same number: no redraw");
+        assert!(set_if_changed(&mut count, 3));
+        assert_eq!(count, 3);
+        let mut screen = Screen::Jobs;
+        assert!(set_if_changed(&mut screen, Screen::Pipeline));
+        assert_eq!(screen, Screen::Pipeline);
+    }
+
+    #[test]
+    fn an_application_remembers_where_it_was_opened_from() {
+        assert_eq!(detail_origin(Screen::Jobs, Screen::Pipeline), Screen::Jobs, "from Today");
+        assert_eq!(detail_origin(Screen::Pipeline, Screen::Jobs), Screen::Pipeline, "from the Pipeline");
+        assert_eq!(detail_origin(Screen::Detail, Screen::Jobs), Screen::Jobs, "opened again from the application itself");
+        assert_eq!(detail_origin(Screen::Settings, Screen::Pipeline), Screen::Pipeline);
+        assert_eq!(detail_origin(Screen::Trends, Screen::Jobs), Screen::Jobs);
     }
 }

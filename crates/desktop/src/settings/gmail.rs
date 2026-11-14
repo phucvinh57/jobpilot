@@ -6,7 +6,6 @@
 use std::future::Future;
 
 use anyhow::anyhow;
-use gpui_kit::component::button::*;
 use gpui_kit::component::input::*;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -15,8 +14,8 @@ use jobpilot_core::chrono::Local;
 use jobpilot_core::mail::{self, GmailState};
 use jobpilot_core::runtime;
 
-use crate::ui::{field, section};
 use crate::app::AppState;
+use crate::ui::{danger_button, field, ghost_button, health_dot, palette, secondary_button, section_with, tag, Palette, Tone};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Busy {
@@ -186,13 +185,13 @@ impl GmailSection {
         );
     }
 
-    fn render_signed_out(&self, form: &Form, muted: Hsla, cx: &mut Context<Self>) -> Div {
+    fn render_signed_out(&self, form: &Form, p: &Palette, cx: &mut Context<Self>) -> Div {
         let connecting = self.busy == Busy::Connecting;
         div()
             .v_flex()
             .gap_3()
             .pt_2()
-            .child(div().text_sm().text_color(muted).child(
+            .child(div().text_sm().text_color(p.muted).child(
                 "Create an OAuth client of type \"Desktop app\" in the Google Cloud Console, enable the Gmail API, \
                  then paste its client ID and secret. The secret is kept in the OS keyring.",
             ))
@@ -204,25 +203,21 @@ impl GmailSection {
                     .gap_2()
                     .items_center()
                     .child(
-                        Button::new("gmail-connect")
-                            .primary()
-                            .label("Connect Gmail")
+                        secondary_button("gmail-connect", "Connect Gmail")
                             .loading(connecting)
                             .disabled(self.busy != Busy::Idle)
                             .on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))),
                     )
                     .when(connecting, |d| {
-                        d.child(div().text_sm().text_color(muted).child("waiting for browser\u{2026}")).child(
-                            Button::new("gmail-cancel")
-                                .ghost()
-                                .label("Cancel")
+                        d.child(div().text_sm().text_color(p.muted).child("waiting for browser\u{2026}")).child(
+                            ghost_button("gmail-cancel", "Cancel")
                                 .on_click(cx.listener(|this, _, _, cx| this.cancel_connect(cx))),
                         )
                     }),
             )
     }
 
-    fn render_signed_in(&self, account: &str, muted: Hsla, ok: Hsla, bad: Hsla, cx: &mut Context<Self>) -> Div {
+    fn render_signed_in(&self, account: &str, p: &Palette, cx: &mut Context<Self>) -> Div {
         let idle = self.busy == Busy::Idle;
         let minutes = self.state.read(cx).core.gmail_poll_interval().as_secs() / 60;
 
@@ -254,7 +249,7 @@ impl GmailSection {
                     .h_flex()
                     .gap_2()
                     .items_center()
-                    .child(div().text_color(ok).child("\u{25CF}"))
+                    .child(health_dot(true, cx))
                     .child(div().font_semibold().child(format!("Connected as {account}"))),
             )
             .child(
@@ -262,13 +257,13 @@ impl GmailSection {
                     .v_flex()
                     .gap_1()
                     .text_sm()
-                    .child(div().text_color(muted).child(last_sync))
+                    .child(div().text_color(p.muted).child(last_sync))
                     .when(!result.is_empty(), |d| {
-                        d.child(div().min_w_0().text_color(if result_ok { muted } else { bad }).child(result))
+                        d.child(div().min_w_0().text_color(if result_ok { p.muted } else { p.danger }).child(result))
                     })
                     .child(
                         div()
-                            .text_color(muted)
+                            .text_color(p.muted)
                             .child(format!("New mail is checked every {minutes} min while JobPilot is open.")),
                     ),
             )
@@ -277,18 +272,16 @@ impl GmailSection {
                     .h_flex()
                     .gap_2()
                     .child(
-                        Button::new("gmail-sync")
-                            .primary()
-                            .label("Sync now")
+                        secondary_button("gmail-sync", "Sync now")
                             .loading(self.busy == Busy::Syncing)
                             .disabled(!idle)
                             .on_click(cx.listener(|this, _, window, cx| this.sync_now(window, cx))),
                     )
                     .child(
-                        Button::new("gmail-disconnect")
-                            .danger()
-                            .outline()
-                            .label(if self.confirm_disconnect { "Click again to disconnect" } else { "Disconnect" })
+                        danger_button(
+                            "gmail-disconnect",
+                            if self.confirm_disconnect { "Click again to disconnect" } else { "Disconnect" },
+                        )
                             .loading(self.busy == Busy::Disconnecting)
                             .disabled(!idle)
                             .on_click(cx.listener(|this, _, window, cx| this.disconnect(window, cx))),
@@ -300,23 +293,28 @@ impl GmailSection {
 impl Render for GmailSection {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_form(window, cx);
-        let (muted, ok, bad) = {
-            let t = cx.theme();
-            (t.muted_foreground, t.success, t.danger)
-        };
+        let p = *palette(cx);
 
-        let mut body = section(
+        let status = match &self.gmail.account {
+            Some(_) => tag("Connected", Tone::Ok, cx),
+            None => tag("Not connected", Tone::Neutral, cx),
+        };
+        let mut body = section_with(
             "Gmail",
             "Read-only access to spot confirmations, interviews and rejections for your applications.",
+            status,
             cx,
-        );
+        )
+        .id("settings-gmail")
+        .role(Role::Group)
+        .aria_label("Gmail");
         match (self.gmail.account.clone(), self.form.as_ref()) {
-            (Some(account), _) => body = body.child(self.render_signed_in(&account, muted, ok, bad, cx)),
-            (None, Some(form)) => body = body.child(self.render_signed_out(form, muted, cx)),
+            (Some(account), _) => body = body.child(self.render_signed_in(&account, &p, cx)),
+            (None, Some(form)) => body = body.child(self.render_signed_out(form, &p, cx)),
             (None, None) => {}
         }
         body.when_some(self.notice.as_ref(), |d, n| {
-            d.child(div().text_sm().min_w_0().text_color(if n.ok { ok } else { bad }).child(n.text.clone()))
+            d.child(div().text_sm().min_w_0().text_color(if n.ok { p.ok } else { p.danger }).child(n.text.clone()))
         })
     }
 }

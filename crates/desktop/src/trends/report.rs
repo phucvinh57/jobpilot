@@ -1,16 +1,17 @@
 //! The latest digest with clickable citations, the skill-frequency chart and the history of reports.
 
 use gpui_kit::component::button::*;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use jobpilot_core::chrono::{DateTime, Local, Utc};
+use jobpilot_core::chrono::Local;
 use jobpilot_core::store::Report;
-use jobpilot_core::trends::{Digest, DigestData, Point, Section, SkillCount, SkillCounts};
+use jobpilot_core::trends::{Digest, DigestData, Point, Section, SkillCount};
 
-use super::{AddButton, Colors, TrendsView};
+use super::{AddButton, TrendsView};
 use crate::settings::profile::Field;
-use crate::ui::section;
+use crate::ui::{caption, card, cite_chip, empty_state, heading, section, skill_bar, Level, Palette};
 
 /// Skills drawn in the chart.
 const CHART_ROWS: usize = 10;
@@ -87,15 +88,19 @@ fn when(report: &Report) -> String {
 }
 
 impl TrendsView {
-    pub(super) fn render_digest(&self, c: &Colors, cx: &Context<Self>) -> Stateful<Div> {
+    /// The digest card: its points, numbered, each with the sources it rests on.
+    pub(super) fn render_digest(&self, p: &Palette, cx: &Context<Self>) -> Stateful<Div> {
         let Some(digest) = self.snap.shown.as_ref() else {
-            return section("Digest", "Nothing yet.", cx)
-                .id("trends-digest")
-                .role(Role::Group)
-                .aria_label("Digest")
-                .child(div().text_sm().text_color(c.muted).child(
-                    "Add sources below, then press \"Collect & build digest\". You need an AI provider (Settings > AI providers).",
-                ));
+            return empty_state(
+                IconName::ChartPie,
+                "No digest yet",
+                "Add sources, then press \"Collect & build digest\". You need an AI provider (Settings > AI providers).",
+                None,
+                cx,
+            )
+            .id("trends-digest")
+            .role(Role::Group)
+            .aria_label("Digest");
         };
         let report = &digest.report;
         let hint = match &digest.data {
@@ -103,53 +108,68 @@ impl TrendsView {
             None => when(report),
         };
         let body = match &digest.data {
-            Some(data) => self.render_data(data, &report.created_at, c, cx),
-            None => self.render_plain(digest, c),
+            Some(data) => self.render_data(data, p, cx),
+            None => self.render_plain(digest, p),
         };
-        section(&report.title, &hint, cx).id("trends-digest").role(Role::Group).aria_label(report.title.clone()).child(body)
+        card(cx)
+            .id("trends-digest")
+            .role(Role::Group)
+            .aria_label(report.title.clone())
+            .gap_4()
+            .p_5()
+            .child(div().v_flex().gap_0p5().child(heading(report.title.clone(), Level::H2, cx)).child(caption(hint, cx)))
+            .child(body)
     }
 
     /// A report this version cannot read back: its text as saved.
-    fn render_plain(&self, digest: &Digest, c: &Colors) -> Div {
+    fn render_plain(&self, digest: &Digest, p: &Palette) -> Div {
         div()
             .v_flex()
             .gap_1()
             .text_sm()
-            .text_color(c.muted)
+            .text_color(p.muted)
             .children(digest.report.body_md.lines().map(|l| div().child(l.to_string())))
     }
 
-    fn render_data(&self, data: &DigestData, created: &DateTime<Utc>, c: &Colors, cx: &Context<Self>) -> Div {
-        let mut body = div().v_flex().gap_4();
+    fn render_data(&self, data: &DigestData, p: &Palette, cx: &Context<Self>) -> Div {
+        let mut body = div().v_flex().gap_5();
+        // The badges count on through the sections, in the order the points are shown.
+        let mut number = 0;
         for sec in Section::ALL {
             let points: Vec<(usize, &Point)> = data.points.iter().enumerate().filter(|(_, p)| p.section == sec).collect();
             if points.is_empty() {
                 continue;
             }
+            let rows: Vec<Div> = points
+                .into_iter()
+                .map(|(idx, point)| {
+                    number += 1;
+                    self.render_point(number, idx, point, data, p, cx)
+                })
+                .collect();
             body = body.child(
                 div()
                     .v_flex()
-                    .gap_2()
-                    .child(div().font_semibold().child(sec.title()))
-                    .children(points.into_iter().map(|(idx, p)| self.render_point(idx, p, data, c, cx))),
+                    .gap_4()
+                    .child(div().text_xs().font_semibold().text_color(p.muted).child(sec.title()))
+                    .children(rows),
             );
         }
         if data.points.is_empty() {
-            body = body.child(div().text_sm().text_color(c.muted).child("No point could be tied to a source this time."));
+            body = body.child(div().text_sm().text_color(p.muted).child("No point could be tied to a source this time."));
         }
-        if let Some(chart) = self.render_chart(&data.counts, created, c, cx) {
-            body = body.child(chart);
-        }
-        body.when(data.dropped > 0, |d| {
-            d.child(div().text_xs().text_color(c.muted).child(format!(
-                "{} point(s) were left out: no valid source, or a quote that is not in the source.",
-                data.dropped
-            )))
+        body.child(caption("Every point links to the stored items it came from.", cx)).when(data.dropped > 0, |d| {
+            d.child(caption(
+                format!("{} point(s) were left out: no valid source, or a quote that is not in the source.", data.dropped),
+                cx,
+            ))
         })
     }
 
-    fn render_point(&self, idx: usize, point: &Point, data: &DigestData, c: &Colors, cx: &Context<Self>) -> Div {
-        let chips: Vec<Stateful<Div>> = point
+    /// One point: a numbered badge, the topic and text, the quote, the sources it cites and the
+    /// "Add to preferences" button.
+    fn render_point(&self, number: usize, idx: usize, point: &Point, data: &DigestData, p: &Palette, cx: &Context<Self>) -> Div {
+        let cites: Vec<Stateful<Div>> = point
             .citations
             .iter()
             .enumerate()
@@ -157,19 +177,22 @@ impl TrendsView {
                 let ordinal = data.items.iter().position(|i| i.id == *id)?;
                 let item = &data.items[ordinal];
                 let url = item.url.clone();
-                let chip = div()
-                    .id(("trends-cite", idx * 16 + j))
+                let n = idx * 16 + j;
+                // The numbered chip and the title are one link; the chip itself only looks like a button.
+                let link = div()
+                    .id(("trends-cite", n))
                     .role(Role::Link)
                     .aria_label(format!("Open source: {}", item.title))
-                    .text_xs()
-                    .text_color(c.link)
-                    .max_w(px(280.))
-                    .truncate()
-                    .child(format!("[{}] {}", ordinal + 1, item.title));
+                    .h_flex()
+                    .items_center()
+                    .gap_1p5()
+                    .max_w(px(320.))
+                    .child(cite_chip(("trends-cite-number", n), ordinal + 1, cx).role(Role::Label))
+                    .child(div().min_w_0().truncate().text_xs().text_color(p.muted).child(item.title.clone()));
                 Some(if is_web_url(&url) {
-                    chip.underline().cursor_pointer().on_click(move |_, _, cx| cx.open_url(&url))
+                    link.cursor_pointer().on_click(move |_, _, cx| cx.open_url(&url))
                 } else {
-                    chip
+                    link
                 })
             })
             .collect();
@@ -188,49 +211,55 @@ impl TrendsView {
                 .disabled(!state.enabled())
                 .on_click(cx.listener(move |this, _, _, cx| this.add_to_preferences(field, topic.clone(), cx)))
         });
-        div()
+        let badge = div()
+            .h_flex()
+            .items_center()
+            .justify_center()
+            .flex_shrink_0()
+            .size(px(28.))
+            .rounded_full()
+            .bg(p.accent_soft)
+            .text_color(p.accent_dark)
+            .text_size(px(13.))
+            .font_semibold()
+            .child(number.to_string());
+        let text = div()
             .v_flex()
-            .gap_1()
-            .child(
-                div()
-                    .h_flex()
-                    .items_start()
-                    .gap_1()
-                    .text_sm()
-                    .when(!point.topic.is_empty(), |d| d.child(div().flex_shrink_0().font_semibold().child(format!("{}:", point.topic))))
-                    .child(div().flex_1().min_w_0().child(point.text.clone())),
-            )
+            .flex_1()
+            .min_w_0()
+            .gap_1p5()
+            .when(!point.topic.is_empty(), |d| d.child(div().font_semibold().child(point.topic.clone())))
+            .child(div().text_color(p.ink).child(point.text.clone()))
             .when(!point.quote.is_empty(), |d| {
-                d.child(div().text_xs().text_color(c.muted).italic().child(format!("\u{201c}{}\u{201d}", point.quote)))
+                d.child(div().text_xs().text_color(p.muted).italic().child(format!("\u{201c}{}\u{201d}", point.quote)))
             })
-            .child(div().h_flex().flex_wrap().items_center().gap_2().children(chips).children(suggest))
+            .child(div().h_flex().flex_wrap().items_center().gap_2().children(cites).children(suggest));
+        div().h_flex().items_start().gap_3().child(badge).child(text)
     }
 
-    /// Simple bars: one hue, the numbers beside each bar.
-    fn render_chart(&self, counts: &SkillCounts, created: &DateTime<Utc>, c: &Colors, cx: &Context<Self>) -> Option<Stateful<Div>> {
-        let max = counts.skills.first()?.total.max(1) as f32;
+    /// Simple bars, scaled to the most frequent skill: blue for what the preferences name already,
+    /// grey for the rest. The count, the share and its change are in the tooltip of the row.
+    pub(super) fn render_chart(&self, p: &Palette, cx: &Context<Self>) -> Option<Stateful<Div>> {
+        let digest = self.snap.shown.as_ref()?;
+        let counts = &digest.data.as_ref()?.counts;
+        let max = counts.skills.first()?.total.max(1);
         let documents: u32 = counts.documents.iter().sum();
-        let partial = latest_month_is_partial(&counts.months, &created.format("%Y-%m").to_string());
+        let partial = latest_month_is_partial(&counts.months, &digest.report.created_at.format("%Y-%m").to_string());
         let rows = counts.skills.iter().take(CHART_ROWS).enumerate().map(|(i, skill)| {
-            let share = (skill.total as f32 / max).clamp(0.02, 1.0);
             // Any skill of the chart, rising or not: adding it makes no claim about the trend.
             let name = skill.skill.clone();
             let state = self.add_button(Field::Skills, &name);
+            let line = describe(skill, &counts.documents, partial);
+            let tip = format!("{}: {line}", skill.skill);
             div()
+                .id(("trends-skill", i))
+                .role(Role::ListItem)
+                .aria_label(tip.clone())
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 .h_flex()
                 .items_center()
-                .gap_2()
-                .child(div().w(px(120.)).flex_shrink_0().truncate().text_sm().child(skill.skill.clone()))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(60.))
-                        .h(px(8.))
-                        .rounded_full()
-                        .bg(c.track)
-                        .child(div().h_full().w(relative(share)).rounded_full().bg(c.primary)),
-                )
-                .child(div().w(px(430.)).flex_shrink_0().truncate().text_xs().text_color(c.muted).child(describe(skill, &counts.documents, partial)))
+                .gap_1()
+                .child(div().v_flex().flex_1().min_w_0().child(skill_bar(&skill.skill, skill.total, max, state == AddButton::Added, cx)))
                 .child(
                     Button::new(("trends-suggest-skill", i))
                         .ghost()
@@ -243,25 +272,43 @@ impl TrendsView {
                         .on_click(cx.listener(move |this, _, _, cx| this.add_to_preferences(Field::Skills, name.clone(), cx))),
                 )
         });
-        Some(
+        let swatch = |color: Hsla, label: &'static str| {
             div()
-                .id("trends-chart")
-                .role(Role::Group)
-                .aria_label("Skill frequency")
-                .v_flex()
-                .gap_2()
-                .child(div().font_semibold().child("Skill frequency"))
-                .child(div().text_xs().text_color(c.muted).child(format!(
-                    "Job postings and leads naming each skill, {} to {} ({documents} read). Counted by the app, not by the AI.",
+                .h_flex()
+                .items_center()
+                .gap_1p5()
+                .child(div().size(px(10.)).rounded(px(2.)).bg(color))
+                .child(div().text_xs().text_color(p.muted).child(label))
+        };
+        Some(
+            section(
+                "Skills in demand",
+                &format!(
+                    "Job postings and leads naming each skill, {} to {} ({documents} read). Counted by the app, not by the AI. Hover a skill for its trend.",
                     counts.months.first().map_or("", String::as_str),
                     counts.months.last().map_or("", String::as_str),
-                )))
-                .children(rows),
+                ),
+                cx,
+            )
+            .id("trends-chart")
+            .role(Role::Group)
+            .aria_label("Skill frequency")
+            .gap_3()
+            .child(div().v_flex().gap_1().children(rows))
+            .child(
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .gap_4()
+                    .child(swatch(p.accent, "In your preferences"))
+                    .child(swatch(p.bar_grey, "Not yet")),
+            ),
         )
     }
 
-    pub(super) fn render_history(&self, c: &Colors, cx: &Context<Self>) -> Stateful<Div> {
+    pub(super) fn render_history(&self, p: &Palette, cx: &Context<Self>) -> Stateful<Div> {
         let shown = self.snap.shown.as_ref().map(|d| d.report.id);
+        let (track, accent_soft, accent_dark) = (p.track, p.accent_soft, p.accent_dark);
         let rows: Vec<Stateful<Div>> = self
             .snap
             .reports
@@ -281,18 +328,18 @@ impl TrendsView {
                     .py_2()
                     .rounded_md()
                     .cursor_pointer()
-                    .when(selected, |d| d.bg(c.accent))
-                    .hover(|d| d.bg(c.accent))
+                    .when(selected, |d| d.bg(accent_soft).text_color(accent_dark).font_semibold())
+                    .hover(move |d| d.bg(if selected { accent_soft } else { track }))
                     .on_click(cx.listener(move |this, _, _, cx| this.select(id, cx)))
                     .child(div().truncate().child(r.title.clone()))
-                    .child(div().text_xs().text_color(c.muted).flex_shrink_0().child(when(r)))
+                    .child(div().text_xs().text_color(p.muted).flex_shrink_0().child(when(r)))
             })
             .collect();
-        section("History", "Past digests, newest first. Click one to read it again.", cx)
+        section("Earlier digests", "Past digests, newest first. Click one to read it again.", cx)
             .id("trends-history")
             .role(Role::Group)
             .aria_label("History")
-            .when(rows.is_empty(), |d| d.child(div().text_sm().text_color(c.muted).child("No digests yet.")))
+            .when(rows.is_empty(), |d| d.child(div().text_sm().text_color(p.muted).child("No digests yet.")))
             .children(rows)
     }
 }

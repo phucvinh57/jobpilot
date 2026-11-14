@@ -14,11 +14,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::*;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -32,6 +30,7 @@ use jobpilot_core::store::{Application, Status};
 
 use crate::app::AppState;
 use crate::problem::{self, RetryFn};
+use crate::ui::{self, Tone};
 
 use super::PrimaryAction;
 
@@ -505,11 +504,16 @@ fn host(url: &str) -> String {
 /// Screenshot preview, scaled to the pane width.
 fn preview(path: &std::path::Path, cx: &App) -> Div {
     div()
-        .rounded_md()
+        .rounded(px(ui::tokens::RADIUS_BUTTON))
         .border_1()
-        .border_color(cx.theme().border)
+        .border_color(ui::palette(cx).border)
         .overflow_hidden()
         .child(img(path.to_path_buf()).w_full())
+}
+
+/// A small bold line above a block (a preview, a proof).
+fn block_title(text: &'static str, cx: &App) -> Div {
+    div().text_size(px(ui::tokens::TEXT_BODY)).font_semibold().text_color(ui::palette(cx).ink).child(text)
 }
 
 impl Render for ApplyTab {
@@ -535,14 +539,13 @@ impl Render for ApplyTab {
             Phase::Done(proof) => self.render_done(&app, proof, cx),
             Phase::Handoff { handoff, headed } => self.render_handoff(&app, &handoff, headed, cx),
         };
-        let theme = cx.theme();
         div()
             .id("apply-tab")
             .v_flex()
             .size_full()
             .gap_3()
             .overflow_y_scroll()
-            .text_color(theme.foreground)
+            .text_color(ui::palette(cx).ink)
             .child(body)
             .into_any_element()
     }
@@ -566,30 +569,39 @@ impl ApplyTab {
             }) as RetryFn
         });
         let help = problem::help(&format!("apply-err-{app_id}"), problem, &self.state, retry, cx);
-        Some(div().v_flex().gap_1().child(div().text_sm().text_color(cx.theme().danger).child(err)).children(help))
+        let danger = ui::palette(cx).tone(Tone::Danger).fg;
+        Some(div().v_flex().gap_1().child(div().text_size(px(ui::tokens::TEXT_BODY)).text_color(danger).child(err)).children(help))
     }
 
     fn render_idle(&mut self, app: &Application, cx: &mut Context<Self>) -> AnyElement {
         let core = self.core(cx);
         let info: ApplyInfo = apply::apply_info(&core, app);
         let applied = matches!(app.status, Status::Applied | Status::Interview | Status::Rejected | Status::Offer);
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let p = ui::palette(cx);
         let app_id = app.id;
+        let body_size = px(ui::tokens::TEXT_BODY);
         let url_line = match &info.apply_url {
-            Some(url) => div().v_flex().child(div().text_sm().truncate().child(url.clone())).child(
-                div().text_xs().text_color(muted).child(match info.url_source {
+            Some(url) => div().v_flex().child(div().text_size(body_size).truncate().child(url.clone())).child(ui::caption(
+                match info.url_source {
                     Some(apply::UrlSource::Analysis) => "found in the job description",
                     _ => "set for this application",
-                }),
-            ),
-            None => div().v_flex().gap_2().child(div().text_sm().text_color(theme.warning).child("No apply URL found in the job description.")).child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .children(self.url_input.clone().map(|i| div().flex_1().child(Input::new(&i))))
-                    .child(Button::new("save-apply-url").outline().label("Save").on_click(cx.listener(move |this, _, _, cx| this.save_url(app_id, cx)))),
-            ),
+                },
+                cx,
+            )),
+            None => div()
+                .v_flex()
+                .gap_2()
+                .child(div().text_size(body_size).text_color(p.warn).child("No apply URL found in the job description."))
+                .child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .children(self.url_input.clone().map(|i| div().flex_1().child(Input::new(&i))))
+                        .child(
+                            ui::secondary_button("save-apply-url", "Save")
+                                .on_click(cx.listener(move |this, _, _, cx| this.save_url(app_id, cx))),
+                        ),
+                ),
         };
         let session_line = match &info.session {
             SessionState::NotNeeded => "No login needed: runs in a throwaway browser profile.".to_string(),
@@ -601,9 +613,9 @@ impl ApplyTab {
             SessionState::Missing { domain } => format!("No browser session for {domain}: create one in Settings > Browser sessions."),
         };
         let session_color = match &info.session {
-            SessionState::Missing { .. } => theme.danger,
-            SessionState::Matched { status: SessionStatus::Expired, .. } => theme.warning,
-            _ => muted,
+            SessionState::Missing { .. } => p.danger,
+            SessionState::Matched { status: SessionStatus::Expired, .. } => p.warn,
+            _ => p.muted,
         };
         let forced = info.dry_run_forced;
         let dry = self.dry_run || forced;
@@ -613,21 +625,15 @@ impl ApplyTab {
             .v_flex()
             .gap_3()
             .child(
-                div()
-                    .v_flex()
+                ui::section_with(info.ats.label(), "Where the application will be sent", ui::tag("detected", Tone::Neutral, cx), cx)
                     .gap_2()
-                    .p_3()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded_md()
-                    .child(div().h_flex().gap_2().items_center().child(div().font_semibold().child(info.ats.label())).child(Tag::secondary().child("detected")))
                     .child(url_line)
-                    .child(div().text_sm().text_color(session_color).child(session_line)),
+                    .child(div().text_size(body_size).text_color(session_color).child(session_line)),
             )
-            .child(div().text_sm().text_color(muted).child(if applied {
+            .child(div().text_size(body_size).text_color(p.muted).child(if applied {
                 "This application was sent. Replies are tracked from your email."
             } else {
-                "Press Review & Submit (bottom right) to open the form and fill it in. You review every answer first; nothing is sent until you press Submit."
+                "Press Review & Submit (top right) to open the form and fill it in. You review every answer first; nothing is sent until you press Submit."
             }))
             .when(!applied, |d| {
                 d.child(
@@ -640,29 +646,34 @@ impl ApplyTab {
                             cx.notify();
                         })),
                 )
-                .when(forced, |d| d.child(div().text_xs().text_color(muted).child("JOBPILOT_DRY_RUN is set: submitting is disabled.")))
+                .when(forced, |d| d.child(ui::caption("JOBPILOT_DRY_RUN is set: submitting is disabled.", cx)))
             })
-            .when_some(proof, |d, p| d.child(div().text_sm().font_semibold().child("Confirmation")).child(preview(&p, cx)))
+            .when_some(proof, |d, pf| d.child(block_title("Confirmation", cx)).child(preview(&pf, cx)))
             .children(self.error_line(app.id, cx))
             .into_any_element()
     }
 
     fn render_working(&mut self, app: &Application, title: &str, cx: &mut Context<Self>) -> AnyElement {
         let lines = self.view(app.id).progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let theme = cx.theme();
+        let p = ui::palette(cx);
         let last = lines.len().saturating_sub(1);
-        div()
-            .v_flex()
+        ui::card(cx)
             .gap_3()
-            .p_3()
-            .border_1()
-            .border_color(theme.border)
-            .rounded_md()
-            .child(div().h_flex().gap_2().items_center().child(Spinner::new()).child(div().font_semibold().child(title.to_string())))
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(Spinner::new().color(p.accent))
+                    .child(ui::heading(title.to_string(), ui::Level::H2, cx)),
+            )
             .children(lines.iter().enumerate().map(|(i, l)| {
-                div().text_sm().text_color(if i == last { theme.foreground } else { theme.muted_foreground }).child(format!("{} {l}", if i == last { ">" } else { "ok" }))
+                div()
+                    .text_size(px(ui::tokens::TEXT_BODY))
+                    .text_color(if i == last { p.ink } else { p.muted })
+                    .child(format!("{} {l}", if i == last { ">" } else { "ok" }))
             }))
-            .child(div().text_xs().text_color(theme.muted_foreground).child("A headless browser is working on the form. This can take up to a minute."))
+            .child(ui::caption("A headless browser is working on the form. This can take up to a minute.", cx))
             .into_any_element()
     }
 
@@ -672,94 +683,96 @@ impl ApplyTab {
         let missing = self.missing(app_id, cx);
         let remember = self.view(app_id).remember.clone();
         let busy = self.view(app_id).busy;
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let p = ui::palette(cx);
         let editable = review.rows.iter().filter(|r| r.editable).count();
         let needs = review.rows.iter().filter(|r| r.editable && (r.needs_input || r.warning.is_some())).count();
 
-        let header = div()
-            .h_flex()
-            .gap_2()
-            .items_center()
-            .justify_between()
-            .child(
-                div()
-                    .v_flex()
-                    .min_w_0()
-                    .child(div().font_semibold().child(format!("{} - {}", review.ats.label(), host(&review.url))))
-                    .child(div().text_xs().text_color(muted).child(format!(
-                        "{editable} fields on this step, {needs} to check{}",
-                        review.session.as_ref().map(|s| format!(" - session {s}")).unwrap_or_default()
-                    ))),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("discard-review")
-                            .outline()
-                            .label(if review.dry_run { "Close dry run" } else { "Discard" })
-                            .disabled(busy.is_some())
-                            .on_click(cx.listener(move |this, _, _, cx| this.discard(app_id, cx))),
-                    )
-            );
+        let discard = ui::secondary_button("discard-review", if review.dry_run { "Close dry run" } else { "Discard" })
+            .disabled(busy.is_some())
+            .on_click(cx.listener(move |this, _, _, cx| this.discard(app_id, cx)));
+        let header = ui::section_with(
+            &format!("{} - {}", review.ats.label(), host(&review.url)),
+            &format!(
+                "{editable} fields on this step, {needs} to check{}",
+                review.session.as_ref().map(|s| format!(" - session {s}")).unwrap_or_default()
+            ),
+            discard,
+            cx,
+        );
 
-        let banner = if review.dry_run {
-            Some("Dry run: the form is filled but will never be submitted.".to_string())
+        let notice = if review.dry_run {
+            Some((Tone::Accent, "Dry run", "The form is filled but will never be submitted.".to_string()))
         } else if !review.complete {
-            Some("This form has more steps. Fill the highlighted fields, then press Continue below (nothing is submitted yet).".to_string())
+            Some((
+                Tone::Accent,
+                "More steps",
+                "This form has more steps. Fill the highlighted fields, then press Continue (top right). Nothing is submitted yet."
+                    .to_string(),
+            ))
         } else if missing > 0 {
-            Some(format!("{missing} required field(s) still empty: fill them to enable the Submit button below."))
+            Some((
+                Tone::Warn,
+                "Required fields empty",
+                format!("{missing} required field(s) still empty: fill them to enable the Submit button."),
+            ))
         } else {
             None
         };
 
         let rows: Vec<AnyElement> = review.rows.iter().map(|row| self.render_row(app_id, row, &remember, cx)).collect();
 
-        let attached = review.attachment.as_ref().map(|p| file_name(&p.to_string_lossy()));
+        let attached = review.attachment.as_ref().map(|path| file_name(&path.to_string_lossy()));
         let shots = review.screenshots.clone();
         let notes = review.notes.clone();
-        let theme = cx.theme();
         div()
             .v_flex()
             .gap_3()
             .child(header)
-            .when_some(banner, |d, b| d.child(div().text_sm().p_2().rounded_md().bg(theme.warning.opacity(0.12)).child(b)))
+            .when_some(notice, |d, (tone, title, body)| d.child(ui::banner(tone, title, &body, div(), cx)))
             .children(self.error_line(app_id, cx))
             .children(notes.into_iter().enumerate().map(|(i, n)| {
                 let problem = health::classify(&n);
                 let help = problem::help(&format!("apply-note-{i}"), problem, &self.state, None, cx);
-                div().v_flex().gap_1().child(div().text_sm().text_color(theme.warning).child(n)).children(help)
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(div().text_size(px(ui::tokens::TEXT_BODY)).text_color(p.warn).child(n))
+                    .children(help)
             }))
             .child(div().v_flex().gap_2().children(rows))
             .when_some(attached, |d, name| {
-                d.child(div().h_flex().gap_2().items_center().child(Tag::secondary().child("attached")).child(div().text_sm().child(name)))
+                d.child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(ui::tag("attached", Tone::Neutral, cx))
+                        .child(div().text_size(px(ui::tokens::TEXT_BODY)).child(name)),
+                )
             })
             .when(!shots.is_empty(), |d| {
-                d.child(div().text_sm().font_semibold().child("Filled form"))
-                    .children(shots.iter().map(|p| preview(p, cx)))
+                d.child(block_title("Filled form", cx)).children(shots.iter().map(|path| preview(path, cx)))
             })
             .into_any_element()
     }
 
     fn render_row(&mut self, app_id: i64, row: &Row, remember: &HashSet<String>, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let p = ui::palette(cx);
+        let body_size = px(ui::tokens::TEXT_BODY);
         let flagged = row.editable && (row.needs_input || row.warning.is_some());
         let current = self.views.get(&app_id).and_then(|v| v.inputs.get(&row.id)).map(|i| input_value(i, cx)).unwrap_or_else(|| row.value.clone());
         let empty_required = row.editable && row.required && row.kind != FieldKind::File && current.trim().is_empty();
 
         let tag = match (row.needs_input, row.source) {
-            (true, _) | (_, Source::Unknown) => Tag::danger().child("needs input"),
-            (_, Source::Profile) => Tag::success().child("profile"),
-            (_, Source::Generated) => Tag::warning().child("generated"),
-            (_, s) => Tag::secondary().child(s.as_str()),
+            (true, _) | (_, Source::Unknown) => ui::tag("needs input", Tone::Danger, cx),
+            (_, Source::Profile) => ui::tag("profile", Tone::Ok, cx),
+            (_, Source::Generated) => ui::tag("generated", Tone::Warn, cx),
+            (_, s) => ui::tag(s.as_str().to_string(), Tone::Neutral, cx),
         };
 
         let editor: AnyElement = if !row.editable || row.kind == FieldKind::File {
             let shown = if row.kind == FieldKind::File { file_name(&row.value) } else { row.value.clone() };
-            div().text_sm().text_color(if shown.is_empty() { muted } else { theme.foreground }).child(if shown.is_empty() { "(empty)".to_string() } else { shown }).into_any_element()
+            div().text_size(body_size).text_color(if shown.is_empty() { p.muted } else { p.ink }).child(if shown.is_empty() { "(empty)".to_string() } else { shown }).into_any_element()
         } else {
             match self.views.get(&app_id).and_then(|v| v.inputs.get(&row.id)) {
                 Some(FieldInput::Line(e)) => Input::new(e).into_any_element(),
@@ -784,9 +797,8 @@ impl ApplyTab {
                         .children(row.options.iter().enumerate().map(|(i, option)| {
                             let selected = chosen.iter().any(|c| c.eq_ignore_ascii_case(option));
                             let (id, option_value, all) = (row.id.clone(), option.clone(), chosen.clone());
-                            let button = Button::new(SharedString::from(format!("chip-{}-{i}", row.id))).small().label(option.clone());
-                            let button = if selected { button.primary() } else { button.outline() };
-                            button.on_click(cx.listener(move |this, _, _, cx| {
+                            // A choice is a toggle (tinted when chosen), never a second primary button.
+                            ui::filter_chip(SharedString::from(format!("chip-{}-{i}", row.id)), option.clone(), selected).on_click(cx.listener(move |this, _, _, cx| {
                                 let next = if multi {
                                     let mut all = all.clone();
                                     if let Some(pos) = all.iter().position(|c| c.eq_ignore_ascii_case(&option_value)) {
@@ -810,25 +822,26 @@ impl ApplyTab {
 
         let can_remember = row.rememberable() && !current.trim().is_empty();
         let id = row.id.clone();
+        let warn = p.tone(Tone::Warn);
         div()
             .v_flex()
-            .gap_1()
-            .p_2()
-            .rounded_md()
+            .gap_1p5()
+            .p_3()
+            .rounded(px(ui::tokens::RADIUS_CARD - 2.0))
             .border_1()
-            .border_color(if flagged || empty_required { theme.warning } else { theme.border })
-            .when(flagged || empty_required, |d| d.bg(theme.warning.opacity(0.08)))
+            .border_color(if flagged || empty_required { warn.dot } else { p.border })
+            .bg(if flagged || empty_required { warn.bg } else { p.surface })
             .child(
                 div()
                     .h_flex()
                     .gap_2()
                     .items_center()
-                    .child(div().flex_1().min_w_0().text_sm().font_semibold().child(format!("{}{}", row.label, if row.required { " *" } else { "" })))
-                    .when(!row.editable, |d| d.child(Tag::secondary().child(format!("step {}", row.step + 1))))
+                    .child(div().flex_1().min_w_0().text_size(body_size).font_semibold().child(format!("{}{}", row.label, if row.required { " *" } else { "" })))
+                    .when(!row.editable, |d| d.child(ui::tag(format!("step {}", row.step + 1), Tone::Neutral, cx)))
                     .child(tag),
             )
             .child(editor)
-            .when_some(row.warning.clone(), |d, w| d.child(div().text_xs().text_color(theme.warning).child(w)))
+            .when_some(row.warning.clone(), |d, w| d.child(div().text_size(px(ui::tokens::TEXT_SMALL)).text_color(warn.fg).child(w)))
             .when(can_remember, |d| {
                 d.child(
                     Checkbox::new(SharedString::from(format!("remember-{}", row.id)))
@@ -841,43 +854,34 @@ impl ApplyTab {
     }
 
     fn render_done(&mut self, app: &Application, proof: Option<PathBuf>, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
+        let body = format!(
+            "{} confirmed the application for {}. Replies will show up from your email.",
+            host(app.apply_url.as_deref().unwrap_or("the site")),
+            app.role
+        );
         div()
             .v_flex()
             .gap_3()
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .p_3()
-                    .rounded_md()
-                    .bg(theme.success.opacity(0.12))
-                    .child(div().font_semibold().child("Application submitted"))
-                    .child(div().text_sm().child(format!("{} confirmed the application for {}. Replies will show up from your email.", host(app.apply_url.as_deref().unwrap_or("the site")), app.role))),
-            )
-            .when_some(proof, |d, p| d.child(div().text_sm().font_semibold().child("Proof")).child(preview(&p, cx)))
+            .child(ui::banner(Tone::Ok, "Application submitted", &body, div(), cx))
+            .when_some(proof, |d, pf| d.child(block_title("Proof", cx)).child(preview(&pf, cx)))
             .into_any_element()
     }
 
     fn render_handoff(&mut self, app: &Application, h: &Handoff, headed: bool, cx: &mut Context<Self>) -> AnyElement {
         let app_id = app.id;
         let busy = self.view(app_id).busy;
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let p = ui::palette(cx);
         div()
             .v_flex()
             .gap_3()
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .p_3()
-                    .rounded_md()
-                    .bg(theme.danger.opacity(0.1))
-                    .child(div().font_semibold().child(if h.captcha { "A CAPTCHA is in the way" } else { "The form needs you" }))
-                    .child(div().text_sm().child(h.reason.clone())),
-            )
-            .child(div().text_sm().text_color(muted).child(if headed {
+            .child(ui::banner(
+                Tone::Warn,
+                if h.captcha { "A CAPTCHA is in the way" } else { "The form needs you" },
+                &h.reason,
+                div(),
+                cx,
+            ))
+            .child(div().text_size(px(ui::tokens::TEXT_BODY)).text_color(p.muted).child(if headed {
                 "The visible browser is open at the form (your earlier answers were filled in again where possible). Finish and submit there, then mark the result below."
             } else {
                 "Open a visible browser on the same profile to finish by hand, then mark the result."
@@ -885,34 +889,29 @@ impl ApplyTab {
             .child(
                 div()
                     .h_flex()
+                    .flex_wrap()
                     .gap_2()
                     .items_center()
                     .child(
-                        Button::new("open-visible")
-                            .outline()
-                            .label(if headed { "Reopen visible browser" } else { "Open visible browser" })
+                        ui::secondary_button("open-visible", if headed { "Reopen visible browser" } else { "Open visible browser" })
                             .loading(busy == Some("Opening the browser..."))
                             .disabled(busy.is_some())
                             .on_click(cx.listener(move |this, _, _, cx| this.open_visible(app_id, cx))),
                     )
                     .child(
-                        Button::new("mark-applied")
-                            .outline()
-                            .label("Mark as applied")
+                        ui::secondary_button("mark-applied", "Mark as applied")
                             .disabled(busy.is_some())
                             .on_click(cx.listener(move |this, _, _, cx| this.mark(app_id, true, cx))),
                     )
                     .child(
-                        Button::new("mark-failed")
-                            .outline()
-                            .label("Mark failed")
+                        ui::secondary_button("mark-failed", "Mark failed")
                             .disabled(busy.is_some())
                             .on_click(cx.listener(move |this, _, _, cx| this.mark(app_id, false, cx))),
                     )
-                    .children(busy.map(|b| div().text_sm().text_color(muted).child(b))),
+                    .children(busy.map(|b| ui::caption(b, cx))),
             )
             .children(self.error_line(app_id, cx))
-            .when_some(h.screenshot.clone(), |d, p| d.child(div().text_sm().font_semibold().child("What the page looked like")).child(preview(&p, cx)))
+            .when_some(h.screenshot.clone(), |d, pf| d.child(block_title("What the page looked like", cx)).child(preview(&pf, cx)))
             .into_any_element()
     }
 }

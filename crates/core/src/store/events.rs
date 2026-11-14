@@ -47,4 +47,56 @@ impl Store {
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
     }
+
+    /// The newest `limit` events across all applications, newest first (ids grow with time).
+    pub fn recent_events(&self, limit: usize) -> Result<Vec<Event>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        self.with_conn(|c| {
+            let mut stmt =
+                c.prepare("SELECT id, app_id, at, kind, message FROM events ORDER BY id DESC LIMIT ?1")?;
+            let rows = stmt.query_map([limit], Event::from_row)?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::store::{NewApplication, Store};
+
+    fn store() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).unwrap();
+        (dir, store)
+    }
+
+    fn app(store: &Store, slug: &str) -> i64 {
+        let new = NewApplication {
+            slug: slug.into(),
+            company: slug.into(),
+            role: "Engineer".into(),
+            dir: format!("/tmp/{slug}").into(),
+            ..Default::default()
+        };
+        store.create_application(&new).unwrap().id
+    }
+
+    #[test]
+    fn recent_events_span_all_applications_newest_first() {
+        let (_dir, store) = store();
+        assert!(store.recent_events(5).unwrap().is_empty());
+
+        let (a, b) = (app(&store, "alpha"), app(&store, "beta"));
+        store.add_event(a, "note", "a1").unwrap();
+        store.add_event(b, "email", "b1").unwrap();
+        store.add_event(a, "note", "a2").unwrap();
+
+        let messages = |limit| {
+            store.recent_events(limit).unwrap().into_iter().map(|e| (e.app_id, e.message)).collect::<Vec<_>>()
+        };
+        assert_eq!(messages(2), [(a, "a2".to_string()), (b, "b1".to_string())], "the newest first, whichever application");
+        assert_eq!(messages(100).len(), 5, "two `created` events and three notes");
+        assert_eq!(messages(100).last().map(|(app_id, _)| *app_id), Some(a), "the first `created` is last");
+        assert!(messages(0).is_empty());
+    }
 }

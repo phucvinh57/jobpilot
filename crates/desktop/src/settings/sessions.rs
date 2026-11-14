@@ -8,9 +8,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_kit::component::button::*;
 use gpui_kit::component::input::*;
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -20,8 +18,8 @@ use jobpilot_core::chrono::{DateTime, Utc};
 use jobpilot_core::runtime;
 use jobpilot_core::store::Session;
 
-use crate::ui::section;
 use crate::app::AppState;
+use crate::ui::{danger_button, field, filter_chip, ghost_button, palette, secondary_button, section_with, tag, Tone};
 
 /// Quick starts for the "New session" form: (name, login URL).
 const SUGGESTIONS: [(&str, &str); 3] = [
@@ -257,13 +255,12 @@ impl Render for SessionsSection {
             self.reload(cx);
         }
         let mgr = self.state.read(cx).core.sessions();
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let p = *palette(cx);
 
         // Browser line.
         let browser_text = if let Some(progress) = &self.download {
             match progress.percent() {
-                Some(p) => format!("Downloading browser... {p}%"),
+                Some(pct) => format!("Downloading browser... {pct}%"),
                 None => "Downloading browser...".to_string(),
             }
         } else {
@@ -274,14 +271,12 @@ impl Render for SessionsSection {
         };
         let browser_line = div()
             .h_flex()
+            .flex_wrap()
             .items_center()
-            .gap_2()
-            .child(div().flex_1().min_w_0().truncate().text_sm().text_color(muted).child(browser_text))
+            .gap_3()
+            .child(div().flex_1().min_w(px(200.)).truncate().text_sm().text_color(p.muted).child(browser_text))
             .child(
-                Button::new("download-browser")
-                    .small()
-                    .outline()
-                    .label(if self.chrome.is_some() { "Update browser" } else { "Download browser" })
+                secondary_button("download-browser", if self.chrome.is_some() { "Update browser" } else { "Download browser" })
                     .loading(self.download.is_some())
                     .disabled(self.download.is_some())
                     .on_click(cx.listener(|this, _, _, cx| this.download_browser(cx))),
@@ -296,81 +291,70 @@ impl Render for SessionsSection {
                 let busy = self.busy.get(&id).copied();
                 let login = mgr.login_in_progress(id);
                 let status = s.session_status();
-                let pill = match status {
-                    SessionStatus::Ok => Tag::success(),
-                    SessionStatus::Expired => Tag::danger(),
-                    SessionStatus::New => Tag::secondary(),
-                }
-                .child(status.as_str());
+                let pill = tag(
+                    status.as_str(),
+                    match status {
+                        SessionStatus::Ok => Tone::Ok,
+                        SessionStatus::Expired => Tone::Danger,
+                        SessionStatus::New => Tone::Neutral,
+                    },
+                    cx,
+                );
                 let verified = s.last_verified_at.map(|t| format!("verified {}", ago(t))).unwrap_or_else(|| "never verified".into());
                 let confirm_sign_out = self.confirm == Some((id, Destructive::SignOut));
                 let confirm_delete = self.confirm == Some((id, Destructive::Delete));
 
                 let actions = if let Some(label) = busy {
-                    div().h_flex().gap_2().child(div().text_sm().text_color(muted).child(label))
+                    div().h_flex().gap_2().child(div().text_sm().text_color(p.muted).child(label))
                 } else if login {
                     div()
                         .h_flex()
+                        .flex_wrap()
                         .gap_2()
                         .items_center()
-                        .child(div().text_sm().text_color(muted).child("Log in in the browser window, then press Done"))
+                        .child(div().text_sm().text_color(p.muted).child("Log in in the browser window, then press Done"))
                         .child(
-                            Button::new(("done", id as usize))
-                                .small()
-                                .primary()
-                                .label("Done")
+                            secondary_button(("done", id as usize), "Done")
                                 .on_click(cx.listener(move |this, _, _, cx| this.finish_login(id, cx))),
                         )
                 } else {
                     div()
                         .h_flex()
+                        .flex_wrap()
                         .gap_2()
                         .child(
-                            Button::new(("check", id as usize))
-                                .small()
-                                .outline()
-                                .label("Check")
+                            secondary_button(("check", id as usize), "Check")
                                 .on_click(cx.listener(move |this, _, _, cx| this.check(id, cx))),
                         )
                         .child(
-                            Button::new(("open", id as usize))
-                                .small()
-                                .outline()
-                                .label("Open")
+                            secondary_button(("open", id as usize), "Open")
                                 .on_click(cx.listener(move |this, _, _, cx| this.open_login(id, cx))),
                         )
                         .child(
-                            Button::new(("sign-out", id as usize))
-                                .small()
-                                .outline()
-                                .label(if confirm_sign_out { "Sure?" } else { "Sign out" })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.destructive(id, Destructive::SignOut, cx)
-                                })),
+                            secondary_button(("sign-out", id as usize), if confirm_sign_out { "Sure?" } else { "Sign out" })
+                                .on_click(cx.listener(move |this, _, _, cx| this.destructive(id, Destructive::SignOut, cx))),
                         )
                         .child(
-                            Button::new(("delete", id as usize))
-                                .small()
-                                .danger()
-                                .label(if confirm_delete { "Sure?" } else { "Delete" })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.destructive(id, Destructive::Delete, cx)
-                                })),
+                            danger_button(("delete", id as usize), if confirm_delete { "Sure?" } else { "Delete" })
+                                .on_click(cx.listener(move |this, _, _, cx| this.destructive(id, Destructive::Delete, cx))),
                         )
                 };
 
                 div()
                     .h_flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_3()
-                    .py_1()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(p.border)
                     .child(
                         div()
                             .v_flex()
                             .flex_1()
-                            .min_w_0()
+                            .min_w(px(160.))
                             .child(div().font_semibold().truncate().child(s.name.clone()))
-                            .child(div().text_xs().text_color(muted).truncate().child(format!("{} - {verified}", host(&s.start_url)))),
+                            .child(div().text_xs().text_color(p.muted).truncate().child(format!("{} - {verified}", host(&s.start_url)))),
                     )
                     .child(pill)
                     .child(actions)
@@ -383,21 +367,19 @@ impl Render for SessionsSection {
             let (name_input, url_input) = (self.name_input.clone(), self.url_input.clone());
             div()
                 .v_flex()
-                .gap_2()
+                .gap_3()
                 .p_3()
                 .border_1()
-                .border_color(theme.border)
-                .rounded_md()
-                .children(name_input.map(|i| Input::new(&i)))
-                .children(url_input.map(|i| Input::new(&i)))
+                .border_color(p.border)
+                .rounded(px(10.))
+                .bg(p.surface_alt)
+                .children(name_input.map(|i| field("Name", Input::new(&i), cx)))
+                .children(url_input.map(|i| field("Login address", Input::new(&i), cx)))
                 .child(
-                    div().h_flex().gap_2().items_center().child(div().text_xs().text_color(muted).child("Suggestions:")).children(
+                    div().h_flex().flex_wrap().gap_2().items_center().child(div().text_xs().text_color(p.muted).child("Suggestions:")).children(
                         SUGGESTIONS.iter().enumerate().map(|(i, suggestion)| {
                             let suggestion = *suggestion;
-                            Button::new(("suggestion", i))
-                                .small()
-                                .ghost()
-                                .label(suggestion.0)
+                            filter_chip(("suggestion", i), suggestion.0, false)
                                 .on_click(cx.listener(move |this, _, window, cx| this.fill_form(suggestion, window, cx)))
                         }),
                     ),
@@ -405,51 +387,49 @@ impl Render for SessionsSection {
                 .child(
                     div()
                         .h_flex()
+                        .flex_wrap()
                         .gap_2()
                         .items_center()
                         .child(
-                            Button::new("create-session")
-                                .small()
-                                .primary()
-                                .label("Open browser to log in")
+                            secondary_button("create-session", "Open browser to log in")
                                 .loading(creating.is_some())
                                 .disabled(creating.is_some())
                                 .on_click(cx.listener(|this, _, _, cx| this.create_and_login(cx))),
                         )
-                        .child(
-                            Button::new("cancel-session")
-                                .small()
-                                .ghost()
-                                .label("Cancel")
-                                .disabled(creating.is_some())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.form_open = false;
-                                    cx.notify();
-                                })),
-                        )
-                        .children(creating.map(|label| div().text_sm().text_color(muted).child(label))),
+                        .child(ghost_button("cancel-session", "Cancel").disabled(creating.is_some()).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.form_open = false;
+                                cx.notify();
+                            },
+                        )))
+                        .children(creating.map(|label| div().text_sm().text_color(p.muted).child(label))),
                 )
                 .into_any_element()
         } else {
             div()
                 .h_flex()
                 .child(
-                    Button::new("new-session")
-                        .small()
-                        .primary()
-                        .label("New session")
+                    secondary_button("new-session", "New session")
                         .on_click(cx.listener(|this, _, window, cx| this.open_form(window, cx))),
                 )
                 .into_any_element()
         };
 
-        section("Browser sessions", "Logins kept in a managed browser profile, separate from your own browser.", cx)
+        let status = match &self.chrome {
+            Some(_) => tag("Chrome found", Tone::Ok, cx),
+            None if self.download.is_some() => tag("Downloading", Tone::Neutral, cx),
+            None => tag("No browser", Tone::Warn, cx),
+        };
+        section_with("Browser sessions", "Logins kept in a managed browser profile, separate from your own browser.", status, cx)
+            .id("settings-sessions")
+            .role(Role::Group)
+            .aria_label("Browser sessions")
             .child(browser_line)
-            .child(div().v_flex().gap_1().children(rows))
+            .child(div().v_flex().children(rows))
             .when(self.sessions.is_empty() && !self.form_open, |d| {
-                d.child(div().text_sm().text_color(muted).child("No sessions yet"))
+                d.child(div().text_sm().text_color(p.muted).child("No sessions yet"))
             })
             .child(form)
-            .children(self.error.clone().map(|e| div().text_sm().text_color(cx.theme().danger).child(e)))
+            .children(self.error.clone().map(|e| div().text_sm().text_color(p.danger).child(e)))
     }
 }

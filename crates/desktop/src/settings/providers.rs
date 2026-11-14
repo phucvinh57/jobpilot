@@ -6,7 +6,6 @@
 use std::future::Future;
 
 use anyhow::anyhow;
-use gpui_kit::component::button::*;
 use gpui_kit::component::input::*;
 use gpui_kit::component::select::*;
 use gpui_kit::component::switch::Switch;
@@ -16,8 +15,10 @@ use gpui_kit::*;
 use jobpilot_core::store::{Provider, ProviderKind};
 use jobpilot_core::{llm, runtime};
 
-use crate::ui::{field, section};
 use crate::app::AppState;
+use crate::ui::{
+    danger_button, field, ghost_button, palette, secondary_button, section_with, segmented, tag, Palette, Tone,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Busy {
@@ -349,19 +350,17 @@ impl ProvidersSection {
         );
     }
 
-    fn render_form(&self, edit: &Edit, form: &Form, ok: Hsla, bad: Hsla, cx: &mut Context<Self>) -> Div {
+    fn render_form(&self, edit: &Edit, form: &Form, p: &Palette, cx: &mut Context<Self>) -> Div {
         let idle = self.busy == Busy::Idle;
-        let kind_button = |id: &'static str, kind: ProviderKind| {
-            Button::new(id)
-                .label(kind_label(kind))
-                .selected(edit.kind == kind)
-                .on_click(cx.listener(move |this, _, window, cx| this.set_kind(kind, window, cx)))
-        };
+        let view = cx.entity();
+        let kinds = [ProviderKind::OpenAi, ProviderKind::Anthropic].map(|kind| (kind, kind_label(kind)));
+        let kind_picker = segmented("provider-kind", "Type", &kinds, edit.kind, move |kind, window, cx| {
+            view.update(cx, |this, cx| this.set_kind(kind, window, cx))
+        }, cx);
 
         let model_row =
             div().h_flex().gap_2().items_center().child(div().flex_1().min_w_0().child(Input::new(&form.model))).child(
-                Button::new("load-models")
-                    .label("Load models")
+                secondary_button("load-models", "Load models")
                     .loading(self.busy == Busy::LoadingModels)
                     .disabled(!idle)
                     .on_click(cx.listener(|this, _, window, cx| this.load_models(window, cx))),
@@ -384,15 +383,7 @@ impl ProvidersSection {
             .v_flex()
             .gap_3()
             .pt_2()
-            .child(field(
-                "Type",
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(kind_button("kind-openai", ProviderKind::OpenAi))
-                    .child(kind_button("kind-anthropic", ProviderKind::Anthropic)),
-                cx,
-            ))
+            .child(field("Type", kind_picker, cx))
             .child(field("Name", Input::new(&form.name), cx))
             .child(field("Base URL", Input::new(&form.base_url), cx))
             .child(field(
@@ -420,46 +411,37 @@ impl ProvidersSection {
                     .gap_2()
                     .flex_wrap()
                     .child(
-                        Button::new("save-provider")
-                            .primary()
-                            .label("Save")
+                        secondary_button("save-provider", "Save")
                             .loading(self.busy == Busy::Saving)
                             .disabled(!idle)
                             .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                     )
                     .child(
-                        Button::new("test-provider")
-                            .label("Test")
+                        secondary_button("test-provider", "Test")
                             .loading(self.busy == Busy::Testing)
                             .disabled(!idle)
                             .on_click(cx.listener(|this, _, window, cx| this.test(window, cx))),
                     )
                     .when(edit.id != 0 && !edit.is_default, |d| {
                         d.child(
-                            Button::new("default-provider")
-                                .label("Make default")
+                            secondary_button("default-provider", "Make default")
                                 .disabled(!idle)
                                 .on_click(cx.listener(|this, _, _, cx| this.make_default(cx))),
                         )
                     })
                     .child(
-                        Button::new("delete-provider")
-                            .danger()
-                            .outline()
-                            .label(delete_label)
+                        danger_button("delete-provider", delete_label)
                             .disabled(!idle)
                             .on_click(cx.listener(|this, _, window, cx| this.delete(window, cx))),
                     )
-                    .child(Button::new("close-provider").ghost().label("Close").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.edit = None;
-                            this.notice = None;
-                            cx.notify();
-                        },
-                    ))),
+                    .child(ghost_button("close-provider", "Close").on_click(cx.listener(|this, _, _, cx| {
+                        this.edit = None;
+                        this.notice = None;
+                        cx.notify();
+                    }))),
             )
             .when_some(self.notice.as_ref(), |d, n| {
-                d.child(div().text_sm().min_w_0().text_color(if n.ok { ok } else { bad }).child(n.text.clone()))
+                d.child(div().text_sm().min_w_0().text_color(if n.ok { p.ok } else { p.danger }).child(n.text.clone()))
             })
     }
 }
@@ -467,64 +449,69 @@ impl ProvidersSection {
 impl Render for ProvidersSection {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_form(window, cx);
-        let (muted, ok, bad, accent, star) = {
-            let t = cx.theme();
-            (t.muted_foreground, t.success, t.danger, t.accent, t.warning)
-        };
+        let p = *palette(cx);
 
         let editing_id = self.edit.as_ref().map(|e| e.id);
         let rows: Vec<_> = self
             .providers
             .iter()
-            .map(|p| {
-                let id = p.id;
+            .map(|prov| {
+                let id = prov.id;
+                let editing = editing_id == Some(id);
                 div()
                     .id(("provider", id as usize))
                     .h_flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_3()
                     .px_3()
                     .py_2()
+                    .min_h(px(44.))
                     .rounded_md()
                     .cursor_pointer()
-                    .when(editing_id == Some(id), |d| d.bg(accent))
-                    .hover(|d| d.bg(accent))
+                    .when(editing, |d| d.bg(p.accent_soft))
+                    .hover(move |d| d.bg(if editing { p.accent_soft } else { p.track }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let provider = this.providers.iter().find(|p| p.id == id).cloned();
                         this.open(provider, window, cx);
                     }))
-                    .child(div().w(px(16.)).flex_shrink_0().text_color(star).child(if p.is_default {
-                        "\u{2605}"
-                    } else {
-                        ""
-                    }))
-                    .child(div().font_semibold().child(p.name.clone()))
-                    .child(div().text_sm().text_color(muted).child(kind_label(p.kind)))
-                    .child(div().flex_1().min_w_0().truncate().text_sm().text_color(muted).child(p.model.clone()))
+                    .child(div().font_semibold().child(prov.name.clone()))
+                    .when(prov.is_default, |d| d.child(tag("default", Tone::Ok, cx)))
+                    .child(div().text_sm().text_color(p.muted).child(kind_label(prov.kind)))
+                    .child(div().flex_1().min_w_0().truncate().text_sm().text_color(p.muted).child(prov.model.clone()))
             })
             .collect();
 
-        let mut body = section(
+        let default_name = self.providers.iter().find(|prov| prov.is_default).map(|prov| prov.name.clone());
+        let status = match default_name {
+            Some(name) => tag(format!("Default: {name}"), Tone::Ok, cx),
+            None if self.providers.is_empty() => tag("No provider", Tone::Warn, cx),
+            None => tag("No default", Tone::Warn, cx),
+        };
+        let mut body = section_with(
             "AI providers",
-            "OpenAI- or Anthropic-compatible endpoints; API keys are kept in the OS keyring. The \u{2605} provider is used for generation.",
+            "OpenAI- or Anthropic-compatible endpoints; API keys are kept in the OS keyring. The provider tagged default is used for generation.",
+            status,
             cx,
-        );
+        )
+        .id("settings-providers")
+        .role(Role::Group)
+        .aria_label("AI providers");
         if rows.is_empty() {
-            body = body.child(div().text_sm().text_color(muted).child("No provider yet. Add one to generate CVs."));
+            body = body.child(div().text_sm().text_color(p.muted).child("No provider yet. Add one to generate CVs."));
         } else {
             body = body.child(div().v_flex().gap_1().children(rows));
         }
         if self.edit.is_none() {
             body = body.child(
                 div().h_flex().child(
-                    Button::new("add-provider")
-                        .label("Add provider")
+                    secondary_button("add-provider", "Add provider")
                         .on_click(cx.listener(|this, _, window, cx| this.open(None, window, cx))),
                 ),
             );
         }
         if let (Some(edit), Some(form)) = (self.edit.as_ref(), self.form.as_ref()) {
-            let form_view = self.render_form(edit, form, ok, bad, cx);
+            let form_view = self.render_form(edit, form, &p, cx);
             body = body.child(form_view);
         }
         body

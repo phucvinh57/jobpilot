@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::cv::Cv;
+use crate::Core;
 
 /// One broken rule: where (`experience[1].company`) and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -273,6 +274,18 @@ fn check_skills(profile_corpus: &str, cv: &Cv, out: &mut Vec<Violation>) {
                     format!("skill `{item}` does not appear in the profile"),
                 ));
             }
+        }
+    }
+}
+
+impl Core {
+    /// Does `cv_yaml` pass the fact guard against `profile.yaml`? `false` when it cannot be told
+    /// (an unreadable or invalid profile, a CV that does not parse). Blocking file read.
+    pub fn cv_is_traced(&self, cv_yaml: &str) -> bool {
+        let Ok(profile_text) = std::fs::read_to_string(self.profile_path()) else { return false };
+        match (Cv::parse(&profile_text), Cv::parse(cv_yaml)) {
+            (Ok(profile), Ok(cv)) => guard(&profile, &cv).is_empty(),
+            _ => false,
         }
     }
 }

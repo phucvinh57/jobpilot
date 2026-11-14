@@ -12,7 +12,7 @@ use jobpilot_core::runtime;
 
 use crate::app::AppState;
 use crate::ui::theme::{set_mode, sync_system};
-use crate::ui::{section, segmented};
+use crate::ui::{palette, section_with, segmented};
 
 /// The appearance applied now.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -82,18 +82,18 @@ impl AppearanceSection {
 
 impl Render for AppearanceSection {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (danger, muted) = {
-            let t = cx.theme();
-            (t.danger, t.muted_foreground)
-        };
+        let p = *palette(cx);
         let this = cx.entity();
         let current = current(cx);
         let choices = Appearance::ALL.map(|a| (a, a.label()));
-        section("Appearance", "Light or dark. System follows your desktop.", cx)
-            .child(segmented("appearance", "Appearance", &choices, current, move |appearance, window, cx| {
-                this.update(cx, |this, cx| this.pick(appearance, window, cx))
-            }, cx))
-            .child(div().text_xs().text_color(muted).child(format!("Now: {}", cx.theme().mode.name())))
-            .children(self.error.clone().map(|e| div().text_sm().text_color(danger).child(e)))
+        let control = segmented("appearance", "Appearance", &choices, current, move |appearance, window, cx| {
+            this.update(cx, |this, cx| this.pick(appearance, window, cx))
+        }, cx);
+        section_with("Appearance", "Light or dark. System follows your desktop.", control, cx)
+            .id("settings-appearance")
+            .role(Role::Group)
+            .aria_label("Appearance")
+            .child(div().text_xs().text_color(p.muted).child(format!("Now: {}", cx.theme().mode.name())))
+            .children(self.error.clone().map(|e| div().text_sm().text_color(p.danger).child(e)))
     }
 }

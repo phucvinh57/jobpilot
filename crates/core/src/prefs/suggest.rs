@@ -46,6 +46,14 @@ impl Core {
     }
 }
 
+impl Core {
+    /// The visible skill names in `profile.yaml` (hidden groups left out); empty when the profile
+    /// cannot be read (logged).
+    pub fn profile_skills(&self) -> Vec<String> {
+        profile_skills(self)
+    }
+}
+
 /// The skills of the visible groups of the master profile.
 fn profile_skills(core: &Core) -> Vec<String> {
     let path = core.profile_path();

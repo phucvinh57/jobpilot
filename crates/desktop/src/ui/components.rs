@@ -126,7 +126,8 @@ pub fn primary_button(id: impl Into<ElementId>, label: impl Into<SharedString>) 
 
 /// A plain action: white with a border.
 pub fn secondary_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
-    sized(Button::new(id).secondary().label(label))
+    // The default variant is the one gpui-component draws with a border (`input`, the control edge).
+    sized(Button::new(id).label(label))
 }
 
 /// A quiet action: no fill until hovered.
@@ -224,8 +225,36 @@ pub fn cite_chip(id: impl Into<ElementId>, number: usize, cx: &App) -> Stateful<
 
 // ------------------------------------------------------------ navigation
 
-/// One entry of the left navigation: icon, label, an optional count badge. The current entry is
-/// tinted. Add `.on_click(..)`.
+/// How the count badge of a navigation entry reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NavBadge {
+    /// Something new, in the accent colour (`Job list, 3 new`).
+    New(usize),
+    /// Something waits for the user, in the warning colour (`Today, 2 need you`).
+    NeedsYou(usize),
+    /// A plain total, no emphasis (`Pipeline, 8`).
+    Total(usize),
+}
+
+impl NavBadge {
+    fn count(self) -> usize {
+        match self {
+            Self::New(n) | Self::NeedsYou(n) | Self::Total(n) => n,
+        }
+    }
+
+    /// The badge as assistive technology reads it after the label.
+    fn spoken(self) -> String {
+        match self {
+            Self::New(n) => format!("{n} new"),
+            Self::NeedsYou(n) => format!("{n} need you"),
+            Self::Total(n) => n.to_string(),
+        }
+    }
+}
+
+/// One entry of the left navigation: icon, label, an optional count badge (shown from 1). The
+/// current entry is tinted. Add `.on_click(..)`.
 pub fn nav_item(
     id: impl Into<ElementId>,
     icon: IconName,
@@ -234,10 +263,22 @@ pub fn nav_item(
     current: bool,
     cx: &App,
 ) -> Stateful<Div> {
+    nav_item_with(id, icon, label, badge.map(NavBadge::New), current, cx)
+}
+
+/// [`nav_item`] with a choice of badge ([`NavBadge`]).
+pub fn nav_item_with(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    label: &str,
+    badge: Option<NavBadge>,
+    current: bool,
+    cx: &App,
+) -> Stateful<Div> {
     let p = palette(cx);
-    let badge = badge.filter(|n| *n > 0);
+    let badge = badge.filter(|b| b.count() > 0);
     let aria = match badge {
-        Some(n) => format!("{label}, {n} new"),
+        Some(b) => format!("{label}, {}", b.spoken()),
         None => label.to_string(),
     };
     let (fg, bg) = if current { (p.accent_dark, p.accent_soft) } else { (p.ink, gpui_kit::transparent_black()) };
@@ -261,18 +302,23 @@ pub fn nav_item(
         .hover(move |d| d.bg(hover))
         .child(Icon::new(icon).size_4().text_color(if current { p.accent } else { p.muted }))
         .child(div().flex_1().min_w_0().truncate().child(label.to_string()))
-        .when_some(badge, |d, n| {
-            d.child(
+        .when_some(badge, |d, b| {
+            let pill = |text_color: Hsla, fill: Option<Hsla>| {
                 div()
                     .flex_shrink_0()
                     .px_1p5()
                     .rounded_full()
                     .text_size(px(11.0))
                     .font_semibold()
-                    .text_color(p.on_fill)
-                    .bg(p.accent)
-                    .child(n.to_string()),
-            )
+                    .text_color(text_color)
+                    .when_some(fill, |d, fill| d.bg(fill))
+                    .child(b.count().to_string())
+            };
+            d.child(match b {
+                NavBadge::New(_) => pill(p.on_fill, Some(p.accent)),
+                NavBadge::NeedsYou(_) => pill(p.on_fill, Some(p.warn)),
+                NavBadge::Total(_) => pill(if current { p.accent_dark } else { p.subtle }, None),
+            })
         })
 }
 
@@ -556,7 +602,7 @@ pub fn empty_state(icon: IconName, title: &str, body: &str, action: Option<AnyEl
 
 #[cfg(test)]
 mod tests {
-    use super::{bar_fraction, score_tone_of, step_state, StepState};
+    use super::{bar_fraction, score_tone_of, step_state, NavBadge, StepState};
     use crate::ui::tokens::Tone;
 
     #[test]
@@ -589,5 +635,13 @@ mod tests {
         assert_eq!(score_tone_of(Some(60.0)), Tone::Warn);
         assert_eq!(score_tone_of(Some(10.0)), Tone::Danger);
         assert_eq!(score_tone_of(None), Tone::Neutral);
+    }
+
+    #[test]
+    fn nav_badges_are_spoken_after_the_label() {
+        assert_eq!(NavBadge::New(3).spoken(), "3 new");
+        assert_eq!(NavBadge::NeedsYou(2).spoken(), "2 need you");
+        assert_eq!(NavBadge::Total(8).spoken(), "8");
+        assert_eq!(NavBadge::Total(8).count(), 8);
     }
 }

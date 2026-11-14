@@ -1,13 +1,16 @@
-//! Job list screen (P12; the queue): found jobs best match first, with the brief and the score
-//! breakdown, and the actions that turn a lead into an application (Prepare CV), drop it (Dismiss) or
-//! look at it (Open posting). At the top, a link box (and a file drop on the window) adds a job the
-//! user found themselves: `Core::add_lead` reads it, scores it and briefs it, and it appears selected.
+//! Today screen (P12; the queue, formerly "Job list"): what needs the user, then found jobs best
+//! match first, with the brief and the score breakdown, and the actions that turn a lead into an
+//! application (Prepare CV), drop it (Dismiss) or look at it (Open posting). At the top, a link box
+//! with "Add job" (and a file drop on the window) adds a job the user found themselves:
+//! `Core::add_lead` reads it, scores it and briefs it, and it appears selected.
 //! Views only: the data comes from `Core::queue_snapshot`, the work from `Core::add_lead` /
 //! `prepare_cv` / `discover_now` / `dismiss_lead_with_reason`, all on the core runtime.
 //!
-//! The one primary button is at the bottom right: "Prepare CV" while there are leads, "Search now"
-//! when the list is empty (`logic::queue_primary_for`). Everything else is a plain button.
+//! The one primary button sits in the open lead's panel: "Prepare CV" while there are leads,
+//! "Search now" (in the empty state) when the list is empty (`logic::queue_primary_for`).
+//! Everything else is a plain button.
 
+mod brief;
 pub(crate) mod logic;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -22,9 +25,9 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use jobpilot_core::chrono::{DateTime, Utc};
+use jobpilot_core::chrono::{DateTime, Local, Utc};
 use jobpilot_core::discover::promote::{parse_prepare_thread, Dismissed, PREPARE_GRAPH};
-use jobpilot_core::discover::queue::{criteria_rows, filter_items, QueueFilter, QueueItem, QueueSnapshot};
+use jobpilot_core::discover::queue::{filter_items, QueueFilter, QueueItem, QueueSnapshot};
 use jobpilot_core::discover::{WaitingSource, SOURCE_GRAPH};
 use jobpilot_core::graph::{ProgressEvent, WaitReason};
 use jobpilot_core::health;
@@ -36,12 +39,13 @@ use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app::jobs::parse_input;
 use crate::app::{AppState, FADE};
-use crate::detail::insight_brief;
+use crate::brief::{company_block, interview_block};
 use crate::problem::{self, RetryFn};
 use crate::ui;
+use brief::shorten;
 use logic::{
-    ago, dismissed_note, drop_unreported, is_web_link, meta_line, queue_behind, queue_primary_for, score_label, score_tone, source_name,
-    source_needs_attention, source_status, waiting_label, QueueAction, QueueFacts, Queued, Tone, ALREADY_READING,
+    ago, dismissed_note, drop_unreported, is_web_link, meta_line, queue_behind, queue_primary_for, score_label, source_name,
+    source_needs_attention, source_status, waiting_label, QueueAction, QueueFacts, QueuePrimary, Queued, ALREADY_READING,
 };
 
 /// The first look at the daily-run setting after the app starts, and the gap between looks after that.
@@ -50,6 +54,21 @@ const DAILY_CHECK_EVERY: Duration = Duration::from_secs(15 * 60);
 
 /// Minimum scores the filter offers.
 const MIN_SCORES: [f64; 3] = [50.0, 70.0, 85.0];
+
+/// Width of the lead list (px); the open lead's panel takes the rest.
+const LIST_WIDTH: f32 = 380.0;
+/// The list shrinks to this (px) in a narrow window before the page scrolls sideways.
+const LIST_MIN_WIDTH: f32 = 260.0;
+/// The panel is never narrower than this (px).
+const PANEL_MIN_WIDTH: f32 = 300.0;
+/// The two panes never get shorter than this (px): a short window scrolls the page instead.
+const PANES_MIN_HEIGHT: f32 = 440.0;
+/// A "Needs you" banner is at least this wide (px), so two fit side by side on a wide window.
+const NEEDS_MIN_WIDTH: f32 = 360.0;
+/// Characters of a failure message the danger banner shows; the whole text goes under it.
+const FAILURE_SUMMARY_CHARS: usize = 140;
+/// Size of the open lead's title (px).
+const PANEL_TITLE: f32 = 24.0;
 
 /// Where a lead stands in "Prepare CV" during this session.
 #[derive(Clone, Debug)]
@@ -107,6 +126,10 @@ pub struct QueueView {
     /// The `AppState::queue_epoch` this view last loaded for.
     epoch: Option<u64>,
     snap: Option<QueueSnapshot>,
+    /// The skill names of the master profile, to tell the skills a posting asks for that the
+    /// profile has from those it lacks (empty when it cannot be read). Read again only when the
+    /// screen is shown (see [`refresh_all`](Self::refresh_all)), not on every refresh.
+    profile_skills: Vec<String>,
     load_error: Option<String>,
     filter: QueueFilter,
     location: Entity<InputState>,
@@ -151,21 +174,16 @@ impl QueueView {
         .detach();
         let link = cx.new(|cx| InputState::new(window, cx).placeholder("Paste a job link and press Enter, or drop a file"));
         cx.subscribe_in(&link, window, |this, input, event: &InputEvent, window, cx| match event {
-            InputEvent::PressEnter { .. } => {
-                let raw = input.read(cx).value();
-                let Some(jd) = parse_input(&raw) else { return };
-                if this.add_lead(jd, window, cx) {
-                    input.update(cx, |input, cx| input.set_value("", window, cx));
+            InputEvent::PressEnter { .. } => this.submit_link(window, cx),
+            InputEvent::Change => {
+                // Typing again clears the "could not add" messages and the remark. Emptying the box
+                // (after Enter, or its clear button) does not: it would hide what Enter just said.
+                if !input.read(cx).value().is_empty() {
+                    this.add_failures.clear();
+                    this.link_note.take();
                 }
-            }
-            // Typing again clears the "could not add" messages and the remark. Emptying the box
-            // (after Enter, or its clear button) does not: it would hide what Enter just said.
-            InputEvent::Change if !input.read(cx).value().is_empty() => {
-                let had_failures = this.add_failures.clear();
-                let had_note = this.link_note.take().is_some();
-                if had_failures || had_note {
-                    cx.notify();
-                }
+                // "Add job" is enabled while there is something to add.
+                cx.notify();
             }
             _ => {}
         })
@@ -184,6 +202,7 @@ impl QueueView {
             state,
             epoch: None,
             snap: None,
+            profile_skills: Vec::new(),
             load_error: None,
             filter: QueueFilter::default(),
             location,
@@ -297,30 +316,62 @@ impl QueueView {
         }
     }
 
-    /// Read the queue again (off the UI thread).
+    /// Read the queue again (off the UI thread), after something changed it.
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.load(false, cx);
+    }
+
+    /// [`refresh`](Self::refresh), and the profile's skills too: the profile is a file the user
+    /// edits outside the app, so it is read when Today is shown (and the first time), not on every
+    /// source progress event or click.
+    fn refresh_all(&mut self, cx: &mut Context<Self>) {
+        self.load(true, cx);
+    }
+
+    fn load(&mut self, with_skills: bool, cx: &mut Context<Self>) {
         // The sidebar badge follows every change the list has, shown or not.
         self.state.update(cx, |s, cx| s.refresh_lead_count(cx));
         let core = self.core(cx);
-        let rx = runtime::spawn(async move { core.queue_snapshot() });
+        let rx = runtime::spawn(async move {
+            let skills = with_skills.then(|| core.profile_skills());
+            (core.queue_snapshot(), skills)
+        });
         cx.spawn(async move |this, cx| {
-            let result = rx.await.unwrap_or_else(|_| Err(anyhow!("the task was cancelled")));
-            this.update(cx, |this, cx| this.on_snapshot(result, cx)).ok();
+            let (result, skills) = rx.await.unwrap_or_else(|_| (Err(anyhow!("the task was cancelled")), None));
+            this.update(cx, |this, cx| this.on_snapshot(result, skills, cx)).ok();
         })
         .detach();
     }
 
-    fn on_snapshot(&mut self, result: Result<QueueSnapshot>, cx: &mut Context<Self>) {
+    fn on_snapshot(&mut self, result: Result<QueueSnapshot>, skills: Option<Vec<String>>, cx: &mut Context<Self>) {
         match result {
             Ok(snap) => {
                 self.load_error = None;
+                if let Some(skills) = skills {
+                    self.profile_skills = skills;
+                }
                 self.checked.retain(|id| snap.items.iter().any(|i| i.lead.id == *id));
                 self.snap = Some(snap);
                 self.normalize_selection(cx);
             }
             Err(e) => self.load_error = Some(format!("{e:#}")),
         }
+        self.sync_needs_you(cx);
         cx.notify();
+    }
+
+    /// What the "NEEDS YOU" header counts: sources waiting at a login, failed CVs and CVs to read.
+    /// The sidebar badge shows this same number (see [`sync_needs_you`](Self::sync_needs_you)).
+    fn needs_you_count(&self) -> usize {
+        self.snap.as_ref().map_or(0, |s| s.waiting.len()) + self.failure_rows().len() + self.prepared.len()
+    }
+
+    /// Tell the sidebar the number the header shows, so the two never differ. Call it after anything
+    /// that changes the banners: the snapshot, a CV that was written or failed, a failure forgotten,
+    /// a message closed.
+    fn sync_needs_you(&self, cx: &mut Context<Self>) {
+        let count = self.needs_you_count();
+        self.state.update(cx, |s, cx| s.set_needs_you(count, cx));
     }
 
     fn items(&self) -> &[QueueItem] {
@@ -369,6 +420,16 @@ impl QueueView {
     }
 
     // ------------------------------------------------------------ actions
+
+    /// "Add job" or Enter in the link box: add what was typed or pasted, and empty the box once it
+    /// is taken (a blank box, or too many inputs waiting, leaves it as it is).
+    fn submit_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let raw = self.link.read(cx).value();
+        let Some(jd) = parse_input(&raw) else { return };
+        if self.add_lead(jd, window, cx) {
+            self.link.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+    }
 
     /// Read the posting behind `input`, score it and add it to the list as a lead (never an
     /// application: Prepare CV does that). While another posting is being read this one waits its
@@ -492,6 +553,7 @@ impl QueueView {
             self.failed.remove(id);
         }
         self.checked.clear();
+        self.sync_needs_you(cx);
         let core = self.core(cx);
         let (tx, mut rx) = unbounded_channel();
         let mut unreported: BTreeSet<i64> = ids.iter().copied().collect();
@@ -514,6 +576,7 @@ impl QueueView {
             if !unreported.is_empty() {
                 this.update(cx, |this, cx| {
                     drop_unreported(&mut this.jobs, &mut this.failed, unreported);
+                    this.sync_needs_you(cx);
                     this.refresh(cx);
                     cx.notify();
                 })
@@ -542,6 +605,7 @@ impl QueueView {
                 self.failed.insert(id, message);
             }
         }
+        self.sync_needs_you(cx);
         // The application is in the sidebar now, whether or not the CV worked out.
         self.state.update(cx, |s, cx| s.reload(cx));
         self.refresh(cx);
@@ -549,6 +613,7 @@ impl QueueView {
 
     fn forget_failure(&mut self, lead_id: i64, cx: &mut Context<Self>) {
         self.failed.remove(&lead_id);
+        self.sync_needs_you(cx);
         let core = self.core(cx);
         let rx = runtime::spawn(async move { core.prepare_forget(lead_id) });
         cx.spawn(async move |this, cx| {
@@ -670,19 +735,9 @@ impl QueueView {
 
     // ------------------------------------------------------------ pieces
 
-    fn tone_color(&self, tone: Tone, cx: &App) -> Hsla {
-        let theme = cx.theme();
-        match tone {
-            Tone::High => theme.success,
-            Tone::Mid => theme.warning,
-            Tone::Low => theme.danger,
-            Tone::Unknown => theme.muted_foreground,
-        }
-    }
-
+    /// The title block: today's date, "Today", the last search (or the one running), and "Search now".
     fn header(&self, empty: bool, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let p = ui::palette(cx);
         let last = self.snap.as_ref().and_then(|s| s.last_run.as_ref()).map(|run| {
             let when = DateTime::parse_from_rfc3339(&run.finished_at)
                 .map(|t| ago(Utc::now(), t.with_timezone(&Utc)))
@@ -691,20 +746,26 @@ impl QueueView {
         });
         div()
             .v_flex()
-            .gap_1()
+            .gap_1p5()
             .child(
                 div()
                     .h_flex()
-                    .items_center()
+                    .flex_wrap()
+                    .items_end()
                     .justify_between()
-                    .child(div().text_2xl().font_semibold().child("Job list"))
-                    // When the list is empty "Search now" is the primary button, below.
+                    .gap_4()
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_0p5()
+                            .child(ui::caption(Local::now().format("%A, %-d %B").to_string(), cx))
+                            .child(ui::heading("Today", ui::Level::H1, cx)),
+                    )
+                    // When the list is empty "Search now" is the primary button, in the empty state.
                     .when(!empty, |d| {
                         d.child(
-                            Button::new("queue-search")
-                                .outline()
+                            ui::secondary_button("queue-search", "Search now")
                                 .icon(IconName::Search)
-                                .label("Search now")
                                 .loading(self.searching.is_some())
                                 .disabled(self.searching.is_some())
                                 .on_click(cx.listener(|this, _, _, cx| this.search_now(cx))),
@@ -717,18 +778,19 @@ impl QueueView {
                     .items_center()
                     .gap_2()
                     .text_sm()
-                    .text_color(muted)
-                    .when_some(self.searching.clone(), |d, label| {
-                        d.child(Spinner::new().small().color(theme.primary)).child(label)
-                    })
-                    .when(self.searching.is_none(), |d| d.child(last.unwrap_or_else(|| "No search yet.".into()))),
+                    .text_color(p.muted)
+                    .when_some(self.searching.clone(), |d, label| d.child(Spinner::new().small().color(p.accent)).child(label))
+                    .when(self.searching.is_none(), |d| {
+                        d.child(div().min_w_0().child(last.unwrap_or_else(|| "No search yet.".into())))
+                    }),
             )
     }
 
-    /// The link box, and under it what is happening to the last thing put in: a spinner while the
-    /// posting is read, or why it failed with what to do about it.
+    /// The link box with "Add job", and under it what is happening to the last thing put in: a
+    /// spinner while the posting is read, or why it failed with what to do about it.
     fn link_box(&self, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
+        let p = ui::palette(cx);
+        let blank = self.link.read(cx).value().trim().is_empty();
         let failures: Vec<Stateful<Div>> = self
             .add_failures
             .iter()
@@ -760,7 +822,7 @@ impl QueueView {
                     .aria_label(format!("The posting could not be added: {}", f.message))
                     .v_flex()
                     .gap_1()
-                    .child(div().text_sm().text_color(theme.danger).child(f.message.clone()))
+                    .child(div().text_sm().text_color(p.danger_fg).child(f.message.clone()))
                     .children(help)
                     .children(again.map(|b| div().h_flex().child(b)))
             })
@@ -769,9 +831,23 @@ impl QueueView {
             .v_flex()
             .gap_2()
             .child(
-                Input::new(&self.link)
-                    .prefix(Icon::new(IconName::Plus).size_4().text_color(theme.muted_foreground))
-                    .cleanable(true),
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.link)
+                                .prefix(Icon::new(IconName::Plus).size_4().text_color(p.muted))
+                                .cleanable(true),
+                        ),
+                    )
+                    // A plain button: "Prepare CV" stays the only primary one.
+                    .child(
+                        ui::secondary_button("queue-add-job", "Add job")
+                            .disabled(blank)
+                            .on_click(cx.listener(|this, _, window, cx| this.submit_link(window, cx))),
+                    ),
             )
             .when(self.adding.is_some(), |d| {
                 d.child(
@@ -787,25 +863,26 @@ impl QueueView {
                         .gap_2()
                         .px_3()
                         .py_2()
-                        .rounded_md()
+                        .rounded(px(ui::tokens::RADIUS_BUTTON))
                         .border_1()
-                        .border_color(theme.border)
+                        .border_color(p.border)
+                        .bg(p.surface)
                         .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(Spinner::new().small().color(theme.primary))
+                        .text_color(p.muted)
+                        .child(Spinner::new().small().color(p.accent))
                         .child("Reading the posting\u{2026}")
                         .children(waiting_label(self.waiting.len()).map(|n| div().child(format!("\u{b7} {n}")))),
                 )
             })
             .children(self.link_note.map(|note| {
-                div().id("add-lead-note").role(Role::Paragraph).aria_label(note).text_sm().text_color(theme.muted_foreground).child(note)
+                div().id("add-lead-note").role(Role::Paragraph).aria_label(note).text_sm().text_color(p.muted).child(note)
             }))
             .children(failures)
     }
 
     fn sources_line(&self, cx: &App) -> Option<Stateful<Div>> {
         let snap = self.snap.as_ref().filter(|s| !s.sources.is_empty())?;
-        let theme = cx.theme();
+        let p = ui::palette(cx);
         let now = Utc::now();
         Some(
             div()
@@ -816,9 +893,9 @@ impl QueueView {
                 .flex_wrap()
                 .gap_x_4()
                 .gap_y_0p5()
-                .text_xs()
+                .text_size(px(ui::tokens::TEXT_SMALL))
                 .children(snap.sources.iter().map(|s| {
-                    let color = if source_needs_attention(s) { theme.warning } else { theme.muted_foreground };
+                    let color = if source_needs_attention(s) { p.warn_fg } else { p.subtle };
                     let text = format!("{}: {}{}", source_name(s), source_status(s, now), if s.enabled { "" } else { " (off)" });
                     div().id(("source", s.id as usize)).role(Role::ListItem).aria_label(text.clone()).text_color(color).child(text)
                 })),
@@ -827,23 +904,23 @@ impl QueueView {
 
     fn note_line(&self, cx: &App) -> Option<Stateful<Div>> {
         let note = self.note.as_ref()?;
-        let theme = cx.theme();
+        let p = ui::palette(cx);
         Some(
             div()
                 .id("queue-note")
                 .role(Role::Paragraph)
                 .aria_label(note.text.clone())
                 .text_sm()
-                .text_color(if note.ok { theme.muted_foreground } else { theme.danger })
+                .text_color(if note.ok { p.muted } else { p.danger_fg })
                 .child(note.text.clone()),
         )
     }
 
-    /// One row per source waiting for the user: Open browser (a visible window on the page), Continue
-    /// and Skip. When the window could not be opened, the reason and what to do about it
-    /// (no Chrome: Settings) come under the row.
+    /// One source waiting for the user, as a "Needs you" banner: Open browser (a visible window on
+    /// the page), Continue and Skip. When the window could not be opened, the reason and what to do
+    /// about it (no Chrome: Settings) come under the banner.
     fn waiting_banner(&self, w: &WaitingSource, cx: &Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
+        let p = ui::palette(cx);
         let (what, url) = match &w.reason {
             WaitReason::Login { url, .. } => ("needs you to sign in", Some(url.clone())),
             WaitReason::Captcha { url, .. } => ("shows a captcha", Some(url.clone())),
@@ -867,68 +944,45 @@ impl QueueView {
                 .aria_label(format!("The browser could not be opened: {message}"))
                 .v_flex()
                 .gap_1()
-                .child(div().text_sm().text_color(theme.danger).child(format!("The browser could not be opened: {message}")))
+                .child(div().text_sm().text_color(p.danger_fg).child(format!("The browser could not be opened: {message}")))
                 .children(help)
         });
+        let title = format!("{} {what}", w.source_name);
+        let body = match url.filter(|u| is_web_link(u)) {
+            Some(url) => shorten(&url, 90),
+            None => "Deal with the page in the browser, then press Continue.".to_string(),
+        };
+        let actions = div()
+            .h_flex()
+            .flex_shrink_0()
+            .gap_2()
+            .child(
+                ui::secondary_button(SharedString::from(format!("waiting-open-{id}")), "Open browser")
+                    .icon(IconName::ExternalLink)
+                    .loading(opening)
+                    .disabled(opening || busy)
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_browser(open_thread.clone(), cx))),
+            )
+            .child(
+                ui::secondary_button(SharedString::from(format!("waiting-continue-{id}")), "Continue")
+                    .loading(busy)
+                    .disabled(busy)
+                    .on_click(cx.listener(move |this, _, _, cx| this.continue_source(thread.clone(), cx))),
+            )
+            .child(
+                ui::ghost_button(SharedString::from(format!("waiting-skip-{id}")), "Skip")
+                    .disabled(busy)
+                    .on_click(cx.listener(move |this, _, _, cx| this.skip_source(skip_thread.clone(), cx))),
+            );
         div()
             .id(("waiting", id as usize))
             .role(Role::Group)
             .aria_label(format!("{} {what}", w.source_name))
             .v_flex()
-            .gap_2()
-            .p_2()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.warning)
-            .bg(theme.warning.opacity(0.08))
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().text_sm().font_semibold().child(format!("{} {what}", w.source_name)))
-                            .when_some(url.filter(|u| is_web_link(u)), |d, url| {
-                                d.child(div().text_xs().truncate().text_color(theme.muted_foreground).child(url))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new(SharedString::from(format!("waiting-open-{id}")))
-                                    .outline()
-                                    .compact()
-                                    .icon(IconName::ExternalLink)
-                                    .label("Open browser")
-                                    .loading(opening)
-                                    .disabled(opening || busy)
-                                    .on_click(cx.listener(move |this, _, _, cx| this.open_browser(open_thread.clone(), cx))),
-                            )
-                            .child(
-                                Button::new(SharedString::from(format!("waiting-continue-{id}")))
-                                    .outline()
-                                    .compact()
-                                    .label("Continue")
-                                    .loading(busy)
-                                    .disabled(busy)
-                                    .on_click(cx.listener(move |this, _, _, cx| this.continue_source(thread.clone(), cx))),
-                            )
-                            .child(
-                                Button::new(SharedString::from(format!("waiting-skip-{id}")))
-                                    .ghost()
-                                    .compact()
-                                    .label("Skip")
-                                    .disabled(busy)
-                                    .on_click(cx.listener(move |this, _, _, cx| this.skip_source(skip_thread.clone(), cx))),
-                            ),
-                    ),
-            )
+            .flex_1()
+            .min_w(px(NEEDS_MIN_WIDTH))
+            .gap_1()
+            .child(ui::banner(ui::Tone::Warn, &title, &body, actions, cx))
             .children(open_error)
     }
 
@@ -960,8 +1014,10 @@ impl QueueView {
         rows
     }
 
+    /// A CV that could not be written, as a danger banner: the first line of the message (the whole
+    /// text under it when there is more), what to do about it, Retry.
     fn failure_card(&self, row: FailureRow, cx: &Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
+        let p = ui::palette(cx);
         let (id, app_id) = (row.lead_id, row.app_id);
         let problem = health::classify(&row.message);
         let retry: RetryFn = {
@@ -969,113 +1025,118 @@ impl QueueView {
             std::rc::Rc::new(move |_, cx| this.update(cx, |this, cx| this.prepare(vec![id], cx)))
         };
         let help = problem::help(&format!("prepare-error-{id}"), problem, &self.state, Some(retry), cx);
+        let title = format!("The CV for {} could not be written", row.title);
+        let first_line = row.message.lines().next().unwrap_or_default().trim();
+        let body = shorten(first_line, FAILURE_SUMMARY_CHARS);
+        let has_more = row.message.lines().count() > 1 || first_line.chars().count() > FAILURE_SUMMARY_CHARS;
+        let actions = div()
+            .h_flex()
+            .flex_shrink_0()
+            .gap_2()
+            .when(!problem.retryable(), |d| {
+                d.child(
+                    ui::secondary_button(SharedString::from(format!("prepare-retry-{id}")), "Try again")
+                        .on_click(cx.listener(move |this, _, _, cx| this.prepare(vec![id], cx))),
+                )
+            })
+            .when_some(app_id, |d, app_id| {
+                d.child(
+                    ui::secondary_button(SharedString::from(format!("prepare-open-{id}")), "Open application")
+                        .on_click(cx.listener(move |this, _, _, cx| this.state.update(cx, |s, cx| s.select(app_id, cx)))),
+                )
+            })
+            .child(
+                ui::ghost_button(SharedString::from(format!("prepare-forget-{id}")), "Forget")
+                    .on_click(cx.listener(move |this, _, _, cx| this.forget_failure(id, cx))),
+            );
         div()
             .id(("failure", id as usize))
             .role(Role::Group)
-            .aria_label(format!("The CV for {} could not be written", row.title))
+            .aria_label(title.clone())
             .v_flex()
+            .flex_1()
+            .min_w(px(NEEDS_MIN_WIDTH))
             .gap_1()
-            .p_2()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.danger)
-            .child(div().text_sm().font_semibold().child(format!("The CV for {} could not be written", row.title)))
-            .child(
-                div()
-                    .id(("failure-text", id as usize))
-                    .max_h(px(72.))
-                    .overflow_y_scroll()
-                    .font_family("monospace")
-                    .text_xs()
-                    .text_color(theme.danger)
-                    .child(row.message),
-            )
+            .child(ui::banner(ui::Tone::Danger, &title, &body, actions, cx))
+            .when(has_more, |d| {
+                d.child(
+                    div()
+                        .id(("failure-text", id as usize))
+                        .max_h(px(72.))
+                        .overflow_y_scroll()
+                        .font_family("monospace")
+                        .text_size(px(ui::tokens::TEXT_SMALL))
+                        .text_color(p.danger_fg)
+                        .child(row.message.clone()),
+                )
+            })
             .children(help)
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .when(!problem.retryable(), |d| {
-                        d.child(
-                            Button::new(SharedString::from(format!("prepare-retry-{id}")))
-                                .outline()
-                                .compact()
-                                .label("Try again")
-                                .on_click(cx.listener(move |this, _, _, cx| this.prepare(vec![id], cx))),
-                        )
-                    })
-                    .when_some(app_id, |d, app_id| {
-                        d.child(
-                            Button::new(SharedString::from(format!("prepare-open-{id}")))
-                                .outline()
-                                .compact()
-                                .label("Open application")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.state.update(cx, |s, cx| s.select(app_id, cx))
-                                })),
-                        )
-                    })
-                    .child(
-                        Button::new(SharedString::from(format!("prepare-forget-{id}")))
-                            .ghost()
-                            .compact()
-                            .label("Forget")
-                            .on_click(cx.listener(move |this, _, _, cx| this.forget_failure(id, cx))),
-                    ),
-            )
     }
 
-    fn prepared_row(&self, index: usize, p: &Prepared, cx: &Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
-        let app_id = p.app_id;
-        div()
-            .id(("prepared", index))
-            .role(Role::Group)
-            .aria_label(format!("CV ready for {}", p.label))
+    /// A CV that was written, as a banner that points at the application: read it, then approve it.
+    fn prepared_row(&self, index: usize, prepared: &Prepared, cx: &Context<Self>) -> Stateful<Div> {
+        let app_id = prepared.app_id;
+        let title = format!("CV ready for {}", prepared.label);
+        let actions = div()
             .h_flex()
-            .items_center()
-            .gap_3()
-            .p_2()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.success)
+            .flex_shrink_0()
+            .gap_2()
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_sm()
-                    .truncate()
-                    .child(format!("CV ready for {}: read it, then approve it.", p.label)),
-            )
-            .child(
-                Button::new(SharedString::from(format!("prepared-open-{index}")))
-                    .outline()
-                    .compact()
-                    .label("Open application")
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                ui::secondary_button(SharedString::from(format!("prepared-open-{index}")), "Open application").on_click(
+                    cx.listener(move |this, _, _, cx| {
                         this.state.update(cx, |s, cx| s.select(app_id, cx));
-                    })),
+                    }),
+                ),
             )
             .child(
                 Button::new(SharedString::from(format!("prepared-close-{index}")))
                     .ghost()
-                    .compact()
                     .icon(IconName::Close)
+                    .accessibility_label("Dismiss this message")
+                    .size(px(ui::tokens::BUTTON_HEIGHT))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if index < this.prepared.len() {
                             this.prepared.remove(index);
                         }
+                        this.sync_needs_you(cx);
                         cx.notify();
                     })),
-            )
+            );
+        div()
+            .id(("prepared", index))
+            .role(Role::Group)
+            .aria_label(title.clone())
+            .flex_1()
+            .min_w(px(NEEDS_MIN_WIDTH))
+            .child(ui::banner(ui::Tone::Ok, &title, "Read it, then approve it.", actions, cx))
+    }
+
+    /// "Needs you": sources waiting at a login, failed CVs and CVs to read. `None` when there is nothing.
+    fn needs_you(&self, banners: Vec<Stateful<Div>>, cx: &App) -> Option<Stateful<Div>> {
+        if banners.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .id("queue-needs-you")
+                .role(Role::Group)
+                .aria_label("Needs you")
+                .v_flex()
+                .gap_2p5()
+                .child(
+                    div()
+                        .text_size(px(ui::tokens::TEXT_SMALL))
+                        .font_semibold()
+                        .text_color(ui::palette(cx).warn_fg)
+                        .child(format!("NEEDS YOU \u{b7} {}", self.needs_you_count())),
+                )
+                .child(div().h_flex().flex_wrap().gap_3().children(banners)),
+        )
     }
 
     fn filter_bar(&self, cx: &Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
         let sources: Vec<(i64, String)> =
             self.snap.iter().flat_map(|s| s.sources.iter()).map(|s| (s.id, source_name(s))).collect();
-        let chip = |id: SharedString, label: String, on: bool| Button::new(id).ghost().compact().label(label).selected(on);
         let caption = |text: &'static str| ui::caption(text, cx);
         let (shown, total) = (self.shown().len(), self.items().len());
         div()
@@ -1086,25 +1147,25 @@ impl QueueView {
             .flex_wrap()
             .items_center()
             .gap_x_4()
-            .gap_y_1()
+            .gap_y_2()
             .when(sources.len() > 1, |d| {
                 d.child(
                     div()
                         .h_flex()
+                        .flex_wrap()
                         .items_center()
-                        .gap_1()
+                        .gap_1p5()
                         .child(caption("Source"))
-                        .child(
-                            chip("flt-src-all".into(), "All".into(), self.filter.source_id.is_none())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.filter.source_id = None;
-                                    this.normalize_selection(cx);
-                                    cx.notify();
-                                })),
-                        )
+                        .child(ui::filter_chip("flt-src-all", "All", self.filter.source_id.is_none()).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.filter.source_id = None;
+                                this.normalize_selection(cx);
+                                cx.notify();
+                            },
+                        )))
                         .children(sources.iter().map(|(id, name)| {
                             let id = *id;
-                            chip(
+                            ui::filter_chip(
                                 SharedString::from(format!("flt-src-{id}")),
                                 name.clone(),
                                 self.filter.source_id == Some(id),
@@ -1120,19 +1181,20 @@ impl QueueView {
             .child(
                 div()
                     .h_flex()
+                    .flex_wrap()
                     .items_center()
-                    .gap_1()
+                    .gap_1p5()
                     .child(caption("Min score"))
-                    .child(chip("flt-score-any".into(), "Any".into(), self.filter.min_score.is_none()).on_click(
-                        cx.listener(|this, _, _, cx| {
+                    .child(ui::filter_chip("flt-score-any", "Any", self.filter.min_score.is_none()).on_click(cx.listener(
+                        |this, _, _, cx| {
                             this.filter.min_score = None;
                             this.normalize_selection(cx);
                             cx.notify();
-                        }),
-                    ))
+                        },
+                    )))
                     .children(MIN_SCORES.iter().map(|min| {
                         let min = *min;
-                        chip(
+                        ui::filter_chip(
                             SharedString::from(format!("flt-score-{min:.0}")),
                             format!("{min:.0}+"),
                             self.filter.min_score == Some(min),
@@ -1145,16 +1207,15 @@ impl QueueView {
                     })),
             )
             .child(div().w(px(200.)).child(Input::new(&self.location)))
-            .child(div().text_xs().text_color(muted).child(format!("{shown} of {total} shown")))
+            .child(ui::caption(format!("{shown} of {total} shown"), cx))
     }
 
-    /// One lead as a card: a tick box (only on hover, or once any box is ticked), the name and where
-    /// it is, why it matches, and the score as a pill in its tone colour.
+    /// One lead as a card: a tick box (only on hover, or once any box is ticked), the score badge,
+    /// the role, where it is, why it matches, and which source found it and when.
     fn lead_row(&self, item: &QueueItem, selected: bool, cx: &Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
+        let p = ui::palette(cx);
         let lead = &item.lead;
         let id = lead.id;
-        let tone = self.tone_color(score_tone(lead.score), cx);
         let job = self.jobs.get(&id).cloned();
         let source = self
             .snap
@@ -1169,21 +1230,20 @@ impl QueueView {
             .join(" \u{b7} ");
         let group = SharedString::from(format!("lead-card-{id}"));
         let any_checked = !self.checked.is_empty();
-        let (accent, border, primary) = (theme.accent, theme.border, theme.primary);
+        let small = px(ui::tokens::TEXT_SMALL);
         div()
             .id(("lead-card", id as usize))
             .group(group.clone())
             .h_flex()
-            .items_start()
-            .rounded_lg()
+            .items_center()
+            .rounded(px(ui::tokens::RADIUS_CARD - 2.0))
             .border_1()
-            .border_color(if selected { primary.opacity(0.55) } else { border })
-            .bg(if selected { accent } else { theme.background })
-            .hover(move |d| d.bg(accent.opacity(if selected { 1.0 } else { 0.5 })))
+            .border_color(if selected { p.accent } else { p.border })
+            .bg(if selected { p.surface } else { transparent_black() })
+            .hover(move |d| d.bg(p.surface))
             .child(
                 div()
                     .pl_3()
-                    .pt_3()
                     .when(!any_checked, |d| d.opacity(0.).group_hover(group, |s| s.opacity(1.)))
                     .child(
                         Checkbox::new(SharedString::from(format!("lead-check-{id}")))
@@ -1204,167 +1264,104 @@ impl QueueView {
                     .id(("lead", id as usize))
                     .role(Role::ListItem)
                     .aria_label(format!("{}: {}, score {}", lead.company, lead.role, score_label(lead.score)))
-                    .v_flex()
+                    .h_flex()
+                    .items_center()
                     .flex_1()
                     .min_w_0()
-                    .gap_1()
-                    .p_3()
+                    .gap_3()
+                    .py_3()
                     .pl_2()
+                    .pr_3()
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.set_selected(Some(id), cx);
                         cx.notify();
                     }))
+                    .child(ui::score_badge(lead.score, cx))
                     .child(
                         div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
+                            .v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(div().truncate().font_semibold().text_color(p.ink).child(lead.role.clone()))
                             .child(
                                 div()
-                                    .flex_1()
-                                    .min_w_0()
                                     .truncate()
-                                    .font_semibold()
-                                    .child(format!("{} \u{2014} {}", lead.company, lead.role)),
+                                    .text_size(px(ui::tokens::TEXT_BODY - 1.0))
+                                    .text_color(p.muted)
+                                    .child(format!("{} \u{b7} {}", lead.company, meta_line(&lead.location, None))),
                             )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .px_2()
-                                    .py_0p5()
-                                    .rounded_full()
-                                    .text_xs()
-                                    .font_semibold()
-                                    .text_color(tone)
-                                    .bg(tone.opacity(0.14))
-                                    .child(score_label(lead.score)),
-                            ),
+                            .when(!reasons.is_empty(), |d| d.child(div().truncate().text_size(small).text_color(p.subtle).child(reasons)))
+                            .when_some(job, |d, job| {
+                                d.child(
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .text_size(small)
+                                        .text_color(p.accent)
+                                        .child(Spinner::new().xsmall().color(p.accent))
+                                        .child(job.label().to_string()),
+                                )
+                            }),
                     )
                     .child(
                         div()
-                            .truncate()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(meta_line(&lead.location, source.as_deref())),
-                    )
-                    .when(!reasons.is_empty(), |d| {
-                        d.child(div().truncate().text_xs().text_color(theme.muted_foreground).child(reasons))
-                    })
-                    .when_some(job, |d, job| {
-                        d.child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_1()
-                                .text_xs()
-                                .text_color(theme.primary)
-                                .child(Spinner::new().xsmall().color(theme.primary))
-                                .child(job.label().to_string()),
-                        )
-                    }),
+                            .v_flex()
+                            .flex_shrink_0()
+                            .items_end()
+                            .text_size(small)
+                            .text_color(p.subtle)
+                            .children(source)
+                            .child(ago(Utc::now(), lead.found_at)),
+                    ),
             )
     }
 
-    fn list(&self, cx: &Context<Self>) -> Stateful<Div> {
+    /// The left pane: "New leads" and the cards, which scroll on their own.
+    fn list(&self, total: usize, cx: &Context<Self>) -> Div {
         let selected = self.selected_id(cx);
         let rows: Vec<Stateful<Div>> =
             self.shown().into_iter().map(|item| self.lead_row(item, selected == Some(item.lead.id), cx)).collect();
         div()
-            .id("queue-list")
-            .role(Role::List)
-            .aria_label("Leads")
             .v_flex()
-            .w(px(360.))
-            .flex_shrink_0()
+            .w(px(LIST_WIDTH))
+            .min_w(px(LIST_MIN_WIDTH))
             .h_full()
-            .gap_2()
-            .overflow_y_scroll()
-            .pr_3()
-            .children(rows)
-    }
-
-    fn score_bar(&self, score: u32, tone: Hsla, cx: &App) -> Div {
-        let theme = cx.theme();
-        div()
-            .w(px(80.))
-            .h(px(6.))
-            .flex_shrink_0()
-            .rounded_full()
-            .bg(theme.border)
-            .child(div().h_full().w(px(f32::from(u16::try_from(score.min(100)).unwrap_or(0)) * 0.8)).rounded_full().bg(tone))
-    }
-
-    fn breakdown(&self, item: &QueueItem, cx: &App) -> Option<Stateful<Div>> {
-        let scored = item.scored.as_ref()?;
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        let total_tone = self.tone_color(score_tone(item.lead.score), cx);
-        let rows = criteria_rows(scored).into_iter().map(|r| {
-            let tone = if r.detail.known { self.tone_color(score_tone(Some(f64::from(r.detail.score))), cx) } else { muted };
-            let reason = if r.detail.known {
-                r.detail.reason.clone()
-            } else {
-                "not judged: the posting or your preferences say nothing about it".to_string()
-            };
-            div()
-                .v_flex()
-                .gap_0p5()
-                .text_sm()
-                .child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().w(px(76.)).flex_shrink_0().child(capitalize(r.criterion)))
-                        .child(div().w(px(36.)).flex_shrink_0().text_xs().text_color(muted).child(format!("{}%", r.weight)))
-                        .child(div().w(px(32.)).flex_shrink_0().font_semibold().text_color(tone).child(if r.detail.known {
-                            r.detail.score.to_string()
-                        } else {
-                            "\u{2013}".to_string()
-                        }))
-                        .child(self.score_bar(if r.detail.known { r.detail.score } else { 0 }, tone, cx)),
-                )
-                .child(div().text_xs().text_color(if r.detail.known { theme.foreground } else { muted }).child(reason))
-        });
-        Some(
-            div()
-                .id("queue-breakdown")
-                .role(Role::Group)
-                .aria_label("Score breakdown")
-                .v_flex()
-                .gap_1p5()
-                .p_3()
-                .rounded_md()
-                .border_1()
-                .border_color(theme.border)
-                .child(
-                    div()
-                        .h_flex()
-                        .items_baseline()
-                        .gap_2()
-                        .child(div().text_xs().text_color(muted).child("Match"))
-                        .child(div().text_lg().font_semibold().text_color(total_tone).child(score_label(item.lead.score)))
-                        .child(div().text_xs().text_color(muted).child("of 100, weighted by your preferences")),
-                )
-                .children(rows),
-        )
+            .gap_2p5()
+            .child(
+                div()
+                    .h_flex()
+                    .items_baseline()
+                    .gap_2()
+                    .child(ui::heading("New leads", ui::Level::H2, cx))
+                    .child(div().text_color(ui::palette(cx).muted).child(format!("\u{b7} {total}"))),
+            )
+            .child(
+                div()
+                    .id("queue-list")
+                    .role(Role::List)
+                    .aria_label("Leads")
+                    .v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .gap_2()
+                    .overflow_y_scroll()
+                    .children(rows),
+            )
     }
 
     fn dismiss_form(&self, item: &QueueItem, form: &DismissForm, cx: &Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
+        let p = ui::palette(cx);
         let company = item.lead.company.clone();
-        div()
+        ui::card(cx)
             .id("queue-dismiss")
             .role(Role::Group)
             .aria_label("Dismiss this lead")
-            .v_flex()
-            .gap_2()
-            .p_3()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.border)
-            .child(div().font_semibold().child(format!("Dismiss {} \u{2014} {}", item.lead.company, item.lead.role)))
+            .bg(p.surface_alt)
+            .gap_2p5()
+            .child(div().font_semibold().text_color(p.ink).child(format!("Dismiss {} \u{2014} {}", item.lead.company, item.lead.role)))
             .child(Input::new(&self.reason))
             .when(!company.trim().is_empty(), |d| {
                 d.child(
@@ -1379,32 +1376,74 @@ impl QueueView {
                         })),
                 )
             })
-            .when_some(form.error.clone(), |d, e| d.child(div().text_sm().text_color(theme.danger).child(e)))
+            .when_some(form.error.clone(), |d, e| d.child(div().text_sm().text_color(p.danger_fg).child(e)))
             .child(
                 div()
                     .h_flex()
                     .gap_2()
                     .child(
-                        Button::new("dismiss-confirm")
-                            .outline()
-                            .compact()
-                            .label("Dismiss lead")
+                        ui::secondary_button("dismiss-confirm", "Dismiss lead")
                             .loading(form.busy)
                             .disabled(form.busy)
                             .on_click(cx.listener(|this, _, _, cx| this.confirm_dismiss(cx))),
                     )
-                    .child(Button::new("dismiss-cancel").ghost().compact().label("Cancel").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.dismiss = None;
-                            cx.notify();
-                        },
-                    ))),
+                    .child(ui::ghost_button("dismiss-cancel", "Cancel").on_click(cx.listener(|this, _, _, cx| {
+                        this.dismiss = None;
+                        cx.notify();
+                    }))),
             )
     }
 
-    fn lead_panel(&self, item: &QueueItem, cx: &Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+    /// The one primary button of the screen (`queue_primary_for`).
+    fn primary_button(&self, primary: &QueuePrimary, cx: &Context<Self>) -> Button {
+        let action = primary.action;
+        ui::primary_button("queue-primary", action.label())
+            .loading(primary.loading)
+            .disabled(!primary.enabled)
+            .on_click(cx.listener(move |this, _, _, cx| match action {
+                QueueAction::PrepareCv => {
+                    let ids = this.targets(cx);
+                    this.prepare(ids, cx)
+                }
+                QueueAction::SearchNow => this.search_now(cx),
+            }))
+    }
+
+    /// The primary button with its hint under it and, for the open lead, the plain "Open posting"
+    /// and "Dismiss" buttons beside it.
+    fn actions(&self, open: Option<&QueueItem>, primary: &QueuePrimary, cx: &Context<Self>) -> Div {
+        div()
+            .v_flex()
+            .gap_2()
+            .child(
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(self.primary_button(primary, cx))
+                    .when_some(open, |d, item| {
+                        let (id, url) = (item.lead.id, item.lead.url.clone());
+                        d.child(
+                            ui::secondary_button("queue-open-posting", "Open posting")
+                                .icon(IconName::ExternalLink)
+                                .disabled(!is_web_link(&url))
+                                .on_click(move |_, _, cx| cx.open_url(&url)),
+                        )
+                        .child(
+                            ui::secondary_button("queue-dismiss-open", "Dismiss")
+                                .disabled(self.jobs.contains_key(&id))
+                                .on_click(cx.listener(move |this, _, window, cx| this.open_dismiss(id, window, cx))),
+                        )
+                    }),
+            )
+            .when_some(primary.hint.clone(), |d, hint| d.child(ui::caption(hint, cx)))
+    }
+
+    /// The right pane for the open lead: title, score, the actions, why it fits, its skills, the
+    /// company and the interview process. It scrolls on its own.
+    fn lead_panel(&self, item: &QueueItem, primary: &QueuePrimary, cx: &Context<Self>) -> Stateful<Div> {
+        let p = ui::palette(cx);
         let lead = &item.lead;
         let source = self
             .snap
@@ -1412,29 +1451,40 @@ impl QueueView {
             .and_then(|s| s.sources.iter().find(|s| Some(s.id) == lead.source_id))
             .map(source_name);
         let url = lead.url.clone();
-        div()
-            .id("queue-lead")
-            .role(Role::Group)
-            .aria_label(format!("{}: {}", lead.company, lead.role))
-            .v_flex()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .gap_3()
-            .overflow_y_scroll()
+        let score = p.tone(ui::score_tone_of(lead.score));
+        let form = self.dismiss.as_ref().filter(|f| f.lead_id == lead.id);
+
+        let header = div()
+            .h_flex()
+            .flex_wrap()
+            .items_start()
+            .justify_between()
+            .gap_4()
             .child(
                 div()
                     .v_flex()
-                    .gap_0p5()
-                    .child(div().text_xl().font_semibold().child(format!("{} \u{2014} {}", lead.company, lead.role)))
-                    .child(div().text_sm().text_color(muted).child(meta_line(&lead.location, source.as_deref())))
+                    .flex_1()
+                    .min_w(px(240.))
+                    .gap_1()
+                    .child(div().text_sm().text_color(p.muted).child(format!("{} \u{b7} {}", lead.company, meta_line(&lead.location, source.as_deref()))))
+                    .child(
+                        div()
+                            .text_size(px(PANEL_TITLE))
+                            .line_height(relative(1.25))
+                            .font_family(ui::tokens::FONT_HEADING)
+                            .font_semibold()
+                            .text_color(p.ink)
+                            .child(lead.role.clone()),
+                    )
                     .when(is_web_link(&url), |d| {
                         let target = url.clone();
                         d.child(
                             div()
                                 .id("lead-url")
+                                .role(Role::Link)
+                                .aria_label(format!("Posting: {url}"))
                                 .text_sm()
-                                .text_color(theme.link)
+                                .text_color(p.accent)
                                 .underline()
                                 .cursor_pointer()
                                 .truncate()
@@ -1443,37 +1493,64 @@ impl QueueView {
                         )
                     }),
             )
-            .children(self.breakdown(item, cx))
-            .child(match &item.insight {
-                Some(insight) => insight_brief(insight, cx).into_any_element(),
-                None => div()
-                    .text_sm()
-                    .text_color(muted)
-                    .child("No company brief for this lead.")
-                    .into_any_element(),
-            })
-    }
+            .child(
+                div()
+                    .v_flex()
+                    .items_end()
+                    .child(
+                        div()
+                            .text_size(px(36.))
+                            .line_height(relative(1.))
+                            .font_family(ui::tokens::FONT_HEADING)
+                            .font_semibold()
+                            .text_color(score.fg)
+                            .child(score_label(lead.score)),
+                    )
+                    .child(ui::caption("fit score", cx)),
+            );
 
-    /// "Open posting" and "Dismiss" for the open lead, plain buttons.
-    fn lead_actions(&self, item: &QueueItem, cx: &Context<Self>) -> Div {
-        let (id, url) = (item.lead.id, item.lead.url.clone());
+        let breakdown = brief::breakdown(item, cx);
+        let skills = item.insight.as_ref().and_then(|i| brief::skills_block(i, &self.profile_skills, cx));
+        let fit = (breakdown.is_some() || skills.is_some()).then(|| {
+            div()
+                .h_flex()
+                .flex_wrap()
+                .items_start()
+                .gap_6()
+                .children(breakdown.map(|b| b.flex_1().min_w(px(220.))))
+                .children(skills.map(|s| s.flex_1().min_w(px(220.))))
+        });
+        let about = div().border_t_1().border_color(p.border).pt_5();
+        let about = match &item.insight {
+            Some(insight) => about
+                .h_flex()
+                .flex_wrap()
+                .items_start()
+                .gap_6()
+                .child(company_block(insight, cx).flex_1().min_w(px(220.)))
+                .child(interview_block(insight, cx).flex_1().min_w(px(220.))),
+            None => about.child(div().text_sm().text_color(p.muted).child("No company brief for this lead.")),
+        };
+
         div()
-            .h_flex()
-            .gap_2()
+            .id("queue-lead")
+            .role(Role::Group)
+            .aria_label(format!("{}: {}", lead.company, lead.role))
+            .v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_y_scroll()
             .child(
-                Button::new("queue-open-posting")
-                    .outline()
-                    .icon(IconName::ExternalLink)
-                    .label("Open posting")
-                    .disabled(!is_web_link(&url))
-                    .on_click(move |_, _, cx| cx.open_url(&url)),
-            )
-            .child(
-                Button::new("queue-dismiss-open")
-                    .outline()
-                    .label("Dismiss")
-                    .disabled(self.jobs.contains_key(&id))
-                    .on_click(cx.listener(move |this, _, window, cx| this.open_dismiss(id, window, cx))),
+                ui::card(cx)
+                    .p_6()
+                    .gap_5()
+                    .rounded(px(ui::tokens::RADIUS_CARD + 2.0))
+                    .child(header)
+                    .child(self.actions(Some(item), primary, cx))
+                    .when_some(form, |d, form| d.child(self.dismiss_form(item, form, cx)))
+                    .children(fit)
+                    .child(about),
             )
     }
 }
@@ -1484,10 +1561,10 @@ impl Render for QueueView {
         let epoch = self.state.read(cx).queue_epoch;
         if self.epoch != Some(epoch) {
             self.epoch = Some(epoch);
-            self.refresh(cx);
+            self.refresh_all(cx);
         }
 
-        let theme = cx.theme();
+        let p = ui::palette(cx);
         let (total, selected) = (self.items().len(), self.selected_id(cx));
         let shown = self.shown().len();
         let targets = self.targets(cx);
@@ -1500,119 +1577,103 @@ impl Render for QueueView {
             sources: self.snap.as_ref().map_or(0, |s| s.sources.iter().filter(|s| s.enabled).count()),
         };
         let primary = queue_primary_for(&facts);
-        let action = primary.action;
         let loaded = self.snap.is_some();
 
-        let waiting: Vec<Stateful<Div>> = self
-            .snap
-            .as_ref()
-            .map(|s| s.waiting.clone())
-            .unwrap_or_default()
+        let waiting = self.snap.as_ref().map(|s| s.waiting.clone()).unwrap_or_default();
+        let banners: Vec<Stateful<Div>> = waiting
             .iter()
             .map(|w| self.waiting_banner(w, cx))
+            .chain(self.failure_rows().into_iter().map(|r| self.failure_card(r, cx)))
+            .chain(self.prepared.iter().enumerate().map(|(i, prepared)| self.prepared_row(i, prepared, cx)))
             .collect();
-        let failures: Vec<Stateful<Div>> = self.failure_rows().into_iter().map(|r| self.failure_card(r, cx)).collect();
-        let prepared: Vec<Stateful<Div>> = self.prepared.iter().enumerate().map(|(i, p)| self.prepared_row(i, p, cx)).collect();
 
         let open_item = selected.and_then(|id| self.items().iter().find(|i| i.lead.id == id)).cloned();
         let body = if total == 0 {
             div()
                 .id("queue-empty")
-                .role(Role::Paragraph)
+                .role(Role::Group)
                 .aria_label("No jobs yet")
                 .v_flex()
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .gap_1()
-                .text_center()
-                .child(div().text_lg().font_semibold().child(if loaded { "No jobs yet" } else { "Loading the job list" }))
-                .child(div().max_w(px(420.)).text_color(theme.muted_foreground).child(
-                    "Paste a job link in the box above, or press Search now to look in your sources. Jobs appear here, best match first.",
-                ))
+                .child(
+                    ui::empty_state(
+                        IconName::Inbox,
+                        if loaded { "No jobs yet" } else { "Loading the job list" },
+                        "Paste a job link in the box above, or press Search now to look in your sources. Jobs appear here, best match first.",
+                        Some(self.actions(None, &primary, cx).items_center().into_any_element()),
+                        cx,
+                    )
+                    .max_w(px(520.)),
+                )
                 .into_any_element()
         } else {
             let panel = match &open_item {
-                Some(item) => {
-                    let form = self.dismiss.as_ref().filter(|f| f.lead_id == item.lead.id);
-                    div()
-                        .v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .gap_3()
-                        .pl_2()
-                        .when_some(form, |d, form| d.child(self.dismiss_form(item, form, cx)))
-                        .child(self.lead_panel(item, cx))
-                        // The panel fades and slides in whenever another lead is opened.
-                        .with_animation(
-                            ElementId::NamedInteger("lead-panel".into(), item.lead.id as u64),
-                            Animation::new(FADE).with_easing(ease_in_out),
-                            |this, delta| this.opacity(delta).relative().left(px(14. * (1. - delta))),
-                        )
-                        .into_any_element()
-                }
+                Some(item) => div()
+                    .v_flex()
+                    .flex_1()
+                    .min_w(px(PANEL_MIN_WIDTH))
+                    .h_full()
+                    .child(self.lead_panel(item, &primary, cx))
+                    // The panel fades and slides in whenever another lead is opened.
+                    .with_animation(
+                        ElementId::NamedInteger("lead-panel".into(), item.lead.id as u64),
+                        Animation::new(FADE).with_easing(ease_in_out),
+                        |this, delta| this.opacity(delta).relative().left(px(14. * (1. - delta))),
+                    )
+                    .into_any_element(),
                 None => div()
                     .flex_1()
-                    .pl_2()
-                    .text_color(theme.muted_foreground)
-                    .child(if shown == 0 { "No lead matches the filters." } else { "Select a lead to see why it matches." })
+                    .min_w(px(PANEL_MIN_WIDTH))
+                    .child(
+                        ui::empty_state(
+                            IconName::Search,
+                            if shown == 0 { "No lead matches the filters" } else { "Select a lead" },
+                            if shown == 0 { "Loosen a filter to see more jobs." } else { "Pick a job on the left to see why it matches." },
+                            Some(self.actions(None, &primary, cx).items_center().into_any_element()),
+                            cx,
+                        ),
+                    )
                     .into_any_element(),
             };
-            div().h_flex().flex_1().min_h_0().items_start().gap_2().child(self.list(cx)).child(panel).into_any_element()
+            div()
+                .h_flex()
+                .flex_1()
+                .min_h(px(PANES_MIN_HEIGHT))
+                .items_start()
+                .gap_5()
+                .child(self.list(total, cx))
+                .child(panel)
+                .into_any_element()
         };
 
         div()
             .id("queue")
             .role(Role::Group)
-            .aria_label("Job list")
+            .aria_label("Today")
             .v_flex()
             .size_full()
-            .gap_3()
-            .p_6()
-            .child(self.header(total == 0, cx))
-            .child(self.link_box(cx))
-            .children(self.sources_line(cx))
-            .children(self.note_line(cx))
-            .when_some(self.load_error.clone(), |d, message| {
-                d.child(div().text_sm().text_color(theme.danger).child(format!("The job list could not be read: {message}")))
-            })
-            .children(waiting)
-            .children(failures)
-            .children(prepared)
-            .when(total > 0, |d| d.child(self.filter_bar(cx)))
-            .child(body)
+            .gap_5()
+            .px_8()
+            .py_7()
+            // A short window scrolls the page; the panes keep their own scroll inside it.
+            .overflow_y_scroll()
             .child(
                 div()
-                    .h_flex()
-                    .items_center()
-                    .justify_between()
+                    .v_flex()
                     .gap_3()
-                    .child(div().h_flex().gap_2().children(open_item.as_ref().map(|item| self.lead_actions(item, cx))))
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_3()
-                            .when_some(primary.hint.clone(), |d, hint| {
-                                d.child(div().min_w_0().text_sm().text_color(theme.muted_foreground).child(hint))
-                            })
-                            .child(
-                                Button::new("queue-primary")
-                                    .primary()
-                                    .label(action.label())
-                                    .loading(primary.loading)
-                                    .disabled(!primary.enabled)
-                                    .on_click(cx.listener(move |this, _, _, cx| match action {
-                                        QueueAction::PrepareCv => {
-                                            let ids = this.targets(cx);
-                                            this.prepare(ids, cx)
-                                        }
-                                        QueueAction::SearchNow => this.search_now(cx),
-                                    })),
-                            ),
-                    ),
+                    .child(self.header(total == 0, cx))
+                    .child(self.link_box(cx))
+                    .children(self.sources_line(cx))
+                    .children(self.note_line(cx))
+                    .when_some(self.load_error.clone(), |d, message| {
+                        d.child(div().text_sm().text_color(p.danger_fg).child(format!("The job list could not be read: {message}")))
+                    }),
             )
+            .children(self.needs_you(banners, cx))
+            .when(total > 0, |d| d.child(self.filter_bar(cx)))
+            .child(body)
     }
 }
 
@@ -1631,16 +1692,11 @@ fn summary_line(s: &jobpilot_core::discover::RunSummary) -> String {
     chars.next().map_or(line.clone(), |c| c.to_uppercase().chain(chars).collect())
 }
 
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
-}
-
 #[cfg(test)]
 mod tests {
     use jobpilot_core::discover::RunSummary;
 
-    use super::{capitalize, summary_line};
+    use super::summary_line;
 
     #[test]
     fn the_search_summary_reads_as_a_sentence() {
@@ -1649,11 +1705,5 @@ mod tests {
         let one = RunSummary { saved: 1, waiting: 1, failed: 2, ..RunSummary::default() };
         assert_eq!(summary_line(&one), "Found 1 new lead, 1 source waiting for you, 2 sources failed");
         assert_eq!(summary_line(&RunSummary::default()), "Found 0 new leads");
-    }
-
-    #[test]
-    fn criteria_are_capitalised() {
-        assert_eq!(capitalize("skills"), "Skills");
-        assert_eq!(capitalize(""), "");
     }
 }
