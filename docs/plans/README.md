@@ -4,20 +4,21 @@ Status: **decisions 1, 2, 3 and 6 confirmed on 2026-11-13**; 4 and 5 use the rec
 
 ## Status
 
-Updated 2026-11-14, after the end-to-end check (Phase 3). On `main` unless noted.
+Updated 2026-11-14: every plan is merged. On `main` unless noted.
 
 | Plan | PR | State | Notes |
 |------|----|-------|-------|
 | P8 foundation | #10 (tables, preferences model, `chat_json`, `NeedsHuman`, nav), #11 (graph runtime) | merged | |
-| P9 preference chat | #13 | **open, awaiting human review** (High: prompt file) | `core/prefs/` has only the `Preferences` model on main; the Preferences screen is a placeholder |
-| P10 discovery | #15 (runner, ATS and HN sources, scoring, `net::http`), #18 (challenge hand-off, SSRF guard proxy, YC and career-page sources, Settings > Job sources) | merged | Daily run while the app is open (decision 5) is not built; only "Search now" |
+| P9 preference chat | #13 | merged | Trends suggestions go into the chat's message box (#22) |
+| P10 discovery | #15 (runner, ATS and HN sources, scoring, `net::http`), #18 (challenge hand-off, SSRF guard proxy, YC and career-page sources, Settings > Job sources) | merged | Optional daily run while the app is open (decision 5): #20 |
 | P11 job insight | #14 | merged | |
 | P12 queue | #17 | merged | Queue, Prepare CV, Dismiss with exclusion, Next in queue |
 | P13a trend collection | #12 | merged | `core/trends/` collectors and the `trends` graph; no screen |
-| P13b digest and view | #16 | **open, awaiting human review** (High: prompt file) | The Trends screen is a placeholder on main |
-| Phase 3 end-to-end and docs | this change | open | `crates/core/tests/e2e_discovery.rs`, CLAUDE.md / README updates |
+| P13b digest and view | #16 | merged | |
+| Phase 3 end-to-end and docs | #19 | merged | `crates/core/tests/e2e_discovery.rs`, CLAUDE.md / README updates |
+| No browser disguise | #21 | merged | The login, apply and JD-reading browsers no longer hide automation either |
 
-End-to-end check (fake provider and fake Greenhouse board on loopback, real typst, real Chrome for the apply step): source -> `discover_now` -> leads with score and insight -> `prepare_cv` -> Approve CV -> dry-run apply on a local form passes. Checked with P9 and P13b absent: discovery and the queue work with default preferences, as planned. Still unchecked: any live site, the live provider, Gmail, and the pending P9 / P13b code.
+End-to-end check (fake provider and fake Greenhouse board on loopback, real typst, real Chrome for the apply step): source -> `discover_now` -> leads with score and insight -> `prepare_cv` -> Approve CV -> dry-run apply on a local form passes. It was checked before P9 and P13b merged: discovery and the queue work with default preferences, as planned. Still unchecked end to end: any live site, the live provider, Gmail, and the P9 / P13b screens with a live provider.
 
 ## Intent vs. what exists today
 
