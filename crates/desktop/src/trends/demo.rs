@@ -17,17 +17,55 @@ pub fn seed_demo(core: &Core) -> Result<()> {
     }
     let hn = core.add_trend_source(SourceKind::HackerNews, "", "")?;
     let yc = core.add_trend_source(SourceKind::Yc, "", "")?;
-    let blog = core.add_trend_source(SourceKind::Rss, "Example engineering blog", "https://blog.example.com/feed.xml")?;
-    core.add_trend_source(SourceKind::Page, "Example annual report", "https://reports.example.com/annual-2026.html")?;
+    let blog = core.add_trend_source(
+        SourceKind::Rss,
+        "Example engineering blog",
+        "https://blog.example.com/feed.xml",
+    )?;
+    core.add_trend_source(
+        SourceKind::Page,
+        "Example annual report",
+        "https://reports.example.com/annual-2026.html",
+    )?;
 
     let now = Utc::now();
     let samples = [
-        (Some(hn.id), "https://news.example.com/item/1001", "Acme | Senior Rust Engineer | REMOTE | robotics platform", 1),
-        (Some(hn.id), "https://news.example.com/item/1002", "Globex | Platform Engineer | Berlin | Rust, Go, Kubernetes", 2),
-        (Some(hn.id), "https://news.example.com/postgres-19", "Postgres 19 is out", 3),
-        (Some(yc.id), "https://yc.example.com/companies/hirey", "Hirey (YC F26): hiring tools for startups", 2),
-        (Some(blog.id), "https://blog.example.com/rust-latency", "How we cut tail latency in half with Rust", 4),
-        (None, "https://reports.example.com/fintech-2026.pdf", "Fintech outlook 2026", 5),
+        (
+            Some(hn.id),
+            "https://news.example.com/item/1001",
+            "Acme | Senior Rust Engineer | REMOTE | robotics platform",
+            1,
+        ),
+        (
+            Some(hn.id),
+            "https://news.example.com/item/1002",
+            "Globex | Platform Engineer | Berlin | Rust, Go, Kubernetes",
+            2,
+        ),
+        (
+            Some(hn.id),
+            "https://news.example.com/postgres-19",
+            "Postgres 19 is out",
+            3,
+        ),
+        (
+            Some(yc.id),
+            "https://yc.example.com/companies/hirey",
+            "Hirey (YC F26): hiring tools for startups",
+            2,
+        ),
+        (
+            Some(blog.id),
+            "https://blog.example.com/rust-latency",
+            "How we cut tail latency in half with Rust",
+            4,
+        ),
+        (
+            None,
+            "https://reports.example.com/fintech-2026.pdf",
+            "Fintech outlook 2026",
+            5,
+        ),
     ];
     let mut ids = Vec::new();
     for (source_id, url, title, age_days) in samples {
@@ -40,7 +78,11 @@ pub fn seed_demo(core: &Core) -> Result<()> {
         })?;
         ids.push(item.map(|i| (i.id, i.title, i.url)));
     }
-    let cited: Vec<CitedItem> = ids.into_iter().flatten().map(|(id, title, url)| CitedItem { id, title, url }).collect();
+    let cited: Vec<CitedItem> = ids
+        .into_iter()
+        .flatten()
+        .map(|(id, title, url)| CitedItem { id, title, url })
+        .collect();
     let id = |n: usize| cited.get(n).map_or(0, |i| i.id);
 
     let period = Period::current_week();
@@ -91,13 +133,23 @@ pub fn seed_demo(core: &Core) -> Result<()> {
         skills: {
             let mut list: Vec<SkillCount> = skills
                 .into_iter()
-                .map(|(skill, by_month)| SkillCount { skill: skill.into(), total: by_month.iter().sum(), by_month: by_month.to_vec() })
+                .map(|(skill, by_month)| SkillCount {
+                    skill: skill.into(),
+                    total: by_month.iter().sum(),
+                    by_month: by_month.to_vec(),
+                })
                 .collect();
             list.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.skill.cmp(&b.skill)));
             list
         },
     };
-    let data = DigestData { items: cited, points, counts, items_read: 6, dropped: 1 };
+    let data = DigestData {
+        items: cited,
+        points,
+        counts,
+        items_read: 6,
+        dropped: 1,
+    };
     core.save_trend_digest(&period, &data)?;
     Ok(())
 }

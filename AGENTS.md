@@ -1,6 +1,6 @@
 # JobPilot
 
-Rust desktop app (GPUI): JD link/file -> tailored CV (from `profile.yaml`) -> review -> managed-browser apply -> status from Gmail.
+Rust desktop app (Tauri v2 shell + React web UI): JD link/file -> tailored CV (from `profile.yaml`) -> review -> managed-browser apply -> status from Gmail.
 
 ## Layout
 
@@ -11,9 +11,8 @@ assets/cv.typ              Typst renderer: typst compile --root <dir> --input da
 assets/prompts/            tailor.md (system prompt), example-cv.yaml (few-shot)
 assets/jobpilot.desktop    desktop entry (StartupWMClass=jobpilot, same as the window app id)
 assets/icons/              app icon (svg + png), used by the deb / AppImage
-assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) embedded by `ui/fonts.rs`
-scripts/package.sh         release .deb (cargo-deb) + AppImage if appimagetool exists -> dist/
-scripts/a11y-hold.py       keeps an AT client connected so accessibility ids stay stable (see "Check the UI")
+assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) bundled by the web app (`web/src/styles.css`)
+scripts/package.sh         release .deb + AppImage (Tauri bundler) -> dist/
 crates/core  (jobpilot-core, lib jobpilot_core)   no UI
   paths      data dir ($XDG_DATA_HOME/jobpilot, override JOBPILOT_DATA_DIR), profile path, logs_dir
   runtime    global tokio runtime; spawn(fut) -> oneshot::Receiver
@@ -38,51 +37,70 @@ crates/core  (jobpilot-core, lib jobpilot_core)   no UI
                   `sources`, `queue` (QueueSnapshot), `promote` (graph `prepare_cv`, dismiss), `manual` (`Core::add_lead`: pasted link/file -> scored lead)
   trends     P13a collection: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`;
                   P13b `digest/` (extract, count, synthesize, cite: every point must cite stored items)
-crates/desktop (package `jobpilot`)               GPUI views only
-  main.rs    logging init, window (app id `jobpilot`)
-  app.rs     AppState (Arc<Core>, selection, screen, health, retry, needs_you, detail_from), root view + setup banner
-  problem.rs Problem -> help text / call-to-action / Retry (shared by every view)
-  sidebar.rs nav (Today with the needs-you / new-lead badge, Pipeline, Trends), Settings, health line; no input
-  detail/{mod,jd,cv,apply,timeline}.rs   settings/{profile,providers,sessions,sources,gmail,appearance}.rs
-  settings/profile.rs  "Profile & preferences" card: CV upload + job type, locations, domains, skills, notes (no chat UI; notes go through `prefs_chat` in the background)
-  queue.rs   queue/logic.rs, queue/brief.rs: Today, the start screen (paste-link box -> `add_lead`, "needs you" banners, leads by score, brief + score breakdown + skills matched against `Core::profile_skills`, Prepare CV / Dismiss / Open posting, Search now); its needs-you count is the sidebar badge
-  pipeline.rs  Pipeline screen: applications on a 5-column board (`column_for(Status)`), recent activity (`Store::recent_events`); a card opens Detail
-  brief.rs   company and interview blocks of an `Insight`, shared by Today and the JD tab
-  trends/    Trends screen (digest with citations, skill chart, history, sources)
-  ui/        design kit, pure render: `tokens` (Palette light/dark, `palette(cx)`, `Tone`, radii, type scale), `theme` (palette -> gpui-component `Theme`; switch light/dark only with `ui::theme::set_mode` / `sync_system`, never `Theme::change` directly), `fonts`, `components` (heading, card, section, banner, buttons, chip, tag, nav_item, field, segmented, score_badge, stepper, ...); views build from these instead of local helpers
-  detail/mod.rs  the ONE primary action (primary_for: Generate -> Approve CV -> Review & Submit -> Submit); the rest are plain buttons; breadcrumb back to `detail_from`, stepper; cv.rs shows "Every fact traced" only when `Core::cv_is_traced`
+crates/desktop (package `jobpilot`)               Tauri v2 shell + web UI, split by bounded context (never by technical layer)
+  contexts   discovery (Leads, Today, job Sources) | applications (Pipeline, Application: JD/CV/apply/timeline) |
+             profile (profile.yaml, preferences) | integrations (AI Providers, Gmail, browser Sessions) | trends (Digest, trend sources)
+  tauri.conf.json, capabilities/default.json   one window `main`; permissions: core + the file picker only; strict CSP (no remote origin)
+  src/main.rs          composition root: logging, `Core`, demo seed, mail autostart, the window (app id `jobpilot`), `apply::close_all` on exit;
+                       routes a command to its context by name prefix (`<context>_<name>`)
+  src/shared/          shared kernel: `error` (CommandError { problem, message } via `health::classify`, `run` / `run_sync`), `events`
+                       (`shared:data-changed`, `shared:graph-progress` bridge), `insight` (company brief read model), `topics` (preference-list rules that Profile and Trends share), `shell` (health line,
+                       setup banner, badges, appearance, `shared_open_url`: the only way a link leaves the app)
+  src/<context>/       `dto.rs` read models (serde camelCase; core types stay free of serde/Tauri; never a secret),
+                       `rules.rs` pure rules + unit tests (`primary_for`, `column_for`, queue ordering, timeline grouping, ...),
+                       `commands.rs` application services: thin `#[tauri::command]`s that call `Core` through `shared::run`
+  src/demo.rs          `JOBPILOT_DEMO=1` sample data
+  src/devtools.rs      cargo feature `dev-tools` only: webview snapshot + UI script runner (see "Check the UI")
+  web/                 React + Vite + TypeScript + Tailwind (pnpm)
+    src/app/           composition root of the web app: App (screen switch, file drop), Sidebar, SetupBanner, SettingsScreen
+    src/shared/        `bridge` (the only Tauri imports: invoke / listen / file picker), `ui/kit.tsx` (design kit: Page, Card, Section,
+                       Banner, Button, Chip, Tag, Segmented, Tabs, ScoreBadge, Stepper, ...), `theme` (tokens light/dark as `--jp-*`
+                       CSS variables; `styles.css` maps them to the only Tailwind colours), `problem` (ErrorBanner, ProblemHelp),
+                       `nav` (screen, open Application / Lead, Today badge), `shell`, `lib/async` (`useQuery`, `useAction`), `insight`
+    src/contexts/<context>/   `domain/` (types mirroring the DTOs + pure helpers + vitest), `api/` (typed functions over the bridge),
+                       `hooks/` (use-cases), `ui/` (screens), `index.ts` (public surface)
+                       direction: ui -> hooks -> api / domain; another context only through its `index.ts` (eslint enforces both)
 ```
 
 ## Commands
 
-- Run: `cargo run -p jobpilot` (sample data: `JOBPILOT_DEMO=1`; throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory`)
+- Web app first (the shell embeds `crates/desktop/web/dist` at compile time): `pnpm --dir crates/desktop/web install`, then `pnpm --dir crates/desktop/web build`.
+- Run: `cargo run -p jobpilot` (the built web app; sample data: `JOBPILOT_DEMO=1`; throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory`). With hot reload: `cd crates/desktop && web/node_modules/.bin/tauri dev`.
+- Web checks: `pnpm --dir crates/desktop/web check` (tsc, eslint with the context-boundary rules, vitest).
 - Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace`
 - Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-core -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
 - End-to-end without real services: `cargo test -p jobpilot-core --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
 - Package: `scripts/package.sh` -> `dist/`
-- Needs: Rust, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (wayland/xkbcommon/vulkan, libdbus for the keyring).
-- Pre-PR checks: `scripts/check.sh [--all]` (paths changed since main: clippy + test, typst render); CI adds `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps) and restores the cache saved by main; `git config core.hooksPath .githooks` once per clone runs it before every push.
+- Needs: Rust, Node + pnpm, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
+- Pre-PR checks: `scripts/check.sh [--all]` (paths changed since main: web typecheck/lint/test/build, clippy + test, typst render); CI adds `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps) and restores the cache saved by main; `git config core.hooksPath .githooks` once per clone runs it before every push.
 - Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_core=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
 
 ## Check the UI visually
 
-Use a throwaway data dir, XWayland (so `import` can capture the window) and demo data:
+A window capture cannot see the webview on a Wayland session and a screen capture asks the user for consent, so the app checks itself: with the cargo feature `dev-tools` (off by default, never packaged) the webview takes its own picture and runs a script that drives the page.
 
 ```
-env -u WAYLAND_DISPLAY JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory JOBPILOT_DEMO=1 ./target/debug/jobpilot &
-import -window JobPilot /tmp/jp.png        # ImageMagick; matches the window title
+pnpm --dir crates/desktop/web build
+JOBPILOT_UI_SCRIPT=/tmp/check.js JOBPILOT_UI_SHOTS=/tmp/shots \
+JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory JOBPILOT_DEMO=1 \
+  cargo run -p jobpilot --features dev-tools
 ```
 
-For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), so a fake job board cannot be driven from the GUI: that path is covered by `crates/core/tests/e2e_discovery.rs`, and the GUI check of the Job list, a lead, Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
+`check.js` is the body of an async function; the app exits when it ends. Helpers (`src/devtools.rs`): `shot(name)` (PNG in `JOBPILOT_UI_SHOTS`), `log(text)` (app log), `sleep(ms)`, `waitFor(fn, ms)`, `$(selector)`, `byText(text, selector)`, `click(target)` (a selector, or the text / aria-label of a button), `type(target, text)`, `invoke(command, args)`. Example:
 
-### Driving it with agent-desktop (accessibility)
+```text
+await waitFor(() => $("#nav-today"));
+await shot("today");
+await click("#nav-pipeline");
+await shot("pipeline");
+await click("#open-settings");
+await click("Appearance: Light");
+await shot("settings-light");
+```
 
-GPUI exposes elements through AccessKit (AT-SPI). An element is visible only with `.id(..)` + `.role(..)` (buttons have a role already), so add both to anything you want to click.
+Page errors, unhandled rejections and CSP violations are written to the app log (`ui script: ...`). Every interactive element has an `id` or an accessible name, so a script (or assistive technology) can reach it.
 
-- Start the holder first: `scripts/a11y-hold.py &` (kill it by PID afterwards). Without it, ref actions fail with `WINDOW_NOT_FOUND`: AccessKit only serves while an AT client is connected, `at-spi-bus-launcher` flips `org.a11y.Status IsEnabled` off between agent-desktop calls, and every reconnect gives the app a new bus unique name (`:1.N`), which is part of the window id. A persistent client keeps the id stable. No app code change is needed.
-- Start the app after the holder, on XWayland (see above). An instance that was activated mid-run (or native Wayland) may only expose the root node.
-- `agent-desktop snapshot --app jobpilot -i --compact` then `agent-desktop click "@<snapshot id>:eN"`. Take a fresh snapshot after every state change: refs are per snapshot.
-- Limits: GPUI text inputs expose only `SetFocus`, so `set-value` and typing do not work, and `--headed type/focus` is refused on a Wayland session. To enter text, seed the DB or send real key events on XWayland (xdotool, not installed by default). Some chip buttons were not re-clickable after a first state change; take a new snapshot before clicking again.
+For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), so a fake job board cannot be driven from the GUI: that path is covered by `crates/core/tests/e2e_discovery.rs`, and the GUI check of Today, a Lead, Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
 
 ## Workflow
 
@@ -96,35 +114,39 @@ GPUI exposes elements through AccessKit (AT-SPI). An element is visible only wit
 
 - Never add facts to a CV that are not in `profile.yaml` (employers, titles, dates, institutions, numbers, technologies).
 - Secrets (API keys, OAuth tokens) only in the OS keyring via `core::secrets`; never in the DB, logs or files. Logs are redacted as a second line of defence: still never put a secret in a log call, an error message or a `Debug` dump.
-- The UI never blocks and never owns I/O: call `jobpilot_core::runtime::spawn(fut)` and await the receiver inside `cx.spawn`.
-- UI views read/write through `Core` only; no SQL or HTTP in `crates/desktop`.
+- The UI never blocks and never owns I/O: a command calls core through `shared::run(fut)` / `shared::run_sync(f)` (the core runtime); long work streams progress as events and the command returns the final result.
+- The shell reads/writes through `Core` only; no SQL or HTTP in `crates/desktop`. The web app talks to the shell only through `web/src/shared/bridge`, and only from a context's `api/` layer.
+- Bounded contexts do not depend on each other: Rust `src/<context>` uses `shared` and core only; a web context imports another only through its `index.ts`. What two contexts share goes to the shared kernel.
+- DTOs (`<context>/dto.rs`) never carry a secret: keys and tokens are write-only from the web app (it can learn that one is saved, never its value).
+- The webview shows the app only: no remote origin in the CSP, navigation is refused (`main.rs::may_show`), and http(s) links open in the system browser through `shared_open_url`. Untrusted text is rendered as text, never as HTML.
 - Statuses only move forward (`Status::can_advance_to`); use `Store::set_status` so a timeline event is recorded.
 - Page/JD/email text is untrusted: an LLM may fill values for known field ids, never choose actions or URLs.
 - Schema change = append a migration in `store/mod.rs`; never edit an existing one.
 - No `unwrap()` / `expect()` on runtime paths (only tests and provably-infallible statics like a constant regex). Return errors with `anyhow::Context`, or recover.
 - Failures the user can act on become a `health::Problem` (no provider, no Chrome, no typst, network) and are shown with a call to action; network errors get a Retry.
 - Log key steps at `info!` with ids/counts only (no page, JD, email or CV text); failures at `warn!`/`error!`.
-- Views use `crate::ui` (`ui::palette(cx)`, its builders) for colours and widgets: no hard-coded colours, no local copies of kit helpers.
-- Exactly one primary button at a time (`detail/mod.rs::primary_for`, unit-tested); it is disabled while work runs. Secondary actions are plain buttons.
+- Views use the design kit (`web/src/shared`) and the theme classes (`bg-surface`, `text-ink`, ...) for colours and widgets: no hard-coded colours (Tailwind's stock palette is removed), no local copies of kit components.
+- Exactly one primary button at a time (`applications/rules.rs::primary_for`, unit-tested; the web app renders what the DTO says); it is disabled while work runs. Secondary actions are plain buttons.
 - Outgoing HTTP to a URL that is not the user's own (job boards, feeds, postings, search results) goes through `net::http`; discovery browsers go through `browser::guard`. Both refuse machine-local and private hosts. `allow_private_hosts` exists for tests only.
 - Discovery browsers never disguise automation (no hidden webdriver flag, no user-agent change), and a login, captcha or block page is never solved, evaded or waited out: the source pauses and the user deals with it in the visible browser.
 - Graphs (`core/graph`): state is one `serde` struct, nodes return the new state and must be idempotent (a resume re-runs the node). A node with several plain incoming edges is an AND join and waits for all of them, so a loop or an alternative path must use `route`, never a second edge. A paused branch holds back its siblings in the same run: independent work runs as its own thread (`Graphs::run_each`). Parallel nodes only share a field declared with `append`.
 - Leads are not applications: a found job is a `leads` row; it becomes an application only when the user presses Prepare CV (`Core::promote`, idempotent). Discovery never promotes and never writes a CV.
 - Doc examples that are not compilable use ```` ```text ````, not ```` ```ignore ````: `cargo test -- --ignored` (the Chrome tests) also runs ignored doctests, and they fail to compile.
-- Desktop tests: never `use super::*` in a test module of a file that glob-imports `gpui_kit` (the glob brings gpui's `test` attribute and shadows `#[test]`); import the names you need.
 - Untrusted text (postings, feed items, company pages) reaches the model only between markers, as data, and the model fills fixed schemas; URLs come from adapters in code.
 
 ## Ownership (parallel work)
 
-Each sub-plan edits only its own files: `llm/` P1 + `settings/providers.rs`; `pipeline/` P2; `detail/{jd,cv,timeline}.rs` + `sidebar.rs` P3; `browser/` + `settings/sessions.rs` P4; `apply/` + `detail/apply.rs` P5; `mail/` + `settings/gmail.rs` P6; `health`, `logging`, `redact`, `problem.rs`, packaging and docs P7. Add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
+Core: each sub-plan edits only its own modules: `llm/` P1; `pipeline/` P2; `browser/` P4; `apply/` P5; `mail/` P6; `health`, `logging`, `redact`, packaging and docs P7. Add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
+
+Desktop: a change belongs to one bounded context and edits only `crates/desktop/src/<context>/` and `crates/desktop/web/src/contexts/<context>/`: discovery (P10 sources, P12 queue), applications (P2/P3/P5 screens), profile (P9), integrations (P1 providers, P4 sessions, P6 Gmail), trends (P13). The shared kernel (`src/shared`, `web/src/shared`, `web/src/app`, `main.rs`) changes only for something every context needs.
 
 The product plans (`docs/plans/`, status table in `docs/plans/README.md`):
 
-- P8 foundation: `core/graph/`, the new `store/` files and migrations, `notify.rs`, `Llm::chat_json`, `Problem::NeedsHuman`, `app.rs` navigation.
-- P9 preference chat: `core/prefs/` (chat), `settings/profile.rs`, `assets/prompts/preferences.md`.
-- P10 discovery: `core/discover/` except `promote.rs` and `queue.rs`, `core/net/`, `browser/{challenge,render,guard,gate}.rs`, `settings/sources.rs`.
-- P11 job insight: `pipeline/insight*`, the brief in `detail/jd.rs`.
-- P12 queue: `desktop/queue*`, `core/discover/{promote,queue}.rs`.
-- P13 trends: `core/trends/`, `desktop/trends.rs`, `assets/prompts/trends.md`.
+- P8 foundation: `core/graph/`, the new `store/` files and migrations, `notify.rs`, `Llm::chat_json`, `Problem::NeedsHuman`.
+- P9 preference chat: `core/prefs/` (chat), the desktop `profile` context, `assets/prompts/preferences.md`.
+- P10 discovery: `core/discover/` except `promote.rs` and `queue.rs`, `core/net/`, `browser/{challenge,render,guard,gate}.rs`, Job sources in the desktop `discovery` context.
+- P11 job insight: `pipeline/insight*`, the company brief (`shared/insight`).
+- P12 queue: Today in the desktop `discovery` context, `core/discover/{promote,queue}.rs`.
+- P13 trends: `core/trends/`, the desktop `trends` context, `assets/prompts/trends.md`.
 
 Prompts under `assets/prompts/` are High risk (a human reads the diff).

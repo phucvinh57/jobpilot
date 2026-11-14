@@ -1,42 +1,43 @@
 #!/usr/bin/env bash
-# Build release packages into dist/: a .deb (cargo-deb) and, if `appimagetool` is installed, an AppImage.
-# Usage: scripts/package.sh            (run from anywhere)
+# Build release packages into dist/ with the Tauri bundler: a .deb and an AppImage.
+# Usage: scripts/package.sh            (run from anywhere; BUNDLES=deb for the .deb only)
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 dist="$root/dist"
+web="$root/crates/desktop/web"
+bundles="${BUNDLES:-deb,appimage}"
 mkdir -p "$dist"
 
-echo "==> release build"
-cargo build --release -p jobpilot
+echo "==> web app dependencies"
+pnpm --dir "$web" install --frozen-lockfile
 
-echo "==> .deb"
-if cargo deb --version >/dev/null 2>&1; then
-    # --no-build: the release binary was just built above.
-    cargo deb -p jobpilot --no-build --output "$dist/"
-else
-    echo "skipped: cargo-deb not installed (cargo install --locked cargo-deb)" >&2
+echo "==> release build and packages ($bundles)"
+# The Tauri CLI runs from the crate that holds tauri.conf.json. It builds the web app
+# (`beforeBuildCommand`), the release binary, then the bundles. The AppImage step downloads
+# linuxdeploy on first use.
+# A bundle that fails (the AppImage needs linuxdeploy to work on this machine) does not hide the
+# ones that were built: they are still copied, and the script ends with the failure.
+status=0
+(cd "$root/crates/desktop" && "$web/node_modules/.bin/tauri" build --bundles "$bundles") || status=$?
+
+echo "==> copy to dist/"
+found=0
+for pkg in "$root"/target/release/bundle/deb/*.deb "$root"/target/release/bundle/appimage/*.AppImage; do
+    [[ -e $pkg ]] || continue
+    cp -f "$pkg" "$dist/"
+    found=$((found + 1))
+done
+if ((found == 0)); then
+    echo "no package was produced (see the output above)" >&2
+    exit 1
 fi
+ls -1 "$dist"
 
-echo "==> AppImage"
-if command -v appimagetool >/dev/null 2>&1; then
-    app="$dist/JobPilot.AppDir"
-    rm -rf "$app"
-    mkdir -p "$app/usr/bin" "$app/usr/share/applications" "$app/usr/share/icons/hicolor/256x256/apps"
-    install -m755 target/release/jobpilot "$app/usr/bin/jobpilot"
-    install -m644 assets/jobpilot.desktop "$app/jobpilot.desktop"
-    install -m644 assets/jobpilot.desktop "$app/usr/share/applications/jobpilot.desktop"
-    install -m644 assets/icons/jobpilot-256.png "$app/jobpilot.png"
-    install -m644 assets/icons/jobpilot-256.png "$app/usr/share/icons/hicolor/256x256/apps/jobpilot.png"
-    printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/jobpilot" "$@"\n' >"$app/AppRun"
-    chmod +x "$app/AppRun"
-    # The AppImage bundles only the binary: GPU/Wayland/X11/dbus libraries come from the host.
-    ARCH="$(uname -m)" appimagetool "$app" "$dist/JobPilot-$(uname -m).AppImage"
-    ls -1 "$dist"/*.AppImage
-else
-    echo "skipped: appimagetool not found (https://github.com/AppImage/appimagetool/releases)" >&2
+if ((status != 0)); then
+    echo "some packages failed (see the output above); the ones listed are in $dist/" >&2
+    exit "$status"
 fi
-
 echo "Done. Packages are in $dist/"
 echo "Not bundled: the typst CLI (cargo install --locked typst-cli) and Chrome (Settings > Browser sessions can download one)."
