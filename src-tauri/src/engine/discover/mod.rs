@@ -11,8 +11,9 @@
 //! core.add_job_source("career_page", "", url, None)?;   // Settings > Job sources: add, enable, bind a session, remove
 //! ```
 //!
-//! - [`source`]: the adapters (`greenhouse`, `lever`, `ashby`, `hn_hiring`; `yc` and `career_page`, which
-//!   read web pages and use the managed browser when a page needs it) behind [`JobSource`].
+//! - [`source`]: the adapters (`greenhouse`, `lever`, `ashby`, `smartrecruiters`, `recruitee`, `personio`,
+//!   `hn_hiring`; `yc` and `career_page`, which read web pages and use the managed browser when a
+//!   page needs it) behind [`JobSource`].
 //! - [`run`]: the `discovery` graph (one thread per run) and the `source_run` graph (one thread per
 //!   source, so a paused source never holds back the others).
 //! - [`score`]: hard filters in code, then one model call per lead, then the weighted sum.

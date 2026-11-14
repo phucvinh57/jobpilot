@@ -16,6 +16,8 @@ pub trait Http: Send + Sync {
     /// classified like every other network error) or a body that is not JSON.
     async fn get_json(&self, url: &str) -> Result<Value>;
 
+    /// GET a URL and return the body as text (an XML feed). `Err` as for [`Http::get_json`].
+    async fn get_text(&self, url: &str, accept: &str) -> Result<String>;
     /// `POST url` with a JSON `body`, failing like [`Http::get_json`]. Never redirected: the body
     /// is not re-sent anywhere else. Only Workday's job search needs it.
     async fn post_json(&self, url: &str, body: &Value) -> Result<Value>;
@@ -41,6 +43,13 @@ impl Http for NetHttp {
         serde_json::from_slice(&resp.body).map_err(|_| anyhow!("{host} did not return JSON"))
     }
 
+    async fn get_text(&self, url: &str, accept: &str) -> Result<String> {
+        let parsed = checked_url(url)?;
+        let host = parsed.host_str().unwrap_or_default().to_string();
+        let resp = self.client.get(url, &[("Accept", accept)]).await.with_context(|| format!("fetching {host}"))?;
+        Ok(resp.text())
+    }
+
     async fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
         let parsed = checked_url(url)?;
         let host = parsed.host_str().unwrap_or_default().to_string();
@@ -56,11 +65,13 @@ pub(crate) mod fake {
 
     use super::*;
 
-    /// Answers GETs from a URL -> JSON map and POSTs from a (URL, body) -> JSON list, and records
-    /// every request (a POST also with its body).
+    /// Answers GETs from a URL -> body map (JSON, or the text of an XML feed), POSTs from a
+    /// (URL, body) -> JSON list, fails the URLs given a status, and records every request (a POST
+    /// also with its body).
     #[derive(Default)]
     pub(crate) struct FakeHttp {
-        answers: HashMap<String, Value>,
+        answers: HashMap<String, String>,
+        statuses: HashMap<String, u16>,
         post_answers: Vec<(String, Value, Value)>,
         requested: Mutex<Vec<String>>,
         posted: Mutex<Vec<(String, Value)>>,
@@ -68,11 +79,25 @@ pub(crate) mod fake {
 
     impl FakeHttp {
         pub(crate) fn with(answers: impl IntoIterator<Item = (&'static str, &'static str)>) -> Arc<Self> {
-            let answers = answers
-                .into_iter()
-                .map(|(url, body)| (url.to_string(), serde_json::from_str(body).expect("fixture is valid JSON")))
-                .collect();
-            Arc::new(Self { answers, ..Self::default() })
+            Self::with_statuses(answers, [])
+        }
+
+        /// [`FakeHttp::with`], plus URLs that answer with a non-2xx `status` (`HTTP 503`).
+        pub(crate) fn with_statuses(
+            answers: impl IntoIterator<Item = (&'static str, &'static str)>,
+            statuses: impl IntoIterator<Item = (&'static str, u16)>,
+        ) -> Arc<Self> {
+            let answers = answers.into_iter().map(|(url, body)| (url.to_string(), body.to_string())).collect();
+            let statuses = statuses.into_iter().map(|(url, status)| (url.to_string(), status)).collect();
+            Arc::new(Self { answers, statuses, ..Self::default() })
+        }
+
+        fn answer(&self, url: &str) -> Result<&str> {
+            self.requested.lock().unwrap_or_else(|e| e.into_inner()).push(url.to_string());
+            if let Some(status) = self.statuses.get(url) {
+                return Err(anyhow!("fetching fixture: HTTP {status}"));
+            }
+            self.answers.get(url).map(String::as_str).ok_or_else(|| anyhow!("fetching fixture: HTTP 404 Not Found ({url})"))
         }
 
         /// [`FakeHttp::with`] plus POST answers: `(url, request body, answer)`.
@@ -101,8 +126,11 @@ pub(crate) mod fake {
     #[async_trait]
     impl Http for FakeHttp {
         async fn get_json(&self, url: &str) -> Result<Value> {
-            self.requested.lock().unwrap_or_else(|e| e.into_inner()).push(url.to_string());
-            self.answers.get(url).cloned().ok_or_else(|| anyhow!("fetching fixture: HTTP 404 Not Found ({url})"))
+            serde_json::from_str(self.answer(url)?).map_err(|_| anyhow!("fixture did not return JSON"))
+        }
+
+        async fn get_text(&self, url: &str, _accept: &str) -> Result<String> {
+            self.answer(url).map(str::to_string)
         }
 
         async fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
@@ -142,6 +170,18 @@ mod tests {
         assert!(html.contains("did not return JSON"), "{html}");
         let missing = format!("{:#}", http.get_json(&format!("{base}/nope")).await.unwrap_err());
         assert!(missing.contains("HTTP 404") && crate::engine::health::classify(&missing) == crate::engine::health::Problem::Other, "{missing}");
+    }
+
+    #[tokio::test]
+    async fn text_comes_back_with_the_accept_header_asked_for() {
+        let fx = Fixtures::start().await;
+        fx.route("/feed.xml", 200, "application/xml", "<jobs/>").route("/busy", 503, "text/plain", "busy");
+        let (http, base) = (local(1 << 20), fx.base());
+        assert_eq!(http.get_text(&format!("{base}/feed.xml"), "application/xml").await.unwrap(), "<jobs/>");
+        assert_eq!(fx.hits_on("/feed.xml")[0].header("accept"), Some("application/xml"));
+        let busy = format!("{:#}", http.get_text(&format!("{base}/busy"), "application/xml").await.unwrap_err());
+        assert_eq!(crate::engine::health::classify(&busy), crate::engine::health::Problem::Network, "{busy}");
+        assert!(http.get_text("file:///etc/passwd", "text/xml").await.is_err());
     }
 
     #[tokio::test]
