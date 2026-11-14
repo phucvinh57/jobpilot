@@ -1,7 +1,7 @@
 // The application stages of the Jobs page (CVs | Applied | In progress | Done): counts, cards,
 // tags and wording.
 
-import type { ActivityItem, Board, BoardCard, StageKey, Tag } from "./types";
+import type { ActivityItem, Board, BoardCard, StageKey } from "./types";
 
 /** The application stages in order, with the labels the shell gives them. */
 export const APP_STAGES: readonly { key: StageKey; label: string }[] = [
@@ -35,17 +35,6 @@ export function stageCards(board: Board, key: StageKey): BoardCard[] {
 /** The stage application `id` is in (`undefined`: not on the board). */
 export function stageOf(board: Board, id: number): StageKey | undefined {
   return board.stages.find((s) => s.cards.some((c) => c.id === id))?.key;
-}
-
-/** The tag of a card: how it ended (Done), the round marked or what happens next. */
-export function cardTag(card: BoardCard): Tag {
-  if (card.outcome === "success") {
-    return { label: "Offer", tone: "ok" };
-  }
-  if (card.outcome === "failed") {
-    return { label: "Rejected", tone: "danger" };
-  }
-  return card.next;
 }
 
 /** What an empty stage says. */

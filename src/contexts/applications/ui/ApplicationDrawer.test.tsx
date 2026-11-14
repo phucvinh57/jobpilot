@@ -11,11 +11,19 @@ import { ApplicationDrawer } from "./ApplicationDrawer";
 import { ApplicationScreen } from "./ApplicationScreen";
 
 vi.mock("../api/applicationsApi");
+/** Who listens for `shared:data-changed`. */
+const changeListeners = vi.hoisted(() => new Set<(scope: string) => void>());
 vi.mock("@/shared/bridge", () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
-  onDataChanged: () => () => undefined,
+  onDataChanged: (handler: (scope: string) => void) => {
+    changeListeners.add(handler);
+    return () => changeListeners.delete(handler);
+  },
   onGraphProgress: () => () => undefined,
 }));
+
+/** The shell says stored applications changed. */
+const applicationsChanged = () => act(() => changeListeners.forEach((handler) => handler("applications")));
 vi.mock("./CvEditor", async () => {
   const { createElement } = await import("react");
   return { CvEditor: () => createElement("textarea", { "aria-label": "cv.yaml" }) };
@@ -63,6 +71,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  changeListeners.clear();
 });
 
 describe("the application drawer", () => {
@@ -145,7 +154,7 @@ describe("the application drawer", () => {
     expect(within(drawer).getByRole("button", { name: "Pairing session" }).getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("marks what the company answered, and says when that failed", async () => {
+  it("marks what the company answered once confirmed, and says when that failed", async () => {
     const user = userEvent.setup();
     mocked.mark.mockRejectedValueOnce(new CommandError("an offer cannot go back to an interview"));
     const drawer = await open(INTERVIEW);
@@ -154,10 +163,95 @@ describe("the application drawer", () => {
     expect(rejected.id).toBe("mark-rejected");
     expect(rejected.className).toContain("text-danger");
     await user.click(within(marks).getByRole("button", { name: "Offer" }));
+    expect(mocked.mark).not.toHaveBeenCalled();
+    await user.click(within(marks).getByRole("button", { name: "Mark as Offer" }));
     expect(mocked.mark).toHaveBeenCalledWith(7, "offer");
     expect(await within(marks).findByText("an offer cannot go back to an interview")).toBeTruthy();
-    await user.click(rejected);
+    await user.click(within(marks).getByRole("button", { name: "Rejected" }));
+    await user.click(within(marks).getByRole("button", { name: "Mark as Rejected" }));
     expect(mocked.mark).toHaveBeenLastCalledWith(7, "rejected");
+  });
+
+  it("asks before a mark, since a status never moves back", async () => {
+    const user = userEvent.setup();
+    const drawer = await open(INTERVIEW);
+    const marks = within(drawer).getByRole("region", { name: "The company answered" });
+
+    await user.click(within(marks).getByRole("button", { name: "Offer" }));
+    const ask = within(marks).getByRole("group", { name: "Mark as Offer" });
+    expect(within(ask).getByText("Mark as Offer? This can't be undone.")).toBeTruthy();
+    const confirm = within(ask).getByRole("button", { name: "Mark as Offer" });
+    expect(confirm.id).toBe("mark-confirm");
+    expect(confirm.className, "a plain button").not.toContain("text-danger");
+    expect(primaryButtons(), "never a second primary").toEqual([]);
+    expect(within(marks).queryByRole("button", { name: "Rejected" }), "one question at a time").toBeNull();
+
+    // Cancel: nothing is marked, the marks are back.
+    await user.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(within(marks).queryByRole("group", { name: "Mark as Offer" })).toBeNull();
+    expect(mocked.mark).not.toHaveBeenCalled();
+
+    // Rejected asks with a red confirm.
+    await user.click(within(marks).getByRole("button", { name: "Rejected" }));
+    const reject = within(marks).getByRole("button", { name: "Mark as Rejected" });
+    expect(reject.id).toBe("mark-confirm");
+    expect(reject.className).toContain("text-danger");
+    expect(primaryButtons()).toEqual([]);
+    expect(document.getElementById("mark-cancel")).toBeTruthy();
+    await user.click(reject);
+    expect(mocked.mark).toHaveBeenCalledWith(7, "rejected");
+    await waitFor(() => expect(within(marks).queryByRole("group", { name: "Mark as Rejected" })).toBeNull());
+  });
+
+  it("keeps a failed mark to the application it was made on", async () => {
+    const user = userEvent.setup();
+    mocked.mark.mockRejectedValueOnce(new CommandError("the database is locked"));
+    const drawer = await open(INTERVIEW);
+    await user.click(within(drawer).getByRole("button", { name: "Offer" }));
+    await user.click(within(drawer).getByRole("button", { name: "Mark as Offer" }));
+    expect(await within(drawer).findByText("the database is locked")).toBeTruthy();
+
+    mocked.readApplication.mockImplementation(async (id) => header({ ...INTERVIEW, id, company: "Globex" }));
+    act(() => useNav.setState({ drawer: { kind: "app", id: 8 } }));
+    const other = await screen.findByRole("dialog", { name: "Globex: Backend Engineer" });
+    expect(await within(other).findByRole("region", { name: "The company answered" })).toBeTruthy();
+    expect(within(other).queryByText("the database is locked")).toBeNull();
+  });
+
+  it("shows the stage the application is in, without closing", async () => {
+    // Opened from elsewhere (the Leads) without a stage: the page moves to the application's.
+    mocked.readApplication.mockResolvedValue(header({ stage: "applied" }));
+    useNav.setState({ screen: "jobs", stage: "leads", drawer: { kind: "app", id: 7 } });
+    render(<ApplicationDrawer />);
+    await screen.findByRole("dialog", { name: "Acme: Backend Engineer" });
+    await waitFor(() => expect(useNav.getState().stage).toBe("applied"));
+    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
+  });
+
+  it("follows the application when a mark moves it to another stage", async () => {
+    const user = userEvent.setup();
+    const applied: Partial<ApplicationHeader> = {
+      status: { key: "applied", label: "Applied", tone: "accent" },
+      stage: "applied",
+      primary: null,
+      marks: [
+        { key: "interview", label: "Got an interview" },
+        { key: "offer", label: "Offer" },
+        { key: "rejected", label: "Rejected" },
+      ],
+    };
+    const drawer = await open(applied);
+    expect(useNav.getState().stage).toBe("applied");
+    mocked.mark.mockResolvedValue(header(INTERVIEW));
+    await user.click(within(drawer).getByRole("button", { name: "Got an interview" }));
+    await user.click(within(drawer).getByRole("button", { name: "Mark as Got an interview" }));
+    expect(mocked.mark).toHaveBeenCalledWith(7, "interview");
+
+    // The shell says the application changed: the drawer reads it again, and the page follows.
+    mocked.readApplication.mockResolvedValue(header(INTERVIEW));
+    applicationsChanged();
+    await waitFor(() => expect(useNav.getState().stage).toBe("inProgress"));
+    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
   });
 
   it("reads the job description only when it is unfolded", async () => {

@@ -109,7 +109,7 @@ function FailureBanner({ row }: { row: FailureRow }) {
               </Button>
             )}
             {applicationId !== null && (
-              <Button id={`prepare-open-${id}`} size="compact" onClick={() => openAppDrawer(applicationId, "cv")}>
+              <Button id={`prepare-open-${id}`} size="compact" onClick={() => openAppDrawer(applicationId)}>
                 Open application
               </Button>
             )}
@@ -140,7 +140,7 @@ function PreparedBanner({ index, prepared }: { index: number; prepared: Prepared
         body="Read it, then approve it."
         actions={
           <>
-            <Button id={`prepared-open-${index}`} size="compact" onClick={() => openAppDrawer(prepared.applicationId, "cv")}>
+            <Button id={`prepared-open-${index}`} size="compact" onClick={() => openAppDrawer(prepared.applicationId)}>
               Open application
             </Button>
             <Button id={`prepared-close-${index}`} size="compact" variant="ghost" icon={X} aria-label="Dismiss this message" onClick={() => closePrepared(index)} />

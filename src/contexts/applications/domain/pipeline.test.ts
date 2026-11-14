@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { board } from "./fixtures";
-import { activityLabel, appStages, cardLabel, cardTag, emptyHint, shownActivity, stageCards, stageLabel, stageOf } from "./pipeline";
+import { activityLabel, appStages, cardLabel, emptyHint, shownActivity, stageCards, stageLabel, stageOf } from "./pipeline";
 import type { ActivityItem, BoardCard } from "./types";
 
 const card: BoardCard = {
@@ -41,14 +41,6 @@ describe("the application stages", () => {
     expect(stageCards({ count: 0, stages: [], activity: [] }, "done")).toEqual([]);
     expect(stageOf(board(), 4)).toBe("inProgress");
     expect(stageOf(board(), 99)).toBeUndefined();
-  });
-
-  it("says how an application ended, else what happens next", () => {
-    expect(cardTag({ ...card, outcome: "success", stage: "done" })).toEqual({ label: "Offer", tone: "ok" });
-    expect(cardTag({ ...card, outcome: "failed", stage: "done" })).toEqual({ label: "Rejected", tone: "danger" });
-    expect(cardTag(card)).toEqual({ label: "Review & submit", tone: "accent" });
-    const interview = { ...card, stage: "inProgress" as const, round: "System design", next: { label: "System design", tone: "warn" as const } };
-    expect(cardTag(interview)).toEqual({ label: "System design", tone: "warn" });
   });
 
   it("explains every empty stage", () => {

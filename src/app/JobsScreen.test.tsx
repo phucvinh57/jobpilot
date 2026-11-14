@@ -91,6 +91,18 @@ describe("the Jobs page", () => {
     const table = await screen.findByRole("table", { name: "Applied" });
     expect(within(table).getByRole("row", { name: "Initech, Platform Engineer: No reply yet, Applied" })).toBeTruthy();
     expect(screen.queryByRole("table", { name: "Leads" })).toBeNull();
+    // One read of the board feeds the stage bar and the table.
+    expect(appsApi.readBoard).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the room of a lead drawer whose lead a filter hides", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<JobsScreen />);
+    await user.click(await screen.findByRole("row", { name: "Acme: Backend Engineer 2, score 70" }));
+    expect((container.firstElementChild as HTMLElement).className).toContain("xl:pr-[480px]");
+    await user.click(screen.getByRole("button", { name: "85+" }));
+    await waitFor(() => expect(useNav.getState().drawer).toBeUndefined());
+    expect((container.firstElementChild as HTMLElement).className).not.toContain("pr-[480px]");
   });
 
   it("opens an application in the drawer, which holds the one primary button, and expands it", async () => {

@@ -32,6 +32,24 @@ describe("Button", () => {
     render(<Button busy>Save</Button>);
     expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
   });
+
+  it("keeps the pointer on a disabled button, so its title shows", async () => {
+    const onClick = vi.fn();
+    render(
+      <Button disabled title="No provider yet" onClick={onClick}>
+        Generate
+      </Button>,
+    );
+    const button = screen.getByRole("button", { name: "Generate" });
+    const classes = button.className.split(" ");
+    expect(classes).toContain("disabled:pointer-events-auto");
+    expect(classes).toContain("disabled:cursor-not-allowed");
+    expect(classes, "the primitive's rule is merged away").not.toContain("disabled:pointer-events-none");
+    expect(button.title).toBe("No provider yet");
+    // Still never clicked.
+    await userEvent.click(button, { pointerEventsCheck: 0 });
+    expect(onClick).not.toHaveBeenCalled();
+  });
 });
 
 describe("Checkbox and Switch", () => {

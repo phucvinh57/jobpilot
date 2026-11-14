@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, Transaction};
 
-pub use applications::{Application, NewApplication};
+pub use applications::{clean_round, Application, NewApplication, ROUND_MAX_CHARS};
 pub use chat::ChatMessage;
 pub use emails::Email;
 pub use events::Event;

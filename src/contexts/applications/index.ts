@@ -11,7 +11,8 @@
 //
 // The Jobs page (`src/app`) composes the application stages from these pieces:
 //   useBoard()             the stages with their cards (for the stage bar's counts: `appStages`)
-//   ApplicationsStage      the table of one stage and the recent activity ({ stage })
+//   ApplicationsStage      the table of one stage and the recent activity ({ stage, board }: the
+//                          page reads the board once, for the counts and the table)
 //   ApplicationDrawer      the drawer of the open application (`useNav` drawer `{ kind: "app" }`);
 //                          it holds the primary action while open
 //   ApplicationScreen      the full view (screen "application")

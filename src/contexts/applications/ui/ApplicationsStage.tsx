@@ -5,11 +5,10 @@
 import clsx from "clsx";
 import { useState } from "react";
 
-import { Button, Caption, Card, DataTable, ErrorBanner, Heading, Tag, TONE_CLASS, useNav, type DataColumn } from "@/shared";
+import { Button, Caption, Card, DataTable, ErrorBanner, Heading, Tag, TONE_CLASS, useNav, type DataColumn, type Query } from "@/shared";
 
-import { ACTIVITY_PREVIEW, activityLabel, cardLabel, cardTag, emptyHint, shownActivity, stageCards, stageLabel, stageOf } from "../domain/pipeline";
-import type { ActivityItem, BoardCard, StageKey } from "../domain/types";
-import { useBoard } from "../hooks/useBoard";
+import { ACTIVITY_PREVIEW, activityLabel, cardLabel, emptyHint, shownActivity, stageCards, stageLabel, stageOf } from "../domain/pipeline";
+import type { ActivityItem, Board, BoardCard, StageKey } from "../domain/types";
 
 const COLUMNS: readonly DataColumn<BoardCard>[] = [
   {
@@ -26,10 +25,8 @@ const COLUMNS: readonly DataColumn<BoardCard>[] = [
   {
     key: "status",
     header: "Status",
-    cell: (card) => {
-      const tag = cardTag(card);
-      return <Tag tone={tag.tone}>{tag.label}</Tag>;
-    },
+    // The shell's words for what happens next (how it ended, for Done).
+    cell: (card) => <Tag tone={card.next.tone}>{card.next.label}</Tag>,
   },
   {
     key: "age",
@@ -100,8 +97,9 @@ function Activity({ items, onOpen }: { items: readonly ActivityItem[]; onOpen: (
   );
 }
 
-export function ApplicationsStage({ stage }: { stage: StageKey }) {
-  const board = useBoard();
+/** The table of `stage`. `board` is the Jobs page's one read of the board (`useBoard`), shared with
+ *  the stage bar's counts. */
+export function ApplicationsStage({ stage, board }: { stage: StageKey; board: Query<Board> }) {
   const drawer = useNav((s) => s.drawer);
   const openAppDrawer = useNav((s) => s.openAppDrawer);
   const data = board.data;

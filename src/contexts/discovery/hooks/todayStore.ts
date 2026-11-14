@@ -106,6 +106,7 @@ export const useTodayStore = create<TodayState>(() => INITIAL);
 /** Back to the start (tests). */
 export function resetToday(): void {
   reads = 0;
+  latestRead = Promise.resolve();
   jobBatch.clear();
   useTodayStore.setState(INITIAL, true);
 }
@@ -160,23 +161,31 @@ function recheck(error: CommandError): void {
 // ------------------------------------------------------------ reading
 
 let reads = 0;
+/** The latest read of the queue. */
+let latestRead: Promise<void> = Promise.resolve();
 
-/** Read the queue (off the UI thread). Only the latest answer is kept. */
-function load(): void {
+/** Read the queue (off the UI thread). Only the latest answer is kept. Resolves once the queue
+ *  shown is at least as new as this read (a later read that took over has answered too). */
+function load(): Promise<void> {
   const read = ++reads;
-  api.readQueue().then(
+  const done = api.readQueue().then(
     (queue) => {
       if (read !== reads) {
-        return;
+        return latestRead;
       }
       set({ queue, loadError: undefined, checked: get().checked.filter((id) => queue.items.some((l) => l.id === id)) });
+      return undefined;
     },
     (thrown: unknown) => {
-      if (read === reads) {
-        set({ loadError: toCommandError(thrown) });
+      if (read !== reads) {
+        return latestRead;
       }
+      set({ loadError: toCommandError(thrown) });
+      return undefined;
     },
   );
+  latestRead = done;
+  return done;
 }
 
 /** The profile is a file the user edits outside the app, so its skills are read when the Jobs page is shown,
@@ -274,17 +283,19 @@ function startAdd(input: LeadInput): void {
   api.addLead(input).then(
     (added) => {
       set({ addFailures: clearFailureOf(get().addFailures, input, sameInput) });
+      const read = load();
       if (added.state === "promoted" && added.applicationId !== null) {
-        // The same job was found before and its CV exists: that is where it is now.
-        useNav.getState().openAppDrawer(added.applicationId, "cv");
+        // The same job was found before and its CV exists: that is where it is now (the drawer
+        // moves the page to its stage).
+        useNav.getState().openAppDrawer(added.applicationId);
       } else if (added.state === "dismissed") {
         set({ note: { ok: false, text: "You dismissed this job before, so it is not in the list." } });
       } else {
-        // Show the new lead, whatever the filters were.
+        // Show the new lead, whatever the filters were, once the list holds it (the drawer closes
+        // on a lead that is not listed).
         set({ filter: NO_FILTER });
-        selectLead(added.leadId);
+        void read.then(() => selectLead(added.leadId));
       }
-      load();
       readNext();
     },
     (thrown: unknown) => {
@@ -369,7 +380,8 @@ export async function prepare(requested: number[]): Promise<void> {
     delete failed[id];
     jobBatch.set(id, batch);
   }
-  set({ jobs, failed, checked: [] });
+  // The leads prepared are no longer ticked; the other ticks stay.
+  set({ jobs, failed, checked: state.checked.filter((id) => !ids.includes(id)) });
   try {
     // Each outcome arrives as an event while the batch goes on; the final list is the safety net.
     for (const outcome of await api.prepareCvs(ids)) {

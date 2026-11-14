@@ -37,7 +37,7 @@ export function JobsScreen() {
         <SourcesLine />
         <NeedsYou />
         <StageBar<Stage> label="Stages" stages={stageItems(summary.newLeads, appStages(board.data))} value={stage} onChange={showStage} />
-        {stage === "leads" ? <LeadsStage otherDrawerOpen={appOpen} /> : <ApplicationsStage stage={stage} />}
+        {stage === "leads" ? <LeadsStage otherDrawerOpen={appOpen} /> : <ApplicationsStage stage={stage} board={board} />}
       </Page>
       <LeadDrawer />
       <ApplicationDrawer />

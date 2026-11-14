@@ -8,7 +8,7 @@ use crate::engine::apply::{Edit, FieldKind, Review, Row, SessionState, Source};
 use crate::engine::browser::SessionStatus;
 use chrono::{NaiveDate, NaiveDateTime};
 use crate::engine::pipeline::{Analysis, Progress};
-use crate::engine::store::{Application, Email, Event, Status};
+use crate::engine::store::{clean_round, Application, Email, Event, Status};
 use serde::Serialize;
 
 /// What a status or a tag means; the web app maps each to its colours.
@@ -110,17 +110,21 @@ pub const DEFAULT_ROUNDS: [&str; 4] = ["HR screen", "Technical interview", "Syst
 /// Most rounds offered.
 pub const MAX_ROUNDS: usize = 8;
 
-/// The rounds the user can mark: the brief's interview steps in order, without the offer step,
-/// without repeats (ignoring case) and at most [`MAX_ROUNDS`]; [`DEFAULT_ROUNDS`] when that leaves none.
+/// The rounds the user can mark: the brief's interview steps in order, each cleaned as the store
+/// keeps a round (`clean_round`: trimmed, cut to `ROUND_MAX_CHARS`, so a saved chip shows as selected),
+/// without the offer step, without repeats (ignoring case) and at most [`MAX_ROUNDS`];
+/// [`DEFAULT_ROUNDS`] when that leaves none.
 pub fn round_options(insight_steps: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for step in insight_steps {
-        let step = step.trim();
+        let Some(step) = clean_round(Some(step)) else {
+            continue;
+        };
         let lower = step.to_lowercase();
-        if step.is_empty() || lower.contains("offer") || out.iter().any(|o| o.to_lowercase() == lower) {
+        if lower.contains("offer") || out.iter().any(|o| o.to_lowercase() == lower) {
             continue;
         }
-        out.push(step.to_string());
+        out.push(step);
         if out.len() == MAX_ROUNDS {
             break;
         }
@@ -215,7 +219,7 @@ pub fn next_action(status: Status, has_cv: bool, busy: bool, round: Option<&str>
             None => next("Check your email", Tone::Warn),
         },
         Status::Offer => next("Offer", Tone::Ok),
-        Status::Rejected => next("Rejected", Tone::Neutral),
+        Status::Rejected => next("Rejected", Tone::Danger),
     }
 }
 
@@ -1012,6 +1016,17 @@ mod tests {
     }
 
     #[test]
+    fn a_long_round_is_offered_as_the_store_keeps_it() {
+        use crate::engine::store::ROUND_MAX_CHARS;
+        let long = format!("  {}  ", "Pair programming with the platform team ".repeat(3));
+        let options = round_options(&strings(&[&long, "HR screen"]));
+        let kept = clean_round(Some(&long));
+        assert_eq!(options.first(), kept.as_ref());
+        assert!(options[0].chars().count() <= ROUND_MAX_CHARS);
+        assert_eq!(options[1], "HR screen");
+    }
+
+    #[test]
     fn without_a_process_the_usual_rounds_are_offered() {
         assert_eq!(round_options(&[]), strings(&DEFAULT_ROUNDS));
         assert_eq!(round_options(&strings(&["Offer", "  "])), strings(&DEFAULT_ROUNDS));
@@ -1104,7 +1119,8 @@ mod tests {
         assert_eq!(next_action(Status::Failed, true, false, None).tone, Tone::Danger);
         assert_eq!(next_action(Status::Interview, true, false, None).tone, Tone::Warn);
         assert_eq!(next_action(Status::Offer, true, false, None).tone, Tone::Ok);
-        assert_eq!(next_action(Status::Rejected, true, false, None).tone, Tone::Neutral);
+        // A failed outcome reads red.
+        assert_eq!(next_action(Status::Rejected, true, false, None).tone, Tone::Danger);
     }
 
     #[test]

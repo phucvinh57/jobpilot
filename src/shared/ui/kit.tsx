@@ -150,8 +150,10 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   children?: ReactNode;
 }
 
-/** The kit's button looks. `primary` keeps `bg-accent`: tests find THE primary button by it. */
-const buttonLook = cva("cursor-pointer border font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-55", {
+/** The kit's button looks. `primary` keeps `bg-accent`: tests find THE primary button by it. A
+ *  disabled button still takes the pointer (over the primitive's `disabled:pointer-events-none`), so
+ *  its `title` says why it is off; the browser never clicks a disabled button. */
+const buttonLook = cva("cursor-pointer border font-medium transition-colors disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-55", {
   variants: {
     variant: {
       primary: "border-accent bg-accent text-on-fill hover:border-accent-dark hover:bg-accent-dark",

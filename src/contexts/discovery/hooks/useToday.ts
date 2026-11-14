@@ -29,10 +29,12 @@ export interface TodayView extends TodayState {
   shown: Lead[];
   /** The lead the drawer shows (`undefined`: the lead drawer is closed). */
   open: Lead | undefined;
-  /** The leads "Prepare CV" acts on: the ticked ones, else the open one. */
+  /** The leads the bulk bar's "Prepare N CVs" acts on: the ticked ones, else the open one. */
   targets: number[];
-  /** What the primary button does. */
+  /** What the primary button of the list (bulk bar, Search now) does. */
   primary: QueuePrimary;
+  /** What the drawer's "Prepare CV" does: it acts on the open lead only, ticked or not. */
+  openPrimary: QueuePrimary;
   /** Where the one primary button sits (`otherDrawerOpen`: an application's drawer is open). */
   placeFor: (otherDrawerOpen: boolean) => PrimaryPlace;
   /** An application's drawer is open on the Jobs page. */
@@ -67,13 +69,17 @@ export function useToday(): TodayView {
   const sources = queue?.sources ?? NO_SOURCES;
   const searchingLabel = searching ?? (queue?.searching ? "Searching your sources" : undefined);
   const rows = useMemo(() => failureRows(queue?.failed ?? [], items, jobs, failed), [queue, items, jobs, failed]);
-  const primary = queuePrimaryFor({
+  const facts = {
     total: items.length,
     shown: shown.length,
-    targets: targets.length,
-    idleTargets: targets.filter((id) => jobs[id] === undefined).length,
     searching: searchingLabel !== undefined,
     sources: sources.filter((s) => s.enabled).length,
+  };
+  const primary = queuePrimaryFor({ ...facts, targets: targets.length, idleTargets: targets.filter((id) => jobs[id] === undefined).length });
+  const openPrimary = queuePrimaryFor({
+    ...facts,
+    targets: open === undefined ? 0 : 1,
+    idleTargets: open === undefined || jobs[open.id] !== undefined ? 0 : 1,
   });
   const appDrawerOpen = drawer?.kind === "app";
 
@@ -85,6 +91,7 @@ export function useToday(): TodayView {
     open,
     targets,
     primary,
+    openPrimary,
     placeFor: (otherDrawerOpen) =>
       primaryPlace({ drawerOpen: open !== undefined, otherDrawerOpen: otherDrawerOpen || appDrawerOpen, checked: checked.length, empty: items.length === 0 }),
     appDrawerOpen,

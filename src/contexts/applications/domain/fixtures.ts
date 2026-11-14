@@ -101,7 +101,7 @@ export function board(): Board {
             title: "Go Developer",
             subtitle: "Vandelay",
             status: "Rejected",
-            next: { label: "Rejected", tone: "neutral" },
+            next: { label: "Rejected", tone: "danger" },
             age: "12 d",
             outcome: "failed",
             stage: "done",

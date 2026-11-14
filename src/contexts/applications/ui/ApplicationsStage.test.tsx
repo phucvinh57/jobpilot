@@ -6,8 +6,14 @@ import { CommandError, useNav, type Problem } from "@/shared";
 
 import * as api from "../api/applicationsApi";
 import { board } from "../domain/fixtures";
-import type { ActivityItem } from "../domain/types";
-import { ApplicationsStage } from "./ApplicationsStage";
+import type { ActivityItem, StageKey } from "../domain/types";
+import { useBoard } from "../hooks/useBoard";
+import { ApplicationsStage as Stage } from "./ApplicationsStage";
+
+/** The stage as the Jobs page shows it: with the page's one read of the board. */
+function ApplicationsStage({ stage }: { stage: StageKey }) {
+  return <Stage stage={stage} board={useBoard()} />;
+}
 
 vi.mock("../api/applicationsApi");
 vi.mock("@/shared/bridge", () => ({
@@ -56,7 +62,22 @@ describe("an application stage", () => {
     render(<ApplicationsStage stage="done" />);
     const done = await screen.findByRole("table", { name: "Done" });
     expect(within(within(done).getByRole("row", { name: /^Hooli/ })).getByText("Offer")).toBeTruthy();
-    expect(within(within(done).getByRole("row", { name: /^Vandelay/ })).getByText("Rejected")).toBeTruthy();
+    expect(within(within(done).getByRole("row", { name: /^Vandelay/ })).getByText("Rejected").className).toContain("danger");
+  });
+
+  it("shows what the shell says happens next, for every card", async () => {
+    const data = board();
+    const done = data.stages.find((s) => s.key === "done");
+    const card = done?.cards[1];
+    if (card) {
+      card.next = { label: "Closed", tone: "neutral" };
+    }
+    mocked.readBoard.mockResolvedValue(data);
+    render(<ApplicationsStage stage="done" />);
+    const table = await screen.findByRole("table", { name: "Done" });
+    const row = within(table).getByRole("row", { name: /^Vandelay/ });
+    expect(within(row).getByText("Closed")).toBeTruthy();
+    expect(within(row).queryByText("Rejected", { selector: "span" })).toBeNull();
   });
 
   it("opens a row in the drawer by click or Enter, and marks the open row", async () => {

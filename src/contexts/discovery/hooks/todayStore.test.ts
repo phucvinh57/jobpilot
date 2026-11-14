@@ -386,8 +386,9 @@ describe("the link box", () => {
     mocked.addLead.mockResolvedValueOnce({ leadId: 9, state: "promoted", applicationId: 21 });
     addInput({ kind: "url", value: "https://a.test/jobs/10" });
     await settle();
+    // The application's drawer moves the page to its stage once it has read it.
     const nav = useNav.getState();
-    expect([nav.screen, nav.stage]).toEqual(["jobs", "cv"]);
+    expect(nav.screen).toBe("jobs");
     expect(nav.drawer).toEqual({ kind: "app", id: 21 });
   });
 

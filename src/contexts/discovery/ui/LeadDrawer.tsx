@@ -1,10 +1,11 @@
 // The drawer of the Leads stage: the open lead's score, the actions, why it fits, its skills, the
 // company and the interview process. While it is open it holds the one primary button ("Prepare
-// CV", for the ticked leads when there are some, else for this one); everything else is plain.
+// CV", for this lead only: the ticked ones are prepared from the bulk bar); everything else is plain.
+// A lead that is not listed (filtered out, gone, "best" of an empty list) closes the drawer.
 
 import clsx from "clsx";
 import { ExternalLink } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   Button,
@@ -26,26 +27,25 @@ import { actionLabel, type QueuePrimary } from "../domain/queue";
 import { isWebLink, leadTitle, metaLine, sourceName } from "../domain/text";
 import type { Job, Lead, Source } from "../domain/types";
 import { useDismiss } from "../hooks/useDismiss";
-import { prepare } from "../hooks/todayStore";
+import { prepare, requestedLead } from "../hooks/todayStore";
 import { useToday } from "../hooks/useToday";
 import { Breakdown, SkillsBlock } from "./LeadBrief";
 
 interface ActionProps {
   open: Lead;
+  /** What "Prepare CV" does for `open`. */
   primary: QueuePrimary;
-  /** The leads "Prepare CV" acts on. */
-  targets: readonly number[];
   jobs: Readonly<Record<number, Job>>;
   onDismiss: () => void;
 }
 
-/** "Prepare CV" (the primary button) with its hint under it, and the plain "Open posting" and
- *  "Dismiss" beside it. */
-function QueueActions({ open, primary, targets, jobs, onDismiss }: ActionProps) {
+/** "Prepare CV" (the primary button, for the open lead only) with its hint under it, and the plain
+ *  "Open posting" and "Dismiss" beside it. */
+function QueueActions({ open, primary, jobs, onDismiss }: ActionProps) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Button id="queue-primary" variant="primary" busy={primary.loading} disabled={!primary.enabled} onClick={() => void prepare([...targets])}>
+        <Button id="queue-primary" variant="primary" busy={primary.loading} disabled={!primary.enabled} onClick={() => void prepare([open.id])}>
           {actionLabel(primary.action)}
         </Button>
         <Button id="queue-open-posting" icon={ExternalLink} disabled={!isWebLink(open.url)} onClick={() => void openUrl(open.url).catch(() => undefined)}>
@@ -98,14 +98,13 @@ interface BodyProps {
   lead: Lead;
   source: Source | undefined;
   primary: QueuePrimary;
-  targets: readonly number[];
   jobs: Readonly<Record<number, Job>>;
   profileSkills: readonly string[];
 }
 
 /** What the drawer shows for `lead`. Shown with `key={lead.id}`, so its form closes and it fades in
  *  whenever another lead is opened. */
-function LeadBody({ lead, source, primary, targets, jobs, profileSkills }: BodyProps) {
+function LeadBody({ lead, source, primary, jobs, profileSkills }: BodyProps) {
   const [dismissing, setDismissing] = useState(false);
   const score = TONE_CLASS[scoreTone(lead.score)];
   const insight = lead.insight;
@@ -131,7 +130,7 @@ function LeadBody({ lead, source, primary, targets, jobs, profileSkills }: BodyP
           <Caption>fit score</Caption>
         </div>
       </div>
-      <QueueActions open={lead} primary={primary} targets={targets} jobs={jobs} onDismiss={() => setDismissing(true)} />
+      <QueueActions open={lead} primary={primary} jobs={jobs} onDismiss={() => setDismissing(true)} />
       {dismissing && <DismissForm lead={lead} onClose={() => setDismissing(false)} />}
       {hasFit && (
         <div className="flex flex-wrap items-start gap-6">
@@ -154,11 +153,20 @@ function LeadBody({ lead, source, primary, targets, jobs, profileSkills }: BodyP
 }
 
 /** The lead drawer (`#drawer`), named "{company}: {role}". Open while navigation asks for a lead
- *  that is listed; Esc or its ✕ closes it. */
+ *  that is listed; Esc or its ✕ closes it. Once the list is read, a request for a lead it does not
+ *  show is dropped, so the page keeps no room for a drawer that is not there (and it does not open
+ *  later by itself when a filter changes). */
 export function LeadDrawer() {
   const t = useToday();
   const closeDrawer = useNav((s) => s.closeDrawer);
+  const requested = useNav((s) => requestedLead(s.drawer));
   const open = t.open;
+  const unshown = t.loaded && requested !== undefined && open === undefined;
+  useEffect(() => {
+    if (unshown) {
+      closeDrawer();
+    }
+  }, [unshown, closeDrawer]);
   return (
     <Drawer open={open !== undefined} title={open ? `${open.company}: ${open.role}` : ""} width="md" onClose={closeDrawer} id="drawer">
       {open && (
@@ -166,8 +174,7 @@ export function LeadDrawer() {
           key={open.id}
           lead={open}
           source={t.sourceOf(open)}
-          primary={t.primary}
-          targets={t.targets}
+          primary={t.openPrimary}
           jobs={t.jobs}
           profileSkills={t.profileSkills}
         />

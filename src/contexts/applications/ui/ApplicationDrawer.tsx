@@ -21,8 +21,8 @@ import {
   type SettingsSection,
 } from "@/shared";
 
-import type { ApplicationHeader } from "../domain/types";
-import { useApplicationDrawer, type ApplicationDrawerModel } from "../hooks/useApplicationDrawer";
+import type { ApplicationHeader, MarkKey } from "../domain/types";
+import { useApplicationDrawer, useApplicationMarks, type ApplicationDrawerModel, type ApplicationMarks } from "../hooks/useApplicationDrawer";
 import { JdTab } from "./JdTab";
 import { TimelineTab } from "./TimelineTab";
 
@@ -70,25 +70,53 @@ function RoundPicker({ header, setRound }: { header: ApplicationHeader; setRound
   );
 }
 
-/** What the company answered, marked by hand. */
-function Marks({ header, mark }: { header: ApplicationHeader; mark: ApplicationDrawerModel["mark"] }) {
+/** What the company answered, marked by hand. A status never moves back, so a mark asks first:
+ *  "Mark as Offer? This can't be undone." with a plain confirm (red for Rejected; never a second
+ *  primary button) and Cancel. */
+function Marks({ header, mark }: { header: ApplicationHeader; mark: ApplicationMarks["mark"] }) {
+  const [asking, setAsking] = useState<MarkKey>();
+  const pending = header.marks.find((m) => m.key === asking);
   return (
     <section aria-label="The company answered" className="flex flex-col gap-2">
       <SectionLabel>The company answered</SectionLabel>
-      <div className="flex flex-wrap gap-2">
-        {header.marks.map((m) => (
-          <Button
-            key={m.key}
-            id={`mark-${m.key}`}
-            size="compact"
-            variant={m.key === "rejected" ? "danger" : "secondary"}
-            disabled={mark.busy}
-            onClick={() => void mark.run(m.key)}
-          >
-            {m.label}
-          </Button>
-        ))}
-      </div>
+      {pending === undefined ? (
+        <div className="flex flex-wrap gap-2">
+          {header.marks.map((m) => (
+            <Button
+              key={m.key}
+              id={`mark-${m.key}`}
+              size="compact"
+              variant={m.key === "rejected" ? "danger" : "secondary"}
+              disabled={mark.busy}
+              onClick={() => {
+                mark.clearError();
+                setAsking(m.key);
+              }}
+            >
+              {m.label}
+            </Button>
+          ))}
+        </div>
+      ) : (
+        <div role="group" aria-label={`Mark as ${pending.label}`} className="flex flex-col gap-2 border border-border bg-surface-alt p-3">
+          <p className="text-body text-ink">Mark as {pending.label}? This can&apos;t be undone.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              id="mark-confirm"
+              size="compact"
+              variant={pending.key === "rejected" ? "danger" : "secondary"}
+              busy={mark.busy}
+              disabled={mark.busy}
+              onClick={() => void mark.run(pending.key).then(() => setAsking(undefined))}
+            >
+              Mark as {pending.label}
+            </Button>
+            <Button id="mark-cancel" size="compact" variant="ghost" disabled={mark.busy} onClick={() => setAsking(undefined)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
       {mark.error && <ErrorBanner error={mark.error} title="The answer could not be saved" onDismiss={mark.clearError} />}
     </section>
   );
@@ -111,6 +139,7 @@ function JobDescription({ id }: { id: number }) {
 
 function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel; header: ApplicationHeader }) {
   const openSettings = useNav((s) => s.openSettings);
+  const marks = useApplicationMarks(id);
   const { head } = model;
   const primary = head.primary;
   const showNextJob = header.showNextJob && primary === null;
@@ -153,15 +182,25 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
       )}
       {head.error !== null && <ErrorBanner id="job-error" error={head.error} title="The last job failed" onRetry={head.retry} onDismiss={head.dismiss} />}
       <Stepper steps={header.steps} current={header.stepIndex} />
-      {header.status.key === "interview" && <RoundPicker key={`round-${id}`} header={header} setRound={model.setRound} />}
-      {header.marks.length > 0 && <Marks header={header} mark={model.mark} />}
+      {header.status.key === "interview" && <RoundPicker header={header} setRound={marks.setRound} />}
+      {header.marks.length > 0 && <Marks header={header} mark={marks.mark} />}
       <section aria-label="Timeline" className="flex flex-col gap-2">
         <SectionLabel>Timeline</SectionLabel>
         <TimelineTab id={id} />
       </section>
-      <JobDescription key={`jd-${id}`} id={id} />
+      <JobDescription id={id} />
     </>
   );
+}
+
+/** What the drawer shows for application `id`. Shown with `key={id}`, so nothing the user did in
+ *  one application (a failed mark, a half-typed round, a question asked) shows in the next. */
+function Content({ id, model }: { id: number; model: ApplicationDrawerModel }) {
+  const header = model.header;
+  if (header === undefined) {
+    return model.head.loadError ? <ErrorBanner error={model.head.loadError} title="The application could not be read" /> : <Caption>Loading...</Caption>;
+  }
+  return header === null ? <Caption>This application is gone.</Caption> : <Body id={id} model={model} header={header} />;
 }
 
 function AppDrawer({ id, open }: { id: number; open: boolean }) {
@@ -181,10 +220,7 @@ function AppDrawer({ id, open }: { id: number; open: boolean }) {
         </Button>
       }
     >
-      {header === undefined &&
-        (model.head.loadError ? <ErrorBanner error={model.head.loadError} title="The application could not be read" /> : <Caption>Loading...</Caption>)}
-      {header === null && <Caption>This application is gone.</Caption>}
-      {header && <Body id={id} model={model} header={header} />}
+      <Content key={id} id={id} model={model} />
     </Drawer>
   );
 }

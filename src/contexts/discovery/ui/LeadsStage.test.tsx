@@ -205,6 +205,39 @@ describe("the list of leads", () => {
     expect(primaryButtons()).toEqual([]);
   });
 
+  it("prepares only the lead shown in the drawer, whatever is ticked", async () => {
+    const user = userEvent.setup();
+    mocked.prepareCvs.mockReturnValue(new Promise(() => undefined));
+    await showList();
+    await user.click(screen.getByRole("checkbox", { name: "Select Acme: Backend Engineer 1" }));
+    const drawer = await openLead(user, "Acme: Backend Engineer 2, score 70");
+    expect(within(drawer).queryByText(/leads selected/), "no hint about the ticked leads").toBeNull();
+    await user.click(within(drawer).getByRole("button", { name: "Prepare CV" }));
+    expect(mocked.prepareCvs).toHaveBeenCalledWith([2]);
+    // Lead 1 is still ticked, for the bulk bar.
+    expect((screen.getByRole("checkbox", { name: "Select Acme: Backend Engineer 1" }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("closes the drawer when a filter hides its lead", async () => {
+    const user = userEvent.setup();
+    await showList();
+    await openLead(user, "Acme: Backend Engineer 2, score 70");
+    await user.click(screen.getByRole("button", { name: "85+" }));
+    await waitFor(() => expect(useNav.getState().drawer).toBeUndefined());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Loosening the filter again does not bring it back by itself.
+    await user.click(screen.getByRole("button", { name: "70+" }));
+    expect(useNav.getState().drawer).toBeUndefined();
+  });
+
+  it("closes the drawer asked for the best lead of an empty list", async () => {
+    mocked.readQueue.mockResolvedValue(queue({ items: [] }));
+    useNav.setState({ drawer: { kind: "lead", id: "best" } });
+    render(<JobsPage />);
+    expect(await screen.findByRole("group", { name: "No jobs yet" })).toBeTruthy();
+    await waitFor(() => expect(useNav.getState().drawer).toBeUndefined());
+  });
+
   it("narrows the list with the filters", async () => {
     const user = userEvent.setup();
     await showList();
@@ -293,7 +326,8 @@ describe("Needs you", () => {
     expect(document.getElementById("failure-text-7")?.textContent).toContain("line two");
     await user.click(within(banner).getByRole("button", { name: "Open application" }));
     const nav = useNav.getState();
-    expect([nav.screen, nav.stage, nav.drawer]).toEqual(["jobs", "cv", { kind: "app", id: 31 }]);
+    // The application's drawer moves the page to its stage once it has read it.
+    expect([nav.screen, nav.drawer]).toEqual(["jobs", { kind: "app", id: 31 }]);
 
     await user.click(screen.getByRole("button", { name: "Forget" }));
     expect(mocked.forgetFailure).toHaveBeenCalledWith(7);
@@ -308,7 +342,7 @@ describe("Needs you", () => {
     const banner = await screen.findByRole("group", { name: "CV ready for Acme — Backend Engineer 1" });
     await user.click(within(banner).getByRole("button", { name: "Open application" }));
     const nav = useNav.getState();
-    expect([nav.stage, nav.drawer]).toEqual(["cv", { kind: "app", id: 12 }]);
+    expect(nav.drawer).toEqual({ kind: "app", id: 12 });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
