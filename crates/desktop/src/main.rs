@@ -30,7 +30,11 @@ fn main() -> anyhow::Result<()> {
     // Logs go to stderr and `<data dir>/logs/`, with secrets redacted.
     let paths = Paths::from_env()?;
     let _log = logging::init(&paths);
-    tracing::info!("JobPilot {} starting, data in {}", env!("CARGO_PKG_VERSION"), paths.data_dir.display());
+    tracing::info!(
+        "JobPilot {} starting, data in {}",
+        env!("CARGO_PKG_VERSION"),
+        paths.data_dir.display()
+    );
 
     let core = Arc::new(Core::open_at(paths, Secrets::from_env())?);
     // Sample data for UI work: `JOBPILOT_DEMO=1 cargo run -p jobpilot` (never on by default).
@@ -63,7 +67,11 @@ fn main() -> anyhow::Result<()> {
                     let allowed = may_show(url.scheme(), url.host_str());
                     if !allowed {
                         // Scheme and host only: a URL may carry a token.
-                        tracing::warn!("blocked navigation to {}://{}", url.scheme(), url.host_str().unwrap_or(""));
+                        tracing::warn!(
+                            "blocked navigation to {}://{}",
+                            url.scheme(),
+                            url.host_str().unwrap_or("")
+                        );
                     }
                     allowed
                 })
@@ -95,7 +103,9 @@ fn main() -> anyhow::Result<()> {
 fn may_show(scheme: &str, host: Option<&str>) -> bool {
     match scheme {
         "about" => true,
-        "tauri" | "http" | "https" => matches!(host, Some("tauri.localhost" | "localhost" | "127.0.0.1")),
+        "tauri" | "http" | "https" => {
+            matches!(host, Some("tauri.localhost" | "localhost" | "127.0.0.1"))
+        }
         _ => false,
     }
 }

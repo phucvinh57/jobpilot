@@ -31,7 +31,16 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
 
 /// A file name from a script: letters, digits, `-` and `_` only, so it stays inside the shots dir.
 fn safe_name(name: &str) -> String {
-    let cleaned: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     if cleaned.is_empty() {
         "shot".into()
     } else {
@@ -40,7 +49,9 @@ fn safe_name(name: &str) -> String {
 }
 
 fn shot_path(name: &str) -> PathBuf {
-    let dir = std::env::var_os(SHOTS_ENV).map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let dir = std::env::var_os(SHOTS_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
     dir.join(format!("{}.png", safe_name(name)))
 }
 
@@ -55,16 +66,22 @@ async fn dev_snapshot(window: WebviewWindow, name: String) -> Result<String, Str
     let target = path.clone();
     window
         .with_webview(move |webview| {
-            webview.inner().snapshot(SnapshotRegion::Visible, SnapshotOptions::NONE, None::<&gtk::gio::Cancellable>, move |result| {
-                let saved = result.map_err(|e| e.to_string()).and_then(|surface| {
-                    let mut file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
-                    surface.write_to_png(&mut file).map_err(|e| e.to_string())
-                });
-                let _ = tx.send(saved);
-            });
+            webview.inner().snapshot(
+                SnapshotRegion::Visible,
+                SnapshotOptions::NONE,
+                None::<&gtk::gio::Cancellable>,
+                move |result| {
+                    let saved = result.map_err(|e| e.to_string()).and_then(|surface| {
+                        let mut file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
+                        surface.write_to_png(&mut file).map_err(|e| e.to_string())
+                    });
+                    let _ = tx.send(saved);
+                },
+            );
         })
         .map_err(|e| e.to_string())?;
-    rx.await.map_err(|_| "the snapshot was dropped".to_string())??;
+    rx.await
+        .map_err(|_| "the snapshot was dropped".to_string())??;
     Ok(path.display().to_string())
 }
 
@@ -113,7 +130,9 @@ document.addEventListener('securitypolicyviolation', (e) => log('CSP: ' + e.viol
 
 /// Run the script named by `JOBPILOT_UI_SCRIPT` in `window` (call once, when the page has loaded).
 pub fn run_script(window: &WebviewWindow) {
-    let Some(path) = std::env::var_os(SCRIPT_ENV) else { return };
+    let Some(path) = std::env::var_os(SCRIPT_ENV) else {
+        return;
+    };
     let script = match std::fs::read_to_string(&path) {
         Ok(script) => script,
         Err(e) => {

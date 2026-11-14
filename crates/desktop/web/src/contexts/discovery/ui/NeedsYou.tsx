@@ -1,0 +1,190 @@
+// "Needs you": sources paused at a login, captcha or block page, CVs that could not be written, and
+// CVs that are ready to read. Nothing here is solved by the app: a site that needs the user is dealt
+// with in the visible browser, and the app only continues afterwards.
+
+import { ExternalLink, X } from "lucide-react";
+import type { ReactNode } from "react";
+
+import { Banner, Button, ProblemHelp, useNav, type CommandError } from "@/shared";
+
+import type { FailureRow } from "../domain/queue";
+import { shorten } from "../domain/text";
+import type { Waiting } from "../domain/types";
+import { closePrepared, continueSource, forgetFailure, openBrowser, prepare, skipSource, type Prepared } from "../hooks/todayStore";
+
+/** Characters of a failure message the danger banner shows; the whole text goes under it. */
+const FAILURE_SUMMARY_CHARS = 140;
+
+/** A "Needs you" banner is at least this wide, so two fit side by side on a wide window. */
+const BANNER = "flex min-w-[360px] flex-1 flex-col gap-1";
+
+function what(reason: Waiting["reason"]): string {
+  switch (reason) {
+    case "login":
+      return "needs you to sign in";
+    case "captcha":
+      return "shows a captcha";
+    case "blocked":
+      return "blocks automated access";
+    default:
+      return "is waiting for you";
+  }
+}
+
+/** One source waiting for the user: Open browser (a visible window on the page), Continue and Skip.
+ *  When the window could not be opened, the reason and what to do about it come under the banner. */
+function WaitingBanner({
+  waiting,
+  opening,
+  continuing,
+  openError,
+}: {
+  waiting: Waiting;
+  opening: boolean;
+  continuing: boolean;
+  openError: CommandError | undefined;
+}) {
+  const { thread, sourceId: id } = waiting;
+  const title = `${waiting.sourceName} ${what(waiting.reason)}`;
+  const body = waiting.url !== null ? shorten(waiting.url, 90) : "Deal with the page in the browser, then press Continue.";
+  return (
+    <div id={`waiting-${id}`} className={BANNER}>
+      <Banner
+        tone="warn"
+        title={title}
+        body={body}
+        actions={
+          <>
+            <Button
+              id={`waiting-open-${id}`}
+              size="compact"
+              icon={ExternalLink}
+              busy={opening}
+              disabled={opening || continuing}
+              onClick={() => void openBrowser(thread)}
+            >
+              Open browser
+            </Button>
+            <Button id={`waiting-continue-${id}`} size="compact" busy={continuing} disabled={continuing} onClick={() => void continueSource(thread)}>
+              Continue
+            </Button>
+            <Button id={`waiting-skip-${id}`} size="compact" variant="ghost" disabled={continuing} onClick={() => void skipSource(thread)}>
+              Skip
+            </Button>
+          </>
+        }
+      />
+      {openError && (
+        <div id={`waiting-open-error-${id}`} role="group" aria-label={`The browser could not be opened: ${openError.message}`} className="flex flex-col gap-1">
+          <p className="selectable text-body text-danger-fg">The browser could not be opened: {openError.message}</p>
+          <ProblemHelp problem={openError.problem} onRetry={() => void openBrowser(thread)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A CV that could not be written: the first line of the message (the whole text under it when there
+ *  is more), what to do about it, Retry. */
+function FailureBanner({ row }: { row: FailureRow }) {
+  const { leadId: id, applicationId, problem } = row;
+  const openApplication = useNav((s) => s.openApplication);
+  const title = `The CV for ${row.title} could not be written`;
+  const lines = row.message.split("\n");
+  const firstLine = (lines[0] ?? "").trim();
+  const hasMore = lines.length > 1 || Array.from(firstLine).length > FAILURE_SUMMARY_CHARS;
+  const again = () => void prepare([id]);
+  return (
+    <div id={`failure-${id}`} className={BANNER}>
+      <Banner
+        tone="danger"
+        title={title}
+        body={shorten(firstLine, FAILURE_SUMMARY_CHARS)}
+        actions={
+          <>
+            {!problem.retryable && (
+              <Button id={`prepare-retry-${id}`} size="compact" onClick={again}>
+                Try again
+              </Button>
+            )}
+            {applicationId !== null && (
+              <Button id={`prepare-open-${id}`} size="compact" onClick={() => openApplication(applicationId)}>
+                Open application
+              </Button>
+            )}
+            <Button id={`prepare-forget-${id}`} size="compact" variant="ghost" onClick={() => void forgetFailure(id)}>
+              Forget
+            </Button>
+          </>
+        }
+      />
+      {hasMore && (
+        <pre id={`failure-text-${id}`} className="selectable max-h-[72px] overflow-y-auto font-mono text-small whitespace-pre-wrap text-danger-fg">
+          {row.message}
+        </pre>
+      )}
+      <ProblemHelp problem={problem} onRetry={again} />
+    </div>
+  );
+}
+
+/** A CV that was written, as a banner that points at the application: read it, then approve it. */
+function PreparedBanner({ index, prepared }: { index: number; prepared: Prepared }) {
+  const openApplication = useNav((s) => s.openApplication);
+  return (
+    <div id={`prepared-${index}`} className={BANNER}>
+      <Banner
+        tone="ok"
+        title={`CV ready for ${prepared.label}`}
+        body="Read it, then approve it."
+        actions={
+          <>
+            <Button id={`prepared-open-${index}`} size="compact" onClick={() => openApplication(prepared.applicationId)}>
+              Open application
+            </Button>
+            <Button id={`prepared-close-${index}`} size="compact" variant="ghost" icon={X} aria-label="Dismiss this message" onClick={() => closePrepared(index)} />
+          </>
+        }
+      />
+    </div>
+  );
+}
+
+interface Props {
+  count: number;
+  waiting: readonly Waiting[];
+  failures: readonly FailureRow[];
+  prepared: readonly Prepared[];
+  opening: readonly string[];
+  continuing: readonly string[];
+  openErrors: Readonly<Record<string, CommandError>>;
+}
+
+/** The "Needs you" block; nothing when there is nothing. */
+export function NeedsYou({ count, waiting, failures, prepared, opening, continuing, openErrors }: Props): ReactNode {
+  if (waiting.length + failures.length + prepared.length === 0) {
+    return null;
+  }
+  return (
+    <div id="queue-needs-you" role="group" aria-label="Needs you" className="flex flex-col gap-2.5">
+      <p className="text-small font-semibold text-warn-fg">NEEDS YOU &middot; {count}</p>
+      <div className="flex flex-wrap gap-3">
+        {waiting.map((w) => (
+          <WaitingBanner
+            key={w.thread}
+            waiting={w}
+            opening={opening.includes(w.thread)}
+            continuing={continuing.includes(w.thread)}
+            openError={openErrors[w.thread]}
+          />
+        ))}
+        {failures.map((row) => (
+          <FailureBanner key={row.leadId} row={row} />
+        ))}
+        {prepared.map((p, i) => (
+          <PreparedBanner key={`${p.applicationId}-${i}`} index={i} prepared={p} />
+        ))}
+      </div>
+    </div>
+  );
+}

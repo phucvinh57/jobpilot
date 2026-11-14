@@ -1,9 +1,9 @@
 //! Bounded context `trends`: `dto` (read models), `rules` (pure rules + tests), `commands` (application services).
 
 pub mod commands;
+pub mod demo;
 pub mod dto;
 pub mod rules;
-pub mod demo;
 
 use std::sync::Arc;
 

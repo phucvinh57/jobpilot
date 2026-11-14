@@ -32,8 +32,14 @@ impl From<&Insight> for InsightDto {
             required_skills: insight.skills.required.clone(),
             preferred_skills: insight.skills.preferred.clone(),
             interview_steps: interview_steps(&insight.interview),
-            interview_notes: (insight.interview.found && !notes.is_empty()).then(|| notes.to_string()),
-            sources: insight.sources.iter().filter(|u| is_web_link(u)).cloned().collect(),
+            interview_notes: (insight.interview.found && !notes.is_empty())
+                .then(|| notes.to_string()),
+            sources: insight
+                .sources
+                .iter()
+                .filter(|u| is_web_link(u))
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -48,13 +54,24 @@ pub fn is_web_link(url: &str) -> bool {
 pub fn facts_line(c: &CompanyFacts) -> Option<String> {
     let part = |label: &str, value: &str| {
         let value = value.trim();
-        (!value.is_empty()).then(|| if label.is_empty() { value.to_string() } else { format!("{label} {value}") })
+        (!value.is_empty()).then(|| {
+            if label.is_empty() {
+                value.to_string()
+            } else {
+                format!("{label} {value}")
+            }
+        })
     };
-    let parts: Vec<String> =
-        [part("", &c.stage), part("", &c.size), part("Funding", &c.funding), part("HQ", &c.hq), part("Founded", &c.founded)]
-            .into_iter()
-            .flatten()
-            .collect();
+    let parts: Vec<String> = [
+        part("", &c.stage),
+        part("", &c.size),
+        part("Funding", &c.funding),
+        part("HQ", &c.hq),
+        part("Founded", &c.founded),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     (!parts.is_empty()).then(|| parts.join(" \u{b7} "))
 }
 
@@ -63,7 +80,11 @@ pub fn interview_steps(i: &Interview) -> Vec<String> {
     if !i.found {
         return Vec::new();
     }
-    i.stages.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    i.stages
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -79,26 +100,56 @@ mod tests {
 
     #[test]
     fn facts_read_as_one_line() {
-        let facts = CompanyFacts { stage: "Series B".into(), size: "80 people".into(), hq: "Berlin".into(), ..CompanyFacts::default() };
-        assert_eq!(facts_line(&facts).as_deref(), Some("Series B \u{b7} 80 people \u{b7} HQ Berlin"));
+        let facts = CompanyFacts {
+            stage: "Series B".into(),
+            size: "80 people".into(),
+            hq: "Berlin".into(),
+            ..CompanyFacts::default()
+        };
+        assert_eq!(
+            facts_line(&facts).as_deref(),
+            Some("Series B \u{b7} 80 people \u{b7} HQ Berlin")
+        );
         assert_eq!(facts_line(&CompanyFacts::default()), None);
-        let blank = CompanyFacts { size: "  ".into(), ..CompanyFacts::default() };
+        let blank = CompanyFacts {
+            size: "  ".into(),
+            ..CompanyFacts::default()
+        };
         assert_eq!(facts_line(&blank), None);
     }
 
     #[test]
     fn interview_steps_need_a_found_process() {
-        let found = Interview { stages: names(&["Recruiter call", " ", "Take-home"]), notes: String::new(), found: true };
-        assert_eq!(interview_steps(&found), names(&["Recruiter call", "Take-home"]));
-        let not_found = Interview { stages: names(&["Stale"]), notes: String::new(), found: false };
+        let found = Interview {
+            stages: names(&["Recruiter call", " ", "Take-home"]),
+            notes: String::new(),
+            found: true,
+        };
+        assert_eq!(
+            interview_steps(&found),
+            names(&["Recruiter call", "Take-home"])
+        );
+        let not_found = Interview {
+            stages: names(&["Stale"]),
+            notes: String::new(),
+            found: false,
+        };
         assert!(interview_steps(&not_found).is_empty());
     }
 
     #[test]
     fn the_read_model_keeps_only_web_links_and_found_notes() {
         let insight = Insight {
-            sources: names(&["https://a.example.com", "file:///etc/passwd", "javascript:alert(1)"]),
-            interview: Interview { stages: Vec::new(), notes: "stale".into(), found: false },
+            sources: names(&[
+                "https://a.example.com",
+                "file:///etc/passwd",
+                "javascript:alert(1)",
+            ]),
+            interview: Interview {
+                stages: Vec::new(),
+                notes: "stale".into(),
+                found: false,
+            },
             ..Insight::default()
         };
         let dto = InsightDto::from(&insight);

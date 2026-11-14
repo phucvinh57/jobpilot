@@ -70,7 +70,9 @@ export function useQuery<T>(load: () => Promise<T>, deps: readonly unknown[], re
   // Answers that arrive after the component is gone are dropped.
   useEffect(
     () => () => {
-      reads.current = Number.MAX_SAFE_INTEGER;
+      // One more read "started": every answer still in flight is stale. (Adding one, never a
+      // sentinel: a remount keeps counting from here.)
+      reads.current += 1;
     },
     [],
   );

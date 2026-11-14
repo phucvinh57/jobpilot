@@ -12,7 +12,6 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use super::error::{run, run_sync, CommandError, CommandResult, ProblemDto};
-use super::events::{self, Scope};
 use super::insight::is_web_link;
 
 // ------------------------------------------------------------------ rules
@@ -48,7 +47,11 @@ pub fn health_line(health: &Health) -> HealthLine {
         [Problem::NoChrome] => "No Chrome found".to_string(),
         many => format!("{} setup problems", many.len()),
     };
-    HealthLine { ok: problems.is_empty(), text, focus }
+    HealthLine {
+        ok: problems.is_empty(),
+        text,
+        focus,
+    }
 }
 
 /// A line of the setup banner: what is missing and how to fix it.
@@ -67,11 +70,21 @@ pub fn blockers(health: &Health) -> Vec<Blocker> {
         .into_iter()
         .filter_map(|problem| {
             let (id, title) = match problem {
-                Problem::NoProvider => ("setup-provider", "No AI provider yet: JobPilot cannot write CVs without one."),
-                Problem::NoTypst => ("setup-typst", "Typst is not installed: CVs cannot be rendered."),
+                Problem::NoProvider => (
+                    "setup-provider",
+                    "No AI provider yet: JobPilot cannot write CVs without one.",
+                ),
+                Problem::NoTypst => (
+                    "setup-typst",
+                    "Typst is not installed: CVs cannot be rendered.",
+                ),
                 _ => return None,
             };
-            Some(Blocker { id, title, problem: problem.into() })
+            Some(Blocker {
+                id,
+                title,
+                problem: problem.into(),
+            })
         })
         .collect()
 }
@@ -119,9 +132,14 @@ pub async fn shared_appearance(core: State<'_, Arc<Core>>) -> CommandResult<&'st
 }
 
 #[tauri::command]
-pub async fn shared_set_appearance(core: State<'_, Arc<Core>>, appearance: String) -> CommandResult<()> {
+pub async fn shared_set_appearance(
+    core: State<'_, Arc<Core>>,
+    appearance: String,
+) -> CommandResult<()> {
     let Some(choice) = Appearance::parse(&appearance) else {
-        return Err(CommandError::new(format!("unknown appearance: {appearance}")));
+        return Err(CommandError::new(format!(
+            "unknown appearance: {appearance}"
+        )));
     };
     let core = core.inner().clone();
     run_sync(move || core.set_appearance(choice)).await
@@ -134,20 +152,19 @@ pub async fn shared_open_url(app: AppHandle, url: String) -> CommandResult<()> {
     if !is_web_link(&url) {
         return Err(CommandError::new("only http(s) links can be opened"));
     }
-    app.opener().open_url(url.trim(), None::<&str>).map_err(|e| CommandError::new(format!("opening the link failed: {e}")))
+    app.opener()
+        .open_url(url.trim(), None::<&str>)
+        .map_err(|e| CommandError::new(format!("opening the link failed: {e}")))
 }
 
 /// The shell's own commands (`shared_*`).
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
-    tauri::generate_handler![shared_status, shared_appearance, shared_set_appearance, shared_open_url]
-}
-
-/// The web app changed stored data through a command of one context and other screens show it too:
-/// tell them (`scope`: `applications` / `leads` / `sources` / `trends` / `profile` / `integrations` / `health`).
-pub fn changed(app: &AppHandle, scopes: &[Scope]) {
-    for scope in scopes {
-        events::data_changed(app, *scope);
-    }
+    tauri::generate_handler![
+        shared_status,
+        shared_appearance,
+        shared_set_appearance,
+        shared_open_url
+    ]
 }
 
 #[cfg(test)]
@@ -157,7 +174,11 @@ mod tests {
     use super::{blockers, health_line};
 
     fn health(provider: bool, typst: bool, chrome: bool) -> Health {
-        Health { typst: typst.then(|| "typst 0.13".to_string()), chrome, provider }
+        Health {
+            typst: typst.then(|| "typst 0.13".to_string()),
+            chrome,
+            provider,
+        }
     }
 
     #[test]
@@ -176,15 +197,27 @@ mod tests {
         assert_eq!(no_typst.text, "typst is missing");
         assert_eq!(no_typst.focus, None, "no Settings section installs typst");
 
-        assert_eq!(health_line(&health(true, true, false)).focus, Some("Browser sessions"));
-        assert_eq!(health_line(&health(false, false, false)).text, "3 setup problems");
+        assert_eq!(
+            health_line(&health(true, true, false)).focus,
+            Some("Browser sessions")
+        );
+        assert_eq!(
+            health_line(&health(false, false, false)).text,
+            "3 setup problems"
+        );
     }
 
     #[test]
     fn the_banner_lists_what_blocks_writing_a_cv() {
-        assert!(blockers(&health(true, true, false)).is_empty(), "Chrome is only needed to apply");
+        assert!(
+            blockers(&health(true, true, false)).is_empty(),
+            "Chrome is only needed to apply"
+        );
         let all = blockers(&health(false, false, true));
-        assert_eq!(all.iter().map(|b| b.id).collect::<Vec<_>>(), ["setup-provider", "setup-typst"]);
+        assert_eq!(
+            all.iter().map(|b| b.id).collect::<Vec<_>>(),
+            ["setup-provider", "setup-typst"]
+        );
         assert!(all.iter().all(|b| b.problem.advice.is_some()));
     }
 }

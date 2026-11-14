@@ -1,6 +1,6 @@
 # JobPilot
 
-Desktop app (Rust, GPUI, Linux) that turns a job description into a CV tailored from your own `profile.yaml`, lets you edit it, fills and submits the application in a managed browser **only after you confirm**, and tracks replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider.
+Desktop app (Rust core, Tauri + React UI, Linux) that turns a job description into a CV tailored from your own `profile.yaml`, lets you edit it, fills and submits the application in a managed browser **only after you confirm**, and tracks replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider.
 
 Flow: paste a JD link (or file) -> Generate CV -> edit / Approve CV -> Review & Submit -> Submit -> status follows your Gmail replies.
 
@@ -8,15 +8,17 @@ It can also find the jobs for you: job sources (Greenhouse, Lever, Ashby boards,
 
 ## Requirements
 
-- Rust (stable) to build
+- Rust (stable), Node and pnpm to build
 - [`typst`](https://typst.app) CLI: `cargo install --locked typst-cli` (the app tells you if it is missing)
 - Chrome or Chromium for browser automation (Settings > Browser sessions can also download Chrome for Testing, only when you click it)
-- Linux with Wayland or X11, xkbcommon, Vulkan, and a Secret Service (gnome-keyring / KWallet, libdbus) for the keyring
+- Linux with Wayland or X11, WebKitGTK 4.1 (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev` to build), and a Secret Service (gnome-keyring / KWallet, libdbus) for the keyring
 - `profile.yaml`: your master profile, the only source of facts for CVs. Found by walking up from the working directory, else `<data dir>/profile.yaml`, else set its path in Settings
 
 ## Run
 
 ```
+pnpm --dir crates/desktop/web install
+pnpm --dir crates/desktop/web build     # the UI, embedded in the binary
 cargo run -p jobpilot --release
 ```
 
@@ -48,7 +50,7 @@ Throwaway state for trying it out: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=m
 scripts/package.sh
 ```
 
-Writes `dist/jobpilot_<version>_<arch>.deb` (needs `cargo install --locked cargo-deb`) and, when `appimagetool` is installed, `dist/JobPilot-<arch>.AppImage` (GPU/Wayland/X11/dbus libraries come from the host). Otherwise that step is skipped with a message. The `typst` CLI is not bundled.
+Writes a `.deb` and an AppImage to `dist/` with the Tauri bundler (`BUNDLES=deb scripts/package.sh` for the `.deb` only; the AppImage step downloads its tooling on first use). The `.deb` depends on WebKitGTK 4.1. The `typst` CLI is not bundled.
 
 ## Where data lives
 

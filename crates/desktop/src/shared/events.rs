@@ -16,18 +16,15 @@ pub const DATA_CHANGED: &str = "shared:data-changed";
 /// A graph run moved: payload [`GraphProgressDto`].
 pub const GRAPH_PROGRESS: &str = "shared:graph-progress";
 
-/// Which data changed, so a screen re-reads only what it shows.
+/// Which data changed, so a screen re-reads only what it shows. These are the scopes the shell
+/// itself reports (mail sync, background searches); the web app also notifies `trends`, `profile`,
+/// `integrations` and `health` after its own commands (`web/src/shared/bridge`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Scope {
     Applications,
     Leads,
     Sources,
-    Trends,
-    Profile,
-    Integrations,
-    /// Prerequisites (provider, typst, Chrome) may have changed.
-    Health,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -66,14 +63,22 @@ impl From<Progress> for GraphProgressDto {
         let (kind, node, text) = match p.event {
             ProgressEvent::NodeStarted { node } => ("nodeStarted", Some(node), None),
             ProgressEvent::NodeFinished { node, .. } => ("nodeFinished", Some(node), None),
-            ProgressEvent::NodeFailed { node, message } => ("nodeFailed", Some(node), Some(message)),
+            ProgressEvent::NodeFailed { node, message } => {
+                ("nodeFailed", Some(node), Some(message))
+            }
             ProgressEvent::Detail { node, text } => ("detail", Some(node), Some(text)),
             ProgressEvent::Waiting(_) => ("waiting", None, None),
             ProgressEvent::Done => ("done", None, None),
             ProgressEvent::Failed => ("failed", None, None),
             ProgressEvent::Cancelled => ("cancelled", None, None),
         };
-        Self { thread: p.thread, graph: p.graph, kind, node, text }
+        Self {
+            thread: p.thread,
+            graph: p.graph,
+            kind,
+            node,
+            text,
+        }
     }
 }
 
@@ -114,13 +119,23 @@ mod tests {
         let p = Progress {
             thread: "t1".into(),
             graph: "discovery".into(),
-            event: ProgressEvent::Detail { node: "fetch".into(), text: "3 of 9".into() },
+            event: ProgressEvent::Detail {
+                node: "fetch".into(),
+                text: "3 of 9".into(),
+            },
         };
         let dto = GraphProgressDto::from(p);
-        assert_eq!((dto.thread.as_str(), dto.graph.as_str(), dto.kind), ("t1", "discovery", "detail"));
+        assert_eq!(
+            (dto.thread.as_str(), dto.graph.as_str(), dto.kind),
+            ("t1", "discovery", "detail")
+        );
         assert_eq!(dto.text.as_deref(), Some("3 of 9"));
 
-        let done = GraphProgressDto::from(Progress { thread: "t".into(), graph: "g".into(), event: ProgressEvent::Done });
+        let done = GraphProgressDto::from(Progress {
+            thread: "t".into(),
+            graph: "g".into(),
+            event: ProgressEvent::Done,
+        });
         assert_eq!((done.kind, done.node), ("done", None));
     }
 }

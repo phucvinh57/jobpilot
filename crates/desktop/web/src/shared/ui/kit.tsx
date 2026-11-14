@@ -271,6 +271,45 @@ export function Checkbox({ label, className, ...rest }: Omit<InputHTMLAttributes
   );
 }
 
+/** An on/off switch: a real button with `role="switch"`, so it is keyboard-operable and read as
+ *  "on" / "off". `label` is the visible text next to it; without one, give `ariaLabel`. */
+export function Switch({
+  id,
+  checked,
+  onChange,
+  label,
+  ariaLabel,
+  disabled,
+}: {
+  id?: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label?: ReactNode;
+  ariaLabel?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <label className={clsx("inline-flex items-center gap-3 text-body text-ink", disabled ? "cursor-not-allowed opacity-55" : "cursor-pointer")}>
+      <button
+        id={id}
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={clsx(
+          "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors disabled:cursor-not-allowed",
+          checked ? "bg-accent" : "bg-bar-grey",
+        )}
+      >
+        <span aria-hidden className={clsx("block size-4 rounded-full bg-on-fill shadow-sm transition-transform", checked ? "translate-x-[18px]" : "translate-x-0.5")} />
+      </button>
+      {label}
+    </label>
+  );
+}
+
 /** A row of exclusive choices: one compact button per choice, the current one tinted. `label`
  *  names the group ("Job type: Remote", not just "Remote"). */
 export function Segmented<T extends string>({

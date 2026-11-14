@@ -7,6 +7,7 @@
 use std::future::Future;
 
 use jobpilot_core::health::{self, Problem};
+use jobpilot_core::redact::redact;
 use jobpilot_core::runtime;
 use serde::Serialize;
 
@@ -55,15 +56,22 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    /// Classify `message` (the `{e:#}` text of an error).
+    /// Classify `message` (the `{e:#}` text of an error). Every secret `Core` has read or written
+    /// is masked first: no context can send one to the web app in an error.
     pub fn new(message: impl Into<String>) -> Self {
-        let message = message.into();
-        Self { problem: health::classify(&message).into(), message }
+        let message = redact(&message.into()).into_owned();
+        Self {
+            problem: health::classify(&message).into(),
+            message,
+        }
     }
 
     /// An error with a known problem (a paused run that needs the user, for instance).
     pub fn with_problem(problem: Problem, message: impl Into<String>) -> Self {
-        Self { problem: problem.into(), message: message.into() }
+        Self {
+            problem: problem.into(),
+            message: redact(&message.into()).into_owned(),
+        }
     }
 }
 
@@ -115,7 +123,10 @@ mod tests {
         assert!(network.retryable, "network errors get a Retry");
 
         let human = ProblemDto::from(Problem::NeedsHuman(Challenge::Captcha));
-        assert_eq!((human.kind, human.challenge), ("needsHuman", Some("captcha")));
+        assert_eq!(
+            (human.kind, human.challenge),
+            ("needsHuman", Some("captcha"))
+        );
 
         let other = ProblemDto::from(Problem::Other);
         assert_eq!((other.kind, other.advice), ("other", None));
@@ -123,7 +134,9 @@ mod tests {
 
     #[test]
     fn an_error_is_classified_from_its_text() {
-        let e = CommandError::from(anyhow::anyhow!("connection refused").context("calling the provider"));
+        let e = CommandError::from(
+            anyhow::anyhow!("connection refused").context("calling the provider"),
+        );
         assert_eq!(e.problem.kind, "network");
         assert_eq!(e.message, "calling the provider: connection refused");
         assert_eq!(CommandError::new("boom").problem.kind, "other");
@@ -131,7 +144,8 @@ mod tests {
 
     #[test]
     fn errors_serialize_in_camel_case() {
-        let json = serde_json::to_value(CommandError::new("no AI provider is configured")).unwrap_or_default();
+        let json = serde_json::to_value(CommandError::new("no AI provider is configured"))
+            .unwrap_or_default();
         assert_eq!(json["problem"]["kind"], "noProvider");
         assert_eq!(json["problem"]["settingsSection"], "AI providers");
     }
