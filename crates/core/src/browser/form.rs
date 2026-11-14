@@ -20,7 +20,7 @@ use chromiumoxide::{Browser, Page};
 use futures::StreamExt;
 
 use super::chrome;
-use super::session::{browser_config, headless_user_agent, prepare_profile, wait_loaded, NAVIGATE_TIMEOUT};
+use super::session::{browser_config, prepare_profile, wait_loaded, NAVIGATE_TIMEOUT};
 use super::{BrowserHandle, SessionManager};
 use crate::Paths;
 
@@ -94,7 +94,6 @@ pub struct TempBrowser {
 
 struct TempInner {
     headless: bool,
-    user_agent: Option<String>,
     dir: PathBuf,
     browser: tokio::sync::Mutex<Option<Browser>>,
     handler_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -132,11 +131,9 @@ impl TempBrowser {
                 }
             }
         });
-        let user_agent = if headless { headless_user_agent(&browser).await } else { None };
         Ok(TempBrowser {
             inner: Arc::new(TempInner {
                 headless,
-                user_agent,
                 dir,
                 browser: tokio::sync::Mutex::new(Some(browser)),
                 handler_task: Mutex::new(Some(handler_task)),
@@ -158,9 +155,6 @@ impl TempBrowser {
         let browser = guard.as_ref().context("the browser is closed")?;
         let page = browser.new_page("about:blank").await.context("opening a tab")?;
         drop(guard);
-        if let Some(ua) = &self.inner.user_agent {
-            page.set_user_agent(ua.clone()).await.context("setting the user agent")?;
-        }
         page.goto(url).await.with_context(|| format!("navigating to {url}"))?;
         wait_loaded(&page, NAVIGATE_TIMEOUT).await;
         Ok(page)

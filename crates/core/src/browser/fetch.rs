@@ -42,7 +42,6 @@ const FLAGS: &[&str] = &[
     "--disable-extensions",
     "--password-store=basic",
     "--use-mock-keychain",
-    "--disable-blink-features=AutomationControlled",
     "--disable-background-mode",
     "--disable-breakpad",
     "--disable-default-apps",
@@ -98,7 +97,7 @@ fn checked_url(raw: &str) -> Result<String> {
 ///
 /// This is the browser fallback of **JD ingest** (a link the user pasted), with the managed browser
 /// flags. Job discovery reads pages with [`render::Renderer`](super::render::Renderer) instead, which
-/// has its own, undisguised launch and the request guard.
+/// adds the request guard. No browser hides that it is automated.
 pub async fn rendered_html(paths: &Paths, url: &str) -> Result<String> {
     let url = checked_url(url)?;
     let chrome = chrome::resolve(paths)
@@ -107,7 +106,19 @@ pub async fn rendered_html(paths: &Paths, url: &str) -> Result<String> {
     let rendered = tokio::time::timeout(RENDER_TIMEOUT, render(&chrome.path, profile.path(), &url))
         .await
         .map_err(|_| anyhow!("the browser did not render {url} within {} seconds", RENDER_TIMEOUT.as_secs()))??;
+    if let Some(kind) = rendered.challenge {
+        bail!("{} instead of the job description: open the link in your browser and paste the text or upload the file", challenge_text(kind));
+    }
     Ok(rendered.html)
+}
+
+/// What the user is told when a login, captcha or block page took the job description's place.
+fn challenge_text(kind: ChallengeKind) -> &'static str {
+    match kind {
+        ChallengeKind::Login => "The site asked for a login",
+        ChallengeKind::Captcha => "The site showed a captcha",
+        ChallengeKind::Blocked => "The site blocked the request",
+    }
 }
 
 async fn render(chrome: &Path, profile: &Path, url: &str) -> Result<Rendered> {
@@ -139,12 +150,6 @@ async fn render(chrome: &Path, profile: &Path, url: &str) -> Result<Rendered> {
 
 async fn read_page(browser: &Browser, url: &str) -> Result<Rendered> {
     let page = browser.new_page("about:blank").await.context("opening a tab")?;
-    // Headless Chrome announces itself as `HeadlessChrome`, which job sites tend to refuse.
-    if let Ok(ua) = browser.user_agent().await {
-        if ua.contains("HeadlessChrome") {
-            page.set_user_agent(ua.replace("HeadlessChrome", "Chrome")).await.context("setting the user agent")?;
-        }
-    }
     page.goto(url).await.with_context(|| format!("navigating to {url}"))?;
     wait_until(LOAD_TIMEOUT, || async {
         page.evaluate_expression("document.readyState")
@@ -253,6 +258,17 @@ pub async fn generate_with_browser(
         rendered_html(&paths, &url).await
     })
     .await
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::FLAGS;
+
+    #[test]
+    fn the_jd_browser_is_not_disguised() {
+        // docs/plans/README.md: no fingerprint spoofing.
+        assert!(!FLAGS.iter().any(|a| a.contains("AutomationControlled") || a.contains("user-agent")), "{FLAGS:?}");
+    }
 }
 
 #[cfg(test)]
