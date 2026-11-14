@@ -3,12 +3,14 @@
 //!
 //! It is not a documented API, so the adapter is best effort: an answer of another shape is a clear
 //! error, never a guess. The board is searched once per wanted role (the search text comes from the
-//! preferences only), 20 postings at a time; a posting's text is one request for that posting. Every
+//! preferences only), 20 postings at a time; a posting's text is one request for that posting. The
+//! adapter keeps no state: a posting two roles find is listed twice and the runner's dedup keeps
+//! one, so the same cursor gives the same page, also after a resume. Every
 //! address is built here from the board the user entered and the posting's path; nothing in an
 //! answer chooses a host.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -74,13 +76,27 @@ impl Board {
         format!("https://{}/wday/cxs/{}/{}/jobs", self.host, self.tenant, self.site)
     }
 
-    fn detail_url(&self, path: &str) -> String {
-        format!("https://{}/wday/cxs/{}/{}{path}", self.host, self.tenant, self.site)
+    /// The API address of a posting; `None` when `path` would not stay under the board's API path.
+    fn detail_url(&self, path: &str) -> Option<String> {
+        self.under(&format!("/wday/cxs/{}/{}", self.tenant, self.site), path)
     }
 
-    /// The posting's page on the board: what `externalUrl` says for a posting of this board.
-    fn page_url(&self, path: &str) -> String {
-        format!("https://{}/{}{path}", self.host, self.site)
+    /// The posting's page on the board (what `externalUrl` says for a posting of this board);
+    /// `None` when `path` would not stay under the board's site.
+    fn page_url(&self, path: &str) -> Option<String> {
+        self.under(&format!("/{}", self.site), path)
+    }
+
+    /// `https://<host><prefix><path>`, checked once more after the URL parser has read it (it
+    /// resolves dot segments, also percent-encoded ones): the host is the board's and the path is
+    /// still under `prefix/`.
+    fn under(&self, prefix: &str, path: &str) -> Option<String> {
+        if !is_posting_path(path) {
+            return None;
+        }
+        let url = url::Url::parse(&format!("https://{}{prefix}{path}", self.host)).ok()?;
+        let stays = url.host_str() == Some(self.host.as_str()) && url.path().starts_with(&format!("{prefix}/"));
+        stays.then(|| url.to_string())
     }
 
     /// The posting path of a page URL made by [`Board::page_url`]; `None` for any other address.
@@ -113,10 +129,11 @@ fn is_locale(s: &str) -> bool {
 }
 
 /// A posting path as Workday lists it (`/job/US-CA-Remote/Engineer_JR1`): it only ever extends the
-/// board's own path, never leaves it.
+/// board's own path, never leaves it (no dot segments, not even percent-encoded ones).
 fn is_posting_path(path: &str) -> bool {
     path.starts_with('/')
         && !path.contains("..")
+        && !path.to_ascii_lowercase().contains("%2e")
         && !path.contains("//")
         && path.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '?' | '#' | '\\'))
 }
@@ -145,33 +162,31 @@ pub struct Workday {
     http: Arc<dyn Http>,
     board: Board,
     company: String,
-    /// Posting path -> the first role whose search returned it, so a posting found by two roles is
-    /// listed once, under the first, and a page searched again is the same page.
-    seen: Mutex<HashMap<String, usize>>,
 }
 
 impl Workday {
     /// `company`: the name given to every posting (the source's name, or the tenant).
     pub fn new(http: Arc<dyn Http>, board: Board, company: &str) -> Self {
-        Self { http, board, company: company.to_string(), seen: Mutex::default() }
+        Self { http, board, company: company.to_string() }
     }
 
-    /// A listed posting: its path and its candidate; `None` without a title or a usable path.
-    fn candidate(&self, p: &Value) -> Option<(String, Candidate)> {
+    /// A listed posting; `None` without a title or a path that stays on the board.
+    fn candidate(&self, p: &Value) -> Option<Candidate> {
         let text = |key: &str| p.get(key).and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
         let (title, path) = (text("title"), text("externalPath"));
-        if title.is_empty() || !is_posting_path(&path) {
+        if title.is_empty() {
             return None;
         }
-        let candidate = Candidate {
-            url: self.board.page_url(&path),
+        let url = self.board.page_url(&path)?;
+        self.board.detail_url(&path)?;
+        Some(Candidate {
+            url,
             title,
             company: self.company.clone(),
             location: text("locationsText"),
             // "Posted 3 Days Ago", as Workday writes it.
             snippet: text("postedOn"),
-        };
-        Some((path, candidate))
+        })
     }
 }
 
@@ -189,20 +204,10 @@ impl JobSource for Workday {
         // Some boards only count on the first page; 0 then means "not said".
         let total = answer.get("total").and_then(Value::as_u64).map_or(0, |t| usize::try_from(t).unwrap_or(usize::MAX));
 
-        let candidates = {
-            let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
-            postings
-                .iter()
-                .filter_map(|p| self.candidate(p))
-                .filter(|(path, _)| {
-                    let first = seen.entry(path.clone()).or_insert(role);
-                    *first = (*first).min(role);
-                    *first == role
-                })
-                .map(|(_, c)| c)
-                .filter(|c| title_fits_roles(&c.title, &prefs.roles))
-                .collect()
-        };
+        // A posting found by two roles comes twice: the runner's dedup drops the second (same URL),
+        // so a page depends on its cursor alone, also in a resumed run with a new adapter.
+        let candidates =
+            postings.iter().filter_map(|p| self.candidate(p)).filter(|c| title_fits_roles(&c.title, &prefs.roles)).collect();
 
         let end = offset.saturating_add(postings.len());
         let more_here = postings.len() >= limit && end < max_offset && (total == 0 || end < total);
@@ -215,8 +220,8 @@ impl JobSource for Workday {
     }
 
     async fn posting(&self, candidate: &Candidate) -> Result<Option<String>> {
-        let Some(path) = self.board.path_of(&candidate.url) else { return Ok(None) };
-        let answer = self.http.get_json(&self.board.detail_url(&path)).await.context("reading the Workday posting")?;
+        let Some(url) = self.board.path_of(&candidate.url).and_then(|path| self.board.detail_url(&path)) else { return Ok(None) };
+        let answer = self.http.get_json(&url).await.context("reading the Workday posting")?;
         let info = answer.get("jobPostingInfo").filter(|v| v.is_object()).context(UNKNOWN_FORMAT)?;
         // `externalUrl` is not read: the posting's address is built from the board (above), so
         // an answer cannot send the user or the runner to another host.
@@ -344,7 +349,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_posting_found_by_two_roles_is_listed_once() {
+    async fn a_fresh_adapter_gives_the_same_page_for_the_same_cursor() {
         let rust = r#"{"total":2,"jobPostings":[
             {"title":"Rust Engineer","externalPath":"/job/A/Rust-Engineer_1","locationsText":"A","postedOn":"Posted Today"},
             {"title":"Platform Engineer","externalPath":"/job/A/Platform-Engineer_2","locationsText":"A","postedOn":"Posted Today"}]}"#;
@@ -352,15 +357,18 @@ mod tests {
             {"title":"Platform Engineer","externalPath":"/job/A/Platform-Engineer_2","locationsText":"A","postedOn":"Posted Today"},
             {"title":"Platform Lead Engineer","externalPath":"/job/A/Platform-Lead_3","locationsText":"A","postedOn":"Posted Today"}]}"#;
         let http = FakeHttp::with_posts([], [(SEARCH, body("Rust Engineer", 0, 10), rust), (SEARCH, body("Platform Engineer", 0, 10), platform)]);
-        let wd = adapter(http);
         let prefs = roles(&["Rust Engineer", "Platform Engineer"]);
-        let first = wd.search(&prefs, &ctx(None, 10)).await.unwrap();
-        assert_eq!(first.candidates.len(), 2);
-        let second = wd.search(&prefs, &ctx(first.next.as_deref(), 10)).await.unwrap();
+        let first_run = adapter(http.clone());
+        let first = first_run.search(&prefs, &ctx(None, 10)).await.unwrap();
+        assert_eq!(first.next.as_deref(), Some("1:0"));
+        let second = first_run.search(&prefs, &ctx(Some("1:0"), 10)).await.unwrap();
         let titles: Vec<_> = second.candidates.iter().map(|c| c.title.as_str()).collect();
-        assert_eq!(titles, ["Platform Lead Engineer"], "Platform Engineer came with the first role");
-        let again = wd.search(&prefs, &ctx(None, 10)).await.unwrap();
-        assert_eq!(again, first, "searching the first role again gives the same page");
+        assert_eq!(titles, ["Platform Engineer", "Platform Lead Engineer"], "the runner's dedup drops the repeat, not the adapter");
+
+        // A resumed run builds a new adapter and starts from the saved cursor.
+        let resumed = adapter(http);
+        assert_eq!(resumed.search(&prefs, &ctx(Some("1:0"), 10)).await.unwrap(), second);
+        assert_eq!(resumed.search(&prefs, &ctx(None, 10)).await.unwrap(), first);
     }
 
     #[tokio::test]
@@ -419,10 +427,29 @@ mod tests {
         let odd = r#"{"total":3,"jobPostings":[
             {"title":"A Engineer","externalPath":"/../../other/jobs","locationsText":"","postedOn":""},
             {"title":"B Engineer","externalPath":"//evil.test/x","locationsText":"","postedOn":""},
-            {"title":"C Engineer","externalPath":"job/no-slash","locationsText":"","postedOn":""}]}"#;
+            {"title":"C Engineer","externalPath":"job/no-slash","locationsText":"","postedOn":""},
+            {"title":"D Engineer","externalPath":"/%2e%2e/%2E%2e/other/jobs","locationsText":"","postedOn":""},
+            {"title":"E Engineer","externalPath":"/.%2e/x","locationsText":"","postedOn":""},
+            {"title":"F Engineer","externalPath":"/%2E./x","locationsText":"","postedOn":""},
+            {"title":"G Engineer","externalPath":"/job/A/Fine_1","locationsText":"","postedOn":""}]}"#;
         let http = FakeHttp::with_posts([], [(SEARCH, body("", 0, 20), odd)]);
         let page = adapter(http).search(&Preferences::default(), &ctx(None, 25)).await.unwrap();
-        assert!(page.candidates.is_empty(), "{page:?}");
+        let titles: Vec<_> = page.candidates.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles, ["G Engineer"], "{page:?}");
+    }
+
+    #[test]
+    fn built_addresses_are_checked_after_parsing() {
+        let b = board();
+        assert_eq!(b.page_url("/job/A/X_1").as_deref(), Some("https://acme.wd5.myworkdayjobs.com/External/job/A/X_1"));
+        assert_eq!(b.detail_url("/job/A/X_1").as_deref(), Some("https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/External/job/A/X_1"));
+        for bad in ["/%2e%2e/x", "/%2E%2e/x", "/.%2e/x", "/%2e./x", "/a/../../x", "//evil.test/x", "@evil.test/x", "/x?y", "/x#y", "/x\\y", "/x y"] {
+            assert_eq!((b.page_url(bad), b.detail_url(bad)), (None, None), "{bad}");
+        }
+        // The shared builder refuses it as well.
+        assert_eq!(b.under("/External", "/%2e%2e/evil"), None);
+        // A posting URL that is not under the site is not read.
+        assert_eq!(b.path_of("https://acme.wd5.myworkdayjobs.com/External/%2e%2e/x"), None);
     }
 
     #[tokio::test]
@@ -431,7 +458,7 @@ mod tests {
         let wd = adapter(http);
         let err = format!("{:#}", wd.search(&Preferences::default(), &ctx(None, 25)).await.unwrap_err());
         assert!(err.contains("Workday answered in an unknown format"), "{err}");
-        let sre = Candidate { url: board().page_url("/job/US-CA-Remote/Site-Reliability-Engineer_JR1000003"), ..Default::default() };
+        let sre = Candidate { url: board().page_url("/job/US-CA-Remote/Site-Reliability-Engineer_JR1000003").unwrap(), ..Default::default() };
         let err = format!("{:#}", wd.posting(&sre).await.unwrap_err());
         assert!(err.contains("Workday answered in an unknown format"), "{err}");
     }
