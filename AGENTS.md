@@ -32,18 +32,19 @@ crates/core  (jobpilot-core, lib jobpilot_core)   no UI
                   SQLite checkpoints, `nodes::challenge` interrupt shared by discovery and trends
   net        P8/P10   `net::http`: the one safe HTTP client for third-party data (public hosts only, per-host delay, size cap, hop-by-hop redirects)
   notify     P8   desktop notifications (best effort)
-  prefs      P8/P9   `Preferences` model + `Core::preferences/save_preferences`; P9 `chat` + `chat_graph` (graph `prefs_chat`), `cv_upload` (context only), `undo`
+  prefs      P8/P9   `Preferences` model + `Core::preferences/save_preferences`; P9 `chat` + `chat_graph` (graph `prefs_chat`), `cv_upload` (context only), `undo`, `suggest` (chips for the preference form), `appearance` (light/dark, kv `ui.appearance`)
   discover   P10/P12   `source/` (greenhouse, lever, ashby, hn_hiring, yc, career_page), `run` (graphs `discovery` and `source_run`), `score`, `dedup`, `handoff`,
-                  `sources`, `queue` (QueueSnapshot), `promote` (graph `prepare_cv`, dismiss)
+                  `sources`, `queue` (QueueSnapshot), `promote` (graph `prepare_cv`, dismiss), `manual` (`Core::add_lead`: pasted link/file -> scored lead)
   trends     P13a collection: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`;
                   P13b `digest/` (extract, count, synthesize, cite: every point must cite stored items)
 crates/desktop (package `jobpilot`)               GPUI views only
   main.rs    logging init, window (app id `jobpilot`)
   app.rs     AppState (Arc<Core>, selection, screen, health, retry), root view + setup banner
   problem.rs Problem -> help text / call-to-action / Retry (shared by every view)
-  sidebar.rs detail/{mod,jd,cv,apply,timeline}.rs   settings/{providers,sessions,sources,gmail}.rs
-  queue.rs   queue/logic.rs: Queue screen (leads by score, brief + score breakdown, Prepare CV / Dismiss / Open posting, Search now, "needs you" banner)
-  prefs.rs   Preferences screen (chat + editable summary; takes `AppState::prefs_suggestion` from Trends into the message box)
+  sidebar.rs nav (Job list, Trends), applications grouped by stage, Settings; no input
+  detail/{mod,jd,cv,apply,timeline}.rs   settings/{profile,providers,sessions,sources,gmail,appearance}.rs
+  settings/profile.rs  "Profile & preferences" card: CV upload + job type, locations, domains, skills, notes (no chat UI; notes go through `prefs_chat` in the background)
+  queue.rs   queue/logic.rs: Job list screen, the start screen (paste-link box -> `add_lead`, leads by score, brief + score breakdown, Prepare CV / Dismiss / Open posting, Search now, "needs you" banner)
   trends/    Trends screen (digest with citations, skill chart, history, sources)
   detail/mod.rs  the ONE primary action (primary_for: Generate -> Approve CV -> Review & Submit -> Submit); the rest are plain buttons
 ```
@@ -68,7 +69,7 @@ env -u WAYLAND_DISPLAY JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory JOBPILO
 import -window JobPilot /tmp/jp.png        # ImageMagick; matches the window title
 ```
 
-For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), so a fake job board cannot be driven from the GUI: that path is covered by `crates/core/tests/e2e_discovery.rs`, and the GUI check of Queue, a lead, Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
+For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), so a fake job board cannot be driven from the GUI: that path is covered by `crates/core/tests/e2e_discovery.rs`, and the GUI check of the Job list, a lead, Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
 
 ### Driving it with agent-desktop (accessibility)
 
@@ -115,7 +116,7 @@ Each sub-plan edits only its own files: `llm/` P1 + `settings/providers.rs`; `pi
 The product plans (`docs/plans/`, status table in `docs/plans/README.md`):
 
 - P8 foundation: `core/graph/`, the new `store/` files and migrations, `notify.rs`, `Llm::chat_json`, `Problem::NeedsHuman`, `app.rs` navigation.
-- P9 preference chat: `core/prefs/` (chat), `desktop/prefs.rs`, `assets/prompts/preferences.md`.
+- P9 preference chat: `core/prefs/` (chat), `settings/profile.rs`, `assets/prompts/preferences.md`.
 - P10 discovery: `core/discover/` except `promote.rs` and `queue.rs`, `core/net/`, `browser/{challenge,render,guard,gate}.rs`, `settings/sources.rs`.
 - P11 job insight: `pipeline/insight*`, the brief in `detail/jd.rs`.
 - P12 queue: `desktop/queue*`, `core/discover/{promote,queue}.rs`.
