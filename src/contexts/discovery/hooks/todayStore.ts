@@ -1,13 +1,13 @@
-// What Today remembers while the app runs: the queue it last read, the filters, the leads ticked,
-// the CVs being written, the postings being read, the notes and the banners. A screen is shown and
-// hidden as the user moves around, but a CV finishes, a source pauses at a captcha or a posting
-// is read whether or not Today is on screen, and the sidebar badge has to follow; so this lives
-// in a store that outlasts the screen, and `startWatching` (once, for the life of the app) keeps
-// it current.
+// What the Leads stage of the Jobs page remembers while the app runs: the queue it last read, the
+// filters, the leads ticked, the CVs being written, the postings being read, the notes and the
+// banners. A page is shown and hidden as the user moves around, but a CV finishes, a source pauses
+// at a captcha or a posting is read whether or not the Jobs page is on screen, and the sidebar badge
+// has to follow; so this lives in a store that outlasts the page, and `startWatching` (once, for the
+// life of the app) keeps it current. Which lead is open is the nav store's drawer.
 
 import { create } from "zustand";
 
-import { CommandError, needsRecheck, toCommandError, useNav, useShell, type GraphProgress } from "@/shared";
+import { CommandError, needsRecheck, toCommandError, useNav, useShell, type DrawerTarget, type GraphProgress } from "@/shared";
 
 import * as api from "../api/discoveryApi";
 import {
@@ -120,21 +120,33 @@ export function shownLeads(state: TodayState): Lead[] {
   return filterItems(state.queue?.items ?? [], state.filter);
 }
 
-/** The lead that is open: the one asked for through navigation when it is listed, else the best. */
+/** The lead the drawer asks for (`undefined`: the drawer is closed or shows something else). */
+export function requestedLead(drawer: DrawerTarget | undefined): number | "best" | undefined {
+  return drawer?.kind === "lead" ? drawer.id : undefined;
+}
+
+/** The lead whose drawer is open: the one navigation asked for, when it is listed. */
 export function openedLeadId(state: TodayState): number | undefined {
-  return openLeadId(shownLeads(state), useNav.getState().leadId);
+  return openLeadId(shownLeads(state), requestedLead(useNav.getState().drawer));
 }
 
-/** Open lead `id` on Today (`undefined`: the best one). Never moves the user to another screen. */
-export function selectLead(id: number | undefined): void {
-  useNav.setState({ leadId: id });
+/** Open lead `id` in the drawer of the Leads stage (`"best"`: the best one shown). */
+export function selectLead(id: number | "best"): void {
+  useNav.getState().openLead(id);
 }
 
-/** After lead `id` left the list, open the one next to it (when it was the open one). */
+/** After lead `id` left the list, its drawer shows the lead next to it, or closes. Only when that
+ *  lead's drawer was the one open; the screen shown does not change. */
 function openNeighbourOf(id: number): void {
   const state = get();
-  if (openedLeadId(state) === id) {
-    selectLead(neighbourOf(shownLeads(state), id));
+  if (openedLeadId(state) !== id) {
+    return;
+  }
+  const next = neighbourOf(shownLeads(state), id);
+  if (next === undefined) {
+    useNav.getState().closeDrawer();
+  } else {
+    useNav.setState({ drawer: { kind: "lead", id: next } });
   }
 }
 
@@ -167,7 +179,7 @@ function load(): void {
   );
 }
 
-/** The profile is a file the user edits outside the app, so its skills are read when Today is shown,
+/** The profile is a file the user edits outside the app, so its skills are read when the Jobs page is shown,
  *  not on every refresh. */
 function loadSkills(): void {
   api.readProfileSkills().then(
@@ -181,7 +193,7 @@ export function reload(): void {
   load();
 }
 
-/** Today is shown: read everything again. */
+/** The Jobs page is shown: read everything again. */
 export function enter(): void {
   startWatching();
   load();
@@ -197,6 +209,11 @@ export function setFilter(patch: Partial<QueueFilter>): void {
 export function setChecked(id: number, on: boolean): void {
   const rest = get().checked.filter((c) => c !== id);
   set({ checked: on ? [...rest, id] : rest });
+}
+
+/** Untick every lead (the bulk bar's "Clear"). */
+export function clearChecked(): void {
+  set({ checked: [] });
 }
 
 export function setNote(note: Note | undefined): void {
@@ -259,7 +276,7 @@ function startAdd(input: LeadInput): void {
       set({ addFailures: clearFailureOf(get().addFailures, input, sameInput) });
       if (added.state === "promoted" && added.applicationId !== null) {
         // The same job was found before and its CV exists: that is where it is now.
-        useNav.getState().openApplication(added.applicationId);
+        useNav.getState().openAppDrawer(added.applicationId, "cv");
       } else if (added.state === "dismissed") {
         set({ note: { ok: false, text: "You dismissed this job before, so it is not in the list." } });
       } else {
@@ -502,7 +519,7 @@ function syncNeedsYou(): void {
 
 let watching = false;
 
-/** Follow the shell for as long as the app runs, whether or not Today is shown: the badge, the CVs
+/** Follow the shell for as long as the app runs, whether or not the Jobs page is shown: the badge, the CVs
  *  being written and the sources that pause all change on their own. Safe to call again. */
 export function startWatching(): void {
   if (watching) {

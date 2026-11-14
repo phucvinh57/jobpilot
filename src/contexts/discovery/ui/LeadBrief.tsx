@@ -1,7 +1,7 @@
 // The open lead's brief: why it fits (one bar per criterion with the reason under it) and the skills
 // the posting asks for, matched against the profile. The company and the interview process are
 // drawn by the shared `CompanyBlock` / `InterviewBlock`. Nothing here reads the shell: the data is
-// the lead's stored score and brief, and the profile's skill names Today read once.
+// the lead's stored score and brief, and the profile's skill names read when the Jobs page is shown.
 
 import { Caption, Chip, FitBar, SectionLabel, Tag } from "@/shared";
 

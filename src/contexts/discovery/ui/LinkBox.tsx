@@ -10,6 +10,7 @@ import { waitingLabel } from "../domain/text";
 import type { AddFailure } from "../domain/addQueue";
 import type { LeadInput } from "../domain/types";
 import { addInput, clearAddFeedback, submitLink } from "../hooks/todayStore";
+import { useToday } from "../hooks/useToday";
 
 interface Props {
   /** The posting being read. */
@@ -20,7 +21,13 @@ interface Props {
   note: string | undefined;
 }
 
-export function LinkBox({ adding, waiting, failures, note }: Props) {
+/** The link box (`#queue-link`) with "Add job" (`#queue-add-job`), from what the store holds. */
+export function LinkBox() {
+  const t = useToday();
+  return <LinkBoxView adding={t.adding} waiting={t.waiting.length} failures={t.addFailures} note={t.linkNote} />;
+}
+
+function LinkBoxView({ adding, waiting, failures, note }: Props) {
   const [raw, setRaw] = useState("");
   const blank = raw.trim() === "";
   const behind = waitingLabel(waiting);
@@ -74,7 +81,7 @@ export function LinkBox({ adding, waiting, failures, note }: Props) {
             </button>
           )}
         </div>
-        {/* A plain button: "Prepare CV" stays the only primary one. */}
+        {/* A plain button: the primary one is "Prepare CV" or "Search now". */}
         <Button id="queue-add-job" disabled={blank} onClick={submit}>
           Add job
         </Button>

@@ -31,8 +31,8 @@ describe("a source's status line", () => {
     expect(Array.from(line).length < STATUS_CHARS + 20 && line.includes("..."), line).toBe(true);
   });
 
-  it("points a paused source to Today", () => {
-    expect(statusLine(source(null, "needs_human"), NOW).line).toContain("Today");
+  it("points a paused source to the Jobs page", () => {
+    expect(statusLine(source(null, "needs_human"), NOW).line).toContain("Jobs");
   });
 
   it("ages read compactly", () => {

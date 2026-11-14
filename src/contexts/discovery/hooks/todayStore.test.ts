@@ -54,6 +54,12 @@ function queue(extra: Partial<Queue> = {}): Queue {
   return { items: [lead(1), lead(2), lead(3)], failed: [], sources: [], waiting: [], lastRun: null, searching: false, ...extra };
 }
 
+/** The lead the drawer asks for (`undefined`: closed or showing something else). */
+const drawerLead = () => {
+  const drawer = useNav.getState().drawer;
+  return drawer?.kind === "lead" ? drawer.id : undefined;
+};
+
 /** Let pending promise callbacks run. */
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -73,7 +79,7 @@ const failed = (leadId: number, message: string): PrepareOutcome => ({ leadId, a
 
 beforeEach(() => {
   resetToday();
-  useNav.setState({ screen: "today", leadId: undefined, needsYou: 0, droppedFile: undefined, applicationId: undefined });
+  useNav.setState({ screen: "jobs", stage: "leads", drawer: undefined, needsYou: 0, droppedFile: undefined, applicationId: undefined });
   mocked.readQueue.mockResolvedValue(queue());
   mocked.readProfileSkills.mockResolvedValue(["Rust"]);
   mocked.onChanged.mockReturnValue(() => undefined);
@@ -87,7 +93,7 @@ afterEach(() => {
 });
 
 describe("reading the queue", () => {
-  it("reads the queue and the profile's skills when Today is shown", async () => {
+  it("reads the queue and the profile's skills when the Jobs page is shown", async () => {
     enter();
     await settle();
     const s = useTodayStore.getState();
@@ -107,14 +113,19 @@ describe("reading the queue", () => {
     expect(s.loadError?.message).toBe("database is locked");
   });
 
-  it("opens the lead asked for, else the best one, and ticks only leads that are listed", async () => {
+  it("opens the lead the drawer asks for when it is listed, and ticks only leads that are listed", async () => {
     enter();
     await settle();
+    expect(openedLeadId(useTodayStore.getState()), "the drawer is closed: no lead is open").toBeUndefined();
+    selectLead("best");
     expect(openedLeadId(useTodayStore.getState())).toBe(1);
     selectLead(2);
     expect(openedLeadId(useTodayStore.getState())).toBe(2);
+    expect(useNav.getState().drawer).toEqual({ kind: "lead", id: 2 });
     selectLead(99);
-    expect(openedLeadId(useTodayStore.getState())).toBe(1);
+    expect(openedLeadId(useTodayStore.getState()), "not listed").toBeUndefined();
+    useNav.getState().openAppDrawer(5);
+    expect(openedLeadId(useTodayStore.getState()), "the drawer shows an application").toBeUndefined();
 
     setChecked(2, true);
     setChecked(3, true);
@@ -132,7 +143,9 @@ describe("reading the queue", () => {
     setFilter({ minScore: 78 });
     expect(useTodayStore.getState().filter.minScore).toBe(78);
     selectLead(3);
-    expect(openedLeadId(useTodayStore.getState()), "lead 3 (score 77) is filtered out: the best shown is open").toBe(1);
+    expect(openedLeadId(useTodayStore.getState()), "lead 3 (score 77) is filtered out: no lead is open").toBeUndefined();
+    selectLead("best");
+    expect(openedLeadId(useTodayStore.getState()), "the best shown").toBe(1);
   });
 });
 
@@ -177,7 +190,7 @@ describe("Prepare CV", () => {
     s = useTodayStore.getState();
     expect(s.jobs).toEqual({ 2: { state: "queued" } });
     expect(s.prepared).toEqual([{ applicationId: 11, label: "Acme — Role 1" }]);
-    expect(useNav.getState().leadId, "the lead that was open left: the one after it opens").toBe(2);
+    expect(drawerLead(), "the lead that was open left: the one after it opens").toBe(2);
 
     applyPrepared(ready(2, 12));
     batch.resolve([ready(1, 11), ready(2, 12)]);
@@ -187,14 +200,49 @@ describe("Prepare CV", () => {
     expect(s.prepared.map((p) => p.applicationId), "an outcome seen twice is shown once").toEqual([11, 12]);
   });
 
-  it("does not move the user to Today when a CV finishes elsewhere", async () => {
+  it("does not move the user to the Jobs page when a CV finishes elsewhere", async () => {
     enter();
     await settle();
-    useNav.setState({ screen: "pipeline" });
+    selectLead(1);
+    useNav.getState().show("trends");
     mocked.prepareCvs.mockResolvedValue([]);
     void prepare([1]);
     applyPrepared(ready(1, 5));
-    expect(useNav.getState().screen).toBe("pipeline");
+    expect(useNav.getState().screen).toBe("trends");
+    expect(drawerLead(), "its drawer moves on to the next lead, out of sight").toBe(2);
+    await settle();
+  });
+
+  it("opens no lead when the one prepared was not the one open", async () => {
+    enter();
+    await settle();
+    mocked.prepareCvs.mockResolvedValue([]);
+    // The drawer is closed.
+    void prepare([1]);
+    applyPrepared(ready(1, 5));
+    expect(useNav.getState().drawer).toBeUndefined();
+
+    // The drawer shows another lead, then an application.
+    selectLead(3);
+    void prepare([2]);
+    applyPrepared(ready(2, 6));
+    expect(drawerLead()).toBe(3);
+    useNav.getState().openAppDrawer(6, "cv");
+    void prepare([3]);
+    applyPrepared(ready(3, 7));
+    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 6 });
+    await settle();
+  });
+
+  it("closes the drawer when the last lead leaves", async () => {
+    mocked.readQueue.mockResolvedValue(queue({ items: [lead(1)] }));
+    enter();
+    await settle();
+    selectLead("best");
+    mocked.prepareCvs.mockResolvedValue([]);
+    void prepare([1]);
+    applyPrepared(ready(1, 5));
+    expect(useNav.getState().drawer).toBeUndefined();
     await settle();
   });
 
@@ -273,7 +321,7 @@ describe("the link box", () => {
     const s = useTodayStore.getState();
     expect(s.adding).toBeUndefined();
     expect(s.filter).toEqual({ sourceId: null, minScore: null, location: "" });
-    expect(useNav.getState().leadId).toBe(3);
+    expect(useNav.getState().drawer).toEqual({ kind: "lead", id: 3 });
   });
 
   it("does nothing for a blank box", async () => {
@@ -329,7 +377,7 @@ describe("the link box", () => {
     expect(useTodayStore.getState().addFailures[0]?.message).toContain("10 postings are already waiting");
   });
 
-  it("says when a job was dismissed before, and opens the application of one that has its CV", async () => {
+  it("says when a job was dismissed before, and shows the application of one that has its CV", async () => {
     mocked.addLead.mockResolvedValueOnce({ leadId: 8, state: "dismissed", applicationId: null });
     addInput(url);
     await settle();
@@ -338,8 +386,9 @@ describe("the link box", () => {
     mocked.addLead.mockResolvedValueOnce({ leadId: 9, state: "promoted", applicationId: 21 });
     addInput({ kind: "url", value: "https://a.test/jobs/10" });
     await settle();
-    expect(useNav.getState().screen).toBe("application");
-    expect(useNav.getState().applicationId).toBe(21);
+    const nav = useNav.getState();
+    expect([nav.screen, nav.stage]).toEqual(["jobs", "cv"]);
+    expect(nav.drawer).toEqual({ kind: "app", id: 21 });
   });
 
   it("a dropped file is a lead like a pasted link, or the reason it was refused", async () => {
@@ -429,11 +478,18 @@ describe("Dismiss", () => {
     mocked.readQueue.mockResolvedValue(queue({ items: [lead(1), lead(3)] }));
     afterDismissed(2, { also: 1, kept: 0, notExcluded: null });
     const s = useTodayStore.getState();
-    expect(useNav.getState().leadId).toBe(3);
+    expect(drawerLead()).toBe(3);
     expect(s.checked).toEqual([]);
     expect(s.note).toEqual({ ok: true, text: "Lead dismissed, and 1 more job from the same company." });
     await settle();
     expect(useTodayStore.getState().queue?.items.map((l) => l.id)).toEqual([1, 3]);
+  });
+
+  it("opens nothing when the drawer was closed", async () => {
+    enter();
+    await settle();
+    afterDismissed(2, { also: 0, kept: 0, notExcluded: null });
+    expect(useNav.getState().drawer).toBeUndefined();
   });
 
   it("flags a company that could not be excluded", () => {

@@ -1,114 +1,124 @@
-// The left pane: "New leads" and the cards, which scroll on their own. A card has a tick box (shown
-// on hover, or once any box is ticked), the score badge, the role, where it is, why it matches, and
-// which source found it and when.
+// The Leads stage's list, full width: one row per lead with a tick box, the score, the role (and
+// the company and place under it), why it matches, which source found it and when. A row opens the
+// lead in the drawer; the tick boxes feed "Prepare N CVs".
 
-import clsx from "clsx";
+import type { ReactNode } from "react";
 
-import { ago, Checkbox, Heading, ScoreBadge, scoreLabel, Spinner } from "@/shared";
+import { ago, Checkbox, DataTable, ScoreBadge, scoreLabel, Spinner, type DataColumn } from "@/shared";
 
 import { jobLabel } from "../domain/queue";
 import { metaLine, reasonsLine, sourceName } from "../domain/text";
 import type { Job, Lead, Source } from "../domain/types";
 import { selectLead, setChecked } from "../hooks/todayStore";
 
-function LeadCard({
-  lead,
-  source,
-  selected,
-  checked,
-  anyChecked,
-  job,
-  now,
-}: {
-  lead: Lead;
-  source: Source | undefined;
-  selected: boolean;
-  checked: boolean;
-  anyChecked: boolean;
-  job: Job | undefined;
-  now: Date;
-}) {
-  const reasons = reasonsLine(lead.reasons);
-  const found = new Date(lead.foundAt);
-  return (
-    <li
-      id={`lead-card-${lead.id}`}
-      className={clsx(
-        "group flex items-center border transition-colors",
-        selected ? "border-accent bg-surface" : "border-border bg-transparent hover:bg-surface",
-      )}
-    >
-      <div className={clsx("pl-3 transition-opacity", !anyChecked && "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100")}>
+interface Props {
+  shown: readonly Lead[];
+  sources: readonly Source[];
+  /** The lead the drawer shows. */
+  openId: number | undefined;
+  checked: readonly number[];
+  jobs: Readonly<Record<number, Job>>;
+  /** What the table says when no lead passes the filters. */
+  empty?: ReactNode;
+}
+
+/** A lead's row as assistive technology names it (tests find rows by it). */
+export function leadRowLabel(lead: Lead): string {
+  return `${lead.company}: ${lead.role}, score ${scoreLabel(lead.score)}`;
+}
+
+export function LeadList({ shown, sources, openId, checked, jobs, empty }: Props) {
+  const now = new Date();
+  const sourceOf = (lead: Lead) => sources.find((s) => s.id === lead.sourceId);
+
+  const columns: DataColumn<Lead>[] = [
+    {
+      key: "pick",
+      header: <span className="sr-only">Select</span>,
+      className: "w-8 pr-0",
+      // A tick never opens the row.
+      cell: (lead) => (
         <Checkbox
           id={`lead-check-${lead.id}`}
           label={null}
           aria-label={`Select ${lead.company}: ${lead.role}`}
-          checked={checked}
+          checked={checked.includes(lead.id)}
+          onClick={(e) => e.stopPropagation()}
           onChange={(e) => setChecked(lead.id, e.target.checked)}
         />
-      </div>
-      <button
-        id={`lead-${lead.id}`}
-        type="button"
-        aria-label={`${lead.company}: ${lead.role}, score ${scoreLabel(lead.score)}`}
-        aria-current={selected ? "true" : undefined}
-        onClick={() => selectLead(lead.id)}
-        className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 py-3 pr-3 pl-2 text-left"
-      >
-        <ScoreBadge score={lead.score} />
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate font-semibold text-ink">{lead.role}</span>
-          <span className="truncate text-[13px] text-muted">
-            {lead.company} &middot; {metaLine(lead.location, null)}
-          </span>
-          {reasons !== "" && <span className="truncate text-small text-subtle">{reasons}</span>}
-          {job && (
-            <span className="flex items-center gap-1 text-small text-accent">
-              <Spinner />
-              {jobLabel(job)}
+      ),
+    },
+    { key: "score", header: "Score", className: "w-14", cell: (lead) => <ScoreBadge score={lead.score} /> },
+    {
+      key: "role",
+      header: "Role",
+      // Takes the rest of the width; its text is cut with an ellipsis, the whole of it in the title.
+      className: "w-full max-w-0",
+      cell: (lead) => {
+        const where = `${lead.company} · ${metaLine(lead.location, null)}`;
+        const job = jobs[lead.id];
+        return (
+          <span id={`lead-${lead.id}`} className="flex min-w-0 flex-col gap-0.5">
+            <span title={lead.role} className="truncate font-semibold text-ink">
+              {lead.role}
             </span>
-          )}
-        </span>
-        <span className="flex shrink-0 flex-col items-end text-small text-subtle">
-          {source && <span>{sourceName(source)}</span>}
-          <span>{Number.isNaN(found.getTime()) ? "" : ago(now, found)}</span>
-        </span>
-      </button>
-    </li>
-  );
-}
+            <span title={where} className="truncate text-small text-muted">
+              {where}
+            </span>
+            {job && (
+              <span className="flex items-center gap-1 text-small text-accent">
+                <Spinner />
+                {jobLabel(job)}
+              </span>
+            )}
+          </span>
+        );
+      },
+    },
+    {
+      key: "why",
+      header: "Why",
+      className: "hidden max-w-[320px] min-[1100px]:table-cell",
+      cell: (lead) => {
+        const reasons = reasonsLine(lead.reasons);
+        return (
+          <span title={reasons} className="block truncate text-small text-muted">
+            {reasons}
+          </span>
+        );
+      },
+    },
+    {
+      key: "source",
+      header: "Source",
+      className: "text-small text-muted",
+      cell: (lead) => {
+        const source = sourceOf(lead);
+        return source ? sourceName(source) : "";
+      },
+    },
+    {
+      key: "found",
+      header: "Found",
+      className: "text-small text-subtle",
+      cell: (lead) => {
+        const found = new Date(lead.foundAt);
+        return Number.isNaN(found.getTime()) ? "" : ago(now, found);
+      },
+    },
+  ];
 
-interface Props {
-  shown: readonly Lead[];
-  total: number;
-  sources: readonly Source[];
-  selectedId: number | undefined;
-  checked: readonly number[];
-  jobs: Readonly<Record<number, Job>>;
-}
-
-export function LeadList({ shown, total, sources, selectedId, checked, jobs }: Props) {
-  const now = new Date();
   return (
-    <div className="flex min-h-0 w-[380px] min-w-[260px] shrink flex-col gap-2.5">
-      <div className="flex items-baseline gap-2">
-        <Heading>New leads</Heading>
-        <span className="text-muted">&middot; {total}</span>
-      </div>
-      <ul id="queue-list" role="list" aria-label="Leads" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-        {shown.map((lead) => (
-          <LeadCard
-            key={lead.id}
-            lead={lead}
-            source={sources.find((s) => s.id === lead.sourceId)}
-            selected={lead.id === selectedId}
-            checked={checked.includes(lead.id)}
-            anyChecked={checked.length > 0}
-            job={jobs[lead.id]}
-            now={now}
-          />
-        ))}
-      </ul>
-    </div>
+    <DataTable
+      id="queue-list"
+      label="Leads"
+      columns={columns}
+      rows={shown}
+      rowKey={(lead) => String(lead.id)}
+      rowLabel={leadRowLabel}
+      onOpen={(lead) => selectLead(lead.id)}
+      openKey={openId === undefined ? null : String(openId)}
+      empty={empty}
+    />
   );
 }
