@@ -2,7 +2,7 @@
 //! components every screen is built from. Pure render, no I/O.
 //!
 //! - [`tokens`]: `Palette` (light and dark), `palette(cx)`, `Tone`, sizes.
-//! - [`theme`]: `apply_palette` puts the palette onto gpui-component's `Theme` (stock widgets follow).
+//! - [`theme`]: `set_mode` / `sync_system` switch light/dark and put the palette onto gpui-component's `Theme` (stock widgets follow).
 //! - [`fonts`]: Inter, Space Grotesk and Source Serif 4, registered at startup.
 //! - [`components`]: `heading`, `card`, `section`, `banner`, buttons, `chip`, `tag`, `nav_item`,
 //!   `field`, `segmented`, `score_badge`, `fit_bar`, `stepper`, `kanban_card`, ...

@@ -134,30 +134,27 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>) ->
     sized(Button::new(id).ghost().label(label))
 }
 
-/// A destructive action (Dismiss, Delete): danger fill.
+/// A destructive action (Remove, Delete): a plain button with danger-coloured text and border,
+/// never filled, so the screen keeps exactly one filled (primary) button.
 pub fn danger_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
-    sized(Button::new(id).danger().label(label))
+    sized(Button::new(id).danger().outline().label(label))
 }
 
 // ---------------------------------------------------------- chips, tags
 
-/// The kinds of chip.
+/// The kinds of static chip.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChipKind {
     /// A requirement the profile matches.
     Match,
     /// A requirement the profile does not cover yet (dashed outline).
     Gap,
-    /// A filter; the flag says whether it is switched on.
-    Filter(bool),
 }
 
-/// A small label. `Filter` chips are buttons: add `.on_click(..)`; the other kinds are static.
-pub fn chip(id: impl Into<ElementId>, label: impl Into<SharedString>, kind: ChipKind, cx: &App) -> Stateful<Div> {
+/// A small static label for a matched or missing requirement.
+pub fn chip(label: impl Into<SharedString>, kind: ChipKind, cx: &App) -> Div {
     let p = palette(cx);
-    let label: SharedString = label.into();
     let base = div()
-        .id(id)
         .h_flex()
         .items_center()
         .min_h(px(28.0))
@@ -167,23 +164,22 @@ pub fn chip(id: impl Into<ElementId>, label: impl Into<SharedString>, kind: Chip
         .font_medium()
         .border_1();
     match kind {
-        ChipKind::Match => base.border_color(p.accent_soft).bg(p.accent_soft).text_color(p.accent_dark).child(label),
-        ChipKind::Gap => base.border_dashed().border_color(p.bar_grey).text_color(p.muted).child(label),
-        ChipKind::Filter(selected) => {
-            let hover = if selected { p.accent_soft } else { p.track };
-            let styled = base
-                .role(Role::Button)
-                .aria_label(label.clone())
-                .cursor_pointer()
-                .min_h(px(32.0))
-                .hover(move |d| d.bg(hover));
-            if selected {
-                styled.border_color(p.accent).bg(p.accent_soft).text_color(p.accent_dark).child(label)
-            } else {
-                styled.border_color(p.border).bg(p.surface).text_color(p.ink).child(label)
-            }
-        }
+        ChipKind::Match => base.border_color(p.accent_soft).bg(p.accent_soft).text_color(p.accent_dark),
+        ChipKind::Gap => base.border_dashed().border_color(p.bar_grey).text_color(p.muted),
     }
+    .child(label.into())
+}
+
+/// A filter toggle. A real `Button`, so it takes keyboard focus and Enter/Space; `selected`
+/// gives the tinted look. Add `.on_click(..)`.
+pub fn filter_chip(id: impl Into<ElementId>, label: impl Into<SharedString>, selected: bool) -> Button {
+    Button::new(id)
+        .outline()
+        .compact()
+        .rounded(px(RADIUS_CHIP))
+        .min_h(px(32.0))
+        .label(label)
+        .selected(selected)
 }
 
 /// A status tag: a small rounded pill in a tone's colours.

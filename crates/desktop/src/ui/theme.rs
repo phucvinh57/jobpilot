@@ -1,14 +1,25 @@
 //! Maps the design [`Palette`] onto gpui-component's `Theme`, so stock widgets (buttons, inputs,
 //! checkboxes, tabs, scrollbars) follow the design too, and sets the body font and radii.
 //!
-//! `Theme::change` reloads the registered theme config and so drops these values: call
-//! [`apply_palette`] after every `Theme::change` / `sync_system_appearance`
-//! (`settings::appearance` does).
+//! `Theme::change` reloads the registered theme config and so drops these values: switch modes
+//! with [`set_mode`] / [`sync_system`], never with `Theme` directly.
 
-use gpui_kit::component::{Theme, ThemeColor, ThemeMode};
-use gpui_kit::{px, App, Hsla};
+use gpui_kit::component::{ActiveTheme as _, Theme, ThemeColor, ThemeMode};
+use gpui_kit::{px, App, Hsla, Window};
 
 use super::tokens::{palette_for, Palette, FONT_BODY, RADIUS_BUTTON, RADIUS_CARD};
+
+/// Switch to `mode` and put the design palette on top of the stock theme.
+pub fn set_mode(mode: ThemeMode, window: Option<&mut Window>, cx: &mut App) {
+    Theme::change(mode, window, cx);
+    apply_palette(cx.theme().mode, cx);
+}
+
+/// Follow the desktop's light/dark setting, with the design palette on top.
+pub fn sync_system(window: Option<&mut Window>, cx: &mut App) {
+    Theme::sync_system_appearance(window, cx);
+    apply_palette(cx.theme().mode, cx);
+}
 
 /// Apply the palette of `mode` (the mode the theme is in now) to the global theme.
 pub fn apply_palette(mode: ThemeMode, cx: &mut App) {
@@ -68,7 +79,7 @@ pub fn set_colors(c: &mut ThemeColor, p: &Palette, dark: bool) {
     // Buttons: primary is the accent; the default and secondary buttons are white with a border.
     c.primary = p.accent;
     c.primary_hover = p.accent_dark;
-    c.primary_active = p.accent_dark;
+    c.primary_active = shade(p.accent_dark, dark, 0.06);
     c.primary_foreground = p.on_fill;
     c.button_primary = c.primary;
     c.button_primary_hover = c.primary_hover;
