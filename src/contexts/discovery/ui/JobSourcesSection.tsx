@@ -7,7 +7,7 @@ import { useState } from "react";
 
 import { Banner, Button, Caption, ErrorBanner, Field, FilterChip, Section, Switch, Tag, TextInput } from "@/shared";
 
-import { suggestButtonId, suggestionText } from "../domain/boards";
+import { shownSuggestions, suggestionText } from "../domain/boards";
 import { rowAddress, rowName, sourceTag, statusLine } from "../domain/sources";
 import type { SessionOption, Source, SourceKind } from "../domain/types";
 import { useBoardSuggestion } from "../hooks/useBoardSuggestion";
@@ -108,15 +108,15 @@ function AddForm({
         />
       </Field>
       <Caption>{hint}</Caption>
-      {suggestion.hints.map((board) => (
+      {shownSuggestions(suggestion.hints).map(({ hint: board, bannerId, buttonId }) => (
         <Banner
-          key={`${board.kind} ${board.input}`}
-          id={`board-suggestion-${board.kind}`}
+          key={bannerId}
+          id={bannerId}
           tone="accent"
           title={suggestionText(board)}
           body="You can still add the careers page itself."
           actions={
-            <Button id={suggestButtonId(board)} size="compact" disabled={adding} onClick={() => onAdd(board.kind, name, board.input)}>
+            <Button id={buttonId} size="compact" disabled={adding} onClick={() => onAdd(board.kind, name, board.input)}>
               {`Add ${board.label} source`}
             </Button>
           }

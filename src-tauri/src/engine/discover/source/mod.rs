@@ -206,6 +206,12 @@ pub fn check_source(kind: &str, url: &str) -> Result<(String, String)> {
     }
 }
 
+/// A board name that is safe in an API path: `[A-Za-z0-9._-]`, not empty, and not starting with a dot
+/// (`.` and `..`, and anything starting with a dot, would walk out of the API path).
+pub(crate) fn is_board_name(s: &str) -> bool {
+    !s.is_empty() && !s.starts_with('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 /// The board name in a board URL (`https://boards.greenhouse.io/acme/jobs/1` -> `acme`) or a bare
 /// slug. `hosts` are the registrable domains a board URL may have.
 pub(crate) fn board_slug(input: &str, hosts: &[&str]) -> Result<String> {
@@ -213,10 +219,7 @@ pub(crate) fn board_slug(input: &str, hosts: &[&str]) -> Result<String> {
     if input.is_empty() {
         bail!("no company board is set: enter the board URL or its short name");
     }
-    // `.` and `..` (and anything starting with a dot) would walk out of the API path.
-    let valid = |s: &str| {
-        !s.is_empty() && !s.starts_with('.') && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    };
+    let valid = is_board_name;
     if !input.contains('/') && !input.contains(':') {
         return if valid(input) { Ok(input.to_string()) } else { bail!("`{input}` is not a board name") };
     }

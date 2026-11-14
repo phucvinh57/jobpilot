@@ -7,8 +7,12 @@ import type { Source, SourceKind } from "./types";
 /** Longest status text shown on a row (a failure note can be long; a "links to a board" note fits). */
 export const STATUS_CHARS = 120;
 
-/** How the last run went, for the colour of the status tag. */
-export type Outcome = "never" | "ok" | "needsYou" | "failed" | "other";
+/** How the last run went, for the colour of the status tag. `boardHint`: a careers page with no
+ *  postings that points to a job board (the status says which one to add). */
+export type Outcome = "never" | "ok" | "needsYou" | "failed" | "boardHint" | "other";
+
+/** How the runner's "no postings, but it links to a board" status starts. */
+const BOARD_HINT_STATUS = "No postings on the page. It links to a ";
 
 /** `just now`, `5m ago`, `3h ago`, `2d ago`. */
 export function compactAgo(now: Date, then: Date): string {
@@ -35,7 +39,8 @@ export function statusLine(source: Pick<Source, "lastRunAt" | "lastStatus">, now
   if (status === "needs_human") {
     return { line: "needs you: continue it from Jobs", outcome: "needsYou" };
   }
-  const outcome: Outcome = status === "ok" ? "ok" : status.startsWith("failed") ? "failed" : "other";
+  const outcome: Outcome =
+    status === "ok" ? "ok" : status.startsWith("failed") ? "failed" : status.startsWith(BOARD_HINT_STATUS) ? "boardHint" : "other";
   const chars = Array.from(status);
   const shown = chars.length > STATUS_CHARS ? `${chars.slice(0, STATUS_CHARS).join("").trimEnd()}...` : status;
   if (ran === undefined) {
@@ -57,6 +62,8 @@ export function sourceTag(outcome: Outcome, waiting: boolean): { text: string; t
       return { text: "failed", tone: "danger" };
     case "never":
       return { text: "new", tone: "neutral" };
+    case "boardHint":
+      return { text: "see note", tone: "accent" };
     default:
       return { text: "idle", tone: "neutral" };
   }

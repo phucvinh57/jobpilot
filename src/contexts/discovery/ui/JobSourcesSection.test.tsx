@@ -126,7 +126,7 @@ describe("Settings > Job sources", () => {
     const banner = await screen.findByRole("group", { name: text });
     expect(mocked.suggestBoards).toHaveBeenCalledWith("beta.test/careers");
     const offer = within(banner).getByRole("button", { name: "Add Greenhouse source" });
-    expect(offer.id).toBe("suggest-board-greenhouse");
+    expect(offer.id).toBe("suggest-board-greenhouse-0");
     // A plain button: the suggestion never takes the form's main action.
     expect(offer.className).not.toContain("bg-accent");
 
@@ -150,7 +150,7 @@ describe("Settings > Job sources", () => {
     expect(screen.queryByRole("group", { name: /lists its jobs on/ })).toBeNull();
   });
 
-  it("drops the suggestion when the page cannot be read", async () => {
+  it("shows nothing when the page cannot be read, and asks again later", async () => {
     const user = userEvent.setup();
     mocked.suggestBoards.mockRejectedValue(new CommandError("network is unreachable"));
     render(<JobSourcesSection />);
@@ -161,6 +161,13 @@ describe("Settings > Job sources", () => {
     await waitFor(() => expect(mocked.suggestBoards).toHaveBeenCalled());
     expect(screen.queryByRole("group", { name: /lists its jobs on/ })).toBeNull();
     expect(screen.queryByText("network is unreachable"), "not an error the user must act on").toBeNull();
+
+    // The failure is not remembered: leaving the field again asks again.
+    mocked.suggestBoards.mockResolvedValue([{ kind: "lever", label: "Lever", input: "jobs.lever.co/beta" }]);
+    await user.click(screen.getByLabelText("Board name or address"));
+    await user.tab();
+    expect(await screen.findByRole("group", { name: /lists its jobs on Lever/ })).toBeTruthy();
+    expect(mocked.suggestBoards).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the form open and says why a source was refused", async () => {

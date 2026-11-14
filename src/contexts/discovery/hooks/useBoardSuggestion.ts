@@ -1,6 +1,7 @@
 // Settings > Job sources, the add form: the job boards behind the careers page being entered. The
 // page is checked once the address rests (or the field is left), in the background: typing never
-// waits, an answer for an older address is dropped, and a failure only means no suggestion.
+// waits, an answer for an older address is dropped, and a failure only means no suggestion (for now:
+// the address is asked again later).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -28,7 +29,12 @@ export function useBoardSuggestion(kind: string, url: string): BoardSuggestion {
     }
     asked.current.add(address);
     const keep = (hints: BoardHint[]) => setAnswers((known) => new Map(known).set(address, hints));
-    void Promise.resolve(address).then(api.suggestBoards).then(keep, () => keep([]));
+    // A failure (offline, a slow site) shows nothing now, and the next blur or pause asks again.
+    const forget = () => {
+      asked.current.delete(address);
+      keep([]);
+    };
+    void Promise.resolve(address).then(api.suggestBoards).then(keep, forget);
   }, []);
 
   useEffect(() => {

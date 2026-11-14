@@ -9,6 +9,8 @@
 //! let hints = core.suggest_boards("acme.test/careers").await?;  // the job boards the page points to (read-only)
 //! ```
 
+use std::sync::OnceLock;
+
 use anyhow::{bail, Context, Result};
 
 use super::fetch::MAX_POSTING_BYTES;
@@ -104,8 +106,7 @@ impl Core {
     /// plain read of the page through the safe HTTP client, no browser; nothing is stored and no
     /// board is read. A page behind a wall has no hints. `url` must pass the career-page check.
     pub async fn suggest_boards(&self, url: &str) -> Result<Vec<BoardHint>> {
-        let client = Http::new(&HttpLimits { max_bytes: MAX_POSTING_BYTES, ..HttpLimits::default() })?;
-        suggest_boards_with(&NetPages::new(client, None), url).await
+        suggest_boards_with(&NetPages::new(suggest_client()?, None), url).await
     }
 
     fn job_source(&self, id: i64) -> Result<Source> {
@@ -120,6 +121,18 @@ impl Core {
     pub fn waiting_thread_of(&self, source_id: i64) -> Result<Option<String>> {
         Ok(self.graphs.waiting()?.into_iter().find(|w| parse_source_thread(&w.thread).is_some_and(|(_, id)| id == source_id)).map(|w| w.thread))
     }
+}
+
+/// The one client of [`Core::suggest_boards`], for the life of the process, so its per-host delay
+/// holds across calls (the add form may ask about several addresses of one site in a row). The app
+/// runs every engine call on the one engine runtime, which the client's pooled connections need.
+fn suggest_client() -> Result<Http> {
+    static CLIENT: OnceLock<Http> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = Http::new(&HttpLimits { max_bytes: MAX_POSTING_BYTES, ..HttpLimits::default() })?;
+    Ok(CLIENT.get_or_init(|| client).clone())
 }
 
 /// [`Core::suggest_boards`] over any page reader.
@@ -218,9 +231,21 @@ mod tests {
 
     #[tokio::test]
     async fn the_live_suggestion_refuses_a_private_address_without_a_read() {
+        // A real page on loopback, which would answer if it were asked.
+        let fixture = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        fixture.set_nonblocking(true).unwrap();
+        let port = fixture.local_addr().unwrap().port();
         let (_dir, core) = core();
-        let err = core.suggest_boards("http://127.0.0.1:9/careers").await.unwrap_err();
-        assert!(!format!("{err:#}").is_empty());
+        let url = format!("http://127.0.0.1:{port}/careers");
+        let err = core.suggest_boards(&url).await.unwrap_err();
+        let chain: Vec<String> = err.chain().map(ToString::to_string).collect();
+        assert!(chain.iter().any(|e| e.contains("private network")), "{chain:?}");
+        // A local name is refused earlier, as no company site.
+        assert!(format!("{:#}", core.suggest_boards(&format!("http://localhost:{port}/careers")).await.unwrap_err()).contains("not a company site"));
+        match fixture.accept() {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            other => panic!("the fixture was asked: {other:?}"),
+        }
     }
 
     #[test]

@@ -24,7 +24,7 @@ use regex::Regex;
 use url::Url;
 
 use super::web::{resolve, Page};
-use super::{board_host, check_source, personio, recruitee, workday};
+use super::{board_host, check_source, is_board_name, personio, recruitee, workday};
 use crate::engine::discover::sources::JOB_SOURCE_KINDS;
 
 /// A board a careers page points to: what to add as a source of `kind` (the input of
@@ -109,45 +109,53 @@ pub fn page_hints(page: &Page) -> Vec<BoardHint> {
 /// Labels on a board's domain that are the vendor's own pages, not a company's board.
 const VENDOR_LABELS: [&str; 8] = ["www", "app", "api", "help", "blog", "support", "status", "docs"];
 
-/// The board behind one address, built from the pattern table and checked by [`check_source`].
+/// The board behind one address, built from the pattern table and checked by [`check_source`]. The
+/// board name is validated before it is put into the address, and the address must read back to
+/// that same name, so a name carrying `?`, `#` or `/` (decoded from `for=acme%3Ffor%3Devil`) can
+/// never make the hint name one board and add another.
 fn hint_for(url: &Url) -> Option<BoardHint> {
     if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
         return None;
     }
     let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
     let first = url.path_segments().and_then(|mut s| s.find(|p| !p.is_empty()).map(str::to_string));
-    let (kind, input) = match kind_for_host(&host)? {
+    let named = |slug: Option<String>| slug.filter(|s| is_board_name(s));
+    // (kind, address to add, the name the address must read back to)
+    let (kind, input, name) = match kind_for_host(&host)? {
         "greenhouse" if host == "boards.greenhouse.io" || host == "job-boards.greenhouse.io" => {
             let slug = match first.as_deref() {
                 // `embed/job_board?for=<slug>` and `embed/job_board/js?for=<slug>`
-                Some("embed") => url.query_pairs().find(|(k, _)| k == "for").map(|(_, v)| v.into_owned())?,
-                _ => first?,
+                Some("embed") => named(url.query_pairs().find(|(k, _)| k == "for").map(|(_, v)| v.into_owned()))?,
+                _ => named(first)?,
             };
-            ("greenhouse", format!("{host}/{slug}"))
+            ("greenhouse", format!("{host}/{slug}"), slug)
         }
-        "lever" if host == "jobs.lever.co" => ("lever", format!("{host}/{}", first?)),
-        "ashby" if host == "jobs.ashbyhq.com" => ("ashby", format!("{host}/{}", first?)),
-        "smartrecruiters" if host == "jobs.smartrecruiters.com" => ("smartrecruiters", format!("{host}/{}", first?)),
-        "recruitee" => {
-            let (name, suffix) = board_host(&host, recruitee::HOSTS).ok()?;
-            ("recruitee", format!("{name}.{suffix}"))
+        kind @ ("lever" | "ashby" | "smartrecruiters")
+            if matches!((kind, host.as_str()), ("lever", "jobs.lever.co") | ("ashby", "jobs.ashbyhq.com") | ("smartrecruiters", "jobs.smartrecruiters.com")) =>
+        {
+            let slug = named(first)?;
+            (kind, format!("{host}/{slug}"), slug)
         }
-        "personio" => {
-            let (name, suffix) = board_host(&host, personio::HOSTS).ok()?;
-            ("personio", format!("{name}.{suffix}"))
+        kind @ ("recruitee" | "personio") => {
+            let hosts = if kind == "recruitee" { recruitee::HOSTS } else { personio::HOSTS };
+            let (name, suffix) = board_host(&host, hosts).ok()?;
+            if VENDOR_LABELS.contains(&name.as_str()) {
+                return None;
+            }
+            (kind, format!("{name}.{suffix}"), name)
         }
         "workday" => {
             let board = workday::Board::parse(url.as_str()).ok()?;
-            ("workday", format!("https://{}/{}", board.host, board.site))
+            let input = format!("https://{}/{}", board.host, board.site);
+            if workday::Board::parse(&input).ok()? != board {
+                return None;
+            }
+            ("workday", input, board.tenant)
         }
         _ => return None,
     };
-    let label = input.split(['.', '/']).find(|s| !s.is_empty() && !s.contains(':'))?;
-    if matches!(kind, "recruitee" | "personio") && VENDOR_LABELS.contains(&label) {
-        return None;
-    }
-    check_source(kind, &input).ok()?;
-    Some(BoardHint { kind, input })
+    let (_, read_back) = check_source(kind, &input).ok()?;
+    (read_back == name).then_some(BoardHint { kind, input })
 }
 
 /// The status of a career-page run that found no postings on a page that points to a board.
@@ -220,6 +228,14 @@ mod tests {
             "https://acme.wd5.myworkdayjobs.com/",
             "https://acme.wd5.myworkdayjobs.com.evil.test/External",
             "ftp://jobs.lever.co/acme",
+            "https://boards.greenhouse.io/embed/job_board?for=acme%3Ffor%3Devil",
+            "https://boards.greenhouse.io/embed/job_board?for=acme%23x",
+            "https://boards.greenhouse.io/embed/job_board?for=acme%2Fevil",
+            "https://boards.greenhouse.io/embed/job_board?for=evil.test%2Fx",
+            "https://boards.greenhouse.io/acme%2F..%2Fevil",
+            "https://jobs.lever.co/acme%3Fx%3Dy",
+            "https://jobs.ashbyhq.com/acme%23x",
+            "https://jobs.smartrecruiters.com/acme%2Fevil",
             "javascript:location='https://jobs.lever.co/acme'",
         ] {
             assert_eq!(one(href), None, "{href}");
