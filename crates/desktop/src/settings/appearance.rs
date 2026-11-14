@@ -10,8 +10,9 @@ use gpui_kit::*;
 use jobpilot_core::prefs::Appearance;
 use jobpilot_core::runtime;
 
-use super::{section, segmented};
 use crate::app::AppState;
+use crate::ui::theme::apply_palette;
+use crate::ui::{section, segmented};
 
 /// The appearance applied now.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -33,6 +34,8 @@ pub fn apply(appearance: Appearance, window: Option<&mut Window>, cx: &mut App) 
         Appearance::Dark => Theme::change(ThemeMode::Dark, window, cx),
         Appearance::System => Theme::sync_system_appearance(window, cx),
     }
+    // `Theme::change` reloads the stock theme: put the design palette back on top.
+    apply_palette(cx.theme().mode, cx);
 }
 
 /// Follow the desktop's light/dark switch while the choice is System. Call once per window.
@@ -41,6 +44,7 @@ pub fn watch_system(window: &mut Window) {
         .observe_window_appearance(|window, cx| {
             if current(cx) == Appearance::System {
                 Theme::sync_system_appearance(Some(window), cx);
+                apply_palette(cx.theme().mode, cx);
             }
         })
         .detach();

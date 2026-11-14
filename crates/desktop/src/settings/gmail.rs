@@ -15,7 +15,7 @@ use jobpilot_core::chrono::Local;
 use jobpilot_core::mail::{self, GmailState};
 use jobpilot_core::runtime;
 
-use super::section;
+use crate::ui::{field, section};
 use crate::app::AppState;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -186,10 +186,6 @@ impl GmailSection {
         );
     }
 
-    fn field(label: &str, muted: Hsla, input: impl IntoElement) -> Div {
-        div().v_flex().gap_1().child(div().text_sm().text_color(muted).child(label.to_string())).child(input)
-    }
-
     fn render_signed_out(&self, form: &Form, muted: Hsla, cx: &mut Context<Self>) -> Div {
         let connecting = self.busy == Busy::Connecting;
         div()
@@ -200,8 +196,8 @@ impl GmailSection {
                 "Create an OAuth client of type \"Desktop app\" in the Google Cloud Console, enable the Gmail API, \
                  then paste its client ID and secret. The secret is kept in the OS keyring.",
             ))
-            .child(Self::field("Client ID", muted, Input::new(&form.client_id)))
-            .child(Self::field("Client secret", muted, Input::new(&form.client_secret).mask_toggle()))
+            .child(field("Client ID", Input::new(&form.client_id), cx))
+            .child(field("Client secret", Input::new(&form.client_secret).mask_toggle(), cx))
             .child(
                 div()
                     .h_flex()

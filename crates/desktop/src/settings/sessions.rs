@@ -20,7 +20,7 @@ use jobpilot_core::chrono::{DateTime, Utc};
 use jobpilot_core::runtime;
 use jobpilot_core::store::Session;
 
-use super::section;
+use crate::ui::section;
 use crate::app::AppState;
 
 /// Quick starts for the "New session" form: (name, login URL).

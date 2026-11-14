@@ -10,7 +10,7 @@ use jobpilot_core::trends::{Digest, DigestData, Point, Section, SkillCount, Skil
 
 use super::{AddButton, Colors, TrendsView};
 use crate::settings::profile::Field;
-use crate::settings::section;
+use crate::ui::section;
 
 /// Skills drawn in the chart.
 const CHART_ROWS: usize = 10;
