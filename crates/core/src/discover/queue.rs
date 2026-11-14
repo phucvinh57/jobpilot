@@ -159,6 +159,13 @@ impl Core {
         })
     }
 
+    /// How many leads wait in the Job list (the sidebar badge): `new` leads, and promoted ones
+    /// whose application was deleted. One cheap count, so the badge can follow every change
+    /// without loading the list. A database read: run it off the UI thread.
+    pub fn new_lead_count(&self) -> Result<usize> {
+        self.store.count_queue_leads()
+    }
+
     /// The best lead left in the queue, for "Next in queue".
     pub fn queue_next(&self) -> Result<Option<Lead>> {
         let mut leads = self.store.list_queue_leads()?;
@@ -300,10 +307,14 @@ mod tests {
 
         let snap = core.queue_snapshot().unwrap();
         assert_eq!(snap.items.iter().map(|i| i.lead.id).collect::<Vec<_>>(), [high.id, low.id], "only `new` leads");
+        assert_eq!(core.new_lead_count().unwrap(), 2, "the badge counts what the list shows");
         assert_eq!(snap.sources.len(), 1, "job sources only");
         assert!(snap.failed.is_empty() && snap.waiting.is_empty() && snap.last_run.is_none());
         assert_eq!(core.queue_next().unwrap().unwrap().id, high.id);
         core.store.dismiss_lead(high.id, "").unwrap();
         assert_eq!(core.queue_next().unwrap().unwrap().id, low.id);
+        assert_eq!(core.new_lead_count().unwrap(), 1);
+        core.store.dismiss_lead(low.id, "").unwrap();
+        assert_eq!(core.new_lead_count().unwrap(), 0);
     }
 }

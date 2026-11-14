@@ -1,11 +1,12 @@
-//! Pure logic of the generate/edit UI (no GPUI, easy to test): what the sidebar box holds, progress
-//! lines, what "Generate" re-runs, the CV file loader, and the edit debounce / render queue.
+//! Pure logic of the generate/edit UI (no GPUI, easy to test): what the Job list's link box holds,
+//! the sidebar's stage groups, progress lines, what "Generate" re-runs, the CV file loader, and the
+//! edit debounce / render queue.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jobpilot_core::pipeline::{JdInput, Progress};
-use jobpilot_core::store::Application;
+use jobpilot_core::store::{Application, Status};
 
 /// File types accepted by drag and drop.
 pub const JD_EXTENSIONS: [&str; 5] = ["md", "txt", "html", "htm", "pdf"];
@@ -13,9 +14,9 @@ pub const JD_EXTENSIONS: [&str; 5] = ["md", "txt", "html", "htm", "pdf"];
 /// Quiet time after the last keystroke before the CV is saved and re-rendered.
 pub const EDIT_DEBOUNCE: Duration = Duration::from_millis(800);
 
-// ---------------------------------------------------------------- sidebar input
+// ---------------------------------------------------------------- link box
 
-/// What the user typed or pasted into the sidebar box: a link, a path to a JD file, or the JD text.
+/// What the user typed or pasted into the Job list's link box: a link, a path to a JD file, or the JD text.
 /// `None` for blank input.
 pub fn parse_input(raw: &str) -> Option<JdInput> {
     let raw = raw.trim();
@@ -96,6 +97,48 @@ pub fn file_input(paths: &[PathBuf]) -> Result<JdInput, String> {
 
 fn extension(path: &Path) -> Option<String> {
     path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase())
+}
+
+// ---------------------------------------------------------------- sidebar groups
+
+/// Where an application stands, as the sidebar groups them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StageGroup {
+    InProgress,
+    Applied,
+    Closed,
+}
+
+impl StageGroup {
+    pub const ALL: [StageGroup; 3] = [StageGroup::InProgress, StageGroup::Applied, StageGroup::Closed];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::InProgress => "In progress",
+            Self::Applied => "Applied",
+            Self::Closed => "Closed",
+        }
+    }
+
+    pub fn of(status: Status) -> Self {
+        match status {
+            Status::Draft | Status::CvReady | Status::Submitting => Self::InProgress,
+            Status::Applied | Status::Interview | Status::Offer => Self::Applied,
+            Status::Rejected | Status::Failed => Self::Closed,
+        }
+    }
+}
+
+/// The applications by stage, in stage order, each keeping the list's order; stages without an
+/// application are left out.
+pub fn group_by_stage(apps: &[Application]) -> Vec<(StageGroup, Vec<&Application>)> {
+    StageGroup::ALL
+        .into_iter()
+        .filter_map(|stage| {
+            let rows: Vec<&Application> = apps.iter().filter(|a| StageGroup::of(a.status) == stage).collect();
+            (!rows.is_empty()).then_some((stage, rows))
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- progress
@@ -306,6 +349,53 @@ mod tests {
         assert!(file_input(&[dir.path().to_path_buf()]).unwrap_err().contains("folder"));
         assert!(file_input(&[]).is_err());
         assert!(file_input(&[dir.path().join("missing.md")]).is_err());
+    }
+
+    #[test]
+    fn applications_are_grouped_by_stage_and_empty_groups_are_hidden() {
+        let (_dir, core) = fresh_core();
+        let make = |slug: &str, status: Status| {
+            let app = core
+                .store
+                .create_application(&NewApplication {
+                    slug: slug.into(),
+                    company: slug.into(),
+                    role: "Engineer".into(),
+                    dir: core.paths.application_dir(slug),
+                    ..Default::default()
+                })
+                .unwrap();
+            core.store.force_status(app.id, status, "test").unwrap();
+            core.store.list_applications().unwrap().into_iter().find(|a| a.id == app.id).unwrap()
+        };
+        let apps = vec![
+            make("a", Status::Interview),
+            make("b", Status::Draft),
+            make("c", Status::Failed),
+            make("d", Status::CvReady),
+            make("e", Status::Applied),
+        ];
+        let names = |rows: &[&Application]| rows.iter().map(|a| a.slug.clone()).collect::<Vec<_>>();
+        let groups = group_by_stage(&apps);
+        assert_eq!(groups.iter().map(|(s, _)| *s).collect::<Vec<_>>(), [StageGroup::InProgress, StageGroup::Applied, StageGroup::Closed]);
+        assert_eq!(names(&groups[0].1), ["b", "d"], "the list's order is kept inside a group");
+        assert_eq!(names(&groups[1].1), ["a", "e"]);
+        assert_eq!(names(&groups[2].1), ["c"]);
+
+        // Only the stages that have applications are listed.
+        let only_open = group_by_stage(&apps[1..2]);
+        assert_eq!(only_open.len(), 1);
+        assert_eq!(only_open[0].0, StageGroup::InProgress);
+        assert!(group_by_stage(&[]).is_empty());
+
+        for (status, stage) in [
+            (Status::Submitting, StageGroup::InProgress),
+            (Status::Offer, StageGroup::Applied),
+            (Status::Rejected, StageGroup::Closed),
+        ] {
+            assert_eq!(StageGroup::of(status), stage, "{status:?}");
+        }
+        assert_eq!(StageGroup::InProgress.label(), "In progress");
     }
 
     #[test]

@@ -1,14 +1,16 @@
-//! Queue screen (P12): found jobs best match first, with the brief and the score breakdown, and
-//! the actions that turn a lead into an application (Prepare CV), drop it (Dismiss) or look at it
-//! (Open posting). Views only: the data comes from `Core::queue_snapshot`, the work from
-//! `Core::prepare_cv` / `discover_now` / `dismiss_lead_with_reason`, all on the core runtime.
+//! Job list screen (P12; the queue): found jobs best match first, with the brief and the score
+//! breakdown, and the actions that turn a lead into an application (Prepare CV), drop it (Dismiss) or
+//! look at it (Open posting). At the top, a link box (and a file drop on the window) adds a job the
+//! user found themselves: `Core::add_lead` reads it, scores it and briefs it, and it appears selected.
+//! Views only: the data comes from `Core::queue_snapshot`, the work from `Core::add_lead` /
+//! `prepare_cv` / `discover_now` / `dismiss_lead_with_reason`, all on the core runtime.
 //!
 //! The one primary button is at the bottom right: "Prepare CV" while there are leads, "Search now"
-//! when the queue is empty (`logic::queue_primary_for`). Everything else is a plain button.
+//! when the list is empty (`logic::queue_primary_for`). Everything else is a plain button.
 
 mod logic;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -26,17 +28,19 @@ use jobpilot_core::discover::queue::{criteria_rows, filter_items, QueueFilter, Q
 use jobpilot_core::discover::{WaitingSource, SOURCE_GRAPH};
 use jobpilot_core::graph::{ProgressEvent, WaitReason};
 use jobpilot_core::health;
+use jobpilot_core::pipeline::JdInput;
 use jobpilot_core::runtime;
-use jobpilot_core::store::Application;
+use jobpilot_core::store::{Application, Lead, LeadState};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
-use crate::app::{AppState, Screen};
+use crate::app::jobs::parse_input;
+use crate::app::{AppState, FADE};
 use crate::detail::insight_brief;
 use crate::problem::{self, RetryFn};
 use logic::{
-    ago, dismissed_note, drop_unreported, is_web_link, meta_line, queue_primary_for, score_label, score_tone, source_name, source_needs_attention,
-    source_status, QueueAction, QueueFacts, Tone,
+    ago, dismissed_note, drop_unreported, is_web_link, meta_line, queue_behind, queue_primary_for, score_label, score_tone, source_name,
+    source_needs_attention, source_status, waiting_label, QueueAction, QueueFacts, Queued, Tone, ALREADY_READING,
 };
 
 /// The first look at the daily-run setting after the app starts, and the gap between looks after that.
@@ -70,6 +74,9 @@ struct Prepared {
     label: String,
 }
 
+/// A link, file or text that did not become a lead: a message under the link box.
+type AddFailure = logic::AddFailure<JdInput>;
+
 /// An inline message under the header.
 struct Note {
     ok: bool,
@@ -93,7 +100,7 @@ struct FailureRow {
     app_id: Option<i64>,
 }
 
-/// The queue of found jobs.
+/// The Job list: found jobs, and the box that adds one.
 pub struct QueueView {
     state: Entity<AppState>,
     /// The `AppState::queue_epoch` this view last loaded for.
@@ -103,6 +110,16 @@ pub struct QueueView {
     filter: QueueFilter,
     location: Entity<InputState>,
     reason: Entity<InputState>,
+    /// Paste a job link (or the posting's text) and press Enter.
+    link: Entity<InputState>,
+    /// The posting being read ("Reading the posting..."), if any.
+    adding: Option<JdInput>,
+    /// Links pasted and files dropped while one is being read: read one after another.
+    waiting: VecDeque<JdInput>,
+    /// Why the last inputs were not added, one per input, the newest first (each has its own Retry).
+    add_failures: logic::AddFailures<JdInput>,
+    /// A short remark under the link box ([`ALREADY_READING`]); the next paste or typing clears it.
+    link_note: Option<&'static str>,
     /// Ticked leads (several CVs at once).
     checked: BTreeSet<i64>,
     jobs: HashMap<i64, Job>,
@@ -123,7 +140,35 @@ pub struct QueueView {
 
 impl QueueView {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        // A file dropped on the window arrives through the shared state.
+        cx.observe_in(&state, window, |this, state, window, cx| {
+            if let Some(dropped) = state.update(cx, |s, _| s.dropped.take()) {
+                this.on_dropped(dropped, window, cx);
+            }
+            cx.notify();
+        })
+        .detach();
+        let link = cx.new(|cx| InputState::new(window, cx).placeholder("Paste a job link and press Enter, or drop a file"));
+        cx.subscribe_in(&link, window, |this, input, event: &InputEvent, window, cx| match event {
+            InputEvent::PressEnter { .. } => {
+                let raw = input.read(cx).value();
+                let Some(jd) = parse_input(&raw) else { return };
+                if this.add_lead(jd, window, cx) {
+                    input.update(cx, |input, cx| input.set_value("", window, cx));
+                }
+            }
+            // Typing again clears the "could not add" messages and the remark. Emptying the box
+            // (after Enter, or its clear button) does not: it would hide what Enter just said.
+            InputEvent::Change if !input.read(cx).value().is_empty() => {
+                let had_failures = this.add_failures.clear();
+                let had_note = this.link_note.take().is_some();
+                if had_failures || had_note {
+                    cx.notify();
+                }
+            }
+            _ => {}
+        })
+        .detach();
         let location = cx.new(|cx| InputState::new(window, cx).placeholder("Location contains..."));
         cx.subscribe_in(&location, window, |this, input, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
@@ -142,6 +187,11 @@ impl QueueView {
             filter: QueueFilter::default(),
             location,
             reason,
+            link,
+            adding: None,
+            waiting: VecDeque::new(),
+            add_failures: logic::AddFailures::default(),
+            link_note: None,
             checked: BTreeSet::new(),
             jobs: HashMap::new(),
             failed: HashMap::new(),
@@ -248,6 +298,8 @@ impl QueueView {
 
     /// Read the queue again (off the UI thread).
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        // The sidebar badge follows every change the list has, shown or not.
+        self.state.update(cx, |s, cx| s.refresh_lead_count(cx));
         let core = self.core(cx);
         let rx = runtime::spawn(async move { core.queue_snapshot() });
         cx.spawn(async move |this, cx| {
@@ -316,6 +368,88 @@ impl QueueView {
     }
 
     // ------------------------------------------------------------ actions
+
+    /// Read the posting behind `input`, score it and add it to the list as a lead (never an
+    /// application: Prepare CV does that). While another posting is being read this one waits its
+    /// turn (see [`logic::MAX_WAITING`]); `false` only when too many are waiting already.
+    fn add_lead(&mut self, input: JdInput, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.link_note = None;
+        if self.adding.is_some() {
+            // The failure of this input goes only when it is really queued again: its Retry
+            // cannot queue the same input twice, and a refusal leaves it where it is.
+            let queued = queue_behind(self.adding.as_ref(), &mut self.waiting, &mut self.add_failures, input);
+            if queued == Queued::Duplicate {
+                self.link_note = Some(ALREADY_READING);
+            }
+            cx.notify();
+            return queued != Queued::Full;
+        }
+        self.add_failures.clear_input(&input);
+        self.start_add(input, window, cx);
+        true
+    }
+
+    /// Start reading `input` (nothing else is being read).
+    fn start_add(&mut self, input: JdInput, window: &mut Window, cx: &mut Context<Self>) {
+        self.adding = Some(input.clone());
+        let core = self.core(cx);
+        let run = input.clone();
+        let rx = runtime::spawn(async move { core.add_lead(run).await });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = rx.await.unwrap_or_else(|_| Err(anyhow!("the task was cancelled")));
+            this.update_in(cx, |this, window, cx| this.on_lead_added(input, result, window, cx)).ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn on_lead_added(&mut self, input: JdInput, result: Result<Lead>, window: &mut Window, cx: &mut Context<Self>) {
+        self.adding = None;
+        match result {
+            Ok(lead) => {
+                tracing::info!(lead = lead.id, "lead added from the link box");
+                // Only this input's own failure: the others are still true.
+                self.add_failures.clear_input(&input);
+                match (lead.state, lead.app_id) {
+                    // The same job was found before and its CV exists: that is where it is now.
+                    (LeadState::Promoted, Some(app_id)) => self.state.update(cx, |s, cx| s.select(app_id, cx)),
+                    (LeadState::Dismissed, _) => {
+                        self.note = Some(Note { ok: false, text: "You dismissed this job before, so it is not in the list.".into() });
+                    }
+                    _ => {
+                        // Show the new lead, whatever the filters were.
+                        self.filter = QueueFilter::default();
+                        self.location.update(cx, |input, cx| input.set_value("", window, cx));
+                        self.set_selected(Some(lead.id), cx);
+                    }
+                }
+                self.refresh(cx);
+            }
+            Err(e) => {
+                let message = format!("{e:#}");
+                self.state.update(cx, |s, cx| s.needs_recheck(&message, cx));
+                self.add_failures.push(AddFailure { message, input: Some(input) });
+            }
+        }
+        // The next one that was waiting, a failure above stays on screen meanwhile.
+        if let Some(next) = self.waiting.pop_front() {
+            self.start_add(next, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// A file dropped on the window: a lead like a pasted link, or the reason it was refused.
+    fn on_dropped(&mut self, dropped: Result<JdInput, String>, window: &mut Window, cx: &mut Context<Self>) {
+        match dropped {
+            Ok(input) => {
+                self.add_lead(input, window, cx);
+            }
+            Err(message) => {
+                self.add_failures.push(AddFailure { message, input: None });
+                cx.notify();
+            }
+        }
+    }
 
     fn search_now(&mut self, cx: &mut Context<Self>) {
         if self.searching.is_some() {
@@ -436,7 +570,7 @@ impl QueueView {
         let (id, exclude) = (form.lead_id, form.exclude_company);
         let reason = self.reason.read(cx).value().to_string();
         let core = self.core(cx);
-        let rx = runtime::spawn(async move { core.dismiss_lead_with_reason(id, &reason, exclude) });
+        let rx = runtime::spawn(async move { core.dismiss_lead_with_reason(id, &reason, exclude).await });
         cx.spawn(async move |this, cx| {
             let result = rx.await.unwrap_or_else(|_| Err(anyhow!("the task was cancelled")));
             this.update(cx, |this, cx| this.on_dismissed(id, result, cx)).ok();
@@ -562,27 +696,19 @@ impl QueueView {
                     .h_flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_xl().font_semibold().child("Queue"))
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            // When the queue is empty "Search now" is the primary button, below.
-                            .when(!empty, |d| {
-                                d.child(
-                                    Button::new("queue-search")
-                                        .outline()
-                                        .icon(IconName::Search)
-                                        .label("Search now")
-                                        .loading(self.searching.is_some())
-                                        .disabled(self.searching.is_some())
-                                        .on_click(cx.listener(|this, _, _, cx| this.search_now(cx))),
-                                )
-                            })
-                            .child(Button::new("queue-back").ghost().label("Back").on_click(cx.listener(
-                                |this, _, _, cx| this.state.update(cx, |s, cx| s.show(Screen::Detail, cx)),
-                            ))),
-                    ),
+                    .child(div().text_2xl().font_semibold().child("Job list"))
+                    // When the list is empty "Search now" is the primary button, below.
+                    .when(!empty, |d| {
+                        d.child(
+                            Button::new("queue-search")
+                                .outline()
+                                .icon(IconName::Search)
+                                .label("Search now")
+                                .loading(self.searching.is_some())
+                                .disabled(self.searching.is_some())
+                                .on_click(cx.listener(|this, _, _, cx| this.search_now(cx))),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -596,6 +722,84 @@ impl QueueView {
                     })
                     .when(self.searching.is_none(), |d| d.child(last.unwrap_or_else(|| "No search yet.".into()))),
             )
+    }
+
+    /// The link box, and under it what is happening to the last thing put in: a spinner while the
+    /// posting is read, or why it failed with what to do about it.
+    fn link_box(&self, cx: &Context<Self>) -> Div {
+        let theme = cx.theme();
+        let failures: Vec<Stateful<Div>> = self
+            .add_failures
+            .iter()
+            .enumerate()
+            .map(|(n, f)| {
+                let problem = health::classify(&f.message);
+                let run = |input: JdInput| -> RetryFn {
+                    let this = cx.entity();
+                    std::rc::Rc::new(move |window, cx| {
+                        let input = input.clone();
+                        this.update(cx, |this, cx| {
+                            this.add_lead(input, window, cx);
+                        })
+                    })
+                };
+                let help = problem::help(&format!("add-lead-error-{n}"), problem, &self.state, f.input.clone().map(run), cx);
+                // A plain error has no advice and no Retry: offer to run it again.
+                let again = f.input.clone().filter(|_| problem.advice().is_none()).map(|input| {
+                    let run = run(input);
+                    Button::new(("add-lead-again", n))
+                        .outline()
+                        .compact()
+                        .label("Try again")
+                        .on_click(move |_, window, cx| run(window, cx))
+                });
+                div()
+                    .id(("add-lead-failure", n))
+                    .role(Role::Group)
+                    .aria_label(format!("The posting could not be added: {}", f.message))
+                    .v_flex()
+                    .gap_1()
+                    .child(div().text_sm().text_color(theme.danger).child(f.message.clone()))
+                    .children(help)
+                    .children(again.map(|b| div().h_flex().child(b)))
+            })
+            .collect();
+        div()
+            .v_flex()
+            .gap_2()
+            .child(
+                Input::new(&self.link)
+                    .prefix(Icon::new(IconName::Plus).size_4().text_color(theme.muted_foreground))
+                    .cleanable(true),
+            )
+            .when(self.adding.is_some(), |d| {
+                d.child(
+                    div()
+                        .id("add-lead-progress")
+                        .role(Role::Status)
+                        .aria_label(match waiting_label(self.waiting.len()) {
+                            Some(n) => format!("Reading the posting, {n}"),
+                            None => "Reading the posting".to_string(),
+                        })
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child(Spinner::new().small().color(theme.primary))
+                        .child("Reading the posting\u{2026}")
+                        .children(waiting_label(self.waiting.len()).map(|n| div().child(format!("\u{b7} {n}")))),
+                )
+            })
+            .children(self.link_note.map(|note| {
+                div().id("add-lead-note").role(Role::Paragraph).aria_label(note).text_sm().text_color(theme.muted_foreground).child(note)
+            }))
+            .children(failures)
     }
 
     fn sources_line(&self, cx: &App) -> Option<Stateful<Div>> {
@@ -943,7 +1147,9 @@ impl QueueView {
             .child(div().text_xs().text_color(muted).child(format!("{shown} of {total} shown")))
     }
 
-    fn lead_row(&self, item: &QueueItem, selected: bool, cx: &Context<Self>) -> Div {
+    /// One lead as a card: a tick box (only on hover, or once any box is ticked), the name and where
+    /// it is, why it matches, and the score as a pill in its tone colour.
+    fn lead_row(&self, item: &QueueItem, selected: bool, cx: &Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
         let lead = &item.lead;
         let id = lead.id;
@@ -960,28 +1166,37 @@ impl QueueView {
             .map(|r| format!("{} {}: {}", r.criterion, r.score, r.text))
             .collect::<Vec<_>>()
             .join(" \u{b7} ");
+        let group = SharedString::from(format!("lead-card-{id}"));
+        let any_checked = !self.checked.is_empty();
+        let (accent, border, primary) = (theme.accent, theme.border, theme.primary);
         div()
+            .id(("lead-card", id as usize))
+            .group(group.clone())
             .h_flex()
             .items_start()
-            .gap_2()
-            .when(selected, |d| d.bg(theme.accent))
-            .rounded_md()
-            .px_2()
-            .py_1p5()
+            .rounded_lg()
+            .border_1()
+            .border_color(if selected { primary.opacity(0.55) } else { border })
+            .bg(if selected { accent } else { theme.background })
+            .hover(move |d| d.bg(accent.opacity(if selected { 1.0 } else { 0.5 })))
             .child(
-                div().pt_0p5().child(
-                    Checkbox::new(SharedString::from(format!("lead-check-{id}")))
-                        .accessibility_label(format!("Select {}: {}", lead.company, lead.role))
-                        .checked(self.checked.contains(&id))
-                        .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                            if *checked {
-                                this.checked.insert(id);
-                            } else {
-                                this.checked.remove(&id);
-                            }
-                            cx.notify();
-                        })),
-                ),
+                div()
+                    .pl_3()
+                    .pt_3()
+                    .when(!any_checked, |d| d.opacity(0.).group_hover(group, |s| s.opacity(1.)))
+                    .child(
+                        Checkbox::new(SharedString::from(format!("lead-check-{id}")))
+                            .accessibility_label(format!("Select {}: {}", lead.company, lead.role))
+                            .checked(self.checked.contains(&id))
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                if *checked {
+                                    this.checked.insert(id);
+                                } else {
+                                    this.checked.remove(&id);
+                                }
+                                cx.notify();
+                            })),
+                    ),
             )
             .child(
                 div()
@@ -991,9 +1206,10 @@ impl QueueView {
                     .v_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap_0p5()
+                    .gap_1()
+                    .p_3()
+                    .pl_2()
                     .cursor_pointer()
-                    .hover(|d| d.bg(theme.accent.opacity(0.5)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.set_selected(Some(id), cx);
                         cx.notify();
@@ -1011,7 +1227,18 @@ impl QueueView {
                                     .font_semibold()
                                     .child(format!("{} \u{2014} {}", lead.company, lead.role)),
                             )
-                            .child(div().flex_shrink_0().font_semibold().text_color(tone).child(score_label(lead.score))),
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_full()
+                                    .text_xs()
+                                    .font_semibold()
+                                    .text_color(tone)
+                                    .bg(tone.opacity(0.14))
+                                    .child(score_label(lead.score)),
+                            ),
                     )
                     .child(
                         div()
@@ -1040,21 +1267,19 @@ impl QueueView {
 
     fn list(&self, cx: &Context<Self>) -> Stateful<Div> {
         let selected = self.selected_id(cx);
-        let rows: Vec<Div> = self.shown().into_iter().map(|item| self.lead_row(item, selected == Some(item.lead.id), cx)).collect();
-        let theme = cx.theme();
+        let rows: Vec<Stateful<Div>> =
+            self.shown().into_iter().map(|item| self.lead_row(item, selected == Some(item.lead.id), cx)).collect();
         div()
             .id("queue-list")
             .role(Role::List)
             .aria_label("Leads")
             .v_flex()
-            .w(px(340.))
+            .w(px(360.))
             .flex_shrink_0()
             .h_full()
-            .gap_0p5()
+            .gap_2()
             .overflow_y_scroll()
-            .pr_2()
-            .border_r_1()
-            .border_color(theme.border)
+            .pr_3()
             .children(rows)
     }
 
@@ -1200,7 +1425,7 @@ impl QueueView {
                 div()
                     .v_flex()
                     .gap_0p5()
-                    .child(div().text_lg().font_semibold().child(format!("{} \u{2014} {}", lead.company, lead.role)))
+                    .child(div().text_xl().font_semibold().child(format!("{} \u{2014} {}", lead.company, lead.role)))
                     .child(div().text_sm().text_color(muted).child(meta_line(&lead.location, source.as_deref())))
                     .when(is_web_link(&url), |d| {
                         let target = url.clone();
@@ -1254,7 +1479,7 @@ impl QueueView {
 
 impl Render for QueueView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Shown again (or "Next in queue" sent us here): read the queue anew.
+        // Shown again (or "Next job" sent us here): read the list anew.
         let epoch = self.state.read(cx).queue_epoch;
         if self.epoch != Some(epoch) {
             self.epoch = Some(epoch);
@@ -1293,16 +1518,16 @@ impl Render for QueueView {
             div()
                 .id("queue-empty")
                 .role(Role::Paragraph)
-                .aria_label("The queue is empty")
+                .aria_label("No jobs yet")
                 .v_flex()
                 .flex_1()
                 .items_center()
                 .justify_center()
                 .gap_1()
                 .text_center()
-                .child(div().text_lg().font_semibold().child(if loaded { "The queue is empty" } else { "Loading the queue" }))
+                .child(div().text_lg().font_semibold().child(if loaded { "No jobs yet" } else { "Loading the job list" }))
                 .child(div().max_w(px(420.)).text_color(theme.muted_foreground).child(
-                    "Jobs found from your sources appear here, best match first. Press Search now to look for new ones.",
+                    "Paste a job link in the box above, or press Search now to look in your sources. Jobs appear here, best match first.",
                 ))
                 .into_any_element()
         } else {
@@ -1318,12 +1543,20 @@ impl Render for QueueView {
                         .pl_2()
                         .when_some(form, |d, form| d.child(self.dismiss_form(item, form, cx)))
                         .child(self.lead_panel(item, cx))
+                        // The panel fades and slides in whenever another lead is opened.
+                        .with_animation(
+                            ElementId::NamedInteger("lead-panel".into(), item.lead.id as u64),
+                            Animation::new(FADE).with_easing(ease_in_out),
+                            |this, delta| this.opacity(delta).relative().left(px(14. * (1. - delta))),
+                        )
+                        .into_any_element()
                 }
                 None => div()
                     .flex_1()
                     .pl_2()
                     .text_color(theme.muted_foreground)
-                    .child(if shown == 0 { "No lead matches the filters." } else { "Select a lead to see why it matches." }),
+                    .child(if shown == 0 { "No lead matches the filters." } else { "Select a lead to see why it matches." })
+                    .into_any_element(),
             };
             div().h_flex().flex_1().min_h_0().items_start().gap_2().child(self.list(cx)).child(panel).into_any_element()
         };
@@ -1331,16 +1564,17 @@ impl Render for QueueView {
         div()
             .id("queue")
             .role(Role::Group)
-            .aria_label("Queue")
+            .aria_label("Job list")
             .v_flex()
             .size_full()
             .gap_3()
-            .p_4()
+            .p_6()
             .child(self.header(total == 0, cx))
+            .child(self.link_box(cx))
             .children(self.sources_line(cx))
             .children(self.note_line(cx))
             .when_some(self.load_error.clone(), |d, message| {
-                d.child(div().text_sm().text_color(theme.danger).child(format!("The queue could not be read: {message}")))
+                d.child(div().text_sm().text_color(theme.danger).child(format!("The job list could not be read: {message}")))
             })
             .children(waiting)
             .children(failures)

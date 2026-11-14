@@ -8,13 +8,14 @@
 //! - Sources (add, enable, remove) and the search API key that switches report search on.
 //!
 //! Views only: everything that touches the store, the keyring or the network runs through
-//! `jobpilot_core::runtime::spawn` (the core's `trends` API). "Add to preferences" opens the
-//! Preferences screen with a suggestion in `AppState::prefs_suggestion`.
+//! `jobpilot_core::runtime::spawn` (the core's `trends` API). "Add to preferences" adds the skill
+//! or domain to the saved preferences at once (Settings > Profile & preferences) and shows "Added".
 
 mod demo;
 mod report;
 mod sources;
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ use jobpilot_core::chrono::Utc;
 use jobpilot_core::graph::nodes::ChallengeKind;
 use jobpilot_core::graph::{Outcome, Progress, ProgressEvent};
 use jobpilot_core::health::{self, Problem};
+use jobpilot_core::prefs::Preferences;
 use jobpilot_core::store::{Report, Source};
 use jobpilot_core::trends::{
     Digest, Period, SearchProvider, SourceKind, SourceStatus, TrendChallenge, TrendConfig, TrendRun,
@@ -39,6 +41,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::app::{AppState, Screen};
 use crate::problem::{self, RetryFn};
+use crate::settings::profile::{item_key, Field, Presence};
 pub use demo::seed_demo;
 
 /// Weekly digest or quarterly summary.
@@ -91,6 +94,58 @@ impl Job {
     }
 }
 
+/// What the "Add to preferences" button of a topic shows and does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AddButton {
+    /// Ready to add.
+    Add,
+    /// The save is running: pressing again does nothing.
+    Adding,
+    /// In the wanted lists (skills, domains).
+    Added,
+    /// In the avoid list: adding it would contradict the preferences.
+    Avoided,
+}
+
+impl AddButton {
+    fn new(presence: Presence, pending: bool) -> Self {
+        match presence {
+            Presence::Added => AddButton::Added,
+            Presence::Avoided => AddButton::Avoided,
+            Presence::Absent if pending => AddButton::Adding,
+            Presence::Absent => AddButton::Add,
+        }
+    }
+
+    fn enabled(self) -> bool {
+        self == AddButton::Add
+    }
+
+    fn label(self) -> &'static str {
+        if self == AddButton::Added {
+            "Added"
+        } else {
+            "Add to preferences"
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            AddButton::Add | AddButton::Adding => "Add to preferences",
+            AddButton::Added => "Added to your preferences",
+            AddButton::Avoided => "In your avoid list",
+        }
+    }
+
+    fn accessibility(self, topic: &str) -> String {
+        match self {
+            AddButton::Add | AddButton::Adding => format!("Add {topic} to preferences"),
+            AddButton::Added => format!("{topic} is in your preferences"),
+            AddButton::Avoided => format!("{topic} is in your avoid list"),
+        }
+    }
+}
+
 /// The line under the controls.
 enum Notice {
     Info(String),
@@ -105,6 +160,8 @@ struct Snapshot {
     challenges: Vec<TrendChallenge>,
     keys: Vec<SearchProvider>,
     shown: Option<Digest>,
+    /// The saved preferences: which skills and domains of the digest are added already.
+    prefs: Preferences,
 }
 
 fn load_snapshot(core: &Core, want: Option<i64>) -> Result<Snapshot> {
@@ -122,6 +179,7 @@ fn load_snapshot(core: &Core, want: Option<i64>) -> Result<Snapshot> {
         challenges: core.trend_challenges()?,
         keys: core.saved_search_providers()?,
         shown,
+        prefs: core.preferences()?,
     })
 }
 
@@ -174,6 +232,9 @@ pub struct TrendsView {
     details: Vec<String>,
     /// The source kind whose address form is open.
     adding: Option<SourceKind>,
+    /// Topics being added to the preferences right now (by field and lowercase text): a second
+    /// click on the same topic waits for the first save.
+    adding_topics: HashSet<(Field, String)>,
     /// Why the last change to the sources or the search key failed.
     sources_error: Option<String>,
     /// The report shown (`None`: the newest).
@@ -229,6 +290,7 @@ impl TrendsView {
             notice: None,
             details: Vec::new(),
             adding: None,
+            adding_topics: HashSet::new(),
             sources_error: None,
             selected: None,
             visible: false,
@@ -359,6 +421,54 @@ impl TrendsView {
     fn select(&mut self, id: i64, cx: &mut Context<Self>) {
         self.selected = Some(id);
         self.reload(cx);
+    }
+
+    /// What the "Add to preferences" button of `topic` shows now.
+    fn add_button(&self, field: Field, topic: &str) -> AddButton {
+        AddButton::new(field.presence(&self.snap.prefs, topic), self.adding_topics.contains(&(field, item_key(topic))))
+    }
+
+    /// "Add to preferences": put `topic` into the saved skills or domains at once, off the UI
+    /// thread. Nothing is cancelled and the screen does not change; the button shows a spinner
+    /// while the save runs (more clicks on it do nothing), then reads "Added".
+    fn add_to_preferences(&mut self, field: Field, topic: String, cx: &mut Context<Self>) {
+        if !self.add_button(field, &topic).enabled() {
+            return;
+        }
+        let key = (field, item_key(&topic));
+        self.adding_topics.insert(key.clone());
+        cx.notify();
+        let core = self.core(cx);
+        let shown = topic.clone();
+        // `add` says whether it changed anything: a no-op saves nothing and keeps the undo point.
+        let rx = runtime::spawn(async move { core.edit_preferences(move |prefs| field.add(prefs, &topic)).await });
+        cx.spawn(async move |this, cx| {
+            let result = rx.await.unwrap_or_else(|_| Err(anyhow!("the task was cancelled")));
+            this.update(cx, |this, cx| {
+                this.adding_topics.remove(&key);
+                match result {
+                    Ok(prefs) => {
+                        let added = field.presence(&prefs, &shown) == Presence::Added;
+                        if added {
+                            // The setup banner follows whether preferences were saved.
+                            this.state.update(cx, |s, cx| {
+                                if !s.prefs_saved {
+                                    s.prefs_saved = true;
+                                    cx.notify();
+                                }
+                            });
+                        } else {
+                            this.notice = Some(Notice::Info(field.why_not_added(&prefs, &shown)));
+                        }
+                        this.snap.prefs = prefs;
+                    }
+                    Err(e) => this.notice = Some(Notice::Info(format!("Could not add \"{shown}\" to your preferences: {e:#}"))),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // ------------------------------------------------------------ render
@@ -508,18 +618,9 @@ impl Render for TrendsView {
             .v_flex()
             .size_full()
             .gap_4()
-            .p_4()
+            .p_6()
             .overflow_y_scroll()
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .justify_between()
-                    .child(div().text_xl().font_semibold().child("Trends"))
-                    .child(Button::new("trends-back").ghost().label("Back").on_click(cx.listener(|this, _, _, cx| {
-                        this.state.update(cx, |s, cx| s.show(Screen::Detail, cx))
-                    }))),
-            )
+            .child(div().text_2xl().font_semibold().child("Trends"))
             .child(self.render_controls(&c, cx))
             .children(self.render_notice(&c, cx))
             .children(self.render_challenges(&c, cx))
@@ -582,10 +683,28 @@ fn summarize(run: &TrendRun) -> (String, Vec<String>) {
 mod tests {
     use jobpilot_core::trends::{Period, SourceOutcome, SourceStatus, TrendRun};
 
-    use super::{step_label, summarize, Job};
+    use super::{step_label, summarize, AddButton, Job};
+    use crate::settings::profile::Presence;
 
     fn period() -> Period {
         Period::parse("2026-W46").unwrap()
+    }
+
+    #[test]
+    fn the_add_button_follows_where_the_topic_stands() {
+        assert_eq!(AddButton::new(Presence::Absent, false), AddButton::Add);
+        assert_eq!(AddButton::new(Presence::Absent, true), AddButton::Adding, "a save is running: no second click");
+        assert_eq!(AddButton::new(Presence::Added, false), AddButton::Added);
+        assert_eq!(AddButton::new(Presence::Added, true), AddButton::Added, "saved: it reads Added even before the flag clears");
+        assert_eq!(AddButton::new(Presence::Avoided, false), AddButton::Avoided);
+        for state in [AddButton::Adding, AddButton::Added, AddButton::Avoided] {
+            assert!(!state.enabled());
+        }
+        assert!(AddButton::Add.enabled());
+        assert_eq!(AddButton::Added.label(), "Added");
+        assert_eq!(AddButton::Avoided.label(), "Add to preferences");
+        assert_eq!(AddButton::Avoided.tooltip(), "In your avoid list");
+        assert!(AddButton::Avoided.accessibility("Go").contains("avoid"));
     }
 
     #[test]

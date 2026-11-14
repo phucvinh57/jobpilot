@@ -108,7 +108,7 @@ fn tag_row(label: &'static str, items: &[String], must: bool, muted: Hsla) -> Di
         .gap_1()
         .child(div().text_xs().text_color(muted).pr_1().child(label))
         .children(items.iter().map(|item| {
-            let tag = if must { Tag::info() } else { Tag::secondary() };
+            let tag = if must { Tag::info().outline() } else { Tag::secondary() };
             tag.small().child(item.clone())
         }))
 }

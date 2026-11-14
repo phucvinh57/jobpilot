@@ -5,22 +5,32 @@
 //! - [`chat_graph`]: the `prefs_chat` graph and [`PrefsChat`], the calls the UI makes.
 //! - [`cv_upload`]: the CV attached to the chat (chat context only).
 //! - `undo`: [`Core::update_preferences`] / [`Core::undo_preferences`], one level of undo.
+//! - [`edit`]: [`Core::edit_preferences`], [`Core::read_preference_notes`] and
+//!   [`Core::undo_preference_edit`], the app's changes to the document one at a time (one lock).
 //! - [`demo`]: sample chat and preferences for `JOBPILOT_DEMO=1`.
+//! - [`suggest`]: skills, locations and domains the preferences screen can offer ([`PrefSuggestions`]).
+//! - [`appearance`]: the saved colour scheme ([`Appearance`]).
 
+pub mod appearance;
 pub mod chat;
 pub mod chat_graph;
 pub mod cv_upload;
 pub mod demo;
+pub mod edit;
 pub mod model;
+pub mod suggest;
 mod undo;
 
 use anyhow::Result;
 
+pub use appearance::Appearance;
 pub use chat::{merge_patch, PrefsPatch, Question, TurnOutput};
 pub use chat_graph::{ChatState, ChatStatus, ChatView, PrefsChat, THREAD};
 pub use cv_upload::UploadedCv;
 pub use demo::seed_demo;
+pub use edit::{clean_notes, NotesRead};
 pub use model::{Preferences, Remote, Weights};
+pub use suggest::PrefSuggestions;
 
 use crate::Core;
 

@@ -51,7 +51,7 @@ use crate::{Core, Paths};
 /// A posting with less text than this is not a posting (a bot page, an empty app shell).
 const MIN_POSTING_CHARS: usize = 40;
 /// Longest posting text kept in the state of a run (and so in every checkpoint).
-const MAX_POSTING_CHARS: usize = 40_000;
+pub(super) const MAX_POSTING_CHARS: usize = 40_000;
 /// How much of a fetched posting a challenge check sees.
 const CHECK_TEXT_CHARS: usize = 2_000;
 /// The `sources` node waits for every source, which can take hours when sources wait for the user
@@ -115,7 +115,7 @@ impl Runner {
 }
 
 /// The master profile, compacted for scoring.
-fn load_profile(core: &Core) -> Result<String> {
+pub(super) fn load_profile(core: &Core) -> Result<String> {
     let path = core.profile_path();
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("cannot read the profile at {}: set its path in Settings", path.display()))?;
@@ -542,8 +542,7 @@ fn store_lead(
             }
         }
     };
-    let path = write_jd(&sh.paths, lead.id, &company, c, &s.jd)?;
-    sh.store.set_lead_jd_path(lead.id, &path)?;
+    attach_jd(&sh.store, &sh.paths, lead.id, &company, c, &s.jd)?;
     tracing::info!(run = %s.run, source_id = source.id, lead_id = lead.id, state = state.as_str(), "lead stored");
     Ok(Stored::Saved)
 }
@@ -553,6 +552,16 @@ pub fn lead_dir(paths: &Paths, lead_id: i64) -> std::path::PathBuf {
     paths.data_dir.join("leads").join(lead_id.to_string())
 }
 
+/// Write the posting text of lead `lead_id` to its `jd.md` and record where it is. Repeating it
+/// only rewrites the file, and the file is replaced whole (written beside it, then renamed), so
+/// two writers at once (the same job added twice) never leave it cut short.
+/// Shared with the leads the user adds by hand (`discover::manual`).
+pub(super) fn attach_jd(store: &Store, paths: &Paths, lead_id: i64, company: &str, c: &Candidate, text: &str) -> Result<std::path::PathBuf> {
+    let path = write_jd(paths, lead_id, company, c, text)?;
+    store.set_lead_jd_path(lead_id, &path)?;
+    Ok(path)
+}
+
 /// `jd.md` in the layout of an application's (`# company - role`, `Source:`, a blank line, the
 /// text), so a promoted lead can use it as it is.
 fn write_jd(paths: &Paths, lead_id: i64, company: &str, c: &Candidate, text: &str) -> Result<std::path::PathBuf> {
@@ -560,8 +569,21 @@ fn write_jd(paths: &Paths, lead_id: i64, company: &str, c: &Candidate, text: &st
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let path = dir.join("jd.md");
     let body = format!("# {company} \u{2014} {}\nSource: {}\n\n{}\n", c.title, c.url, text.trim());
-    std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+    write_atomic(&path, &body)?;
     Ok(path)
+}
+
+/// Replace `path` with `body` in one step: a temporary file of its own in the same directory (the
+/// same file system, so the rename is atomic) is written first.
+fn write_atomic(path: &std::path::Path, body: &str) -> Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let tmp = path.with_extension(format!("md.{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::Error::new(e).context(format!("replacing {}", path.display()))
+    })
 }
 
 // ---------------------------------------------------------------- pausing a source for a day

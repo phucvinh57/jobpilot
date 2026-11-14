@@ -23,7 +23,7 @@ use super::session::NO_SANDBOX_ENV;
 use crate::graph::nodes::ChallengeKind;
 use crate::pipeline::ingest::MIN_PAGE_CHARS;
 use crate::pipeline::generate::shared_llm;
-use crate::pipeline::{JdInput, NeedsBrowser, Pipeline, Progress, Stage};
+use crate::pipeline::{ingest, ingest_html, JdInput, JdText, NeedsBrowser, Pipeline, Progress, Stage};
 use crate::store::Application;
 use crate::{Core, Paths};
 
@@ -244,6 +244,28 @@ where
     pipeline.generate_into(id, JdInput::Html { html, url: needs.url }, progress).await
 }
 
+/// [`ingest`] with the same browser fallback as [`generate_with_fallback`], for callers that only
+/// need the JD text (adding a lead): when the plain fetch says the page needs a browser, render it
+/// with `render_page` and read its HTML.
+pub async fn ingest_with_fallback<F, Fut>(input: JdInput, render_page: F) -> Result<JdText>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = Result<String>>,
+{
+    let err = match ingest(input).await {
+        Ok(jd) => return Ok(jd),
+        Err(e) => e,
+    };
+    let Some(needs) = err.downcast_ref::<NeedsBrowser>().cloned() else { return Err(err) };
+    let html = render_page(needs.url.clone()).await.with_context(|| format!("could not open {} in a browser", needs.url))?;
+    ingest_html(&html, &needs.url)
+}
+
+/// [`ingest_with_fallback`] with headless Chrome (a throwaway profile) as the browser.
+pub async fn ingest_with_browser(paths: &Paths, input: JdInput) -> Result<JdText> {
+    ingest_with_fallback(input, |url| async move { rendered_html(paths, &url).await }).await
+}
+
 /// The app's generate entry point: default AI provider, headless Chrome as the browser fallback.
 pub async fn generate_with_browser(
     core: &Core,
@@ -307,6 +329,30 @@ mod tests {
     }
 
     const SPA: &str = "<html><body><div id=root></div><script src=app.js></script></body></html>";
+
+    #[tokio::test]
+    async fn ingest_renders_a_js_page_in_the_browser_and_reads_plain_ones_directly() {
+        let spa = serve(200, "text/html", SPA.to_string()).await;
+        let asked = Mutex::new(Vec::new());
+        let jd = ingest_with_fallback(JdInput::Url(spa.clone()), |u| {
+            asked.lock().unwrap().push(u);
+            async { Ok(JOB_HTML.to_string()) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(asked.into_inner().unwrap(), vec![spa.clone()]);
+        assert!(jd.text.contains("Senior Rust Engineer"), "{}", jd.text);
+        assert_eq!(jd.url.as_deref(), Some(spa.as_str()));
+
+        let plain = serve(200, "text/html", JOB_HTML.to_string()).await;
+        let jd = ingest_with_fallback(JdInput::Url(plain), |_| async { panic!("no browser for a readable page") }).await.unwrap();
+        assert!(jd.text.contains("Kubernetes"));
+
+        let err = ingest_with_fallback(JdInput::Url(spa), |_| async { Err(anyhow!("Chrome not found")) }).await.unwrap_err();
+        assert!(format!("{err:#}").contains("Chrome not found") && format!("{err:#}").contains("in a browser"), "{err:#}");
+        let err = ingest_with_fallback(JdInput::Url("not a url".into()), |_| async { Ok(String::new()) }).await.unwrap_err();
+        assert!(format!("{err:#}").contains("not a valid URL"), "{err:#}");
+    }
 
     #[test]
     fn only_http_links_are_opened() {

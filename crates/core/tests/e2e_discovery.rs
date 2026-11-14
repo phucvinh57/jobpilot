@@ -428,7 +428,7 @@ async fn flow(with_apply: bool) {
     assert!(core.store.set_status(app.id, Status::Draft, "back").is_err(), "statuses only move forward");
 
     // 5. "Dismiss, never this company" on the other lead empties the queue.
-    let done = core.dismiss_lead_with_reason(other.lead.id, "Java, not what I want", true).expect("dismiss");
+    let done = core.dismiss_lead_with_reason(other.lead.id, "Java, not what I want", true).await.expect("dismiss");
     assert_eq!(done.also, 0);
     assert!(core.queue_snapshot().expect("queue").items.is_empty());
     assert!(core.preferences().expect("prefs").exclude_companies.contains(&"Globex".to_string()));

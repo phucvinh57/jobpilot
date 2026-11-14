@@ -23,7 +23,7 @@ use cv::CvTab;
 use jd::JdTab;
 use timeline::TimelineTab;
 
-/// The company brief card, shared with the queue's lead view.
+/// The company brief card, shared with the Job list's lead view.
 pub(crate) use jd::brief as insight_brief;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -150,9 +150,9 @@ pub fn primary_for(
     }
 }
 
-/// After the application was sent (or while its confirmation shows), a plain "Next in queue" button
-/// keeps the user moving: it opens the best lead left in the queue.
-pub fn next_in_queue_offered(status: Status, apply: &ApplyUi) -> bool {
+/// After the application was sent (or while its confirmation shows), a plain "Next job" button
+/// keeps the user moving: it opens the best lead left in the Job list.
+pub fn next_job_offered(status: Status, apply: &ApplyUi) -> bool {
     matches!(apply, ApplyUi::Done)
         || matches!(status, Status::Applied | Status::Interview | Status::Rejected | Status::Offer)
 }
@@ -245,9 +245,9 @@ impl Render for Detail {
                 .text_center()
                 .child(div().text_lg().font_semibold().child(if none_yet { "No applications yet" } else { "Nothing selected" }))
                 .child(div().text_color(theme.muted_foreground).max_w(px(420.)).child(if none_yet {
-                    "Paste the link of a job description in the box at the top left (or drop a .md, .txt, .html or .pdf file here). JobPilot writes a CV tailored to it from your profile, then helps you apply."
+                    "Open the Job list and paste the link of a job posting (or drop a .md, .txt, .html or .pdf file on the window). Press Prepare CV on the job: JobPilot writes a CV tailored to it from your profile, then helps you apply."
                 } else {
-                    "Select an application in the list, or paste a JD link to add one."
+                    "Select an application in the list, or prepare a CV for a job from the Job list."
                 }))
                 .into_any_element();
         };
@@ -262,8 +262,8 @@ impl Render for Detail {
             &|| apply_blocker(&core, &app),
         );
 
-        // Read-only (sent): the one primary is gone, "Next in queue" is a plain button in its place.
-        let show_next = primary.is_none() && next_in_queue_offered(app.status, &apply_ui);
+        // Read-only (sent): the one primary is gone, "Next job" is a plain button in its place.
+        let show_next = primary.is_none() && next_job_offered(app.status, &apply_ui);
 
         let content = match self.tab {
             DetailTab::Jd => self.jd.clone().into_any_element(),
@@ -277,13 +277,13 @@ impl Render for Detail {
             .v_flex()
             .size_full()
             .gap_3()
-            .p_4()
+            .p_6()
             .child(
                 div()
                     .h_flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_xl().font_semibold().child(format!("{} — {}", app.company, app.role)))
+                    .child(div().text_2xl().font_semibold().child(format!("{} — {}", app.company, app.role)))
                     .child(
                         div()
                             .h_flex()
@@ -357,8 +357,8 @@ impl Render for Detail {
             .child(div().flex_1().min_h_0().child(content))
             .when(show_next, |d| {
                 d.child(div().h_flex().justify_end().child(
-                    Button::new("next-in-queue").outline().icon(IconName::Inbox).label("Next in queue").on_click(
-                        cx.listener(|this, _, _, cx| this.state.update(cx, |state, cx| state.next_in_queue(cx))),
+                    Button::new("next-job").outline().icon(IconName::Inbox).label("Next job").on_click(
+                        cx.listener(|this, _, _, cx| this.state.update(cx, |state, cx| state.next_job(cx))),
                     ),
                 ))
             })
@@ -421,16 +421,16 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn next_in_queue_is_offered_once_the_application_was_sent() {
+    fn next_job_is_offered_once_the_application_was_sent() {
         for status in [Status::Applied, Status::Interview, Status::Rejected, Status::Offer] {
-            assert!(next_in_queue_offered(status, &ApplyUi::Idle), "{status:?}");
+            assert!(next_job_offered(status, &ApplyUi::Idle), "{status:?}");
             assert_eq!(idle(status, true), None, "it replaces the primary button, never joins it");
         }
         // Right after Submit, while the confirmation shows.
-        assert!(next_in_queue_offered(Status::Submitting, &ApplyUi::Done));
+        assert!(next_job_offered(Status::Submitting, &ApplyUi::Done));
         for status in [Status::Draft, Status::CvReady, Status::Failed, Status::Submitting] {
-            assert!(!next_in_queue_offered(status, &ApplyUi::Idle), "{status:?} still has work to do");
-            assert!(!next_in_queue_offered(status, &ApplyUi::Handoff));
+            assert!(!next_job_offered(status, &ApplyUi::Idle), "{status:?} still has work to do");
+            assert!(!next_job_offered(status, &ApplyUi::Handoff));
         }
     }
 

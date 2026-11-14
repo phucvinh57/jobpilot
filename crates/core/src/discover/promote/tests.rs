@@ -70,6 +70,11 @@ fn add_lead(core: &Core, n: u32, company: &str, role: &str, score: Option<f64>) 
     core.store.get_lead(lead.id).unwrap().unwrap()
 }
 
+/// `Core::dismiss_lead_with_reason` for the tests that are not async.
+fn dismiss(core: &Core, id: i64, reason: &str, exclude: bool) -> Result<Dismissed> {
+    crate::runtime::block_on(core.dismiss_lead_with_reason(id, reason, exclude))
+}
+
 #[test]
 fn promote_is_idempotent_and_copies_the_brief() {
     let (_dir, core) = core();
@@ -95,10 +100,21 @@ fn promote_is_idempotent_and_copies_the_brief() {
 }
 
 #[test]
+fn a_lead_added_from_text_has_no_web_address_to_apply_at() {
+    let (_dir, core) = core();
+    let lead = add_lead(&core, 1, "Acme", "Backend Engineer", None);
+    core.store.with_conn(|c| Ok(c.execute("UPDATE leads SET url = 'manual:0123456789abcdef' WHERE id = ?1", [lead.id])?)).unwrap();
+    let app = core.promote(lead.id).unwrap();
+    assert_eq!((app.source, app.apply_url), (None, None), "a `manual:` address is not a link");
+    assert!(keep_apply_url(&core, app.id, "manual:0123456789abcdef").is_ok());
+    assert_eq!(core.store.get_application(app.id).unwrap().unwrap().apply_url, None);
+}
+
+#[test]
 fn only_a_new_lead_with_a_readable_posting_is_promoted() {
     let (_dir, core) = core();
     let dismissed = add_lead(&core, 1, "Acme", "Backend Engineer", None);
-    core.dismiss_lead_with_reason(dismissed.id, "", false).unwrap();
+    dismiss(&core, dismissed.id, "", false).unwrap();
     assert!(core.promote(dismissed.id).unwrap_err().to_string().contains("dismissed"));
 
     // No posting text: nothing is created and the lead stays in the queue.
@@ -224,13 +240,13 @@ fn dismissing_can_feed_the_preferences_back_but_never_promotes() {
     let more = add_lead(&core, 4, "Metabase", "Engineer", Some(50.0));
 
     // A plain dismissal keeps the reason and touches nothing else.
-    assert_eq!(core.dismiss_lead_with_reason(more.id, "  too junior ", false).unwrap(), Dismissed::default());
+    assert_eq!(dismiss(&core, more.id, "  too junior ", false).unwrap(), Dismissed::default());
     let got = core.store.get_lead(more.id).unwrap().unwrap();
     assert_eq!((got.state, got.dismiss_reason.as_deref()), (LeadState::Dismissed, Some("too junior")));
     assert!(core.preferences().unwrap().exclude_companies.is_empty());
 
     // "Don't show this company again": the preference grows and the company's other leads go too.
-    assert_eq!(core.dismiss_lead_with_reason(one.id, "not interested", true).unwrap(), Dismissed { also: 1, ..Default::default() });
+    assert_eq!(dismiss(&core, one.id, "not interested", true).unwrap(), Dismissed { also: 1, ..Default::default() });
     assert_eq!(core.preferences().unwrap().exclude_companies, ["Acme"]);
     let got = core.store.get_lead(two.id).unwrap().unwrap();
     assert_eq!((got.state, got.dismiss_reason.as_deref()), (LeadState::Dismissed, Some("excluded company: Acme")));
@@ -239,12 +255,12 @@ fn dismissing_can_feed_the_preferences_back_but_never_promotes() {
     // Existing preferences are kept; an excluded company is not listed twice.
     core.save_preferences(Preferences { exclude_companies: vec!["acme".into(), "Evil".into()], ..core.preferences().unwrap() }).unwrap();
     let third = add_lead(&core, 5, "ACME", "Dev", None);
-    core.dismiss_lead_with_reason(third.id, "", true).unwrap();
+    dismiss(&core, third.id, "", true).unwrap();
     assert_eq!(core.preferences().unwrap().exclude_companies, ["acme", "Evil"]);
 
     // A lead that is no longer new cannot be dismissed, and then the preferences stay as they were.
     let before = core.preferences().unwrap();
-    assert!(core.dismiss_lead_with_reason(one.id, "again", true).is_err());
+    assert!(dismiss(&core, one.id, "again", true).is_err());
     assert_eq!(core.preferences().unwrap(), before);
 
     assert!(core.store.list_applications().unwrap().is_empty(), "dismissing never promotes");
@@ -259,14 +275,14 @@ fn dismissing_a_company_leaves_the_leads_whose_cv_is_queued_or_being_written() {
 
     let held = Preparing::new(&core, busy.id);
     assert!(core.is_preparing(busy.id) && !core.is_preparing(idle.id));
-    let out = core.dismiss_lead_with_reason(one.id, "", true).unwrap();
+    let out = dismiss(&core, one.id, "", true).unwrap();
     assert_eq!(out, Dismissed { also: 1, kept: 1, not_excluded: None }, "the one waiting for its CV stays");
     let state = |id| core.store.get_lead(id).unwrap().unwrap().state;
     assert_eq!((state(one.id), state(busy.id), state(idle.id)), (LeadState::Dismissed, LeadState::New, LeadState::Dismissed));
     assert_eq!(core.preferences().unwrap().exclude_companies, ["Acme"], "the company is still excluded for later runs");
 
     // The lead itself cannot be dismissed while its CV is on the way.
-    let err = core.dismiss_lead_with_reason(busy.id, "", false).unwrap_err();
+    let err = dismiss(&core, busy.id, "", false).unwrap_err();
     assert!(err.to_string().contains("being prepared"), "{err:#}");
     assert_eq!(state(busy.id), LeadState::New);
 
@@ -276,7 +292,7 @@ fn dismissing_a_company_leaves_the_leads_whose_cv_is_queued_or_being_written() {
     assert!(core.is_preparing(busy.id));
     drop(second);
     assert!(!core.is_preparing(busy.id));
-    core.dismiss_lead_with_reason(busy.id, "", false).unwrap();
+    dismiss(&core, busy.id, "", false).unwrap();
     assert_eq!(state(busy.id), LeadState::Dismissed);
 }
 
@@ -408,7 +424,7 @@ async fn a_lead_whose_application_was_deleted_can_be_prepared_again() {
     assert_ne!(again.id, second.id);
     assert!(again.jd_path().is_file());
     core.store.delete_application(again.id).unwrap();
-    core.dismiss_lead_with_reason(lead.id, "no longer wanted", false).unwrap();
+    core.dismiss_lead_with_reason(lead.id, "no longer wanted", false).await.unwrap();
     assert_eq!(core.store.get_lead(lead.id).unwrap().unwrap().state, LeadState::Dismissed);
     assert!(core.queue_snapshot().unwrap().items.is_empty());
 }
@@ -425,12 +441,55 @@ fn the_lead_is_dismissed_first_and_a_failing_exclusion_is_reported_not_hidden() 
         })
         .unwrap();
 
-    let out = core.dismiss_lead_with_reason(lead.id, "no", true).unwrap();
+    let out = dismiss(&core, lead.id, "no", true).unwrap();
     assert!(out.not_excluded.as_deref().is_some_and(|e| e.contains("not valid JSON")), "{out:?}");
     assert_eq!((out.also, out.kept), (0, 0));
     let state = |id| core.store.get_lead(id).unwrap().unwrap().state;
     assert_eq!(state(lead.id), LeadState::Dismissed, "the user's dismissal is never lost");
     assert_eq!(state(other.id), LeadState::New, "nothing else changed");
+}
+
+#[test]
+fn the_company_exclusion_waits_for_an_edit_in_progress_and_neither_is_lost() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (_dir, core) = core();
+    let core = Arc::new(core);
+    let lead = add_lead(&core, 1, "Acme", "Backend Engineer", Some(80.0));
+
+    crate::runtime::block_on(async {
+        let (reached, wait_reached) = mpsc::channel::<()>();
+        let (go, wait_go) = mpsc::channel::<()>();
+        // A chip click: it holds the edit lock and has read the document when the dismissal starts.
+        let edit = tokio::spawn({
+            let core = core.clone();
+            async move {
+                core.edit_preferences(move |p| {
+                    p.locations.push("Hanoi".into());
+                    reached.send(()).ok();
+                    wait_go.recv_timeout(Duration::from_secs(10)).ok();
+                    true
+                })
+                .await
+            }
+        });
+        while wait_reached.try_recv().is_err() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let dismissal = tokio::spawn({
+            let core = core.clone();
+            async move { core.dismiss_lead_with_reason(lead.id, "", true).await }
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(core.preferences().unwrap().exclude_companies.is_empty(), "the exclusion waits for the edit");
+        go.send(()).unwrap();
+        edit.await.unwrap().unwrap();
+        let out = dismissal.await.unwrap().unwrap();
+        assert!(out.not_excluded.is_none(), "{out:?}");
+    });
+    let prefs = core.preferences().unwrap();
+    assert_eq!((prefs.locations.as_slice(), prefs.exclude_companies.as_slice()), (&["Hanoi".to_string()][..], &["Acme".to_string()][..]));
 }
 
 /// Two postings, found by a fake source.

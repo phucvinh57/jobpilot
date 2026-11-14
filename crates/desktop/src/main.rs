@@ -2,7 +2,6 @@
 
 mod app;
 mod detail;
-mod prefs;
 mod problem;
 mod queue;
 mod settings;
@@ -13,6 +12,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use gpui_kit::*;
+use jobpilot_core::prefs::Appearance;
 use jobpilot_core::{logging, mail, Core, Paths, Secrets};
 
 /// Window / desktop-entry id (`jobpilot.desktop`, StartupWMClass).
@@ -30,6 +30,12 @@ fn main() -> anyhow::Result<()> {
         app::seed_demo(&core)?;
     }
 
+    // The saved light/dark choice, applied before the first frame (a bad read only means System).
+    let appearance = core.appearance().unwrap_or_else(|e| {
+        tracing::warn!("reading the appearance setting failed: {e:#}");
+        Appearance::System
+    });
+
     // Gmail tracking: poll for replies while the app runs (no-op unless Gmail is connected).
     mail::autostart(&core);
 
@@ -38,13 +44,20 @@ fn main() -> anyhow::Result<()> {
     let opened_in_run = opened.clone();
     gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
+        settings::appearance::apply(appearance, None, cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
             titlebar: Some(TitlebarOptions { title: Some("JobPilot".into()), ..Default::default() }),
             app_id: Some(APP_ID.into()),
             ..Default::default()
         };
-        let window = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| app::JobPilot::new(core, window, cx)));
+        let window = gpui_kit::open_window(options, cx, |window, cx| {
+            // The window knows the desktop's appearance (the app-level query can be wrong on
+            // Linux): settle System on it, and follow the desktop when it switches.
+            settings::appearance::apply(appearance, Some(window), cx);
+            settings::appearance::watch_system(window);
+            cx.new(|cx| app::JobPilot::new(core, window, cx))
+        });
         if let Err(e) = window {
             tracing::error!("failed to open the window: {e:#}");
             opened_in_run.set(false);
