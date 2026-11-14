@@ -11,9 +11,13 @@
 //! the user entered or a subdomain of it) are candidates, whether a link, a JSON-LD `url` or a
 //! sitemap `<loc>`; links and sitemap entries must also have a posting-shaped path
 //! ([`super::web::looks_like_posting`]). A posting's text is read by the runner's own fetch.
+//!
+//! When no attempt finds a posting, the adapter keeps the job boards the pages it read point to
+//! ([`super::boards`]): the run's status suggests adding that board as a source. It never reads
+//! the board itself.
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -21,6 +25,7 @@ use chrono::{DateTime, Utc};
 use tracing::info;
 use url::Url;
 
+use super::boards::{page_hints, BoardHint};
 use super::jsonld::job_postings;
 use super::sitemap::read_sitemap;
 use super::web::{check_site, is_generic, links, looks_like_posting, normalize_page_url, page_url, read_plain_page, same_site, title_from_url, Page, Pages};
@@ -37,6 +42,8 @@ pub struct CareerPage {
     url: Url,
     company: String,
     listing: Cached<Vec<Candidate>>,
+    /// The boards of the last read, when it found no postings.
+    hints: Mutex<Vec<BoardHint>>,
 }
 
 impl CareerPage {
@@ -45,7 +52,7 @@ impl CareerPage {
     pub fn new(pages: Arc<dyn Pages>, source: &Source, company: &str) -> Result<Self> {
         let url = normalize_page_url(&source.url).context("career page source")?;
         check_site(&url).context("career page source")?;
-        Ok(Self { pages, source: source.clone(), url, company: company.to_string(), listing: Cached::new(LISTING_TTL) })
+        Ok(Self { pages, source: source.clone(), url, company: company.to_string(), listing: Cached::new(LISTING_TTL), hints: Mutex::new(Vec::new()) })
     }
 
     async fn postings(&self) -> Result<Arc<Vec<Candidate>>> {
@@ -56,12 +63,25 @@ impl CareerPage {
     /// docs). A [`ChallengeFound`](crate::engine::browser::challenge::ChallengeFound) or any other
     /// browser error is the caller's error, and so is a plain failure that is not a wall.
     async fn read(&self) -> Result<Vec<Candidate>> {
+        let mut hints = Vec::new();
+        let read = self.read_pages(&mut hints).await;
+        let kept = match &read {
+            Ok(found) if found.is_empty() => hints,
+            _ => Vec::new(),
+        };
+        *self.hints.lock().unwrap_or_else(|e| e.into_inner()) = kept;
+        read
+    }
+
+    /// [`read`](Self::read), adding the board hints of each page it reads to `hints`.
+    async fn read_pages(&self, hints: &mut Vec<BoardHint>) -> Result<Vec<Candidate>> {
         let pages = self.pages.as_ref();
         let url = self.url.as_str();
         // Postings the page's JSON-LD says are closed: the fallbacks (links, sitemap, browser) would
         // otherwise bring them back.
         let mut closed = HashSet::new();
         if let Some(page) = read_plain_page(pages, url).await? {
+            add_hints(hints, &page);
             let found = self.candidates(&page, &mut closed);
             if !found.is_empty() {
                 return Ok(found);
@@ -73,6 +93,7 @@ impl CareerPage {
             return Ok(found);
         }
         let page = pages.rendered(&self.source, url).await?;
+        add_hints(hints, &page);
         Ok(self.candidates(&page, &mut closed))
     }
 
@@ -129,6 +150,15 @@ impl CareerPage {
     }
 }
 
+/// Add the boards `page` points to that `hints` does not have yet.
+fn add_hints(hints: &mut Vec<BoardHint>, page: &Page) {
+    for hint in page_hints(page) {
+        if !hints.contains(&hint) {
+            hints.push(hint);
+        }
+    }
+}
+
 #[async_trait]
 impl JobSource for CareerPage {
     async fn search(&self, prefs: &Preferences, ctx: &SearchCtx) -> Result<SearchPage> {
@@ -136,6 +166,10 @@ impl JobSource for CareerPage {
             self.postings().await?.iter().filter(|c| title_fits_roles(&c.title, &prefs.roles)).cloned().collect();
         let (candidates, next) = page_of(&fitting, ctx)?;
         Ok(SearchPage { candidates, next })
+    }
+
+    fn board_hints(&self) -> Vec<BoardHint> {
+        self.hints.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -152,6 +186,7 @@ mod tests {
     const JSONLD_PAGE: &str = include_str!("../fixtures/career_page_jsonld.html");
     const SITEMAP: &str = include_str!("../fixtures/sitemap.xml");
     const SITEMAP_URL: &str = "https://acme.test/sitemap.xml";
+    const EMBED: &str = include_str!("../fixtures/career_page_embed.html");
 
     fn source(url: &str) -> Source {
         Source { id: 1, kind: "career_page".into(), name: "Acme".into(), url: url.into(), purpose: SourcePurpose::Jobs, enabled: true, session_id: None, last_run_at: None, last_status: None }
@@ -320,6 +355,25 @@ mod tests {
         let adapter = CareerPage::new(moved, &source(LIST), "Acme").unwrap();
         let urls: Vec<_> = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap().candidates.into_iter().map(|c| c.url).collect();
         assert_eq!(urls, ["https://careers.acme.test/careers/rust-engineer", "https://acme.test/jobs/8812345"]);
+    }
+
+    #[tokio::test]
+    async fn a_page_without_postings_keeps_the_boards_it_points_to() {
+        let fake = pages(FakePages::new().plain(LIST, EMBED).plain(SITEMAP_URL, "<urlset></urlset>").rendered(LIST, EMBED));
+        let adapter = CareerPage::new(fake.clone(), &source(LIST), "Acme").unwrap();
+        assert!(adapter.board_hints().is_empty(), "nothing read yet");
+        let page = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap();
+        assert!(page.candidates.is_empty());
+        let hints: Vec<_> = adapter.board_hints().into_iter().map(|h| (h.kind, h.input)).collect();
+        assert_eq!(hints, [("greenhouse", "boards.greenhouse.io/acme".to_string()), ("lever", "jobs.lever.co/acme".to_string())]);
+        // Only suggested: no board was read.
+        assert_eq!(fake.asked(), [format!("plain {LIST}"), format!("plain {SITEMAP_URL}"), format!("browser {LIST}")]);
+
+        // A page with postings keeps none, even when it also links to a board.
+        let html = format!("{EMBED}<a href=\"/careers/rust-engineer\">Rust Engineer</a>");
+        let adapter = CareerPage::new(pages(FakePages::new().plain(LIST, &html)), &source(LIST), "Acme").unwrap();
+        assert_eq!(adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap().candidates.len(), 1);
+        assert!(adapter.board_hints().is_empty());
     }
 
     #[test]

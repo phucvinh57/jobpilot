@@ -20,6 +20,7 @@
 //! the runner turns into a pause for the user.
 
 mod ashby;
+pub mod boards;
 mod career_page;
 mod greenhouse;
 mod hn_hiring;
@@ -30,7 +31,7 @@ mod personio;
 mod recruitee;
 mod sitemap;
 mod smartrecruiters;
-mod web;
+pub(crate) mod web;
 mod workday;
 mod yc;
 
@@ -43,6 +44,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 pub use ashby::Ashby;
+pub use boards::{detect_boards, kind_for_host, BoardHint};
 pub use career_page::CareerPage;
 pub use greenhouse::Greenhouse;
 pub use hn_hiring::HnHiring;
@@ -108,6 +110,12 @@ pub trait JobSource: Send + Sync {
     /// (all of the API adapters do); `None` makes the runner fetch the page.
     async fn posting(&self, _candidate: &Candidate) -> Result<Option<String>> {
         Ok(None)
+    }
+
+    /// The job boards its last listing read pointed to when that read found no postings (a careers
+    /// page that embeds a Greenhouse board). Only a suggestion for the user: nothing reads them.
+    fn board_hints(&self) -> Vec<BoardHint> {
+        Vec::new()
     }
 }
 

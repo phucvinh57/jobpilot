@@ -31,6 +31,7 @@ use super::dedup::{canonical_url, dedup_key, Known};
 use super::deps::{ChallengeCheck, CheckStage, DiscoverDeps, FetchRequest, InsightRequest};
 use super::limits::{MAX_CHALLENGES_IN_A_ROW, SCAN_FACTOR};
 use super::score::{compact_profile, hard_filter, score};
+use super::source::boards::no_postings_status;
 use super::source::{one_line, Candidate, JobSource, SearchCtx, SNIPPET_CHARS};
 use super::state::{
     parse_source_thread, source_thread, wait_label, DiscoveryState, RunSummary, SourceResult,
@@ -78,6 +79,11 @@ pub(crate) struct Shared {
 impl Shared {
     fn source(&self, id: i64) -> Result<Source> {
         self.store.get_source(id)?.with_context(|| format!("source {id} no longer exists"))
+    }
+
+    /// The adapter this run made for a source, if it made one.
+    fn adapter_of(&self, source_id: i64) -> Option<Arc<dyn JobSource>> {
+        self.adapters.lock().unwrap_or_else(|e| e.into_inner()).get(&source_id).cloned()
     }
 
     fn adapter(&self, source: &Source) -> Result<Arc<dyn JobSource>> {
@@ -487,9 +493,15 @@ fn clear_current(s: &mut SourceState) {
     s.verdict = None;
 }
 
-/// `finish`: the source ran to its end.
+/// `finish`: the source ran to its end. A source that found nothing on a page pointing to a job
+/// board (a careers page embedding Greenhouse) says so in its status, so the user can add that board.
 async fn finish(sh: Arc<Shared>, s: SourceState) -> Result<SourceState> {
-    sh.store.set_source_run(s.source_id, "ok")?;
+    let hints = if s.candidates.is_empty() { sh.adapter_of(s.source_id).map(|a| a.board_hints()).unwrap_or_default() } else { Vec::new() };
+    let status = no_postings_status(&hints);
+    if status.is_some() {
+        tracing::info!(run = %s.run, source_id = s.source_id, boards = hints.len(), "source found no postings but points to a job board");
+    }
+    sh.store.set_source_run(s.source_id, status.as_deref().unwrap_or("ok"))?;
     tracing::info!(run = %s.run, source_id = s.source_id, saved = s.saved, dismissed = s.dismissed, skipped = s.skipped, pages = s.scanned, "source run finished");
     Ok(s)
 }

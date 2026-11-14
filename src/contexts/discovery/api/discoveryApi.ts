@@ -5,7 +5,7 @@
 import { toCommandError, type GraphProgress } from "@/shared";
 import { invoke, listen, notifyChanged, onDataChanged, onGraphProgress, type Scope } from "@/shared/bridge";
 
-import type { AddedLead, Dismissed, JobSources, LeadInput, PrepareOutcome, Queue, RunSummary, SearchFinished, Source } from "../domain/types";
+import type { AddedLead, BoardHint, Dismissed, JobSources, LeadInput, PrepareOutcome, Queue, RunSummary, SearchFinished, Source } from "../domain/types";
 
 // ------------------------------------------------------------------ Today: reading
 
@@ -147,6 +147,11 @@ export async function addSource(kind: string, name: string, url: string): Promis
   const source = await invoke<Source>("discovery_add_source", { kind, name, url });
   notifyChanged("sources");
   return source;
+}
+
+/** The job boards a careers page points to (the shell reads the page once; nothing is added). */
+export function suggestBoards(url: string): Promise<BoardHint[]> {
+  return invoke<BoardHint[]>("discovery_suggest_boards", { url });
 }
 
 export async function setSourceEnabled(id: number, enabled: boolean): Promise<void> {

@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use url::Url;
 
+use super::boards::{kind_for_host, BoardHint};
 use super::{html_to_text, one_line, Candidate};
 use crate::engine::browser::challenge::ChallengeFound;
 use crate::engine::browser::render::Renderer;
@@ -158,7 +159,9 @@ pub(crate) fn links(html: &str, base: &Url) -> Vec<Link> {
     out
 }
 
-fn resolve(base: &Url, href: &str) -> Option<Url> {
+/// `href` as an absolute http(s) address with a host, resolved against `base`; `None` for an empty
+/// one, a fragment, and `javascript:`, `mailto:`, `tel:` and `data:` links.
+pub(super) fn resolve(base: &Url, href: &str) -> Option<Url> {
     if href.is_empty() || href.starts_with('#') {
         return None;
     }
@@ -232,14 +235,17 @@ pub(crate) fn shared_host(host: &str) -> Option<&'static str> {
     None
 }
 
-/// Fail for an address whose site cannot be told from other companies' sites ([`shared_host`]).
+/// Fail for an address whose site cannot be told from other companies' sites ([`shared_host`]),
+/// and for a job board's address ([`kind_for_host`]): the message names the source to add instead.
 pub(crate) fn check_site(url: &Url) -> Result<()> {
+    let host = url.host_str().unwrap_or_default();
+    if let Some(kind) = kind_for_host(host) {
+        let label = BoardHint { kind, input: String::new() }.label();
+        bail!("`{host}` is a {label} job board shared by many companies: add it as a {label} source, not as a careers page");
+    }
     match shared_host(&bare_host(url)) {
         None => Ok(()),
-        Some(why) => bail!(
-            "`{}` is {why}: add the company's own careers page (for a Greenhouse, Lever or Ashby board use that source instead)",
-            url.host_str().unwrap_or_default()
-        ),
+        Some(why) => bail!("`{host}` is {why}: add the company's own careers page"),
     }
 }
 
@@ -513,6 +519,25 @@ mod tests {
             assert!(check_site(&url(ok)).is_ok(), "{ok}");
         }
         assert!(shared_host("acme.com").is_none() && shared_host("co.uk").is_some() && shared_host("greenhouse.io").is_some());
+    }
+
+    #[test]
+    fn a_board_typed_as_a_careers_page_is_refused_naming_its_source() {
+        for (address, label) in [
+            ("https://boards.greenhouse.io/acme", "Greenhouse"),
+            ("https://jobs.lever.co/acme", "Lever"),
+            ("https://jobs.ashbyhq.com/acme", "Ashby"),
+            ("https://jobs.smartrecruiters.com/Acme", "SmartRecruiters"),
+            ("https://acme.recruitee.com/", "Recruitee"),
+            ("https://acme.jobs.personio.de/", "Personio"),
+            ("https://acme.wd5.myworkdayjobs.com/External", "Workday"),
+        ] {
+            let err = check_site(&url(address)).unwrap_err().to_string();
+            assert!(err.contains(&format!("add it as a {label} source")), "{address}: {err}");
+        }
+        let err = check_site(&url("https://www.linkedin.com/jobs")).unwrap_err().to_string();
+        assert!(err.contains("job board shared by many companies") && err.contains("careers page"), "{err}");
+        assert!(check_site(&url("https://greenhouse.io.acme.test/careers")).is_ok(), "a look-alike is just another site");
     }
 
     #[test]

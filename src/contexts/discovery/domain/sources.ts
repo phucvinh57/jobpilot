@@ -4,8 +4,8 @@ import type { Tone } from "@/shared";
 
 import type { Source, SourceKind } from "./types";
 
-/** Longest status text shown on a row (a failure note can be long). */
-export const STATUS_CHARS = 90;
+/** Longest status text shown on a row (a failure note can be long; a "links to a board" note fits). */
+export const STATUS_CHARS = 120;
 
 /** How the last run went, for the colour of the status tag. */
 export type Outcome = "never" | "ok" | "needsYou" | "failed" | "other";

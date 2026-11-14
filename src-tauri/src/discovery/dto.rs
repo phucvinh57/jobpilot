@@ -5,6 +5,7 @@
 
 use crate::engine::discover::promote::{Dismissed, FailedPrepare};
 use crate::engine::discover::queue::{criteria_rows, QueueItem, QueueSnapshot};
+use crate::engine::discover::source::BoardHint;
 use crate::engine::discover::{RunSummary, WaitingSource};
 use crate::engine::graph::WaitReason;
 use crate::engine::health;
@@ -386,6 +387,25 @@ pub struct SourceKindDto {
     pub hint: &'static str,
 }
 
+/// A job board a careers page points to: offered as a source to add instead (never added or read
+/// by itself).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardHintDto {
+    /// The source kind to add (`greenhouse`, `lever`, ...).
+    pub kind: &'static str,
+    /// The kind's label (`Greenhouse`).
+    pub label: &'static str,
+    /// The board address to add, which the kind's check accepts (`boards.greenhouse.io/acme`).
+    pub input: String,
+}
+
+impl From<&BoardHint> for BoardHintDto {
+    fn from(h: &BoardHint) -> Self {
+        Self { kind: h.kind, label: h.label(), input: h.input.clone() }
+    }
+}
+
 /// A managed browser session a source can be read in (name only).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -418,6 +438,13 @@ pub struct JobSourcesDto {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_board_hint_carries_its_label_in_camel_case() {
+        let hint = super::BoardHint { kind: "smartrecruiters", input: "jobs.smartrecruiters.com/Acme".into() };
+        let json = serde_json::to_value(super::BoardHintDto::from(&hint)).unwrap();
+        assert_eq!(json, serde_json::json!({ "kind": "smartrecruiters", "label": "SmartRecruiters", "input": "jobs.smartrecruiters.com/Acme" }));
+    }
+
     use chrono::{TimeZone, Utc};
     use crate::engine::discover::queue::QueueItem;
     use crate::engine::discover::score::{Criteria, Criterion, Scored};

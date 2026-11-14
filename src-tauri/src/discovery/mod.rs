@@ -1,8 +1,10 @@
-//! Bounded context `discovery`: `dto` (read models), `rules` (pure rules + tests), `commands` (application services).
+//! Bounded context `discovery`: `dto` (read models), `rules` (pure rules + tests), `commands` (application services),
+//! `demo` (sample answers for `JOBPILOT_DEMO=1`).
 //! Leads, the queue shown on Today, job Sources and their daily search.
 
 pub mod commands;
 mod daily;
+mod demo;
 pub mod dto;
 pub mod rules;
 

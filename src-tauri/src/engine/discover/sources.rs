@@ -6,12 +6,16 @@
 //! core.set_job_source_enabled(id, false)?
 //! core.set_job_source_session(id, Some(session_id))?      // the managed session a login-walled site is read in
 //! core.remove_job_source(id)?                             // also skips its paused run
+//! let hints = core.suggest_boards("acme.test/careers").await?;  // the job boards the page points to (read-only)
 //! ```
 
 use anyhow::{bail, Context, Result};
 
-use super::source::check_source;
+use super::fetch::MAX_POSTING_BYTES;
+use super::source::web::{normalize_page_url, read_plain_page, NetPages, Pages};
+use super::source::{boards, check_source, BoardHint};
 use super::{handoff, parse_source_thread};
+use crate::engine::net::http::{Http, HttpLimits};
 use crate::engine::store::{NewSource, Source, SourcePurpose};
 use crate::engine::Core;
 
@@ -95,6 +99,15 @@ impl Core {
         Ok(())
     }
 
+    /// The job boards a careers page points to (a Greenhouse iframe, Lever links, ...), each one a
+    /// board address that [`check_source`] accepts: what the add form offers to add instead. One
+    /// plain read of the page through the safe HTTP client, no browser; nothing is stored and no
+    /// board is read. A page behind a wall has no hints. `url` must pass the career-page check.
+    pub async fn suggest_boards(&self, url: &str) -> Result<Vec<BoardHint>> {
+        let client = Http::new(&HttpLimits { max_bytes: MAX_POSTING_BYTES, ..HttpLimits::default() })?;
+        suggest_boards_with(&NetPages::new(client, None), url).await
+    }
+
     fn job_source(&self, id: i64) -> Result<Source> {
         match self.store.get_source(id)? {
             Some(source) if source.purpose == SourcePurpose::Jobs => Ok(source),
@@ -107,6 +120,16 @@ impl Core {
     pub fn waiting_thread_of(&self, source_id: i64) -> Result<Option<String>> {
         Ok(self.graphs.waiting()?.into_iter().find(|w| parse_source_thread(&w.thread).is_some_and(|(_, id)| id == source_id)).map(|w| w.thread))
     }
+}
+
+/// [`Core::suggest_boards`] over any page reader.
+pub(crate) async fn suggest_boards_with(pages: &dyn Pages, url: &str) -> Result<Vec<BoardHint>> {
+    check_source("career_page", url)?;
+    let page_url = normalize_page_url(url).context("career page source")?;
+    let Some(page) = read_plain_page(pages, page_url.as_str()).await? else { return Ok(Vec::new()) };
+    let hints = boards::page_hints(&page);
+    tracing::info!(boards = hints.len(), "careers page checked for job boards");
+    Ok(hints)
 }
 
 #[cfg(test)]
@@ -171,6 +194,33 @@ mod tests {
         let session_err = core.add_job_source("hn_hiring", "", "", Some(42)).unwrap_err();
         assert!(session_err.to_string().contains("not found"));
         assert!(core.job_sources().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_careers_page_suggests_the_boards_it_points_to_without_reading_them() {
+        use crate::engine::discover::source::web::fake::FakePages;
+        let html = include_str!("fixtures/career_page_embed.html");
+        let pages = FakePages::new().plain("https://acme.test/careers", html).wall("https://walled.test/careers", 403);
+        let hints = suggest_boards_with(&pages, "acme.test/careers").await.unwrap();
+        let shown: Vec<_> = hints.iter().map(|h| (h.kind, h.input.as_str(), h.label())).collect();
+        assert_eq!(shown, [("greenhouse", "boards.greenhouse.io/acme", "Greenhouse"), ("lever", "jobs.lever.co/acme", "Lever")]);
+        assert_eq!(pages.asked(), ["plain https://acme.test/careers"], "one plain read, no board, no browser");
+        // A wall: no hints, no error.
+        assert!(suggest_boards_with(&pages, "https://walled.test/careers").await.unwrap().is_empty());
+        // The address is checked as a careers page first, before anything is read.
+        for bad in ["", "javascript:alert(1)", "https://boards.greenhouse.io/acme"] {
+            assert!(suggest_boards_with(&pages, bad).await.is_err(), "{bad}");
+        }
+        assert_eq!(pages.asked().len(), 2);
+        // Another failure is the error.
+        assert!(suggest_boards_with(&pages, "https://gone.test/careers").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_live_suggestion_refuses_a_private_address_without_a_read() {
+        let (_dir, core) = core();
+        let err = core.suggest_boards("http://127.0.0.1:9/careers").await.unwrap_err();
+        assert!(!format!("{err:#}").is_empty());
     }
 
     #[test]
