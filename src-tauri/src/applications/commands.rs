@@ -24,7 +24,7 @@ use super::dto::{
     JdDto, PrimaryDto, ProgressDto, RenderedDto, TimelineDto, ACTIVITY_ROWS,
 };
 use super::files::{self, generate_plan, GeneratePlan};
-use super::rules::ApplyUi;
+use super::rules::{marks_for, ApplyUi, Mark};
 use super::state::{Applications, Confirm, Job, Phase};
 use crate::shared::events::{data_changed, emit, Scope};
 use crate::shared::{run, run_sync, CommandError, CommandResult};
@@ -54,9 +54,9 @@ fn live_ui(core: &Core, id: i64) -> ApplyUi {
     }
 }
 
-// ------------------------------------------------------------------ Pipeline
+// ------------------------------------------------------------------ Jobs page
 
-/// The board (applications in five columns) and the latest events across all of them.
+/// The Jobs page's application stages (CVs, Applied, In progress, Done) and the latest events across all of them.
 #[tauri::command]
 pub async fn applications_board(
     core: State<'_, Arc<Core>>,
@@ -94,6 +94,66 @@ pub async fn applications_get(
         Ok(Some(application_dto(&core, &app, job, apply_ui)))
     })
     .await
+}
+
+/// The header of `id` after a change made from it (the application must exist).
+fn header(core: &Core, state: &Applications, id: i64) -> anyhow::Result<ApplicationDto> {
+    let app = require_application(core, id)?;
+    let job = state.job_view(id);
+    let apply_ui = state.with_apply(id, |v| v.ui(&|| live_ui(core, id)));
+    Ok(application_dto(core, &app, job, apply_ui))
+}
+
+/// Mark (or clear, with `None` or blank text) the interview round; only while the status is Interview.
+#[tauri::command]
+pub async fn applications_set_round(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    state: State<'_, Applications>,
+    id: i64,
+    round: Option<String>,
+) -> CommandResult<ApplicationDto> {
+    let (core, state) = handles(&core, &state);
+    let dto = run_sync(move || {
+        core.store.set_interview_round(id, round.as_deref())?;
+        tracing::info!(app = id, "interview round marked");
+        header(&core, &state, id)
+    })
+    .await?;
+    data_changed(&app, Scope::Applications);
+    Ok(dto)
+}
+
+/// A manual marker on a sent application: `interview` ("Got an interview"), `offer` or `rejected`.
+/// Only the marks the header offers (`rules::marks_for`) are accepted; the status only moves forward.
+#[tauri::command]
+pub async fn applications_mark(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    state: State<'_, Applications>,
+    id: i64,
+    mark: String,
+) -> CommandResult<ApplicationDto> {
+    let Some(mark) = Mark::parse(&mark) else {
+        return Err(CommandError::new(format!("unknown mark `{mark}`")));
+    };
+    let (core, state) = handles(&core, &state);
+    let dto = run_sync(move || {
+        let current = require_application(&core, id)?.status;
+        if !marks_for(current).contains(&mark) {
+            bail!(
+                "an application in {} cannot be marked {}",
+                current.label(),
+                mark.label()
+            );
+        }
+        core.store.set_status(id, mark.status(), "marked by you")?;
+        tracing::info!(app = id, mark = mark.key(), "application marked");
+        header(&core, &state, id)
+    })
+    .await?;
+    data_changed(&app, Scope::Applications);
+    Ok(dto)
 }
 
 /// A progress step of a pipeline job: the header's line moves, and a new stage may have renamed the row.
@@ -606,6 +666,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         applications_board,
         applications_get,
+        applications_set_round,
+        applications_mark,
         applications_generate,
         applications_revise,
         applications_retry,

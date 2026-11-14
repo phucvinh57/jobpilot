@@ -189,6 +189,10 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX graph_checkpoints_thread ON graph_checkpoints(thread, seq);
     CREATE INDEX graph_checkpoints_status ON graph_checkpoints(status, updated_at);
     ",
+    // 4: the interview round the user marked (Jobs page, `Store::set_interview_round`)
+    "
+    ALTER TABLE applications ADD COLUMN interview_round TEXT;
+    ",
 ];
 
 #[derive(Clone)]
@@ -319,6 +323,7 @@ mod tests {
 
         let app = store.get_application_by_slug("old-app").unwrap().unwrap();
         assert_eq!((app.company.as_str(), app.status, app.insight_json.as_deref()), ("Acme", Status::Applied, None));
+        assert_eq!(app.interview_round, None);
         assert_eq!(store.kv_get("profile_path").unwrap().as_deref(), Some("/x/profile.yaml"));
 
         // The new column and tables are usable.
