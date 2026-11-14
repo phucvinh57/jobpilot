@@ -5,10 +5,16 @@ version.workspace = true
 license.workspace = true
 description = "Tailored CVs, managed-browser job applications and Gmail status tracking"
 
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
 [dependencies]
 jobpilot-core = { path = "../core" }
-gpui-kit = { version = "0.9", features = ["tree-sitter-yaml"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -17,34 +23,17 @@ url = "2"
 [dev-dependencies]
 tempfile = "3"
 
-# `cargo deb -p jobpilot` (scripts/package.sh). Paths are relative to this crate.
-[package.metadata.deb]
-name = "jobpilot"
-maintainer = "JobPilot <jobpilot@localhost>"
-section = "utils"
-priority = "optional"
-extended-description = """\
-Turns a job description into a CV tailored from your own profile.yaml, lets you edit it, \
-fills and submits the application in a managed browser only after you confirm, and tracks \
-replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider. \
-All data stays on this machine; secrets live in the OS keyring."""
-depends = "$auto, libvulkan1, libwayland-client0"
-recommends = "google-chrome-stable | chromium | chromium-browser, gnome-keyring | kwalletd6 | kwalletd5"
-suggests = "typst"
-assets = [
-    ["target/release/jobpilot", "usr/bin/", "755"],
-    ["../../assets/jobpilot.desktop", "usr/share/applications/jobpilot.desktop", "644"],
-    ["../../assets/icons/jobpilot.svg", "usr/share/icons/hicolor/scalable/apps/jobpilot.svg", "644"],
-    ["../../assets/icons/jobpilot-256.png", "usr/share/icons/hicolor/256x256/apps/jobpilot.png", "644"],
-    ["../../assets/icons/jobpilot-48.png", "usr/share/icons/hicolor/48x48/apps/jobpilot.png", "644"],
-    ["../../README.md", "usr/share/doc/jobpilot/README.md", "644"],
-]
+[features]
+# The bundled web app (`web/dist`) instead of the dev server. On by default, so `cargo run -p jobpilot`
+# shows the built UI; `pnpm tauri dev` turns it off (`--no-default-features`) and loads Vite on :1420.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+# UI checks without a person at the screen: the webview snapshots itself and runs a script
+# (`src/devtools.rs`). Never part of a release package.
+dev-tools = ["dep:webkit2gtk", "dep:gtk", "dep:cairo-rs"]
 
-# `cargo bundle` (cargo-bundle) metadata; the Linux package is the .deb above.
-[package.metadata.bundle]
-name = "JobPilot"
-identifier = "dev.jobpilot.app"
-icon = ["../../assets/icons/jobpilot-256.png"]
-category = "Office"
-short_description = "Tailored CVs, managed-browser applications, Gmail status tracking"
-long_description = "Turns a job description into a CV tailored from your own profile, applies in a managed browser after you confirm, and tracks replies."
+# The versions Tauri itself links (same `PlatformWebview::inner()` type).
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0", optional = true }
+gtk = { version = "0.18", optional = true }
+cairo-rs = { version = "0.18", features = ["png"], optional = true }

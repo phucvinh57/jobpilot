@@ -1,0 +1,157 @@
+@import "tailwindcss";
+
+/* The bundled fonts (assets/fonts, SIL OFL): Inter for text, Space Grotesk for headings,
+   Source Serif 4 for the CV preview. */
+@font-face {
+  font-family: "Inter";
+  font-weight: 400;
+  font-display: block;
+  src: url("@assets/fonts/Inter-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Inter";
+  font-weight: 500;
+  font-display: block;
+  src: url("@assets/fonts/Inter-Medium.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Inter";
+  font-weight: 600;
+  font-display: block;
+  src: url("@assets/fonts/Inter-SemiBold.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-weight: 500;
+  font-display: block;
+  src: url("@assets/fonts/SpaceGrotesk-Medium.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-weight: 600;
+  font-display: block;
+  src: url("@assets/fonts/SpaceGrotesk-SemiBold.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Source Serif 4";
+  font-weight: 400;
+  font-display: block;
+  src: url("@assets/fonts/SourceSerif4-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Source Serif 4";
+  font-weight: 600;
+  font-display: block;
+  src: url("@assets/fonts/SourceSerif4-SemiBold.ttf") format("truetype");
+}
+
+/* The only colours, radii, fonts and text sizes of the app. The `--jp-*` variables are written
+   by `shared/theme/theme.ts` from `tokens.ts` (light or dark). Tailwind's stock colours are
+   removed, so a view cannot hard-code one. */
+@theme inline {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-bg: var(--jp-bg);
+  --color-surface: var(--jp-surface);
+  --color-surface-alt: var(--jp-surface-alt);
+  --color-border: var(--jp-border);
+  --color-control-border: var(--jp-control-border);
+  --color-ink: var(--jp-ink);
+  --color-muted: var(--jp-muted);
+  --color-subtle: var(--jp-subtle);
+  --color-accent: var(--jp-accent);
+  --color-accent-dark: var(--jp-accent-dark);
+  --color-accent-soft: var(--jp-accent-soft);
+  --color-on-fill: var(--jp-on-fill);
+  --color-warn: var(--jp-warn);
+  --color-warn-fg: var(--jp-warn-fg);
+  --color-warn-bg: var(--jp-warn-bg);
+  --color-ok: var(--jp-ok);
+  --color-ok-fg: var(--jp-ok-fg);
+  --color-ok-bg: var(--jp-ok-bg);
+  --color-danger: var(--jp-danger);
+  --color-danger-fg: var(--jp-danger-fg);
+  --color-danger-bg: var(--jp-danger-bg);
+  --color-track: var(--jp-track);
+  --color-bar-grey: var(--jp-bar-grey);
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Source Serif 4", ui-serif, Georgia, serif;
+
+  /* Type scale: page title, card title, body, captions and chips. */
+  --text-h1: 30px;
+  --text-h1--line-height: 1.25;
+  --text-h2: 18px;
+  --text-h2--line-height: 1.25;
+  --text-body: 14px;
+  --text-body--line-height: 1.5;
+  --text-small: 12px;
+  --text-small--line-height: 1.45;
+  --text-tiny: 11px;
+  --text-tiny--line-height: 1.45;
+
+  --radius-card: 14px;
+  --radius-banner: 12px;
+  --radius-button: 10px;
+  --radius-chip: 8px;
+  --radius-tag: 6px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--jp-bg);
+    color: var(--jp-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    /* A desktop app: text is selected where it is content, not on chrome. */
+    user-select: none;
+    cursor: default;
+  }
+  input,
+  textarea,
+  .selectable,
+  .cm-editor {
+    user-select: text;
+  }
+  :focus-visible {
+    outline: 2px solid var(--jp-accent);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--jp-accent-soft);
+    color: var(--jp-accent-dark);
+  }
+  /* Thin scrollbars in the palette. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--jp-bar-grey) transparent;
+  }
+}
+
+/* A short fade-in whenever another screen (or lead) is shown. */
+@keyframes jp-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@utility fade-in {
+  animation: jp-fade 150ms ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fade-in {
+    animation: none;
+  }
+}
