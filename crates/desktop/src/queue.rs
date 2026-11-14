@@ -39,6 +39,7 @@ use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app::jobs::parse_input;
 use crate::app::{AppState, FADE};
+use crate::brief::{company_block, interview_block};
 use crate::problem::{self, RetryFn};
 use crate::ui;
 use brief::shorten;
@@ -126,7 +127,8 @@ pub struct QueueView {
     epoch: Option<u64>,
     snap: Option<QueueSnapshot>,
     /// The skill names of the master profile, to tell the skills a posting asks for that the
-    /// profile has from those it lacks (empty when it cannot be read).
+    /// profile has from those it lacks (empty when it cannot be read). Read again only when the
+    /// screen is shown (see [`refresh_all`](Self::refresh_all)), not on every refresh.
     profile_skills: Vec<String>,
     load_error: Option<String>,
     filter: QueueFilter,
@@ -314,34 +316,62 @@ impl QueueView {
         }
     }
 
-    /// Read the queue again (off the UI thread).
+    /// Read the queue again (off the UI thread), after something changed it.
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.load(false, cx);
+    }
+
+    /// [`refresh`](Self::refresh), and the profile's skills too: the profile is a file the user
+    /// edits outside the app, so it is read when Today is shown (and the first time), not on every
+    /// source progress event or click.
+    fn refresh_all(&mut self, cx: &mut Context<Self>) {
+        self.load(true, cx);
+    }
+
+    fn load(&mut self, with_skills: bool, cx: &mut Context<Self>) {
         // The sidebar badge follows every change the list has, shown or not.
         self.state.update(cx, |s, cx| s.refresh_lead_count(cx));
         let core = self.core(cx);
         let rx = runtime::spawn(async move {
-            let skills = core.profile_skills();
+            let skills = with_skills.then(|| core.profile_skills());
             (core.queue_snapshot(), skills)
         });
         cx.spawn(async move |this, cx| {
-            let (result, skills) = rx.await.unwrap_or_else(|_| (Err(anyhow!("the task was cancelled")), Vec::new()));
+            let (result, skills) = rx.await.unwrap_or_else(|_| (Err(anyhow!("the task was cancelled")), None));
             this.update(cx, |this, cx| this.on_snapshot(result, skills, cx)).ok();
         })
         .detach();
     }
 
-    fn on_snapshot(&mut self, result: Result<QueueSnapshot>, skills: Vec<String>, cx: &mut Context<Self>) {
+    fn on_snapshot(&mut self, result: Result<QueueSnapshot>, skills: Option<Vec<String>>, cx: &mut Context<Self>) {
         match result {
             Ok(snap) => {
                 self.load_error = None;
-                self.profile_skills = skills;
+                if let Some(skills) = skills {
+                    self.profile_skills = skills;
+                }
                 self.checked.retain(|id| snap.items.iter().any(|i| i.lead.id == *id));
                 self.snap = Some(snap);
                 self.normalize_selection(cx);
             }
             Err(e) => self.load_error = Some(format!("{e:#}")),
         }
+        self.sync_needs_you(cx);
         cx.notify();
+    }
+
+    /// What the "NEEDS YOU" header counts: sources waiting at a login, failed CVs and CVs to read.
+    /// The sidebar badge shows this same number (see [`sync_needs_you`](Self::sync_needs_you)).
+    fn needs_you_count(&self) -> usize {
+        self.snap.as_ref().map_or(0, |s| s.waiting.len()) + self.failure_rows().len() + self.prepared.len()
+    }
+
+    /// Tell the sidebar the number the header shows, so the two never differ. Call it after anything
+    /// that changes the banners: the snapshot, a CV that was written or failed, a failure forgotten,
+    /// a message closed.
+    fn sync_needs_you(&self, cx: &mut Context<Self>) {
+        let count = self.needs_you_count();
+        self.state.update(cx, |s, cx| s.set_needs_you(count, cx));
     }
 
     fn items(&self) -> &[QueueItem] {
@@ -523,6 +553,7 @@ impl QueueView {
             self.failed.remove(id);
         }
         self.checked.clear();
+        self.sync_needs_you(cx);
         let core = self.core(cx);
         let (tx, mut rx) = unbounded_channel();
         let mut unreported: BTreeSet<i64> = ids.iter().copied().collect();
@@ -545,6 +576,7 @@ impl QueueView {
             if !unreported.is_empty() {
                 this.update(cx, |this, cx| {
                     drop_unreported(&mut this.jobs, &mut this.failed, unreported);
+                    this.sync_needs_you(cx);
                     this.refresh(cx);
                     cx.notify();
                 })
@@ -573,6 +605,7 @@ impl QueueView {
                 self.failed.insert(id, message);
             }
         }
+        self.sync_needs_you(cx);
         // The application is in the sidebar now, whether or not the CV worked out.
         self.state.update(cx, |s, cx| s.reload(cx));
         self.refresh(cx);
@@ -580,6 +613,7 @@ impl QueueView {
 
     fn forget_failure(&mut self, lead_id: i64, cx: &mut Context<Self>) {
         self.failed.remove(&lead_id);
+        self.sync_needs_you(cx);
         let core = self.core(cx);
         let rx = runtime::spawn(async move { core.prepare_forget(lead_id) });
         cx.spawn(async move |this, cx| {
@@ -1064,6 +1098,7 @@ impl QueueView {
                         if index < this.prepared.len() {
                             this.prepared.remove(index);
                         }
+                        this.sync_needs_you(cx);
                         cx.notify();
                     })),
             );
@@ -1093,7 +1128,7 @@ impl QueueView {
                         .text_size(px(ui::tokens::TEXT_SMALL))
                         .font_semibold()
                         .text_color(ui::palette(cx).warn_fg)
-                        .child(format!("NEEDS YOU \u{b7} {}", banners.len())),
+                        .child(format!("NEEDS YOU \u{b7} {}", self.needs_you_count())),
                 )
                 .child(div().h_flex().flex_wrap().gap_3().children(banners)),
         )
@@ -1492,8 +1527,8 @@ impl QueueView {
                 .flex_wrap()
                 .items_start()
                 .gap_6()
-                .child(brief::company_block(insight, cx).flex_1().min_w(px(220.)))
-                .child(brief::interview_block(insight, cx).flex_1().min_w(px(220.))),
+                .child(company_block(insight, cx).flex_1().min_w(px(220.)))
+                .child(interview_block(insight, cx).flex_1().min_w(px(220.))),
             None => about.child(div().text_sm().text_color(p.muted).child("No company brief for this lead.")),
         };
 
@@ -1526,7 +1561,7 @@ impl Render for QueueView {
         let epoch = self.state.read(cx).queue_epoch;
         if self.epoch != Some(epoch) {
             self.epoch = Some(epoch);
-            self.refresh(cx);
+            self.refresh_all(cx);
         }
 
         let p = ui::palette(cx);

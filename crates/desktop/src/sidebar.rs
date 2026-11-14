@@ -8,8 +8,8 @@ use jobpilot_core::health::{Health, Problem};
 use crate::app::{AppState, Screen};
 use crate::ui::{self, NavBadge};
 
-/// Width of the sidebar.
-const WIDTH: f32 = 224.0;
+/// Width of the sidebar (px); the Application screen sizes its CV pages from it.
+pub(crate) const WIDTH: f32 = 224.0;
 
 /// The one-line setup state at the bottom of the sidebar.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +48,34 @@ pub fn health_line(health: Option<&Health>) -> HealthLine {
         many => format!("{} setup problems", many.len()),
     };
     HealthLine { ok: problems.is_empty(), checking: false, text, focus }
+}
+
+impl HealthLine {
+    /// Pressing the line opens Settings: only when something is missing and a Settings section
+    /// helps with it (typst has none).
+    pub fn actionable(&self) -> bool {
+        !self.ok && self.focus.is_some()
+    }
+}
+
+/// The badge of the Today entry: what needs the user, in amber, else the number of new leads.
+pub fn today_badge(needs_you: usize, new_leads: usize) -> Option<NavBadge> {
+    if needs_you > 0 {
+        Some(NavBadge::NeedsYou(needs_you))
+    } else if new_leads > 0 {
+        Some(NavBadge::New(new_leads))
+    } else {
+        None
+    }
+}
+
+/// The entry to highlight: an open application belongs to the screen it was opened from.
+pub fn nav_screen(screen: Screen, detail_from: Screen) -> Screen {
+    if screen == Screen::Detail {
+        detail_from
+    } else {
+        screen
+    }
 }
 
 pub struct Sidebar {
@@ -101,15 +129,16 @@ impl Sidebar {
             .child(ui::heading("JobPilot", ui::Level::H2, cx))
     }
 
-    /// The health line: a dot and a few words. When something is missing it opens the Settings
-    /// section that fixes it.
+    /// The health line: a dot and a few words. When something is missing and Settings has a section
+    /// that fixes it, pressing the line opens that section.
     fn health(&self, line: HealthLine, cx: &Context<Self>) -> impl IntoElement {
         let p = ui::palette(cx);
         let dot = if line.checking { div().size_2().flex_shrink_0().rounded_full().bg(p.bar_grey) } else { ui::health_dot(line.ok, cx) };
         let focus = line.focus;
+        let actionable = line.actionable();
         let row = div()
             .id("health")
-            .role(if line.ok { Role::Paragraph } else { Role::Button })
+            .role(if actionable { Role::Button } else { Role::Paragraph })
             .aria_label(line.text.clone())
             .h_flex()
             .items_center()
@@ -120,7 +149,7 @@ impl Sidebar {
             .text_color(p.subtle)
             .child(dot)
             .child(div().flex_1().min_w_0().truncate().child(line.text));
-        if line.ok {
+        if !actionable {
             row
         } else {
             row.cursor_pointer()
@@ -132,13 +161,16 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (screen, needs_you, applications, health) = {
+        let (screen, today, applications, health) = {
             let s = self.state.read(cx);
-            (s.screen, s.needs_you, s.applications.len(), health_line(s.health.as_ref()))
+            (
+                nav_screen(s.screen, s.detail_from),
+                today_badge(s.needs_you, s.lead_count),
+                s.applications.len(),
+                health_line(s.health.as_ref()),
+            )
         };
         let p = ui::palette(cx);
-        // An open application belongs to the Pipeline (its breadcrumb starts there).
-        let screen = if screen == Screen::Detail { Screen::Pipeline } else { screen };
         div()
             .v_flex()
             .w(px(WIDTH))
@@ -159,7 +191,7 @@ impl Render for Sidebar {
                     .aria_label("Navigation")
                     .v_flex()
                     .gap_1()
-                    .child(self.nav("nav-today", IconName::Inbox, "Today", Some(NavBadge::NeedsYou(needs_you)), Screen::Jobs, screen, cx))
+                    .child(self.nav("nav-today", IconName::Inbox, "Today", today, Screen::Jobs, screen, cx))
                     .child(self.nav(
                         "nav-pipeline",
                         IconName::LayoutDashboard,
@@ -182,7 +214,9 @@ impl Render for Sidebar {
 mod tests {
     use jobpilot_core::health::Health;
 
-    use super::health_line;
+    use super::{health_line, nav_screen, today_badge};
+    use crate::app::Screen;
+    use crate::ui::NavBadge;
 
     fn health(typst: bool, chrome: bool, provider: bool) -> Health {
         Health { typst: typst.then(|| "typst 0.13".to_string()), chrome, provider }
@@ -217,6 +251,31 @@ mod tests {
         let line = health_line(Some(&health(false, true, true)));
         assert_eq!(line.text, "typst is missing");
         assert_eq!(line.focus, None);
+    }
+
+    #[test]
+    fn only_a_line_with_somewhere_to_go_is_pressable() {
+        assert!(!health_line(None).actionable(), "still checking");
+        assert!(!health_line(Some(&health(true, true, true))).actionable(), "nothing to fix");
+        assert!(health_line(Some(&health(true, true, false))).actionable());
+        assert!(!health_line(Some(&health(false, true, true))).actionable(), "typst has no Settings section");
+        assert!(health_line(Some(&health(false, false, true))).actionable(), "Chrome has one");
+    }
+
+    #[test]
+    fn today_shows_what_needs_you_before_new_leads() {
+        assert_eq!(today_badge(2, 5), Some(NavBadge::NeedsYou(2)));
+        assert_eq!(today_badge(0, 5), Some(NavBadge::New(5)));
+        assert_eq!(today_badge(1, 0), Some(NavBadge::NeedsYou(1)));
+        assert_eq!(today_badge(0, 0), None);
+    }
+
+    #[test]
+    fn an_open_application_highlights_where_it_was_opened_from() {
+        assert_eq!(nav_screen(Screen::Detail, Screen::Jobs), Screen::Jobs);
+        assert_eq!(nav_screen(Screen::Detail, Screen::Pipeline), Screen::Pipeline);
+        assert_eq!(nav_screen(Screen::Trends, Screen::Jobs), Screen::Trends);
+        assert_eq!(nav_screen(Screen::Settings, Screen::Pipeline), Screen::Settings);
     }
 
     #[test]

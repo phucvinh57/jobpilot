@@ -1,18 +1,19 @@
-//! The open lead's brief on the Today screen: the score breakdown, the skills the posting asks for
-//! (matched against the profile), the company and the interview process.
+//! The open lead's brief on the Today screen: the score breakdown and the skills the posting asks
+//! for (matched against the profile). The company and the interview process are drawn by the shared
+//! [`crate::brief`] module.
 //!
 //! The helpers on top are pure and tested; the builders below them only draw. Nothing here reads
 //! the database: the data is the lead's stored score and insight, and the profile's skill names
-//! that the view loads once per refresh (see `Core::profile_skills`).
+//! that the view caches (see `Core::profile_skills`).
 
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jobpilot_core::discover::queue::{criteria_rows, QueueItem};
-use jobpilot_core::pipeline::insight::{CompanyFacts, Interview, Skills};
+use jobpilot_core::pipeline::insight::Skills;
 use jobpilot_core::pipeline::Insight;
 
-use super::logic::is_web_link;
+use crate::brief::section_label;
 use crate::ui::{self, ChipKind, Tone};
 
 /// `skills` -> `Skills`.
@@ -41,25 +42,41 @@ pub(super) struct SkillSplit {
     pub gaps: Vec<String>,
 }
 
-
-/// Lower case, split at spaces and the usual list separators; `+`, `#` and `.` stay (`c++`, `c#`, `node.js`).
-fn tokens(skill: &str) -> Vec<String> {
-    skill
-        .to_lowercase()
-        .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '/' | '(' | ')' | '&'))
-        .map(|t| t.trim_matches('.').to_string())
-        .filter(|t| !t.is_empty())
-        .collect()
+/// A skill name for comparing: lower case, spaces collapsed, a trailing parenthetical dropped
+/// (`Kubernetes (EKS)` -> `kubernetes`). `/` and `&` stay: `CI/CD` is one skill, not `CI` and `CD`.
+fn normalize(skill: &str) -> String {
+    let lower = skill.to_lowercase();
+    let name = lower.split_whitespace().collect::<Vec<_>>().join(" ");
+    without_trailing_parenthetical(&name).to_string()
 }
 
-/// The same skill: equal names, or one name is a whole word of the other (`Kubernetes` and
-/// `Kubernetes (EKS)`). `Java` is not `JavaScript`, `C` is not `C++`.
-fn same_skill(a: &str, b: &str) -> bool {
-    let (ta, tb) = (tokens(a), tokens(b));
-    if ta.is_empty() || tb.is_empty() {
-        return false;
+/// `name` without a closing `( ... )` group at its end (nested groups included), unless that would
+/// leave nothing.
+fn without_trailing_parenthetical(name: &str) -> &str {
+    let Some(inner) = name.strip_suffix(')') else { return name };
+    let mut depth = 1usize;
+    for (at, c) in inner.char_indices().rev() {
+        match c {
+            ')' => depth += 1,
+            '(' => {
+                depth -= 1;
+                if depth == 0 {
+                    let head = inner[..at].trim_end();
+                    return if head.is_empty() { name } else { head };
+                }
+            }
+            _ => {}
+        }
     }
-    ta == tb || (ta.len() == 1 && tb.contains(&ta[0])) || (tb.len() == 1 && ta.contains(&tb[0]))
+    name
+}
+
+/// The same skill: equal names once normalised ([`normalize`]). Nothing looser: `Java` is not
+/// `Java Spring` or `JavaScript`, `Cloud` is not `Google Cloud`, `C` is not `C++`, `CI/CD` is not
+/// `CI`. A false "not in your profile" costs a glance; a false match would be a claim.
+fn same_skill(a: &str, b: &str) -> bool {
+    let (a, b) = (normalize(a), normalize(b));
+    !a.is_empty() && a == b
 }
 
 /// The posting's skills (required first, then preferred, each once) split by the profile's.
@@ -67,7 +84,7 @@ pub(super) fn split_skills(wanted: &Skills, profile: &[String]) -> SkillSplit {
     let mut seen: Vec<String> = Vec::new();
     let mut split = SkillSplit::default();
     for skill in wanted.required.iter().chain(&wanted.preferred) {
-        let key = skill.trim().to_lowercase();
+        let key = normalize(skill);
         if key.is_empty() || seen.contains(&key) {
             continue;
         }
@@ -82,44 +99,7 @@ pub(super) fn split_skills(wanted: &Skills, profile: &[String]) -> SkillSplit {
     split
 }
 
-// ----------------------------------------------------------- company
-
-/// The company facts the texts gave, as one line (`Series B · 80 people · HQ Berlin`); `None` when
-/// they gave none.
-pub(super) fn facts_line(c: &CompanyFacts) -> Option<String> {
-    let part = |label: &str, value: &str| {
-        let value = value.trim();
-        (!value.is_empty()).then(|| if label.is_empty() { value.to_string() } else { format!("{label} {value}") })
-    };
-    let parts: Vec<String> = [
-        part("", &c.stage),
-        part("", &c.size),
-        part("Funding", &c.funding),
-        part("HQ", &c.hq),
-        part("Founded", &c.founded),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    (!parts.is_empty()).then(|| parts.join(" \u{b7} "))
-}
-
-/// The interview stages in order; empty when the process was not found.
-pub(super) fn interview_steps(i: &Interview) -> Vec<String> {
-    if !i.found {
-        return Vec::new();
-    }
-    i.stages.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
-}
-
 // ----------------------------------------------------------- drawing
-
-const NOT_FOUND: &str = "Not found in the posting or the company pages.";
-
-/// A small upper-case heading of a brief section.
-pub(super) fn section_label(text: &str, cx: &App) -> Div {
-    div().text_size(px(ui::tokens::TEXT_SMALL)).font_semibold().text_color(ui::palette(cx).muted).child(text.to_uppercase())
-}
 
 /// "Why it fits": one bar per criterion with the reason under it. `None` when the lead was not scored.
 pub(super) fn breakdown(item: &QueueItem, cx: &App) -> Option<Stateful<Div>> {
@@ -203,86 +183,11 @@ fn list_or_none(items: &[String]) -> String {
     }
 }
 
-/// "The company": domain, what it does, the facts, and the pages the brief comes from.
-pub(super) fn company_block(insight: &Insight, cx: &App) -> Div {
-    let p = ui::palette(cx);
-    let facts = facts_line(&insight.company);
-    let domain = insight.domain.trim();
-    let summary = insight.business_summary.trim();
-    let known = !domain.is_empty() || !summary.is_empty() || facts.is_some();
-    let links: Vec<Stateful<Div>> = insight
-        .sources
-        .iter()
-        .filter(|u| is_web_link(u))
-        .enumerate()
-        .map(|(i, url)| {
-            let target = url.clone();
-            div()
-                .id(SharedString::from(format!("insight-source-{i}")))
-                .role(Role::Link)
-                .aria_label(format!("Source: {url}"))
-                .truncate()
-                .text_size(px(ui::tokens::TEXT_SMALL))
-                .text_color(p.accent)
-                .underline()
-                .cursor_pointer()
-                .child(url.clone())
-                .on_click(move |_, _, cx| cx.open_url(&target))
-        })
-        .collect();
-    div()
-        .v_flex()
-        .gap_2()
-        .child(section_label("The company", cx))
-        .when(!domain.is_empty(), |d| d.child(div().h_flex().child(ui::tag(domain.to_string(), Tone::Accent, cx))))
-        .when(!summary.is_empty(), |d| {
-            d.child(div().text_size(px(ui::tokens::TEXT_BODY)).text_color(p.ink).child(summary.to_string()))
-        })
-        .children(facts.map(|f| ui::caption(f, cx)))
-        .when(!known, |d| d.child(ui::caption(NOT_FOUND, cx)))
-        .when(!links.is_empty(), |d| d.child(div().v_flex().gap_0p5().children(links)))
-}
-
-/// "Interview process": the stages in order, then any notes.
-pub(super) fn interview_block(insight: &Insight, cx: &App) -> Div {
-    let p = ui::palette(cx);
-    let steps = interview_steps(&insight.interview);
-    let notes = Some(insight.interview.notes.trim()).filter(|n| insight.interview.found && !n.is_empty());
-    div()
-        .v_flex()
-        .gap_2()
-        .child(section_label("Interview process", cx))
-        .when(!steps.is_empty(), |d| {
-            d.child(
-                div()
-                    .id("queue-interview")
-                    .role(Role::List)
-                    .aria_label("Interview stages")
-                    .v_flex()
-                    .gap_1()
-                    .children(steps.iter().enumerate().map(|(i, step)| {
-                        div()
-                            .id(("queue-interview-step", i))
-                            .role(Role::ListItem)
-                            .aria_label(format!("Step {}: {step}", i + 1))
-                            .h_flex()
-                            .items_start()
-                            .gap_2()
-                            .text_size(px(ui::tokens::TEXT_BODY))
-                            .child(div().w(px(18.0)).flex_shrink_0().text_color(p.subtle).child(format!("{}.", i + 1)))
-                            .child(div().flex_1().min_w_0().text_color(p.ink).child(step.clone()))
-                    })),
-            )
-        })
-        .children(notes.map(|n| ui::caption(n.to_string(), cx)))
-        .when(steps.is_empty() && notes.is_none(), |d| d.child(ui::caption(NOT_FOUND, cx)))
-}
-
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::pipeline::insight::{CompanyFacts, Interview, Skills};
+    use jobpilot_core::pipeline::insight::Skills;
 
-    use super::{capitalize, facts_line, interview_steps, shorten, split_skills, SkillSplit};
+    use super::{capitalize, same_skill, shorten, split_skills, SkillSplit};
 
     fn names(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -308,35 +213,44 @@ mod tests {
 
     #[test]
     fn similar_names_are_not_the_same_skill() {
-        let wanted = Skills { required: names(&["Java", "C", "SQL"]), preferred: vec![] };
-        let profile = names(&["JavaScript", "C++", "PostgreSQL"]);
+        let wanted = Skills { required: names(&["Java", "C", "SQL", "Cloud", "CI/CD", "REST"]), preferred: vec![] };
+        let profile = names(&["JavaScript", "C++", "PostgreSQL", "Google Cloud", "CI", "REST APIs", "Java Spring"]);
         let split = split_skills(&wanted, &profile);
-        assert!(split.matched.is_empty());
-        assert_eq!(split.gaps, names(&["Java", "C", "SQL"]));
+        assert!(split.matched.is_empty(), "{:?}", split.matched);
+        assert_eq!(split.gaps, names(&["Java", "C", "SQL", "Cloud", "CI/CD", "REST"]));
     }
 
     #[test]
-    fn a_whole_word_of_a_longer_name_matches() {
-        let wanted = Skills { required: names(&["REST", "Terraform"]), preferred: vec![] };
-        let profile = names(&["REST APIs", "Terraform / OpenTofu"]);
-        assert_eq!(split_skills(&wanted, &profile).matched, names(&["REST", "Terraform"]));
+    fn a_longer_name_does_not_match_a_part_of_it() {
+        // Both ways round: what the posting asks for, and what the profile has.
+        assert!(!same_skill("Java", "Java Spring"));
+        assert!(!same_skill("Java Spring", "Java"));
+        assert!(!same_skill("Cloud", "Google Cloud"));
+        assert!(!same_skill("CI/CD", "CI"));
+        assert!(!same_skill("CI", "CI/CD"));
+        assert!(!same_skill("Terraform", "Terraform / OpenTofu"), "'/' and '&' do not split a name");
+        assert!(!same_skill("R&D", "R"));
     }
 
     #[test]
-    fn facts_read_as_one_line() {
-        let facts = CompanyFacts { stage: "Series B".into(), size: "80 people".into(), hq: "Berlin".into(), ..CompanyFacts::default() };
-        assert_eq!(facts_line(&facts).as_deref(), Some("Series B \u{b7} 80 people \u{b7} HQ Berlin"));
-        assert_eq!(facts_line(&CompanyFacts::default()), None);
-        let blank = CompanyFacts { size: "  ".into(), ..CompanyFacts::default() };
-        assert_eq!(facts_line(&blank), None);
+    fn case_spacing_and_a_trailing_parenthetical_are_ignored() {
+        assert!(same_skill("rust", "Rust"));
+        assert!(same_skill("  Node.js ", "node.js"));
+        assert!(same_skill("Apache   Kafka", "apache kafka"));
+        assert!(same_skill("C++", "c++"));
+        assert!(same_skill("CI/CD", "ci/cd"));
+        assert!(same_skill("Kubernetes (EKS)", "Kubernetes"));
+        assert!(same_skill("Kubernetes", "kubernetes  (EKS)"));
+        assert!(same_skill("Postgres (RDS (Aurora))", "Postgres"), "a nested group goes with the rest");
+        assert!(!same_skill("C (embedded) and Rust", "C"), "only a parenthetical at the very end goes");
     }
 
     #[test]
-    fn interview_steps_need_a_found_process() {
-        let found = Interview { stages: names(&["Recruiter call", " ", "Take-home"]), notes: String::new(), found: true };
-        assert_eq!(interview_steps(&found), names(&["Recruiter call", "Take-home"]));
-        let not_found = Interview { stages: names(&["Stale"]), notes: String::new(), found: false };
-        assert!(interview_steps(&not_found).is_empty());
+    fn nothing_matches_a_blank_or_a_bare_parenthetical() {
+        assert!(!same_skill("", ""));
+        assert!(!same_skill("  ", " "));
+        assert!(!same_skill("(EKS)", "(GKE)"), "a name that is only a parenthetical is kept whole");
+        assert!(same_skill("(EKS)", "(eks)"));
     }
 
     #[test]

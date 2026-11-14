@@ -256,9 +256,31 @@ pub(crate) fn subtitle(company: &str, analysis: Option<&Analysis>) -> String {
     }
 }
 
-/// `Pipeline / <company>`: the first part goes back to the Pipeline.
-fn breadcrumb(company: &str, state: Entity<AppState>, cx: &App) -> Div {
+/// Horizontal padding of the Application screen (px). The CV tab sizes its pages from it.
+pub(crate) const PAGE_PADDING_X: f32 = 32.0;
+
+/// Where the breadcrumb leads back to: the screen the application was opened from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Crumb {
+    id: &'static str,
+    label: &'static str,
+    aria: &'static str,
+    target: Screen,
+}
+
+/// The breadcrumb for an application opened from `from` (Today, else the Pipeline).
+fn crumb_for(from: Screen) -> Crumb {
+    match from {
+        Screen::Jobs => Crumb { id: "breadcrumb-today", label: "Today", aria: "Back to Today", target: Screen::Jobs },
+        _ => Crumb { id: "breadcrumb-pipeline", label: "Pipeline", aria: "Back to the Pipeline", target: Screen::Pipeline },
+    }
+}
+
+/// `Today / <company>` or `Pipeline / <company>`: the first part goes back to where the application
+/// was opened from.
+fn breadcrumb(company: &str, from: Screen, state: Entity<AppState>, cx: &App) -> Div {
     let p = ui::palette(cx);
+    let crumb = crumb_for(from);
     div()
         .h_flex()
         .items_center()
@@ -267,14 +289,14 @@ fn breadcrumb(company: &str, state: Entity<AppState>, cx: &App) -> Div {
         .text_color(p.muted)
         .child(
             div()
-                .id("breadcrumb-pipeline")
+                .id(crumb.id)
                 .role(Role::Button)
-                .aria_label("Back to the Pipeline")
+                .aria_label(crumb.aria)
                 .cursor_pointer()
                 .text_color(p.accent)
                 .hover(|d| d.underline())
-                .child("Pipeline")
-                .on_click(move |_, _, cx| state.update(cx, |s, cx| s.show(Screen::Pipeline, cx))),
+                .child(crumb.label)
+                .on_click(move |_, _, cx| state.update(cx, |s, cx| s.show(crumb.target, cx))),
         )
         .child("/")
         .child(div().min_w_0().truncate().child(company.to_string()))
@@ -282,7 +304,7 @@ fn breadcrumb(company: &str, state: Entity<AppState>, cx: &App) -> Div {
 
 impl Render for Detail {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (app, progress, error) = {
+        let (app, progress, error, from) = {
             let state = self.state.read(cx);
             let app = state.selected_app().cloned();
             let id = app.as_ref().map(|a| a.id);
@@ -290,6 +312,7 @@ impl Render for Detail {
                 app,
                 id.and_then(|id| state.job_label(id)).map(str::to_string),
                 id.and_then(|id| state.error(id)).map(str::to_string),
+                state.detail_from,
             )
         };
         let busy = progress.is_some();
@@ -339,7 +362,7 @@ impl Render for Detail {
             .v_flex()
             .min_w_0()
             .gap_1()
-            .child(breadcrumb(&app.company, self.state.clone(), cx))
+            .child(breadcrumb(&app.company, from, self.state.clone(), cx))
             .child(ui::heading(app.role.clone(), Level::H1, cx))
             .child(
                 div()
@@ -394,7 +417,7 @@ impl Render for Detail {
             .w_full()
             .min_h_full()
             .gap(px(18.))
-            .px(px(32.))
+            .px(px(PAGE_PADDING_X))
             .py(px(24.))
             .child(
                 div()
@@ -480,8 +503,9 @@ mod tests {
     use jobpilot_core::store::Status;
 
     use super::{
-        next_job_offered, primary_for, status_tone, step_index, subtitle, ApplyUi, Blocker, PrimaryAction, STEPS,
+        crumb_for, next_job_offered, primary_for, status_tone, step_index, subtitle, ApplyUi, Blocker, PrimaryAction, STEPS,
     };
+    use crate::app::Screen;
     use crate::ui::Tone;
 
     fn none() -> Option<Blocker> {
@@ -599,6 +623,15 @@ mod tests {
         assert_eq!(status_tone(Status::Applied), Tone::Ok);
         assert_eq!(status_tone(Status::Failed), Tone::Danger);
         assert_eq!(status_tone(Status::Rejected), Tone::Danger);
+    }
+
+    #[test]
+    fn the_breadcrumb_leads_back_to_where_the_application_was_opened_from() {
+        let today = crumb_for(Screen::Jobs);
+        assert_eq!((today.label, today.target, today.id), ("Today", Screen::Jobs, "breadcrumb-today"));
+        let pipeline = crumb_for(Screen::Pipeline);
+        assert_eq!((pipeline.label, pipeline.target, pipeline.id), ("Pipeline", Screen::Pipeline, "breadcrumb-pipeline"));
+        assert_eq!(crumb_for(Screen::Trends).target, Screen::Pipeline, "anything else falls back to the Pipeline");
     }
 
     #[test]

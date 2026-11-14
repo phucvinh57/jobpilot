@@ -2,7 +2,7 @@
 //! Submitted, Interview, Closed), and the latest events across all of them.
 //!
 //! A card says what the user does next (`next_action`), and opens the application when pressed. Views
-//! only: applications come from `AppState`, events from `Store::list_events` on the core runtime.
+//! only: applications come from `AppState`, events from `Store::recent_events` on the core runtime.
 //! There is no primary button here: the board is for looking around, the action is in the detail.
 
 use std::collections::HashSet;
@@ -21,9 +21,6 @@ use crate::ui::{self, Level, Tone};
 
 /// How many events "Recent activity" shows.
 const ACTIVITY_ROWS: usize = 6;
-/// Events are read for this many applications (the most recently updated ones): enough for the
-/// latest few lines, and a bound on the reads.
-const ACTIVITY_APPS: usize = 20;
 /// Narrowest a column gets before the board scrolls sideways.
 const COLUMN_MIN_WIDTH: f32 = 200.0;
 /// Gap between columns.
@@ -157,13 +154,6 @@ pub fn activity_text(kind: &str, message: &str) -> String {
     }
 }
 
-/// The newest `n` events, newest first.
-pub fn latest_events(mut events: Vec<Event>, n: usize) -> Vec<Event> {
-    events.sort_by(|a, b| b.at.cmp(&a.at).then(b.id.cmp(&a.id)));
-    events.truncate(n);
-    events
-}
-
 /// What the board needs besides the applications, read off the UI thread.
 #[derive(Default)]
 struct Loaded {
@@ -174,14 +164,12 @@ struct Loaded {
 
 fn load(core: &Core, apps: &[Application]) -> Loaded {
     let has_cv = apps.iter().filter(|a| a.cv_yaml_path().is_file()).map(|a| a.id).collect();
-    let mut events = Vec::new();
-    for app in apps.iter().take(ACTIVITY_APPS) {
-        match core.store.list_events(app.id) {
-            Ok(list) => events.extend(list),
-            Err(e) => tracing::warn!("reading the events of application {} failed: {e:#}", app.id),
-        }
-    }
-    Loaded { has_cv, activity: latest_events(events, ACTIVITY_ROWS) }
+    // The newest events of every application, not only of the ones changed last.
+    let activity = core.store.recent_events(ACTIVITY_ROWS).unwrap_or_else(|e| {
+        tracing::warn!("reading the recent events failed: {e:#}");
+        Vec::new()
+    });
+    Loaded { has_cv, activity }
 }
 
 /// What a read of [`Loaded`] was made from: when it differs, the board reads again.
@@ -421,12 +409,9 @@ impl Render for PipelineView {
 mod tests {
     // Not `super::*`: the file glob-imports gpui_kit, whose `test` attribute would shadow the standard one.
     use jobpilot_core::chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
-    use jobpilot_core::store::{Application, Event, Status};
+    use jobpilot_core::store::{Application, Status};
 
-    use super::{
-        activity_text,
-        activity_tone, activity_when, age_label, board, column_for, latest_events, next_action, Column,
-    };
+    use super::{activity_text, activity_tone, activity_when, age_label, board, column_for, next_action, Column};
     use crate::ui::Tone;
 
     fn day(d: u32) -> NaiveDate {
@@ -552,21 +537,6 @@ mod tests {
         assert_eq!(activity_when(now, at(9, 8, 0)), "Mon");
         assert_eq!(activity_when(now, at(8, 8, 0)), "Sun", "six days ago still has a weekday");
         assert_eq!(activity_when(now, at(7, 8, 0)), "07 Nov");
-    }
-
-    fn event(id: i64, hour: u32, kind: &str) -> Event {
-        let at = Utc.with_ymd_and_hms(2026, 11, 14, hour, 0, 0).single().expect("a valid moment");
-        Event { id, app_id: 1, at, kind: kind.into(), message: format!("event {id}") }
-    }
-
-    #[test]
-    fn the_latest_events_come_first_and_are_capped() {
-        let events = vec![event(1, 9, "created"), event(2, 12, "status"), event(3, 12, "email"), event(4, 7, "note")];
-        let ids = |list: &[Event]| list.iter().map(|e| e.id).collect::<Vec<_>>();
-        assert_eq!(ids(&latest_events(events.clone(), 3)), [3, 2, 1], "the newest first, the later row first on a tie");
-        assert_eq!(ids(&latest_events(events.clone(), 10)), [3, 2, 1, 4]);
-        assert!(latest_events(events, 0).is_empty());
-        assert!(latest_events(Vec::new(), 3).is_empty());
     }
 
     #[test]

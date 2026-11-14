@@ -46,7 +46,6 @@ impl Core {
     }
 }
 
-/// The skills of the visible groups of the master profile.
 impl Core {
     /// The visible skill names in `profile.yaml` (hidden groups left out); empty when the profile
     /// cannot be read (logged).
@@ -55,6 +54,7 @@ impl Core {
     }
 }
 
+/// The skills of the visible groups of the master profile.
 fn profile_skills(core: &Core) -> Vec<String> {
     let path = core.profile_path();
     let cv = match std::fs::read_to_string(&path).map_err(anyhow::Error::from).and_then(|text| Cv::parse(&text)) {

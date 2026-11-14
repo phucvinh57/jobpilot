@@ -1,6 +1,7 @@
 //! JobPilot desktop app (GPUI). Views only: all logic lives in `jobpilot-core`.
 
 mod app;
+mod brief;
 mod detail;
 mod pipeline;
 mod problem;

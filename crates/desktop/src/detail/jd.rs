@@ -1,4 +1,4 @@
-//! JD tab: the company brief (domain, business, facts, skills, interview process, sources), the job
+//! JD tab: the company brief (the company, skills, interview process; drawn by `crate::brief`), the job
 //! description text, its source link and the key terms found in it.
 
 use gpui_kit::component::text::TextView;
@@ -6,12 +6,12 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use jobpilot_core::chrono::{DateTime, Utc};
-use jobpilot_core::pipeline::insight::{CompanyFacts, Interview};
 use jobpilot_core::pipeline::{read_jd_text, Analysis, Insight};
 use jobpilot_core::store::Application;
 use jobpilot_core::runtime;
 
 use crate::app::AppState;
+use crate::brief::{company_block, interview_block, section_label, NOT_FOUND};
 use crate::ui::{self, Level, Tone};
 
 /// What the tab shows for one application.
@@ -76,29 +76,6 @@ fn is_link(source: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
-/// What the brief shows where a text did not say.
-const NOT_FOUND: &str = "not found";
-
-/// The company row: each fact with its label, `None` for what no text stated.
-fn company_facts(c: &CompanyFacts) -> [(&'static str, Option<&str>); 5] {
-    [
-        ("Size", non_empty(&c.size)),
-        ("Stage", non_empty(&c.stage)),
-        ("Funding", non_empty(&c.funding)),
-        ("HQ", non_empty(&c.hq)),
-        ("Founded", non_empty(&c.founded)),
-    ]
-}
-
-fn non_empty(s: &str) -> Option<&str> {
-    Some(s).filter(|s| !s.is_empty())
-}
-
-/// The interview stages in order, `None` when the process was not found.
-fn interview_steps(i: &Interview) -> Option<String> {
-    (i.found && !i.stages.is_empty()).then(|| i.stages.join(" \u{2192} "))
-}
-
 /// A row of tags with a label in front: skills. `must` = required (accent), else neutral.
 fn tag_row(label: &'static str, items: &[String], must: bool, cx: &App) -> Div {
     let tone = if must { Tone::Accent } else { Tone::Neutral };
@@ -111,84 +88,23 @@ fn tag_row(label: &'static str, items: &[String], must: bool, cx: &App) -> Div {
         .children(items.iter().map(|item| ui::tag(item.clone(), tone, cx)))
 }
 
-/// The company brief: domain, business, company facts, skills, interview process and sources, with
-/// "not found" for what the texts did not say.
+/// The company brief: the company and the interview process (the blocks Today shows too), and the
+/// skills the posting asks for, with "not found" for what the texts did not say.
 fn brief(insight: &Insight, cx: &App) -> Div {
-    let p = ui::palette(cx);
-    let (muted, link) = (p.muted, p.accent);
-    let not_found = || div().text_color(muted).child(NOT_FOUND).into_any_element();
-    let text = |value: &str| match non_empty(value) {
-        Some(v) => div().child(v.to_string()).into_any_element(),
-        None => not_found(),
-    };
-    let row = |label: &'static str, body: AnyElement| {
-        div()
-            .h_flex()
-            .items_start()
-            .gap_2()
-            .text_size(px(ui::tokens::TEXT_BODY))
-            .text_color(p.ink)
-            .child(div().w(px(84.)).flex_shrink_0().pt_0p5().child(ui::caption(label, cx)))
-            .child(div().flex_1().min_w_0().child(body))
-    };
-
-    let facts = div().h_flex().flex_wrap().gap_x_4().children(company_facts(&insight.company).into_iter().map(
-        |(label, value)| {
-            let value = match value {
-                Some(v) => div().child(v.to_string()),
-                None => div().text_color(muted).child(NOT_FOUND),
-            };
-            div().h_flex().gap_1().child(div().text_color(muted).child(label)).child(value)
-        },
-    ));
-
     let skills = &insight.skills;
-    let skills = if skills.required.is_empty() && skills.preferred.is_empty() {
-        not_found()
-    } else {
-        div()
-            .v_flex()
-            .gap_1p5()
-            .when(!skills.required.is_empty(), |d| d.child(tag_row("Required", &skills.required, true, cx)))
-            .when(!skills.preferred.is_empty(), |d| d.child(tag_row("Preferred", &skills.preferred, false, cx)))
-            .into_any_element()
-    };
-
-    let interview = &insight.interview;
-    let process = match (interview_steps(interview), non_empty(&interview.notes).filter(|_| interview.found)) {
-        (None, None) => not_found(),
-        (steps, notes) => div()
-            .v_flex()
-            .gap_0p5()
-            .children(steps.map(|s| div().child(s)))
-            .children(notes.map(|n| div().text_color(muted).child(n.to_string())))
-            .into_any_element(),
-    };
-
-    let sources = insight.sources.iter().filter(|u| is_link(u)).enumerate().map(|(i, url)| {
-        let target = url.clone();
-        div()
-            .id(SharedString::from(format!("insight-source-{i}")))
-            .text_color(link)
-            .underline()
-            .cursor_pointer()
-            .truncate()
-            .child(url.clone())
-            .on_click(move |_, _, cx| cx.open_url(&target))
-    });
-    let sources: Vec<_> = sources.collect();
-
+    let skills = div()
+        .v_flex()
+        .gap_1p5()
+        .child(section_label("Skills", cx))
+        .when(skills.required.is_empty() && skills.preferred.is_empty(), |d| d.child(ui::caption(NOT_FOUND, cx)))
+        .when(!skills.required.is_empty(), |d| d.child(tag_row("Required", &skills.required, true, cx)))
+        .when(!skills.preferred.is_empty(), |d| d.child(tag_row("Preferred", &skills.preferred, false, cx)));
     ui::card(cx)
-        .gap_2()
+        .gap_3()
         .child(ui::heading("Company brief", Level::H2, cx))
-        .child(row("Domain", text(&insight.domain)))
-        .child(row("Business", text(&insight.business_summary)))
-        .child(row("Company", facts.into_any_element()))
-        .child(row("Skills", skills))
-        .child(row("Interview", process))
-        .when(!sources.is_empty(), |d| {
-            d.child(row("Sources", div().v_flex().gap_0p5().children(sources).into_any_element()))
-        })
+        .child(company_block(insight, cx))
+        .child(skills)
+        .child(interview_block(insight, cx))
 }
 
 impl Render for JdTab {
@@ -268,9 +184,7 @@ impl Render for JdTab {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::pipeline::insight::{CompanyFacts, Interview};
-
-    use super::{company_facts, interview_steps, is_link, jd_markdown};
+    use super::{is_link, jd_markdown};
 
     #[test]
     fn line_breaks_survive_markdown() {
@@ -283,24 +197,5 @@ mod tests {
         assert!(is_link("https://acme.test/jobs/1"));
         assert!(is_link("HTTP://acme.test"));
         assert!(!is_link("/home/me/jd.pdf"));
-    }
-
-    #[test]
-    fn unknown_company_facts_are_none_so_the_view_says_not_found() {
-        let facts = CompanyFacts { hq: "Singapore".into(), founded: "2015".into(), ..CompanyFacts::default() };
-        let shown: Vec<_> = company_facts(&facts).into_iter().collect();
-        assert_eq!(
-            shown,
-            [("Size", None), ("Stage", None), ("Funding", None), ("HQ", Some("Singapore")), ("Founded", Some("2015"))]
-        );
-        assert!(company_facts(&CompanyFacts::default()).iter().all(|(_, v)| v.is_none()));
-    }
-
-    #[test]
-    fn interview_stages_read_in_order_and_only_when_found() {
-        let found = Interview { stages: vec!["Call".into(), "Onsite".into()], notes: String::new(), found: true };
-        assert_eq!(interview_steps(&found).as_deref(), Some("Call \u{2192} Onsite"));
-        assert_eq!(interview_steps(&Interview { found: false, ..found.clone() }), None);
-        assert_eq!(interview_steps(&Interview { stages: vec![], notes: "Three rounds.".into(), found: true }), None);
     }
 }

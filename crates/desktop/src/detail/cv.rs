@@ -18,15 +18,17 @@ use jobpilot_core::pipeline::{self, Analysis, Violation};
 use jobpilot_core::{runtime, Core};
 
 use crate::app::jobs::{load_cv_files, page_files, parse_gaps, CvFiles, Debounce, RenderQueue, EDIT_DEBOUNCE};
+use super::PAGE_PADDING_X;
 use crate::app::AppState;
+use crate::sidebar;
 use crate::ui::{self, Tone};
 
 /// Share of the row taken by the left column (checklist, cards, editor).
 const EDITOR_SHARE: f32 = 0.42;
-/// Width of the sidebar (`sidebar.rs`) and the Detail screen's horizontal padding, for sizing the pages.
-/// A page image needs a definite width (a percentage width collapses its aspect ratio), so the pane
-/// width is computed from the window.
-const CHROME_WIDTH: f32 = 224.0 + 1.0 + 2.0 * 32.0;
+/// Width of the sidebar (with its 1 px border) and the Detail screen's horizontal padding, for sizing
+/// the pages. A page image needs a definite width (a percentage width collapses its aspect ratio),
+/// so the pane width is computed from the window.
+const CHROME_WIDTH: f32 = sidebar::WIDTH + 1.0 + 2.0 * PAGE_PADDING_X;
 /// Gap between the two columns, padding of the preview pane and of a sheet (with its border).
 const COLUMN_GAP: f32 = 16.0;
 const PANE_PADDING: f32 = 2.0 * 16.0;
