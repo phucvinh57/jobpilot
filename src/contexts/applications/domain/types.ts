@@ -8,7 +8,13 @@ export interface Tag {
   tone: Tone;
 }
 
-// ------------------------------------------------------------------ Pipeline
+// ------------------------------------------------------------------ Stages of the Jobs page
+
+/** The application stages of the Jobs page (Leads is the discovery context's). */
+export type StageKey = "cv" | "applied" | "inProgress" | "done";
+
+/** How a finished application ended: an offer, or a rejection. */
+export type Outcome = "success" | "failed";
 
 export interface BoardCard {
   id: number;
@@ -20,10 +26,16 @@ export interface BoardCard {
   next: Tag;
   /** How long ago the card last changed (`today`, `3 d`). */
   age: string;
+  /** The interview round the user marked (kept once the application is answered). */
+  round: string | null;
+  /** `null`: not finished. */
+  outcome: Outcome | null;
+  /** The stage the card is in. */
+  stage: StageKey;
 }
 
-export interface BoardColumn {
-  key: string;
+export interface BoardStage {
+  key: StageKey;
   label: string;
   cards: BoardCard[];
 }
@@ -38,7 +50,8 @@ export interface ActivityItem {
 
 export interface Board {
   count: number;
-  columns: BoardColumn[];
+  /** Every stage in order, empty ones too. */
+  stages: BoardStage[];
   activity: ActivityItem[];
 }
 
@@ -79,6 +92,22 @@ export interface ApplicationHeader {
   showNextJob: boolean;
   /** Changes whenever a job rewrote the CV files. */
   cvEpoch: number;
+  /** The interview round the user marked; `null`: none marked. */
+  round: string | null;
+  /** The rounds to pick from (the brief's interview process, or the usual ones). */
+  roundOptions: string[];
+  /** What the user can mark by hand (the company's answers); empty before it was sent. */
+  marks: Mark[];
+  /** The stage of the Jobs page the application is in. */
+  stage: StageKey;
+  outcome: Outcome | null;
+}
+
+export type MarkKey = "interview" | "offer" | "rejected";
+
+export interface Mark {
+  key: MarkKey;
+  label: string;
 }
 
 // ------------------------------------------------------------------ JD tab

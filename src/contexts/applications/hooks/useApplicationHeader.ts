@@ -53,7 +53,7 @@ export function useApplicationHeader(id: number): HeaderModel {
   }
   const jobLabel = header?.job == null ? null : live !== null ? live.label : header.job;
 
-  // A CV made by the "Prepare CV" graph (from Today) changes the files without a job of this screen.
+  // A CV made by the "Prepare CV" graph (from the Leads) changes the files without a job of this screen.
   const [graphRuns, setGraphRuns] = useState(0);
   const reload = query.reload;
   useGraphProgress((p) => {

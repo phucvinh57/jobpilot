@@ -1,10 +1,10 @@
-// Left column: the logo, navigation (Today, Pipeline, Trends), Settings and the health line.
+// Left column: the logo, navigation (Jobs, Trends), Settings and the health line.
 
 import clsx from "clsx";
-import { ArrowUpRight, ChartPie, Inbox, LayoutDashboard, Settings, type LucideIcon } from "lucide-react";
+import { ArrowUpRight, ChartPie, Inbox, Settings, type LucideIcon } from "lucide-react";
 
 import { Heading, HealthDot, useNav, useShell, type Screen, type SettingsSection } from "@/shared";
-import { navScreen, spokenBadge, todayBadge, type NavBadge } from "@/shared/nav/nav";
+import { jobsBadge, navScreen, spokenBadge, type NavBadge } from "@/shared/nav/nav";
 
 /** One entry of the navigation: icon, label, an optional count badge (shown from 1). */
 function NavItem({
@@ -83,11 +83,10 @@ function HealthLine() {
 
 export function Sidebar() {
   const screen = useNav((s) => s.screen);
-  const detailFrom = useNav((s) => s.detailFrom);
   const needsYou = useNav((s) => s.needsYou);
   const show = useNav((s) => s.show);
   const status = useShell((s) => s.status);
-  const current = navScreen(screen, detailFrom);
+  const current = navScreen(screen);
   const entry = (target: Screen) => ({ current: current === target, onClick: () => show(target) });
 
   return (
@@ -99,14 +98,7 @@ export function Sidebar() {
         <Heading>JobPilot</Heading>
       </div>
       <nav aria-label="Navigation" className="flex flex-col gap-0.5">
-        <NavItem id="nav-today" icon={Inbox} label="Today" badge={todayBadge(needsYou, status?.newLeads ?? 0)} {...entry("today")} />
-        <NavItem
-          id="nav-pipeline"
-          icon={LayoutDashboard}
-          label="Pipeline"
-          badge={{ kind: "total", count: status?.applications ?? 0 }}
-          {...entry("pipeline")}
-        />
+        <NavItem id="nav-jobs" icon={Inbox} label="Jobs" badge={jobsBadge(needsYou, status?.newLeads ?? 0)} {...entry("jobs")} />
         <NavItem id="nav-trends" icon={ChartPie} label="Trends" {...entry("trends")} />
       </nav>
       <div className="flex-1" />

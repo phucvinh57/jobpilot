@@ -1,4 +1,4 @@
-// The Application screen: a breadcrumb back to where it was opened from, the role, company and
+// The Application screen (the drawer's "Open full view"): a breadcrumb back to the Jobs page, the role, company and
 // status, the ONE primary action (Generate -> Approve CV -> Review & Submit -> Submit), the steps,
 // and the tabs JD / CV / Apply / Timeline. The shell owns what the primary action is; this view
 // only shows it.
@@ -17,7 +17,6 @@ import {
   Tag,
   useNav,
   useShell,
-  type Origin,
   type SettingsSection,
 } from "@/shared";
 
@@ -37,20 +36,22 @@ function Nothing({ none }: { none: boolean }) {
         title={none ? "No applications yet" : "Nothing selected"}
         body={
           none
-            ? "Open Today and paste the link of a job posting (or drop a .md, .txt, .html or .pdf file on the window). Press Prepare CV on the job: JobPilot writes a CV tailored to it from your profile, then helps you apply."
-            : "Open an application from the Pipeline, or prepare a CV for a job on Today."
+            ? "Open Jobs and paste the link of a job posting (or drop a .md, .txt, .html or .pdf file on the window). Press Prepare CV on the job: JobPilot writes a CV tailored to it from your profile, then helps you apply."
+            : "Open an application from the Jobs page, or prepare a CV for one of its Leads."
         }
       />
     </main>
   );
 }
 
-function Breadcrumb({ company, from }: { company: string; from: Origin }) {
+/** Back to the Jobs page as the user left it (its stage and its drawer). */
+function Breadcrumb({ company }: { company: string }) {
   const show = useNav((s) => s.show);
-  const crumb = crumbFor(from);
+  const stage = useNav((s) => s.stage);
+  const crumb = crumbFor(stage);
   return (
     <div className="flex min-w-0 items-center gap-1.5 text-small text-muted">
-      <button id={crumb.id} type="button" aria-label={crumb.aria} onClick={() => show(crumb.target)} className="cursor-pointer text-accent hover:underline">
+      <button id={crumb.id} type="button" aria-label={crumb.aria} onClick={() => show("jobs")} className="cursor-pointer text-accent hover:underline">
         {crumb.label}
       </button>
       <span aria-hidden>/</span>
@@ -83,7 +84,7 @@ function OpenApplication({ id }: { id: number }) {
       label="Application"
       title={
         <div className="flex min-w-0 flex-col gap-1">
-          <Breadcrumb company={header.company} from={model.from} />
+          <Breadcrumb company={header.company} />
           <h1 className="font-heading text-h1 font-semibold text-ink">{header.role}</h1>
         </div>
       }
