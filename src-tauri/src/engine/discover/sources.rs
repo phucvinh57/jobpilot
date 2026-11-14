@@ -16,13 +16,14 @@ use crate::engine::store::{NewSource, Source, SourcePurpose};
 use crate::engine::Core;
 
 /// The kinds a job source can have, with the label the UI shows, in display order.
-pub const JOB_SOURCE_KINDS: [(&str, &str); 9] = [
+pub const JOB_SOURCE_KINDS: [(&str, &str); 10] = [
     ("greenhouse", "Greenhouse"),
     ("lever", "Lever"),
     ("ashby", "Ashby"),
     ("smartrecruiters", "SmartRecruiters"),
     ("recruitee", "Recruitee"),
     ("personio", "Personio"),
+    ("workday", "Workday"),
     ("hn_hiring", "HN Who is hiring"),
     ("yc", "Y Combinator"),
     ("career_page", "Career page"),
@@ -37,6 +38,7 @@ pub fn source_url_hint(kind: &str) -> &'static str {
         "smartrecruiters" => "jobs.smartrecruiters.com/Acme or Acme",
         "recruitee" => "acme.recruitee.com or acme",
         "personio" => "acme.jobs.personio.de (or .com) or acme",
+        "workday" => "Board URL, e.g. https://acme.wd5.myworkdayjobs.com/External",
         "hn_hiring" => "No address needed",
         "yc" => "Optional: https://www.ycombinator.com/jobs",
         _ => "Careers page, e.g. https://acme.com/careers",
@@ -177,6 +179,7 @@ mod tests {
             let url = match kind {
                 "greenhouse" | "lever" | "ashby" | "smartrecruiters" | "recruitee" | "personio" => "acme",
                 "career_page" => "https://acme.test/careers",
+                "workday" => "https://acme.wd5.myworkdayjobs.com/External",
                 _ => "",
             };
             assert!(check_source(kind, url).is_ok(), "{kind}");
