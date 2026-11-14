@@ -95,19 +95,20 @@ pub fn help_with(
     )
 }
 
-/// Banner above the main pane while something the main flow needs is missing (no AI provider, no typst).
+/// Banner above the main pane while something the main flow needs is missing (no AI provider, no typst),
+/// and until the job preferences are saved (it points to the Preferences chat).
 /// `None` when everything is in place (or the first check has not finished).
 pub fn setup_banner(state: &Entity<AppState>, cx: &App) -> Option<Div> {
-    let (blockers, screen) = {
+    let (blockers, screen, prefs_saved) = {
         let s = state.read(cx);
-        (s.blockers(), s.screen)
+        (s.blockers(), s.screen, s.prefs_saved)
     };
     // Settings is where the user fixes these; no need to nag there.
-    if blockers.is_empty() || screen == Screen::Settings {
+    if screen == Screen::Settings {
         return None;
     }
     let theme = cx.theme();
-    let rows: Vec<Div> = blockers
+    let mut rows: Vec<Div> = blockers
         .into_iter()
         .filter_map(|problem| {
             let title = match problem {
@@ -123,6 +124,26 @@ pub fn setup_banner(state: &Entity<AppState>, cx: &App) -> Option<Div> {
             Some(div().v_flex().gap_1().child(div().text_sm().font_semibold().child(title)).child(help))
         })
         .collect();
+    if !prefs_saved && screen != Screen::Preferences {
+        let state = state.clone();
+        rows.push(
+            div()
+                .v_flex()
+                .gap_1()
+                .child(div().text_sm().font_semibold().child("Tell JobPilot what job you are looking for."))
+                .child(div().text_sm().text_color(theme.muted_foreground).child("No preferences are saved yet: a short chat sets them up."))
+                .child(
+                    div().h_flex().child(
+                        Button::new("setup-preferences")
+                            .outline()
+                            .compact()
+                            .icon(IconName::Settings2)
+                            .label("Open Preferences")
+                            .on_click(move |_, _, cx| state.update(cx, |s, cx| s.show(Screen::Preferences, cx))),
+                    ),
+                ),
+        );
+    }
     if rows.is_empty() {
         return None;
     }

@@ -80,6 +80,8 @@ pub struct AppState {
     pub queue_selected: Option<i64>,
     /// Bumped whenever the queue is shown, so it reads its leads again.
     pub queue_epoch: u64,
+    /// Job-search preferences were saved at least once (the setup banner points to Preferences until then).
+    pub prefs_saved: bool,
 }
 
 impl AppState {
@@ -100,6 +102,7 @@ impl AppState {
             settings_focus: None,
             queue_selected: None,
             queue_epoch: 0,
+            prefs_saved: false,
         };
         state.load();
         state.selected = state.applications.first().map(|a| a.id);
@@ -110,6 +113,10 @@ impl AppState {
         match self.core.store.list_applications() {
             Ok(apps) => self.applications = apps,
             Err(e) => tracing::error!("failed to load applications: {e:#}"),
+        }
+        match self.core.store.has_preferences() {
+            Ok(saved) => self.prefs_saved = saved,
+            Err(e) => tracing::error!("failed to read the preferences: {e:#}"),
         }
     }
 
@@ -497,7 +504,7 @@ impl JobPilot {
             detail: cx.new(|cx| Detail::new(state.clone(), window, cx)),
             settings: cx.new(|cx| SettingsView::new(state.clone(), cx)),
             queue: cx.new(|cx| QueueView::new(state.clone(), window, cx)),
-            prefs: cx.new(|_| PreferencesView::new(state.clone())),
+            prefs: cx.new(|cx| PreferencesView::new(state.clone(), cx)),
             trends: cx.new(|_| TrendsView::new(state.clone())),
             state,
         }
@@ -547,6 +554,7 @@ impl Render for JobPilot {
 
 /// Insert a few sample applications when the store is empty (`JOBPILOT_DEMO=1`).
 pub fn seed_demo(core: &Core) -> Result<()> {
+    jobpilot_core::prefs::seed_demo(core)?;
     seed_demo_applications(core)?;
     seed_demo_queue(core)
 }
