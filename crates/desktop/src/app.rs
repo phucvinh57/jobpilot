@@ -84,7 +84,7 @@ pub struct AppState {
     pub prefs_saved: bool,
     /// A skill or domain the user asked to add to their preferences (Trends > "Add to preferences"),
     /// as a message for the preference chat. The Preferences view reads it with `.take()` when it is
-    /// shown, so it is used once; until P9's view does, the Preferences screen just opens.
+    /// shown, so it is used once, and puts it in the message box for the user to send.
     pub prefs_suggestion: Option<String>,
 }
 
