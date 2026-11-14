@@ -333,6 +333,14 @@ impl PreferencesView {
         }
     }
 
+    /// A suggestion from Trends ("Add to preferences") goes into the message box, used once. The
+    /// user reads it and sends it with Enter, so nothing reaches the chat without them.
+    fn take_suggestion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &self.form else { return };
+        let Some(text) = self.state.update(cx, |s, _| s.prefs_suggestion.take()) else { return };
+        form.message.update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(message) = self.form.as_ref().map(|f| f.message.clone()) else { return };
         let text = message.read(cx).value().trim().to_string();
@@ -906,6 +914,7 @@ impl Render for PreferencesView {
             // First paint of this visit: read the chat (and let the assistant open it when nothing
             // was said yet).
             self.shown = true;
+            self.take_suggestion(window, cx);
             cx.defer_in(window, |this, window, cx| this.run(Action::Open, window, cx));
         }
         let (muted, border) = {
