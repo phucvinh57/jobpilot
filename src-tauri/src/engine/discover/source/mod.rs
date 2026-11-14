@@ -8,7 +8,7 @@
 //! | `ashby` | `jobs.ashbyhq.com/acme` or slug | public job-board JSON |
 //! | `hn_hiring` | unused | HN Algolia, the latest "Who is hiring?" thread, one comment per candidate |
 //! | `yc` | `https://www.ycombinator.com/jobs` (default) or a workatastartup.com page | the job links of the listing page; the browser (and a bound session) when the page needs it |
-//! | `career_page` | a careers page | the same-site links that look like postings; the browser when the page is drawn by JavaScript |
+//! | `career_page` | a careers page | its `JobPosting` JSON-LD, else the same-site links that look like postings; else the site's `sitemap.xml`; else the browser (a page drawn by JavaScript) |
 //!
 //! The API adapters read through [`Http`] and a base URL, so tests answer from saved fixture JSON; the
 //! page adapters read through [`Pages`] (plain HTTP, then the managed browser), so tests answer from
@@ -20,7 +20,9 @@ mod career_page;
 mod greenhouse;
 mod hn_hiring;
 mod http;
+pub(crate) mod jsonld;
 mod lever;
+mod sitemap;
 mod web;
 mod yc;
 

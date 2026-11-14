@@ -2,12 +2,16 @@
 //! ([`crate::engine::net::http`]), so a posting URL taken from third-party data (an HN comment, a board's
 //! `absolute_url`) gets the same checks as every other request: public hosts only on every hop,
 //! the per-host delay and a size cap while streaming. Text extraction is the one of
-//! `pipeline::ingest`.
+//! `pipeline::ingest`, except for a page that carries exactly one schema.org `JobPosting` (JSON-LD)
+//! with a real description: its text is built from that item ([`structured_text`]), which is cleaner
+//! than reading the page and gives salary and dates as the site states them.
 
 use anyhow::{Context, Result};
 use futures::FutureExt;
 
 use super::deps::PostingFetcher;
+use super::run::MIN_POSTING_CHARS;
+use super::source::jsonld;
 use crate::engine::browser::challenge::ChallengeFound;
 use crate::engine::browser::render::Renderer;
 use crate::engine::net::http::{checked_url, FetchError, Http};
@@ -52,7 +56,21 @@ async fn browsed_text(renderer: &Renderer, session_id: Option<i64>, url: &str) -
     if let Some(kind) = rendered.challenge {
         return Err(anyhow::Error::new(ChallengeFound { kind, url: url.to_string() }));
     }
+    if let Some(text) = structured_text(&rendered.html, &rendered.url) {
+        return Ok(text);
+    }
     Ok(extract_html(&rendered.html, Some(&rendered.url)))
+}
+
+/// The text of a posting page from its `JobPosting` JSON-LD: only when the page has exactly one,
+/// with a description of at least [`MIN_POSTING_CHARS`]; `None` sends the page through the usual
+/// extraction. `page_url` (after redirects) resolves the item's relative addresses.
+fn structured_text(html: &str, page_url: &str) -> Option<String> {
+    let base = url::Url::parse(page_url).ok()?;
+    match jsonld::job_postings(html, &base).as_slice() {
+        [one] if one.description_text().trim().chars().count() >= MIN_POSTING_CHARS => Some(jsonld::posting_text(one)),
+        _ => None,
+    }
 }
 
 /// The readable text of the page at `url`. The answers `pipeline::ingest` gives: [`NeedsBrowser`]
@@ -73,6 +91,12 @@ pub(crate) async fn posting_text(http: &Http, url: &str) -> Result<String> {
         }
         Err(e) => return Err(anyhow::Error::new(e)).with_context(|| format!("fetching {host}")),
     };
+    let content_type = resp.content_type.to_ascii_lowercase();
+    if content_type.contains("html") || content_type.is_empty() {
+        if let Some(text) = structured_text(&String::from_utf8_lossy(&resp.body), &resp.url) {
+            return Ok(text);
+        }
+    }
     page_text(&url, &resp.url, &resp.content_type, resp.body).await
 }
 
@@ -165,6 +189,42 @@ mod tests {
         b.route("/job", 200, "text/html", job_page());
         let text = posting_text(&client(&limits()), &format!("{}/apply", a.base())).await.unwrap();
         assert!(text.contains("sync engine in Rust"));
+    }
+
+    #[tokio::test]
+    async fn a_page_with_one_job_posting_is_read_from_its_json_ld() {
+        let fx = Fixtures::start().await;
+        let posting = include_str!("fixtures/posting_jsonld.html");
+        let two = posting.replace("</head>", r#"<script type="application/ld+json">{"@type":"JobPosting","title":"Another","description":"<p>Another job with a long enough description to count as one.</p>"}</script></head>"#);
+        let short = posting.replacen(r#""description": "<p>Acme"#, r#""description": "<p>Short.</p>", "x": "<p>Acme"#, 1);
+        fx.route("/one", 200, "text/html; charset=utf-8", posting)
+            .route("/two", 200, "text/html", two)
+            .route("/short", 200, "text/html", short)
+            .route("/none", 200, "text/html", job_page());
+        let http = client(&limits());
+        let text = posting_text(&http, &format!("{}/one", fx.base())).await.unwrap();
+        assert!(
+            text.starts_with("Title: Senior Rust Engineer\nCompany: Acme\nLocation: Ho Chi Minh City, HCMC, VN\nRemote: yes\nEmployment type: Full time\nSalary: USD 60000-90000 per year\nPosted: 2026-10-20\nValid through: 2099-12-31\n\n"),
+            "{text}"
+        );
+        assert!(text.contains("replication protocol") && text.contains("Profile and tune SQLite") && !text.contains("Cookie settings"), "{text}");
+        // Two postings, or one with too short a description: the page is read as today. The first page
+        // is mostly empty without its JSON-LD, so it needs a browser; the plain job page reads as text.
+        for page in ["/two", "/short"] {
+            let got = posting_text(&http, &format!("{}{page}", fx.base())).await;
+            assert!(got.as_ref().map_or(true, |t| !t.starts_with("Title:")), "{page}: {got:?}");
+        }
+        let text = posting_text(&http, &format!("{}/none", fx.base())).await.unwrap();
+        assert!(text.contains("sync engine in Rust") && !text.starts_with("Title:"), "{text}");
+    }
+
+    #[test]
+    fn the_rendered_page_takes_the_same_json_ld_path() {
+        let posting = include_str!("fixtures/posting_jsonld.html");
+        let text = structured_text(posting, "https://acme.test/careers/senior-rust-engineer").unwrap();
+        assert!(text.starts_with("Title: Senior Rust Engineer\n") && text.contains("replication protocol"), "{text}");
+        assert_eq!(structured_text("<html><body>No data</body></html>", "https://acme.test/x"), None);
+        assert_eq!(structured_text(posting, "not a url"), None);
     }
 
     #[tokio::test]

@@ -1,18 +1,28 @@
-//! `career_page`: a careers page the user added. The links on it that look like postings and stay on
-//! the same site are the candidates; the page is read plain first and rendered in the managed browser
-//! when it has no postings in its HTML (a job list that JavaScript draws) or answers with a wall.
+//! `career_page`: a careers page the user added. The candidates come from the first of these that
+//! gives any, in order of cost:
 //!
-//! The model never picks a URL: only links on the configured site ([`web::same_site`]: the host the user
-//! entered or a subdomain of it) with a posting-shaped path are followed ([`web::looks_like_posting`]), and
-//! a posting's text is read by the runner's own fetch.
+//! 1. the page read plain: its schema.org `JobPosting` JSON-LD ([`super::jsonld`]), else its links
+//!    that look like postings;
+//! 2. the site's `sitemap.xml` ([`super::sitemap`]);
+//! 3. the page rendered in the managed browser (a job list that JavaScript draws, or a wall on the
+//!    plain read): its JSON-LD, else its links.
+//!
+//! The model never picks a URL: only addresses on the configured site ([`super::web::same_site`]: the host
+//! the user entered or a subdomain of it) are candidates, whether a link, a JSON-LD `url` or a
+//! sitemap `<loc>`; links and sitemap entries must also have a posting-shaped path
+//! ([`super::web::looks_like_posting`]). A posting's text is read by the runner's own fetch.
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use tracing::info;
 use url::Url;
 
-use super::web::{check_site, is_generic, links, looks_like_posting, normalize_page_url, page_url, read_listing, same_site, title_from_url, Page, Pages};
+use super::jsonld::job_postings;
+use super::sitemap::read_sitemap;
+use super::web::{check_site, is_generic, links, looks_like_posting, normalize_page_url, page_url, read_plain_listing, same_site, title_from_url, Page, Pages};
 use super::{page_of, title_fits_roles, Cached, Candidate, JobSource, SearchCtx, SearchPage, LISTING_TTL};
 use crate::engine::prefs::Preferences;
 use crate::engine::store::Source;
@@ -38,18 +48,39 @@ impl CareerPage {
     }
 
     async fn postings(&self) -> Result<Arc<Vec<Candidate>>> {
-        self.listing
-            .get_or_load(|| async { read_listing(self.pages.as_ref(), &self.source, self.url.as_str(), |page| self.candidates(page)).await })
-            .await
+        self.listing.get_or_load(|| self.read()).await
     }
 
-    /// The same-site, posting-shaped links of `page`, titled by their text (or their address).
+    /// The candidates, trying the plain page, the sitemap and the browser in turn (see the module
+    /// docs). A [`ChallengeFound`](crate::engine::browser::challenge::ChallengeFound) or any other
+    /// browser error is the caller's error, and so is a plain failure that is not a wall.
+    async fn read(&self) -> Result<Vec<Candidate>> {
+        let pages = self.pages.as_ref();
+        let url = self.url.as_str();
+        let found = read_plain_listing(pages, url, |page| self.candidates(page)).await?;
+        if !found.is_empty() {
+            return Ok(found);
+        }
+        let found = read_sitemap(pages, &self.url, &self.url, &self.company, MAX_POSTINGS).await;
+        if !found.is_empty() {
+            return Ok(found);
+        }
+        let page = pages.rendered(&self.source, url).await?;
+        Ok(self.candidates(&page))
+    }
+
+    /// The postings of `page`: its JSON-LD postings when it has any on the configured site, else its
+    /// same-site, posting-shaped links, titled by their text (or their address).
     fn candidates(&self, page: &Page) -> Vec<Candidate> {
         let Ok(base) = page_url(page) else { return Vec::new() };
         // The site is the one the user configured: a redirect to another site (or links that lead
         // there) does not move it, and a page read from another site has no candidates at all.
         if !same_site(&self.url, &base) {
             return Vec::new();
+        }
+        let structured = self.structured(page, &base, Utc::now());
+        if !structured.is_empty() {
+            return structured;
         }
         links(&page.html, &base)
             .into_iter()
@@ -60,6 +91,32 @@ impl CareerPage {
             })
             .take(MAX_POSTINGS)
             .collect()
+    }
+
+    /// The page's `JobPosting` JSON-LD items that are still open at `now` and whose address is on
+    /// the configured site (JSON-LD is page text: its `url` gets the same rule as a link).
+    fn structured(&self, page: &Page, base: &Url, now: DateTime<Utc>) -> Vec<Candidate> {
+        let postings = job_postings(&page.html, base);
+        if postings.is_empty() {
+            return Vec::new();
+        }
+        let total = postings.len();
+        let mut seen = std::collections::HashSet::new();
+        let found: Vec<Candidate> = postings
+            .into_iter()
+            .filter(|p| !p.expired(now))
+            .filter_map(|p| {
+                let url = p.url.filter(|u| same_site(&self.url, u) && *u != self.url)?;
+                if !seen.insert(url.to_string()) {
+                    return None;
+                }
+                let title = if p.title.is_empty() { title_from_url(&url)? } else { p.title };
+                Some(Candidate { url: url.to_string(), title, company: self.company.clone(), location: p.location, snippet: String::new() })
+            })
+            .take(MAX_POSTINGS)
+            .collect();
+        info!(postings = total, candidates = found.len(), "career page: JSON-LD postings read");
+        found
     }
 }
 
@@ -83,6 +140,9 @@ mod tests {
 
     const LIST: &str = "https://acme.test/careers";
     const PAGE: &str = include_str!("../fixtures/career_page.html");
+    const JSONLD_PAGE: &str = include_str!("../fixtures/career_page_jsonld.html");
+    const SITEMAP: &str = include_str!("../fixtures/sitemap.xml");
+    const SITEMAP_URL: &str = "https://acme.test/sitemap.xml";
 
     fn source(url: &str) -> Source {
         Source { id: 1, kind: "career_page".into(), name: "Acme".into(), url: url.into(), purpose: SourcePurpose::Jobs, enabled: true, session_id: None, last_run_at: None, last_status: None }
@@ -135,7 +195,59 @@ mod tests {
         let adapter = CareerPage::new(fake.clone(), &source(LIST), "Acme").unwrap();
         let page = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap();
         assert_eq!(page.candidates.len(), 4);
-        assert_eq!(fake.asked(), [format!("plain {LIST}"), format!("browser {LIST}")]);
+        assert_eq!(fake.asked(), [format!("plain {LIST}"), format!("plain {SITEMAP_URL}"), format!("browser {LIST}")], "the sitemap before the browser");
+    }
+
+    #[tokio::test]
+    async fn json_ld_postings_come_first_and_keep_to_the_site() {
+        let fake = pages(FakePages::new().plain(LIST, JSONLD_PAGE).plain(SITEMAP_URL, SITEMAP).rendered(LIST, PAGE));
+        let adapter = CareerPage::new(fake.clone(), &source(LIST), "Acme").unwrap();
+        let page = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap();
+        let found: Vec<_> = page.candidates.iter().map(|c| (c.url.as_str(), c.title.as_str(), c.location.as_str())).collect();
+        // Not the expired posting, not the one on another site, not the page's plain link.
+        assert_eq!(
+            found,
+            [
+                ("https://acme.test/careers/senior-rust-engineer", "Senior Rust Engineer", "Ho Chi Minh City, VN"),
+                ("https://careers.acme.test/jobs/4011001", "Data Engineer", "Berlin, Germany"),
+            ]
+        );
+        assert!(page.candidates.iter().all(|c| c.company == "Acme"));
+        assert_eq!(fake.asked(), [format!("plain {LIST}")], "a JSON-LD page is never rendered, and its sitemap never read");
+    }
+
+    #[tokio::test]
+    async fn a_page_without_postings_reads_the_sitemap_before_the_browser() {
+        let empty = "<html><body><div id=root></div></body></html>";
+        let fake = pages(FakePages::new().plain(LIST, empty).plain(SITEMAP_URL, SITEMAP).rendered(LIST, PAGE));
+        let adapter = CareerPage::new(fake.clone(), &source(LIST), "Acme").unwrap();
+        let page = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap();
+        assert_eq!(page.candidates.len(), 5);
+        assert_eq!(page.candidates[0].url, "https://acme.test/careers/senior-rust-engineer", "newest first");
+        assert_eq!(fake.asked(), [format!("plain {LIST}"), format!("plain {SITEMAP_URL}")], "no browser");
+
+        // A sitemap without postings: the browser, whose page may carry JSON-LD.
+        let fake = pages(FakePages::new().plain(LIST, empty).plain(SITEMAP_URL, "<urlset></urlset>").rendered(LIST, JSONLD_PAGE));
+        let adapter = CareerPage::new(fake.clone(), &source(LIST), "Acme").unwrap();
+        let page = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap();
+        assert_eq!(page.candidates.len(), 2);
+        assert_eq!(fake.asked(), [format!("plain {LIST}"), format!("plain {SITEMAP_URL}"), format!("browser {LIST}")]);
+    }
+
+    #[test]
+    fn json_ld_on_a_listing_that_moved_to_another_site_is_ignored() {
+        let adapter = CareerPage::new(pages(FakePages::new()), &source(LIST), "Acme").unwrap();
+        let moved = Page { url: "https://evil.test/careers".into(), html: JSONLD_PAGE.into() };
+        assert!(adapter.candidates(&moved).is_empty());
+        // Later, the dated posting has closed; the undated one stays.
+        let now = DateTime::parse_from_rfc3339("2100-01-01T00:00:00Z").unwrap().with_timezone(&Utc);
+        let page = Page { url: LIST.into(), html: JSONLD_PAGE.into() };
+        let open: Vec<_> = adapter.structured(&page, &Url::parse(LIST).unwrap(), now).into_iter().map(|c| c.title).collect();
+        assert_eq!(open, ["Data Engineer"]);
+        // JSON-LD with no posting on the site: the page's links are read instead.
+        let html = r#"<script type="application/ld+json">{"@type":"JobPosting","title":"Elsewhere","url":"https://evil.test/jobs/1"}</script><a href="/careers/rust-engineer">Rust Engineer</a>"#;
+        let urls: Vec<_> = adapter.candidates(&Page { url: LIST.into(), html: html.into() }).into_iter().map(|c| c.url).collect();
+        assert_eq!(urls, ["https://acme.test/careers/rust-engineer"]);
     }
 
     #[tokio::test]

@@ -49,7 +49,7 @@ use crate::engine::store::{LeadState, NewLead, Source, SourcePurpose, Store};
 use crate::engine::{Core, Paths};
 
 /// A posting with less text than this is not a posting (a bot page, an empty app shell).
-const MIN_POSTING_CHARS: usize = 40;
+pub(super) const MIN_POSTING_CHARS: usize = 40;
 /// Longest posting text kept in the state of a run (and so in every checkpoint).
 pub(super) const MAX_POSTING_CHARS: usize = 40_000;
 /// How much of a fetched posting a challenge check sees.
