@@ -1,4 +1,4 @@
-// The read models of the shell's `applications` commands (`crates/desktop/src/applications/dto.rs`).
+// The read models of the shell's `applications` commands (`src-tauri/src/applications/dto.rs`).
 // Text that comes from a posting, a CV or an email is plain text here: views show it as text only.
 
 import type { CommandError, Insight, Problem, Tone } from "@/shared";

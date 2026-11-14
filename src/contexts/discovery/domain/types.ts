@@ -1,4 +1,4 @@
-// What the shell's `discovery_*` commands return (`crates/desktop/src/discovery/dto.rs`), plus the
+// What the shell's `discovery_*` commands return (`src-tauri/src/discovery/dto.rs`), plus the
 // few shapes the screens keep for themselves. No React, no shell.
 
 import type { CommandError, Insight, Problem } from "@/shared";

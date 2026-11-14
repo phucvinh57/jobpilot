@@ -9,5 +9,9 @@ data/
 backups/
 .claude/worktrees/
 
-# release packages (scripts/package.sh)
+# the web build (vite) and node
 dist/
+node_modules/
+
+# release packages (scripts/package.sh)
+release/

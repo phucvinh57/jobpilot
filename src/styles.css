@@ -1,4 +1,5 @@
-@import "tailwindcss";
+/* Class names are read from the web app only (not the Rust crates or the docs). */
+@import "tailwindcss" source(".");
 
 /* The bundled fonts (assets/fonts, SIL OFL): Inter for text, Space Grotesk for headings,
    Source Serif 4 for the CV preview. */

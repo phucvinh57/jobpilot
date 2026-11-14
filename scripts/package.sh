@@ -1,28 +1,27 @@
 #!/usr/bin/env bash
-# Build release packages into dist/ with the Tauri bundler: a .deb and an AppImage.
+# Build release packages into release/ with the Tauri bundler: a .deb and an AppImage.
 # Usage: scripts/package.sh            (run from anywhere; BUNDLES=deb for the .deb only)
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
-dist="$root/dist"
-web="$root/crates/desktop/web"
+dist="$root/release"
 bundles="${BUNDLES:-deb,appimage}"
 mkdir -p "$dist"
 
 echo "==> web app dependencies"
-pnpm --dir "$web" install --frozen-lockfile
+bun install --frozen-lockfile
 
 echo "==> release build and packages ($bundles)"
-# The Tauri CLI runs from the crate that holds tauri.conf.json. It builds the web app
+# The Tauri CLI finds `src-tauri/tauri.conf.json` from the repository root. It builds the web app
 # (`beforeBuildCommand`), the release binary, then the bundles. The AppImage step downloads
 # linuxdeploy on first use.
 # A bundle that fails (the AppImage needs linuxdeploy to work on this machine) does not hide the
 # ones that were built: they are still copied, and the script ends with the failure.
 status=0
-(cd "$root/crates/desktop" && "$web/node_modules/.bin/tauri" build --bundles "$bundles") || status=$?
+bun run tauri build --bundles "$bundles" || status=$?
 
-echo "==> copy to dist/"
+echo "==> copy to release/"
 found=0
 for pkg in "$root"/target/release/bundle/deb/*.deb "$root"/target/release/bundle/appimage/*.AppImage; do
     [[ -e $pkg ]] || continue

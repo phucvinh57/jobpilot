@@ -55,16 +55,14 @@ render_profile() {
 # Extra cargo args, e.g. CARGO_PROFILE_ARG="--profile ci" (see Cargo.toml).
 read -ra prof <<<"${CARGO_PROFILE_ARG:-}"
 
-web=crates/desktop/web
-
-# The web app first: the Tauri shell embeds its build (`web/dist`) at compile time, so clippy and
+# The web app first: the Tauri shell embeds its build (`dist/`) at compile time, so clippy and
 # the tests of the desktop crate need it. Fonts come from assets/fonts.
-if touches '^(Cargo\.(toml|lock)$|crates/|assets/|scripts/check\.sh$|\.github/workflows/ci\.yml$)'; then
-  run web-install pnpm --dir "$web" install --frozen-lockfile &&
-    run web-typecheck pnpm --dir "$web" typecheck &&
-    run web-lint pnpm --dir "$web" lint &&
-    run web-test pnpm --dir "$web" test &&
-    run web-build pnpm --dir "$web" exec vite build &&
+if touches '^(Cargo\.(toml|lock)$|crates/|src-tauri/|src/|assets/|(package|tsconfig)\.json$|bun\.lock$|index\.html$|(vite|eslint)\.config\.[jt]s$|scripts/check\.sh$|\.github/workflows/ci\.yml$)'; then
+  run web-install bun install --frozen-lockfile &&
+    run web-typecheck bun run typecheck &&
+    run web-lint bun run lint &&
+    run web-test bun run test &&
+    run web-build bun x vite build &&
     # --all-features: also the `dev-tools` feature of the desktop crate (UI checks).
     run clippy cargo clippy --workspace --all-targets --all-features ${prof[@]+"${prof[@]}"} -- -D warnings &&
     run test cargo test --workspace ${prof[@]+"${prof[@]}"}

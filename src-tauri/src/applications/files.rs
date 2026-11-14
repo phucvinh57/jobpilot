@@ -171,7 +171,7 @@ mod tests {
 
     use super::*;
 
-    const EXAMPLE: &str = include_str!("../../../../assets/prompts/example-cv.yaml");
+    const EXAMPLE: &str = include_str!("../../../assets/prompts/example-cv.yaml");
 
     fn fresh_core() -> (tempfile::TempDir, Core) {
         let dir = tempfile::tempdir().expect("a temporary directory");
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn saving_renders_the_edit_and_reports_problems() {
         let (_dir, core) = fresh_core();
-        core.set_profile_path(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profile.yaml"))
+        core.set_profile_path(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../profile.yaml"))
             .expect("the profile path");
         let id = app(&core, None).id;
 

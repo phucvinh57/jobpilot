@@ -41,16 +41,14 @@ jobs:
             libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev \
             librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev
 
-      # The web app (crates/desktop/web): pnpm from its `packageManager` field.
-      - uses: pnpm/action-setup@v4
+      # The web app (repository root): bun from the `packageManager` field; vite and vitest run on Node.
+      - uses: oven-sh/setup-bun@v2
         with:
-          package_json_file: crates/desktop/web/package.json
+          bun-version-file: package.json
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: crates/desktop/web/pnpm-lock.yaml
 
       - uses: rui314/setup-mold@v1 # faster linking of the desktop binary
 

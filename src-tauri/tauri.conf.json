@@ -4,10 +4,10 @@
   "mainBinaryName": "jobpilot",
   "identifier": "dev.jobpilot.app",
   "build": {
-    "frontendDist": "web/dist",
+    "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build"
   },
   "app": {
     "windows": [],
@@ -31,14 +31,14 @@
   "bundle": {
     "active": true,
     "targets": ["deb", "appimage"],
-    "icon": ["../../assets/icons/jobpilot-48.png", "../../assets/icons/jobpilot-256.png"],
+    "icon": ["../assets/icons/jobpilot-48.png", "../assets/icons/jobpilot-256.png"],
     "category": "Productivity",
     "shortDescription": "Tailored CVs, managed-browser applications, Gmail status tracking",
     "longDescription": "Turns a job description into a CV tailored from your own profile.yaml, lets you edit it, fills and submits the application in a managed browser only after you confirm, and tracks replies from Gmail. All data stays on this machine; secrets live in the OS keyring.",
     "linux": {
       "deb": {
         "section": "utils",
-        "desktopTemplate": "../../assets/jobpilot.desktop",
+        "desktopTemplate": "../assets/jobpilot.desktop",
         "recommends": ["google-chrome-stable | chromium | chromium-browser", "gnome-keyring | kwalletd6 | kwalletd5"]
       }
     }

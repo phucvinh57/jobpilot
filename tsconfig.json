@@ -15,7 +15,7 @@
     "skipLibCheck": true,
     "noEmit": true,
     "types": ["vite/client", "node"],
-    "paths": { "@/*": ["./src/*"], "@assets/*": ["../../../assets/*"] }
+    "paths": { "@/*": ["./src/*"], "@assets/*": ["./assets/*"] }
   },
   "include": ["src", "vite.config.ts"]
 }
