@@ -11,6 +11,7 @@ assets/cv.typ              Typst renderer: typst compile --root <dir> --input da
 assets/prompts/            tailor.md (system prompt), example-cv.yaml (few-shot)
 assets/jobpilot.desktop    desktop entry (StartupWMClass=jobpilot, same as the window app id)
 assets/icons/              app icon (svg + png), used by the deb / AppImage
+assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) embedded by `ui/fonts.rs`
 scripts/package.sh         release .deb (cargo-deb) + AppImage if appimagetool exists -> dist/
 scripts/a11y-hold.py       keeps an AT client connected so accessibility ids stay stable (see "Check the UI")
 crates/core  (jobpilot-core, lib jobpilot_core)   no UI
@@ -39,14 +40,17 @@ crates/core  (jobpilot-core, lib jobpilot_core)   no UI
                   P13b `digest/` (extract, count, synthesize, cite: every point must cite stored items)
 crates/desktop (package `jobpilot`)               GPUI views only
   main.rs    logging init, window (app id `jobpilot`)
-  app.rs     AppState (Arc<Core>, selection, screen, health, retry), root view + setup banner
+  app.rs     AppState (Arc<Core>, selection, screen, health, retry, needs_you, detail_from), root view + setup banner
   problem.rs Problem -> help text / call-to-action / Retry (shared by every view)
-  sidebar.rs nav (Job list, Trends), applications grouped by stage, Settings; no input
+  sidebar.rs nav (Today with the needs-you / new-lead badge, Pipeline, Trends), Settings, health line; no input
   detail/{mod,jd,cv,apply,timeline}.rs   settings/{profile,providers,sessions,sources,gmail,appearance}.rs
   settings/profile.rs  "Profile & preferences" card: CV upload + job type, locations, domains, skills, notes (no chat UI; notes go through `prefs_chat` in the background)
-  queue.rs   queue/logic.rs: Job list screen, the start screen (paste-link box -> `add_lead`, leads by score, brief + score breakdown, Prepare CV / Dismiss / Open posting, Search now, "needs you" banner)
+  queue.rs   queue/logic.rs, queue/brief.rs: Today, the start screen (paste-link box -> `add_lead`, "needs you" banners, leads by score, brief + score breakdown + skills matched against `Core::profile_skills`, Prepare CV / Dismiss / Open posting, Search now); its needs-you count is the sidebar badge
+  pipeline.rs  Pipeline screen: applications on a 5-column board (`column_for(Status)`), recent activity (`Store::recent_events`); a card opens Detail
+  brief.rs   company and interview blocks of an `Insight`, shared by Today and the JD tab
   trends/    Trends screen (digest with citations, skill chart, history, sources)
-  detail/mod.rs  the ONE primary action (primary_for: Generate -> Approve CV -> Review & Submit -> Submit); the rest are plain buttons
+  ui/        design kit, pure render: `tokens` (Palette light/dark, `palette(cx)`, `Tone`, radii, type scale), `theme` (palette -> gpui-component `Theme`; switch light/dark only with `ui::theme::set_mode` / `sync_system`, never `Theme::change` directly), `fonts`, `components` (heading, card, section, banner, buttons, chip, tag, nav_item, field, segmented, score_badge, stepper, ...); views build from these instead of local helpers
+  detail/mod.rs  the ONE primary action (primary_for: Generate -> Approve CV -> Review & Submit -> Submit); the rest are plain buttons; breadcrumb back to `detail_from`, stepper; cv.rs shows "Every fact traced" only when `Core::cv_is_traced`
 ```
 
 ## Commands
@@ -100,6 +104,7 @@ GPUI exposes elements through AccessKit (AT-SPI). An element is visible only wit
 - No `unwrap()` / `expect()` on runtime paths (only tests and provably-infallible statics like a constant regex). Return errors with `anyhow::Context`, or recover.
 - Failures the user can act on become a `health::Problem` (no provider, no Chrome, no typst, network) and are shown with a call to action; network errors get a Retry.
 - Log key steps at `info!` with ids/counts only (no page, JD, email or CV text); failures at `warn!`/`error!`.
+- Views use `crate::ui` (`ui::palette(cx)`, its builders) for colours and widgets: no hard-coded colours, no local copies of kit helpers.
 - Exactly one primary button at a time (`detail/mod.rs::primary_for`, unit-tested); it is disabled while work runs. Secondary actions are plain buttons.
 - Outgoing HTTP to a URL that is not the user's own (job boards, feeds, postings, search results) goes through `net::http`; discovery browsers go through `browser::guard`. Both refuse machine-local and private hosts. `allow_private_hosts` exists for tests only.
 - Discovery browsers never disguise automation (no hidden webdriver flag, no user-agent change), and a login, captcha or block page is never solved, evaded or waited out: the source pauses and the user deals with it in the visible browser.
