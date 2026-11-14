@@ -5,6 +5,7 @@ pub mod jobs;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use anyhow::Result;
 use gpui_kit::component::*;
@@ -24,7 +25,6 @@ use jobpilot_core::{mail, runtime, Core};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use crate::detail::Detail;
-use crate::prefs::PreferencesView;
 use crate::queue::QueueView;
 use crate::settings::SettingsView;
 use crate::sidebar::Sidebar;
@@ -36,13 +36,26 @@ pub enum Screen {
     /// The selected application.
     Detail,
     Settings,
-    /// Found jobs sorted by match (P12).
-    Queue,
-    /// The job-search chat and saved preferences (P9).
-    Preferences,
+    /// The Job list: found jobs sorted by match, and the box that turns a pasted link into one (P12).
+    Jobs,
     /// Market trends and reports (P13).
     Trends,
 }
+
+impl Screen {
+    /// A number per screen, to key the fade-in of the main pane.
+    fn index(self) -> u64 {
+        match self {
+            Screen::Detail => 0,
+            Screen::Settings => 1,
+            Screen::Jobs => 2,
+            Screen::Trends => 3,
+        }
+    }
+}
+
+/// Length of the fade-in when the main pane or the open lead changes.
+pub const FADE: StdDuration = StdDuration::from_millis(150);
 
 /// What to run again when a job failed and the user presses Retry.
 #[derive(Clone, Debug)]
@@ -62,30 +75,30 @@ pub struct AppState {
     jobs: HashMap<i64, String>,
     /// Last failure per application, shown inline until its next job starts or it is dismissed.
     errors: HashMap<i64, String>,
-    /// Failure of an input that never became a Draft (bad link, no AI provider...).
-    pub input_error: Option<String>,
     /// What this session fed to `generate` for each Draft, so "Generate" can retry it.
     inputs: HashMap<i64, JdInput>,
     /// Bumped when a job rewrote an application's CV files, so the CV tab reloads them.
     cv_epochs: HashMap<i64, u64>,
     /// The last job started per application, for Retry.
     last_jobs: HashMap<i64, Job>,
-    /// The last input pasted or dropped in the sidebar (Retry for an input that never became a Draft).
-    last_input: Option<JdInput>,
     /// Prerequisites (AI provider, typst, Chrome); `None` until the first check finished.
     pub health: Option<Health>,
     /// Settings section to scroll to the next time Settings is shown.
     pub settings_focus: Option<&'static str>,
-    /// The lead open in the queue (P12).
+    /// The lead open in the Job list (P12).
     pub queue_selected: Option<i64>,
-    /// Bumped whenever the queue is shown, so it reads its leads again.
+    /// Bumped whenever the Job list is shown, so it reads its leads again.
     pub queue_epoch: u64,
-    /// Job-search preferences were saved at least once (the setup banner points to Preferences until then).
+    /// New leads in the Job list (the badge on the sidebar entry), kept current by
+    /// [`refresh_lead_count`](Self::refresh_lead_count) whichever screen is shown.
+    pub lead_count: usize,
+    /// Counts started so far: only the answer of the latest one is shown.
+    lead_count_reads: u64,
+    /// A file dropped on the window (or why it was refused), waiting for the Job list to turn it into
+    /// a lead. The Job list reads it with `.take()`, so it is used once.
+    pub dropped: Option<Result<JdInput, String>>,
+    /// Job-search preferences were saved at least once (the setup banner points to Settings until then).
     pub prefs_saved: bool,
-    /// A skill or domain the user asked to add to their preferences (Trends > "Add to preferences"),
-    /// as a message for the preference chat. The Preferences view reads it with `.take()` when it is
-    /// shown, so it is used once, and puts it in the message box for the user to send.
-    pub prefs_suggestion: Option<String>,
 }
 
 impl AppState {
@@ -94,20 +107,20 @@ impl AppState {
             core,
             applications: Vec::new(),
             selected: None,
-            screen: Screen::Detail,
+            screen: Screen::Jobs,
             jobs: HashMap::new(),
             errors: HashMap::new(),
-            input_error: None,
             inputs: HashMap::new(),
             cv_epochs: HashMap::new(),
             last_jobs: HashMap::new(),
-            last_input: None,
             health: None,
             settings_focus: None,
             queue_selected: None,
             queue_epoch: 0,
+            lead_count: 0,
+            lead_count_reads: 0,
+            dropped: None,
             prefs_saved: false,
-            prefs_suggestion: None,
         };
         state.load();
         state.selected = state.applications.first().map(|a| a.id);
@@ -125,9 +138,12 @@ impl AppState {
         }
     }
 
-    /// Re-read the applications from the store (called after generate/submit/sync).
+    /// Re-read the applications from the store (called after generate/submit/sync), and the
+    /// sidebar badge: a deleted application, a mail change or an approval can move leads in or out
+    /// of the Job list.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.load();
+        self.refresh_lead_count(cx);
         cx.notify();
     }
 
@@ -139,7 +155,7 @@ impl AppState {
 
     pub fn show(&mut self, screen: Screen, cx: &mut Context<Self>) {
         let leaving_settings = self.screen == Screen::Settings && screen != Screen::Settings;
-        if screen == Screen::Queue {
+        if screen == Screen::Jobs {
             self.queue_epoch += 1;
         }
         self.screen = screen;
@@ -150,17 +166,18 @@ impl AppState {
         cx.notify();
     }
 
-    /// Show Settings, scrolled to `section` (`"AI providers"`, `"Browser sessions"`, `"Gmail"`).
+    /// Show Settings, scrolled to `section` (`"AI providers"`, `"Browser sessions"`, `"Gmail"`,
+    /// `"Profile & preferences"`).
     pub fn open_settings(&mut self, section: Option<&'static str>, cx: &mut Context<Self>) {
         self.settings_focus = section;
         self.show(Screen::Settings, cx);
     }
 
-    /// Open Preferences with `message` as a suggestion for the preference chat (see
-    /// [`prefs_suggestion`](Self::prefs_suggestion)).
-    pub fn suggest_preference(&mut self, message: String, cx: &mut Context<Self>) {
-        self.prefs_suggestion = Some(message);
-        self.show(Screen::Preferences, cx);
+    /// A file was dropped on the window: show the Job list, which turns it into a lead (see
+    /// [`dropped`](Self::dropped)).
+    pub fn drop_input(&mut self, input: Result<JdInput, String>, cx: &mut Context<Self>) {
+        self.dropped = Some(input);
+        self.show(Screen::Jobs, cx);
     }
 
     /// Re-check the prerequisites in the background (also at startup).
@@ -176,6 +193,33 @@ impl AppState {
                     }
                 })
                 .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Read the number of leads in the Job list again (the sidebar badge), off the UI thread and
+    /// without the Job list screen: call it once at startup and after anything that adds, prepares
+    /// or dismisses leads (a search, the daily run, an add by hand). An older answer that arrives
+    /// after a newer one is dropped.
+    pub fn refresh_lead_count(&mut self, cx: &mut Context<Self>) {
+        self.lead_count_reads += 1;
+        let read = self.lead_count_reads;
+        let core = self.core.clone();
+        let rx = runtime::spawn(async move { core.new_lead_count() });
+        cx.spawn(async move |this, cx| {
+            match rx.await {
+                Ok(Ok(count)) => {
+                    this.update(cx, |state, cx| {
+                        if is_latest_read(read, state.lead_count_reads) && state.lead_count != count {
+                            state.lead_count = count;
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                }
+                Ok(Err(e)) => tracing::warn!("counting the new leads failed: {e:#}"),
+                Err(_) => {}
             }
         })
         .detach();
@@ -222,40 +266,9 @@ impl AppState {
         }
     }
 
-    /// Retry for an input that never became a Draft (the link could not be fetched).
-    pub fn retry_input(&mut self, cx: &mut Context<Self>) {
-        if let Some(input) = self.last_input.clone() {
-            self.submit_input(input, cx);
-        }
-    }
-
-    /// The failed input can be retried.
-    pub fn can_retry_input(&self) -> bool {
-        self.last_input.is_some()
-    }
-
     /// Counter that changes whenever a job rewrote this application's `cv.yaml` / previews.
     pub fn cv_epoch(&self, id: i64) -> u64 {
         self.cv_epochs.get(&id).copied().unwrap_or(0)
-    }
-
-    /// Sidebar: create a Draft from `input` and run the whole pipeline. The Draft appears (and gets
-    /// selected) with the first progress event.
-    pub fn submit_input(&mut self, input: JdInput, cx: &mut Context<Self>) {
-        self.input_error = None;
-        self.last_input = Some(input.clone());
-        let run_input = input.clone();
-        self.start_job(
-            None,
-            Some(input),
-            move |core, tx| async move {
-                generate_with_browser(&core, None, run_input, move |p| {
-                    let _ = tx.send(p);
-                })
-                .await
-            },
-            cx,
-        );
     }
 
     /// Primary button on a Draft without a CV: re-run generation for this application.
@@ -267,7 +280,7 @@ impl AppState {
         let Some(app) = self.applications.iter().find(|a| a.id == id).cloned() else { return };
         match generate_plan(&app, self.inputs.get(&id)) {
             GeneratePlan::Regenerate => self.start_job(
-                Some(id),
+                id,
                 None,
                 move |core, tx| async move {
                     pipeline::regenerate(&core, id, move |p| {
@@ -280,7 +293,7 @@ impl AppState {
             GeneratePlan::Reingest(input) => {
                 let run_input = input.clone();
                 self.start_job(
-                    Some(id),
+                    id,
                     Some(input),
                     move |core, tx| async move {
                         generate_with_browser(&core, Some(id), run_input, move |p| {
@@ -305,7 +318,7 @@ impl AppState {
         }
         self.last_jobs.insert(id, Job::Revise(instruction.clone()));
         self.start_job(
-            Some(id),
+            id,
             None,
             move |core, tx| async move {
                 pipeline::revise(&core, id, &instruction, move |p| {
@@ -317,41 +330,25 @@ impl AppState {
         );
     }
 
-    /// Run `run` on the global runtime; its progress events arrive over a channel that the UI task
-    /// drains. `existing`: the application this job works on; `None` = a new Draft that gets
-    /// selected when its first event arrives.
-    fn start_job<F, Fut>(
-        &mut self,
-        existing: Option<i64>,
-        retry_input: Option<JdInput>,
-        run: F,
-        cx: &mut Context<Self>,
-    ) where
+    /// Run `run` on the global runtime for application `id`; its progress events arrive over a channel
+    /// that the UI task drains. `retry_input`: what the job was fed, kept so "Generate" can run again.
+    fn start_job<F, Fut>(&mut self, id: i64, retry_input: Option<JdInput>, run: F, cx: &mut Context<Self>)
+    where
         F: FnOnce(Arc<Core>, UnboundedSender<Progress>) -> Fut,
         Fut: Future<Output = Result<Application>> + Send + 'static,
     {
-        if let Some(id) = existing {
-            self.errors.remove(&id);
-            self.jobs.insert(id, "Starting".into());
-            if let Some(input) = &retry_input {
-                self.inputs.insert(id, input.clone());
-            }
-            cx.notify();
+        self.errors.remove(&id);
+        self.jobs.insert(id, "Starting".into());
+        if let Some(input) = retry_input {
+            self.inputs.insert(id, input);
         }
+        cx.notify();
 
         let (tx, mut rx) = unbounded_channel::<Progress>();
         let done = runtime::spawn(run(self.core.clone(), tx));
-        let select_new = existing.is_none();
         cx.spawn(async move |this, cx| {
-            let mut app_id = existing;
-            let mut retry_input = retry_input;
-            let mut first = true;
             while let Some(progress) = rx.recv().await {
-                app_id = Some(progress.app_id);
-                let input = retry_input.take();
-                let announce = std::mem::take(&mut first);
-                let alive = this.update(cx, |state, cx| state.on_progress(&progress, input, select_new && announce, cx));
-                if alive.is_err() {
+                if this.update(cx, |state, cx| state.on_progress(&progress, cx)).is_err() {
                     return;
                 }
             }
@@ -359,52 +356,32 @@ impl AppState {
                 Ok(result) => result,
                 Err(_) => Err(anyhow::anyhow!("the task was cancelled")),
             };
-            this.update(cx, |state, cx| state.finish_job(app_id, result, cx)).ok();
+            this.update(cx, |state, cx| state.finish_job(id, result, cx)).ok();
         })
         .detach();
     }
 
-    fn on_progress(&mut self, p: &Progress, input: Option<JdInput>, select: bool, cx: &mut Context<Self>) {
-        let new_row = !self.applications.iter().any(|a| a.id == p.app_id);
+    fn on_progress(&mut self, p: &Progress, cx: &mut Context<Self>) {
         self.errors.remove(&p.app_id);
         self.jobs.insert(p.app_id, progress_label(p));
-        if let Some(input) = input {
-            self.inputs.insert(p.app_id, input);
-        }
-        // The Draft row appears with the first event; the analysis renames it (company, role).
+        // The analysis renames the row (company, role).
         self.load();
-        if select && new_row {
-            self.selected = Some(p.app_id);
-            self.screen = Screen::Detail;
-        }
         cx.notify();
     }
 
-    fn finish_job(&mut self, app_id: Option<i64>, result: Result<Application>, cx: &mut Context<Self>) {
-        match app_id {
-            Some(id) => {
-                self.jobs.remove(&id);
-                *self.cv_epochs.entry(id).or_insert(0) += 1;
-                match result {
-                    Ok(_) => {
-                        self.errors.remove(&id);
-                        self.inputs.remove(&id);
-                    }
-                    Err(e) => {
-                        let message = format!("{e:#}");
-                        self.last_jobs.entry(id).or_insert(Job::Generate);
-                        self.needs_recheck(&message, cx);
-                        self.errors.insert(id, message);
-                    }
-                }
+    fn finish_job(&mut self, id: i64, result: Result<Application>, cx: &mut Context<Self>) {
+        self.jobs.remove(&id);
+        *self.cv_epochs.entry(id).or_insert(0) += 1;
+        match result {
+            Ok(_) => {
+                self.errors.remove(&id);
+                self.inputs.remove(&id);
             }
-            // Refused before a Draft existed (bad link, no AI provider).
-            None => {
-                if let Err(e) = result {
-                    let message = format!("{e:#}");
-                    self.needs_recheck(&message, cx);
-                    self.input_error = Some(message);
-                }
+            Err(e) => {
+                let message = format!("{e:#}");
+                self.last_jobs.entry(id).or_insert(Job::Generate);
+                self.needs_recheck(&message, cx);
+                self.errors.insert(id, message);
             }
         }
         self.load();
@@ -418,8 +395,8 @@ impl AppState {
         }
     }
 
-    /// "Next in queue": show the queue with its best lead open (after a submit or a dismissal).
-    pub fn next_in_queue(&mut self, cx: &mut Context<Self>) {
+    /// "Next job": show the Job list with its best lead open (after a submit or a dismissal).
+    pub fn next_job(&mut self, cx: &mut Context<Self>) {
         let core = self.core.clone();
         let rx = runtime::spawn(async move { core.queue_next() });
         cx.spawn(async move |this, cx| {
@@ -433,7 +410,7 @@ impl AppState {
             };
             this.update(cx, |state, cx| {
                 state.queue_selected = next;
-                state.show(Screen::Queue, cx);
+                state.show(Screen::Jobs, cx);
             })
             .ok();
         })
@@ -480,6 +457,11 @@ impl AppState {
 }
 
 /// Colour of the status dot.
+/// The answer of read number `read` is the one to show only while it is the latest started.
+pub(crate) fn is_latest_read(read: u64, latest: u64) -> bool {
+    read == latest
+}
+
 pub fn status_color(status: Status, theme: &Theme) -> Hsla {
     match status {
         Status::Draft => theme.muted_foreground,
@@ -492,14 +474,13 @@ pub fn status_color(status: Status, theme: &Theme) -> Hsla {
     }
 }
 
-/// Root view: sidebar on the left, the current [`Screen`] on the right.
+/// Root view: sidebar on the left, the current [`Screen`] on the right (fading in when it changes).
 pub struct JobPilot {
     state: Entity<AppState>,
     sidebar: Entity<Sidebar>,
     detail: Entity<Detail>,
     settings: Entity<SettingsView>,
     queue: Entity<QueueView>,
-    prefs: Entity<PreferencesView>,
     trends: Entity<TrendsView>,
 }
 
@@ -510,13 +491,13 @@ impl JobPilot {
         state.update(cx, |state, cx| {
             state.watch_mail(cx);
             state.refresh_health(cx);
+            state.refresh_lead_count(cx);
         });
         Self {
             sidebar: cx.new(|cx| Sidebar::new(state.clone(), window, cx)),
             detail: cx.new(|cx| Detail::new(state.clone(), window, cx)),
             settings: cx.new(|cx| SettingsView::new(state.clone(), cx)),
             queue: cx.new(|cx| QueueView::new(state.clone(), window, cx)),
-            prefs: cx.new(|cx| PreferencesView::new(state.clone(), cx)),
             trends: cx.new(|cx| TrendsView::new(state.clone(), window, cx)),
             state,
         }
@@ -525,11 +506,11 @@ impl JobPilot {
 
 impl Render for JobPilot {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let main = match self.state.read(cx).screen {
+        let screen = self.state.read(cx).screen;
+        let main = match screen {
             Screen::Detail => self.detail.clone().into_any_element(),
             Screen::Settings => self.settings.clone().into_any_element(),
-            Screen::Queue => self.queue.clone().into_any_element(),
-            Screen::Preferences => self.prefs.clone().into_any_element(),
+            Screen::Jobs => self.queue.clone().into_any_element(),
             Screen::Trends => self.trends.clone().into_any_element(),
         };
         let theme = cx.theme();
@@ -539,17 +520,11 @@ impl Render for JobPilot {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            // Drop a .md/.txt/.html/.pdf file anywhere on the window to start a Draft from it.
+            // Drop a .md/.txt/.html/.pdf file anywhere on the window to add it to the Job list as a lead.
             .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(highlight))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 let result = jobs::file_input(paths.paths());
-                this.state.update(cx, |state, cx| match result {
-                    Ok(input) => state.submit_input(input, cx),
-                    Err(message) => {
-                        state.input_error = Some(message);
-                        cx.notify();
-                    }
-                });
+                this.state.update(cx, |state, cx| state.drop_input(result, cx));
             }))
             .child(self.sidebar.clone())
             .child(
@@ -559,7 +534,18 @@ impl Render for JobPilot {
                     .min_w_0()
                     .h_full()
                     .children(crate::problem::setup_banner(&self.state, cx))
-                    .child(div().flex_1().min_h_0().child(main)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .child(main)
+                            // A short fade-in whenever another screen is shown.
+                            .with_animation(
+                                ElementId::NamedInteger("screen".into(), screen.index()),
+                                Animation::new(FADE).with_easing(ease_in_out),
+                                |this, delta| this.opacity(delta),
+                            ),
+                    ),
             )
     }
 }
@@ -736,5 +722,17 @@ fn demo_insight(slug: &str) -> Insight {
             format!("https://{slug}.example.com/about"),
             format!("https://{slug}.example.com/careers"),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: it would pull in gpui's `test` attribute and shadow the standard one.
+    use super::is_latest_read;
+
+    #[test]
+    fn only_the_latest_lead_count_is_shown() {
+        assert!(is_latest_read(3, 3));
+        assert!(!is_latest_read(2, 3), "an older answer arriving late is dropped");
     }
 }

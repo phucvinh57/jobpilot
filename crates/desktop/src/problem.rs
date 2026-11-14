@@ -36,6 +36,24 @@ pub fn help_with(
 ) -> Option<Div> {
     let advice = problem.advice()?;
     let muted = cx.theme().muted_foreground;
+    let buttons = action_buttons(id, problem, state, retry, open_browser);
+    Some(
+        div()
+            .v_flex()
+            .gap_1()
+            .child(div().text_sm().text_color(muted).child(advice))
+            .when(!buttons.is_empty(), |d| d.child(div().h_flex().flex_wrap().gap_2().children(buttons))),
+    )
+}
+
+/// The buttons of [`help_with`] alone: Settings shortcut, "Check again", "Open browser", Retry.
+fn action_buttons(
+    id: &str,
+    problem: Problem,
+    state: &Entity<AppState>,
+    retry: Option<RetryFn>,
+    open_browser: Option<RetryFn>,
+) -> Vec<AnyElement> {
     let mut buttons: Vec<AnyElement> = Vec::new();
 
     if let Some(section) = problem.settings_section() {
@@ -86,18 +104,13 @@ pub fn help_with(
                 .into_any_element(),
         );
     }
-    Some(
-        div()
-            .v_flex()
-            .gap_1()
-            .child(div().text_sm().text_color(muted).child(advice))
-            .when(!buttons.is_empty(), |d| d.child(div().h_flex().flex_wrap().gap_2().children(buttons))),
-    )
+    buttons
 }
 
-/// Banner above the main pane while something the main flow needs is missing (no AI provider, no typst),
-/// and until the job preferences are saved (it points to the Preferences chat).
-/// `None` when everything is in place (or the first check has not finished).
+/// Compact bar above the main pane while something the main flow needs is missing (no AI provider,
+/// no typst), and until the job preferences are saved (it points to Settings > Profile & preferences).
+/// One line per missing thing, each with its action button. `None` when everything is in place (or
+/// the first check has not finished).
 pub fn setup_banner(state: &Entity<AppState>, cx: &App) -> Option<Div> {
     let (blockers, screen, prefs_saved) = {
         let s = state.read(cx);
@@ -108,56 +121,50 @@ pub fn setup_banner(state: &Entity<AppState>, cx: &App) -> Option<Div> {
         return None;
     }
     let theme = cx.theme();
-    let mut rows: Vec<Div> = blockers
+    // One line: warning icon, what is missing, then the buttons that fix it.
+    let line = |id: &str, title: &'static str, buttons: Vec<AnyElement>| {
+        div()
+            .id(SharedString::from(format!("{id}-banner")))
+            .role(Role::Group)
+            .aria_label(title)
+            .h_flex()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_1p5()
+            .rounded_md()
+            .border_1()
+            .border_color(theme.warning.opacity(0.45))
+            .bg(theme.warning.opacity(0.08))
+            .child(Icon::new(IconName::TriangleAlert).size_4().flex_shrink_0().text_color(theme.warning))
+            .child(div().flex_1().min_w_0().truncate().text_sm().child(title))
+            .child(div().h_flex().flex_shrink_0().gap_2().children(buttons))
+    };
+    let mut rows: Vec<Stateful<Div>> = blockers
         .into_iter()
         .filter_map(|problem| {
-            let title = match problem {
-                Problem::NoProvider => "No AI provider yet: JobPilot cannot write CVs without one.",
-                Problem::NoTypst => "Typst is not installed: CVs cannot be rendered.",
+            let (id, title) = match problem {
+                Problem::NoProvider => ("setup-provider", "No AI provider yet: JobPilot cannot write CVs without one."),
+                Problem::NoTypst => ("setup-typst", "Typst is not installed: CVs cannot be rendered."),
                 _ => return None,
             };
-            let id = match problem {
-                Problem::NoProvider => "setup-provider",
-                _ => "setup-typst",
-            };
-            let help = help(id, problem, state, None, cx)?;
-            Some(div().v_flex().gap_1().child(div().text_sm().font_semibold().child(title)).child(help))
+            problem.advice()?;
+            Some(line(id, title, action_buttons(id, problem, state, None, None)))
         })
         .collect();
-    if !prefs_saved && screen != Screen::Preferences {
+    if !prefs_saved {
         let state = state.clone();
-        rows.push(
-            div()
-                .v_flex()
-                .gap_1()
-                .child(div().text_sm().font_semibold().child("Tell JobPilot what job you are looking for."))
-                .child(div().text_sm().text_color(theme.muted_foreground).child("No preferences are saved yet: a short chat sets them up."))
-                .child(
-                    div().h_flex().child(
-                        Button::new("setup-preferences")
-                            .outline()
-                            .compact()
-                            .icon(IconName::Settings2)
-                            .label("Open Preferences")
-                            .on_click(move |_, _, cx| state.update(cx, |s, cx| s.show(Screen::Preferences, cx))),
-                    ),
-                ),
-        );
+        let open = Button::new("setup-preferences")
+            .outline()
+            .compact()
+            .icon(IconName::Settings2)
+            .label("Set your preferences")
+            .on_click(move |_, _, cx| state.update(cx, |s, cx| s.open_settings(Some("Profile & preferences"), cx)))
+            .into_any_element();
+        rows.push(line("setup-preferences", "Tell JobPilot what job you are looking for.", vec![open]));
     }
     if rows.is_empty() {
         return None;
     }
-    Some(
-        div()
-            .v_flex()
-            .gap_2()
-            .m_4()
-            .mb_0()
-            .p_3()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.warning)
-            .bg(theme.warning.opacity(0.08))
-            .children(rows),
-    )
+    Some(div().v_flex().gap_1().mx_6().mt_4().children(rows))
 }

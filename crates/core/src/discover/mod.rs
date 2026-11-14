@@ -22,6 +22,7 @@
 //! - [`handoff`]: the login / captcha / block page hand-off: [`Core::discover_open_browser`] opens the
 //!   page visibly for the user (the app never solves a challenge), the default [`text_probe`], and
 //!   [`needs_human`] (a paused run's reason as the `Problem` to show).
+//! - [`manual`]: [`Core::add_lead`], a job the user pasted (link, file or text) added to the Job list as a lead.
 //! - [`schedule`]: the optional daily run (`discover_daily_enabled`, `set_discover_daily`, `discover_due`).
 //! - [`sources`]: add, enable, bind a session to and remove job sources (`Core::job_sources`, ...).
 //! - [`limits`]: the per-host delay, pages per run, and the three-challenges rule. Every request
@@ -35,6 +36,7 @@ pub mod deps;
 mod fetch;
 pub mod handoff;
 pub mod limits;
+pub mod manual;
 pub mod promote;
 pub mod queue;
 mod run;
@@ -55,6 +57,7 @@ pub use deps::{
 };
 pub use handoff::{needs_human, text_probe};
 pub use limits::{DiscoverLimits, MAX_CHALLENGES_IN_A_ROW};
+pub use manual::ManualDeps;
 pub use run::lead_dir;
 pub use source::{Candidate, JobSource, SearchCtx, SearchPage};
 pub use sources::{source_url_hint, JOB_SOURCE_KINDS};

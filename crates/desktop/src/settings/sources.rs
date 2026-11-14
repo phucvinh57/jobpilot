@@ -3,7 +3,7 @@
 //! Views only: what a source accepts is checked by `Core::add_job_source`; the sources, their last
 //! run and the sessions come from `Core`. A source that needs a login is read in a managed session
 //! the user logged in to under Browser sessions; a source that is paused at a login, captcha or block
-//! page is continued from the Queue.
+//! page is continued from the Job list.
 
 use std::future::Future;
 
@@ -49,7 +49,7 @@ fn status_line(source: &Source, now: DateTime<Utc>) -> (String, Outcome) {
     let status = source.last_status.as_deref().map(str::trim).unwrap_or_default();
     match (source.last_run_at, status) {
         (None, "") => ("never run".into(), Outcome::Never),
-        (_, "needs_human") => ("needs you: continue it from the Queue".into(), Outcome::NeedsYou),
+        (_, "needs_human") => ("needs you: continue it from the Job list".into(), Outcome::NeedsYou),
         (at, status) => {
             let outcome = if status == "ok" {
                 Outcome::Ok
@@ -84,7 +84,7 @@ pub struct SourcesSection {
     sessions: Vec<Session>,
     /// Sources paused for the user right now.
     waiting: Vec<i64>,
-    /// "Search daily while JobPilot is open" (the Queue runs it).
+    /// "Search daily while JobPilot is open" (the Job list runs it).
     daily: bool,
     /// Reload from the store on the next render.
     dirty: bool,

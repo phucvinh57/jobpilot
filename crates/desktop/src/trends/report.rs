@@ -8,7 +8,8 @@ use jobpilot_core::chrono::{DateTime, Local, Utc};
 use jobpilot_core::store::Report;
 use jobpilot_core::trends::{Digest, DigestData, Point, Section, SkillCount, SkillCounts};
 
-use super::{Colors, TrendsView};
+use super::{AddButton, Colors, TrendsView};
+use crate::settings::profile::Field;
 use crate::settings::section;
 
 /// Skills drawn in the chart.
@@ -16,11 +17,11 @@ const CHART_ROWS: usize = 10;
 /// Reports listed in the history.
 const HISTORY_ROWS: usize = 30;
 
-/// The message the Preferences screen gets for a skill or domain of the digest.
-fn suggestion(section: Section, topic: &str) -> String {
+/// The list of the preferences a point of `section` is added to: domains, else skills.
+fn target(section: Section) -> Field {
     match section {
-        Section::Domains => format!("Add the domain \"{topic}\" to my preferences: the market looks active there."),
-        _ => format!("Add the skill \"{topic}\" to my preferences: the market asks for it more."),
+        Section::Domains => Field::Domains,
+        _ => Field::Skills,
     }
 }
 
@@ -173,16 +174,19 @@ impl TrendsView {
             })
             .collect();
         let suggest = (point.section.is_suggestible() && !point.topic.is_empty()).then(|| {
-            let message = suggestion(point.section, &point.topic);
+            let field = target(point.section);
+            let topic = point.topic.clone();
+            let state = self.add_button(field, &topic);
             Button::new(("trends-suggest-point", idx))
                 .outline()
                 .compact()
-                .label("Add to preferences")
-                .accessibility_label(format!("Add {} to preferences", point.topic))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let message = message.clone();
-                    this.state.update(cx, |s, cx| s.suggest_preference(message, cx));
-                }))
+                .when(state == AddButton::Added, |b| b.icon(IconName::Check))
+                .label(state.label())
+                .accessibility_label(state.accessibility(&topic))
+                .when(state == AddButton::Avoided, |b| b.tooltip(state.tooltip()))
+                .loading(state == AddButton::Adding)
+                .disabled(!state.enabled())
+                .on_click(cx.listener(move |this, _, _, cx| this.add_to_preferences(field, topic.clone(), cx)))
         });
         div()
             .v_flex()
@@ -209,8 +213,9 @@ impl TrendsView {
         let partial = latest_month_is_partial(&counts.months, &created.format("%Y-%m").to_string());
         let rows = counts.skills.iter().take(CHART_ROWS).enumerate().map(|(i, skill)| {
             let share = (skill.total as f32 / max).clamp(0.02, 1.0);
-            // Any skill of the chart, rising or not: the message makes no claim about the trend.
-            let message = format!("Add the skill \"{}\" to my preferences.", skill.skill);
+            // Any skill of the chart, rising or not: adding it makes no claim about the trend.
+            let name = skill.skill.clone();
+            let state = self.add_button(Field::Skills, &name);
             div()
                 .h_flex()
                 .items_center()
@@ -230,13 +235,12 @@ impl TrendsView {
                     Button::new(("trends-suggest-skill", i))
                         .ghost()
                         .compact()
-                        .icon(IconName::Plus)
-                        .accessibility_label(format!("Add {} to preferences", skill.skill))
-                        .tooltip("Add to preferences")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let message = message.clone();
-                            this.state.update(cx, |s, cx| s.suggest_preference(message, cx));
-                        })),
+                        .icon(if state == AddButton::Added { IconName::Check } else { IconName::Plus })
+                        .accessibility_label(state.accessibility(&skill.skill))
+                        .tooltip(state.tooltip())
+                        .loading(state == AddButton::Adding)
+                        .disabled(!state.enabled())
+                        .on_click(cx.listener(move |this, _, _, cx| this.add_to_preferences(Field::Skills, name.clone(), cx))),
                 )
         });
         Some(
@@ -295,7 +299,8 @@ impl TrendsView {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe, is_web_url, latest_month_is_partial, suggestion};
+    use super::{describe, is_web_url, latest_month_is_partial, target};
+    use crate::settings::profile::Field;
     use jobpilot_core::trends::{Section, SkillCount};
 
     fn skill(by_month: &[u32]) -> SkillCount {
@@ -367,9 +372,9 @@ mod tests {
     }
 
     #[test]
-    fn suggestions_name_the_kind_of_preference() {
-        assert!(suggestion(Section::RisingSkills, "Rust").contains("skill \"Rust\""));
-        assert!(suggestion(Section::Domains, "fintech").contains("domain \"fintech\""));
+    fn a_point_is_added_to_the_list_of_its_kind() {
+        assert_eq!(target(Section::RisingSkills), Field::Skills);
+        assert_eq!(target(Section::Domains), Field::Domains);
     }
 
     #[test]

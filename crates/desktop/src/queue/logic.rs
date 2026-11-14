@@ -1,13 +1,126 @@
-//! Pure logic of the queue screen (no GPUI, easy to test): the one primary button, score and time
+//! Pure logic of the Job list screen (the queue) (no GPUI, easy to test): the one primary button, score and time
 //! labels, source status lines.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use jobpilot_core::chrono::{DateTime, Utc};
 use jobpilot_core::discover::promote::Dismissed;
 use jobpilot_core::store::Source;
 
-/// The queue's primary action.
+/// Most postings that may wait behind the one being read (links pasted or files dropped meanwhile).
+pub const MAX_WAITING: usize = 10;
+
+/// What became of an input put behind the posting that is being read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Queued {
+    /// At the end of the queue.
+    Waiting,
+    /// The same input is being read or already waits: nothing added.
+    Duplicate,
+    /// [`MAX_WAITING`] are waiting: nothing added.
+    Full,
+}
+
+/// Put `item` at the end of `queue`, unless it is the `running` one or one already waiting (a
+/// Retry or a second paste of the same link would read the same posting twice), or
+/// [`MAX_WAITING`] wait already.
+pub fn enqueue<T: PartialEq>(running: Option<&T>, queue: &mut VecDeque<T>, item: T) -> Queued {
+    if running == Some(&item) || queue.contains(&item) {
+        return Queued::Duplicate;
+    }
+    if queue.len() >= MAX_WAITING {
+        return Queued::Full;
+    }
+    queue.push_back(item);
+    Queued::Waiting
+}
+
+/// Most failures kept under the link box: the oldest fall off.
+pub const MAX_FAILURES: usize = 5;
+
+/// What the link box says when a posting is pasted that is being read or already waits.
+pub const ALREADY_READING: &str = "Already reading this posting";
+
+/// An input (link, file, text) that did not become a lead, with what Retry runs again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddFailure<T> {
+    pub message: String,
+    /// What Retry runs again; `None` for a refusal with nothing to retry (a drop that was refused,
+    /// a full queue).
+    pub input: Option<T>,
+}
+
+/// The failures under the link box, the newest first. An input has at most one (a new failure of
+/// the same input replaces the old one), so a batch keeps what went wrong with each of its items.
+#[derive(Debug)]
+pub struct AddFailures<T> {
+    items: Vec<AddFailure<T>>,
+}
+
+impl<T> Default for AddFailures<T> {
+    fn default() -> Self {
+        Self { items: Vec::new() }
+    }
+}
+
+impl<T: PartialEq> AddFailures<T> {
+    /// Show `failure` first. It replaces the one of the same input (or, without an input, the one
+    /// with the same message); at most [`MAX_FAILURES`] are kept.
+    pub fn push(&mut self, failure: AddFailure<T>) {
+        self.items.retain(|f| match (&f.input, &failure.input) {
+            (Some(a), Some(b)) => a != b,
+            (None, None) => f.message != failure.message,
+            _ => true,
+        });
+        self.items.insert(0, failure);
+        self.items.truncate(MAX_FAILURES);
+    }
+
+    /// Forget the failure of `input` (it is being read again, or was read): the others stay.
+    pub fn clear_input(&mut self, input: &T) {
+        self.items.retain(|f| f.input.as_ref() != Some(input));
+    }
+
+    /// Forget them all; whether there was any.
+    pub fn clear(&mut self) -> bool {
+        let any = !self.items.is_empty();
+        self.items.clear();
+        any
+    }
+
+    /// The newest first.
+    pub fn iter(&self) -> impl Iterator<Item = &AddFailure<T>> {
+        self.items.iter()
+    }
+}
+
+/// Put `input` behind the posting being read (`running`), and keep the failures honest about it:
+/// the failure of `input` goes only when it is really queued again; a duplicate or a full queue
+/// leaves every failure as it was (a full queue adds its own, with nothing to retry).
+pub fn queue_behind<T: PartialEq + Clone>(
+    running: Option<&T>,
+    waiting: &mut VecDeque<T>,
+    failures: &mut AddFailures<T>,
+    input: T,
+) -> Queued {
+    let queued = enqueue(running, waiting, input.clone());
+    match queued {
+        Queued::Waiting => failures.clear_input(&input),
+        Queued::Duplicate => {}
+        Queued::Full => failures.push(AddFailure {
+            message: format!("{MAX_WAITING} postings are already waiting: add this one when they have been read."),
+            input: None,
+        }),
+    }
+    queued
+}
+
+/// "3 waiting" next to the spinner; `None` when nothing waits.
+pub fn waiting_label(waiting: usize) -> Option<String> {
+    (waiting > 0).then(|| format!("{waiting} waiting"))
+}
+
+/// The Job list's primary action.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QueueAction {
     PrepareCv,
@@ -23,7 +136,7 @@ impl QueueAction {
     }
 }
 
-/// What the queue's primary button looks like right now.
+/// What the Job list's primary button looks like right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueuePrimary {
     pub action: QueueAction,
@@ -37,7 +150,7 @@ pub struct QueuePrimary {
 /// What `queue_primary_for` needs to know.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct QueueFacts {
-    /// New leads in the queue, before the filters.
+    /// New leads in the Job list, before the filters.
     pub total: usize,
     /// Leads that pass the filters.
     pub shown: usize,
@@ -51,8 +164,8 @@ pub struct QueueFacts {
     pub sources: usize,
 }
 
-/// The one primary button of the queue: "Prepare CV" while there are leads, "Search now" when the
-/// queue is empty. Disabled while the work it starts runs. Every other button on the screen is plain.
+/// The one primary button of the Job list: "Prepare CV" while there are leads, "Search now" when the
+/// list is empty. Disabled while the work it starts runs. Every other button on the screen is plain.
 pub fn queue_primary_for(f: &QueueFacts) -> QueuePrimary {
     let ready = |action, hint: Option<String>| QueuePrimary { action, enabled: true, loading: false, hint };
     let blocked = |action, hint: &str| QueuePrimary { action, enabled: false, loading: false, hint: Some(hint.to_string()) };
@@ -62,7 +175,7 @@ pub fn queue_primary_for(f: &QueueFacts) -> QueuePrimary {
         } else if f.sources == 0 {
             blocked(QueueAction::SearchNow, "No job source yet: add one in Settings, then search.")
         } else {
-            ready(QueueAction::SearchNow, Some("The queue is empty.".into()))
+            ready(QueueAction::SearchNow, Some("No jobs yet.".into()))
         };
     }
     if f.targets == 0 {
@@ -171,7 +284,7 @@ pub fn dismissed_note(out: &Dismissed) -> String {
 }
 
 /// A "Prepare CV" batch whose results stopped coming (the task ended early): its jobs that never
-/// reported leave the queue of running jobs and become failures the user can retry.
+/// reported leave the running ones and become failures the user can retry.
 pub fn drop_unreported<J>(jobs: &mut HashMap<i64, J>, failed: &mut HashMap<i64, String>, unreported: impl IntoIterator<Item = i64>) {
     for id in unreported {
         if jobs.remove(&id).is_some() {
@@ -186,6 +299,111 @@ mod tests {
     use jobpilot_core::store::{Source, SourcePurpose};
 
     use super::*;
+
+    #[test]
+    fn postings_added_while_one_is_read_wait_in_order_up_to_a_limit() {
+        let mut queue = std::collections::VecDeque::new();
+        assert_eq!(waiting_label(queue.len()), None, "nothing waits, nothing is said");
+        for n in 0..MAX_WAITING {
+            assert_eq!(enqueue(None, &mut queue, n), Queued::Waiting);
+        }
+        assert_eq!(enqueue(None, &mut queue, 99), Queued::Full, "a full queue refuses the next one");
+        assert_eq!(queue.len(), MAX_WAITING);
+        assert_eq!(queue.pop_front(), Some(0), "first in, first read");
+        assert_eq!(queue.pop_front(), Some(1));
+        assert_eq!(enqueue(None, &mut queue, 99), Queued::Waiting, "room again after one is taken");
+        assert_eq!(queue.back(), Some(&99));
+        assert_eq!(waiting_label(1).as_deref(), Some("1 waiting"));
+        assert_eq!(waiting_label(queue.len()).as_deref(), Some("9 waiting"));
+    }
+
+    #[test]
+    fn an_input_already_running_or_waiting_is_not_queued_again() {
+        let mut queue = std::collections::VecDeque::new();
+        assert_eq!(enqueue(Some(&"a"), &mut queue, "a"), Queued::Duplicate, "the one being read");
+        assert_eq!(enqueue(Some(&"a"), &mut queue, "b"), Queued::Waiting);
+        assert_eq!(enqueue(Some(&"a"), &mut queue, "b"), Queued::Duplicate, "the one already waiting");
+        assert_eq!(enqueue(None, &mut queue, "a"), Queued::Waiting, "nothing is running: it is a new one");
+        assert_eq!(queue, ["b", "a"]);
+        // A duplicate is a duplicate even when the queue is full.
+        let mut full: std::collections::VecDeque<usize> = (0..MAX_WAITING).collect();
+        assert_eq!(enqueue(None, &mut full, 3), Queued::Duplicate);
+        assert_eq!(full.len(), MAX_WAITING);
+    }
+
+    fn failure(message: &str, input: Option<&'static str>) -> AddFailure<&'static str> {
+        AddFailure { message: message.into(), input }
+    }
+
+    fn messages<'a>(failures: &'a AddFailures<&'static str>) -> Vec<&'a str> {
+        failures.iter().map(|f| f.message.as_str()).collect()
+    }
+
+    #[test]
+    fn failures_are_kept_per_input_newest_first_and_each_is_cleared_on_its_own() {
+        let mut failures = AddFailures::default();
+        assert_eq!(failures.iter().count(), 0);
+        failures.push(failure("a failed", Some("a")));
+        failures.push(failure("b failed", Some("b")));
+        failures.push(failure("drop refused", None));
+        assert_eq!(messages(&failures), ["drop refused", "b failed", "a failed"], "a batch keeps every failure, newest first");
+
+        // Reading `a` again clears its failure only.
+        failures.clear_input(&"a");
+        assert_eq!(messages(&failures), ["drop refused", "b failed"]);
+        failures.clear_input(&"c");
+        assert_eq!(failures.iter().count(), 2, "an input with no failure changes nothing");
+
+        // The same input failing again replaces its old message and moves to the front.
+        failures.push(failure("b failed again", Some("b")));
+        assert_eq!(messages(&failures), ["b failed again", "drop refused"]);
+        // Without an input, the same message is shown once.
+        failures.push(failure("drop refused", None));
+        assert_eq!(messages(&failures), ["drop refused", "b failed again"]);
+
+        assert!(failures.clear());
+        assert_eq!(failures.iter().count(), 0);
+        assert!(!failures.clear(), "nothing to clear");
+    }
+
+    #[test]
+    fn a_failure_goes_only_when_its_input_is_really_queued_again() {
+        let mut waiting = VecDeque::new();
+        let mut failures = AddFailures::default();
+        failures.push(failure("a failed", Some("a")));
+        failures.push(failure("b failed", Some("b")));
+
+        // `b` is being read: asking for `b` again changes nothing, and `a` keeps its failure.
+        assert_eq!(queue_behind(Some(&"b"), &mut waiting, &mut failures, "b"), Queued::Duplicate);
+        assert_eq!(messages(&failures), ["b failed", "a failed"], "a duplicate clears nothing");
+        assert!(waiting.is_empty());
+
+        // `a`'s Retry queues it behind `b`: its failure goes, `b`'s stays.
+        assert_eq!(queue_behind(Some(&"b"), &mut waiting, &mut failures, "a"), Queued::Waiting);
+        assert_eq!(messages(&failures), ["b failed"]);
+        // `a` again while it waits: a duplicate.
+        assert_eq!(queue_behind(Some(&"b"), &mut waiting, &mut failures, "a"), Queued::Duplicate);
+
+        // A full queue refuses and says so, keeping the failure of the refused input.
+        let mut waiting: VecDeque<&str> = ["w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w9", "w10"].into();
+        assert_eq!(waiting.len(), MAX_WAITING);
+        assert_eq!(queue_behind(Some(&"x"), &mut waiting, &mut failures, "b"), Queued::Full);
+        assert_eq!(failures.iter().count(), 2);
+        assert_eq!(failures.iter().next().map(|f| f.input), Some(None), "the refusal is the newest line");
+        assert!(failures.iter().any(|f| f.input == Some("b")), "b still has its own failure and Retry");
+    }
+
+    #[test]
+    fn only_the_newest_failures_are_kept() {
+        let mut failures = AddFailures::default();
+        let inputs = ["a", "b", "c", "d", "e", "f", "g"];
+        for input in inputs {
+            failures.push(failure(input, Some(input)));
+        }
+        assert_eq!(failures.iter().count(), MAX_FAILURES);
+        assert_eq!(failures.iter().next().map(|f| f.message.as_str()), Some("g"));
+        assert_eq!(failures.iter().last().map(|f| f.message.as_str()), Some("c"));
+    }
 
     fn facts(f: impl FnOnce(&mut QueueFacts)) -> QueueFacts {
         let mut facts = QueueFacts { total: 5, shown: 5, targets: 1, idle_targets: 1, searching: false, sources: 2 };
@@ -250,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_queue_offers_search_now() {
+    fn an_empty_job_list_offers_search_now() {
         let empty = |f: &mut QueueFacts| (f.total, f.shown, f.targets, f.idle_targets) = (0, 0, 0, 0);
         let p = queue_primary_for(&facts(empty));
         assert_eq!((p.action, p.enabled, p.loading), (QueueAction::SearchNow, true, false));

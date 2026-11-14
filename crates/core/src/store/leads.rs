@@ -185,6 +185,14 @@ impl Store {
         })
     }
 
+    /// How many leads the queue shows (see [`Store::list_queue_leads`]), without reading them.
+    pub fn count_queue_leads(&self) -> Result<usize> {
+        self.with_conn(|c| {
+            let n: i64 = c.query_row(&format!("SELECT COUNT(*) FROM leads WHERE {IN_QUEUE}"), [], |r| r.get(0))?;
+            Ok(usize::try_from(n).unwrap_or(0))
+        })
+    }
+
     /// Leads in `state`, best score first (unscored last), then newest.
     pub fn list_leads(&self, state: LeadState) -> Result<Vec<Lead>> {
         self.with_conn(|c| {

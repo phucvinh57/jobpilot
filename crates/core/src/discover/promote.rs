@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! let app = core.prepare_cv(lead_id).await?;       // "Prepare CV": lead -> Draft application + CV
-//! core.dismiss_lead_with_reason(id, "too junior", true)?;   // "Dismiss", optionally "never this company"
+//! core.dismiss_lead_with_reason(id, "too junior", true).await?;   // "Dismiss", optionally "never this company"
 //! ```
 //!
 //! Nothing here runs on its own: a lead becomes an application only when the user asks for it
@@ -178,11 +178,19 @@ async fn generate_node(env: &Env, s: PrepareState) -> Result<PrepareState> {
     Ok(s)
 }
 
+/// The posting's address when it is a web link: a lead the user added from pasted text or a file
+/// has a `manual:` address instead, which is not somewhere to apply.
+fn web_link(url: &str) -> Option<String> {
+    let lower = url.trim().to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://")).then(|| url.to_string())
+}
+
 /// Give the application the posting's address as apply URL when it has none.
 fn keep_apply_url(core: &Core, app_id: i64, posting_url: &str) -> Result<()> {
     let Some(mut app) = core.store.get_application(app_id)? else { return Ok(()) };
     if app.apply_url.is_none() {
-        app.apply_url = Some(posting_url.to_string());
+        let Some(url) = web_link(posting_url) else { return Ok(()) };
+        app.apply_url = Some(url);
         core.store.save_application(&app)?;
     }
     Ok(())
@@ -259,8 +267,8 @@ impl Core {
             slug,
             company: lead.company.clone(),
             role: lead.role.clone(),
-            source: Some(lead.url.clone()),
-            apply_url: Some(lead.url.clone()),
+            source: web_link(&lead.url),
+            apply_url: web_link(&lead.url),
         };
         let app = self.store.promote_lead_to_application(lead.id, &new, lead.insight_json.as_deref())?;
         write_posting(&app, &text)?;
@@ -394,7 +402,7 @@ impl Core {
     /// The lead goes first: if the exclusion cannot be saved after that, the lead stays dismissed
     /// and [`Dismissed::not_excluded`] says why. A lead whose CV is queued or being written cannot
     /// be dismissed (an error).
-    pub fn dismiss_lead_with_reason(&self, lead_id: i64, reason: &str, exclude_company: bool) -> Result<Dismissed> {
+    pub async fn dismiss_lead_with_reason(&self, lead_id: i64, reason: &str, exclude_company: bool) -> Result<Dismissed> {
         let lead = self.store.get_lead(lead_id)?.with_context(|| format!("lead {lead_id} no longer exists"))?;
         if !lead.in_queue() {
             bail!("this lead is already {}", lead.state.as_str());
@@ -415,11 +423,18 @@ impl Core {
         if !exclusion {
             return Ok(Dismissed::default());
         }
-        let saved = self.store.update_preferences(|prefs| {
-            if excluded_company(prefs, company).is_none() {
+        // Through the preferences edit lock ([`Core::edit_preferences`]): a chip click or a notes
+        // read that is in the middle of its own read-change-write must not write the old list back
+        // over the exclusion.
+        let saved = self
+            .edit_preferences(|prefs| {
+                if excluded_company(prefs, company).is_some() {
+                    return false;
+                }
                 prefs.exclude_companies.push(company.to_string());
-            }
-        });
+                true
+            })
+            .await;
         let prefs = match saved {
             Ok(prefs) => prefs,
             Err(e) => {
