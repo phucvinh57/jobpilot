@@ -82,5 +82,5 @@ export function CvEditor({ doc, readOnly, onChange }: Props) {
     view.current?.dispatch({ effects: locked.current.reconfigure(lock(readOnly)) });
   }, [readOnly]);
 
-  return <div ref={host} id="cv-editor" className="h-full min-h-[300px] overflow-hidden rounded-chip border border-border" />;
+  return <div ref={host} id="cv-editor" className="h-full min-h-[300px] overflow-hidden border border-border" />;
 }

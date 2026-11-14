@@ -22,7 +22,7 @@ function ApplicationCard({ card, onOpen }: { card: BoardCard; onOpen: () => void
       id={`card-${card.id}`}
       aria-label={cardLabel(card)}
       onClick={onOpen}
-      className="flex cursor-pointer flex-col gap-1.5 rounded-banner border border-border bg-surface p-3 text-left transition-colors hover:border-accent/50"
+      className="flex cursor-pointer flex-col gap-1.5 border border-border bg-surface p-3 text-left transition-colors hover:border-accent/50"
     >
       <span className="text-body font-semibold text-ink">{card.title}</span>
       {card.subtitle !== "" && <span className="text-small text-muted">{card.subtitle}</span>}
@@ -41,7 +41,7 @@ function Column({ column, onOpen }: { column: BoardColumn; onOpen: (id: number) 
       id={`column-${column.key}`}
       role="group"
       aria-label={columnLabel(column.label, count)}
-      className="flex min-w-[200px] flex-1 flex-col gap-2.5 rounded-card bg-track p-3"
+      className="flex min-w-[200px] flex-1 flex-col gap-2.5 bg-track p-3"
     >
       <div className="flex justify-between px-1 py-0.5 text-body font-semibold text-ink">
         <span>{column.label}</span>
@@ -64,7 +64,7 @@ function ActivityButton({ item, onOpen }: { item: ActivityItem; onOpen: () => vo
         id={`activity-${item.id}`}
         aria-label={activityLabel(item)}
         onClick={onOpen}
-        className="flex w-full cursor-pointer items-center gap-3 rounded-chip px-1 py-1.5 text-left hover:bg-track"
+        className="flex w-full cursor-pointer items-center gap-3 px-1 py-1.5 text-left hover:bg-track"
       >
         <span className={clsx("size-2 shrink-0 rounded-full", TONE_CLASS[item.tone].dot)} />
         <span className="min-w-0 flex-1 truncate text-body text-ink">{item.text}</span>

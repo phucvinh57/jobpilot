@@ -48,7 +48,7 @@ export function SkillChart({ chart, adds }: { chart: Chart; adds: PreferenceAdds
 function Swatch({ colorClass, label }: { colorClass: string; label: string }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span aria-hidden className={`size-2.5 rounded-sm ${colorClass}`} />
+      <span aria-hidden className={`size-2.5 ${colorClass}`} />
       <span className="text-small text-muted">{label}</span>
     </span>
   );

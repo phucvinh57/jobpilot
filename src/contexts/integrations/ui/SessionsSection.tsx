@@ -57,7 +57,7 @@ function SessionRow({ session, card, now }: { session: Session; card: SessionsCa
 function NewSession({ card }: { card: SessionsCard }) {
   const creating = card.busy[NEW_KEY];
   return (
-    <div className="flex flex-col gap-3 rounded-banner border border-border bg-surface-alt p-3">
+    <div className="flex flex-col gap-3 border border-border bg-surface-alt p-3">
       <Field label="Name">
         <TextInput id="session-name" aria-label="Name" placeholder="Name, e.g. LinkedIn" value={card.name} onChange={(e) => card.setName(e.target.value)} />
       </Field>

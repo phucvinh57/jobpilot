@@ -107,14 +107,14 @@ export function CvTab(input: CvTabInput) {
         </div>
 
         {/* Right: the CV on paper. The pages come from Typst as opaque white sheets in both appearances. */}
-        <div className="flex min-w-0 flex-col gap-2 rounded-card bg-track p-4">
+        <div className="flex min-w-0 flex-col gap-2 bg-track p-4">
           <Heading>Preview</Heading>
           <div id="cv-preview" className="flex max-h-[900px] flex-1 flex-col items-center gap-3 overflow-y-auto">
             {cv.pages.map((url, i) => (
               <img key={url} src={url} alt={`CV page ${i + 1} of ${cv.pages.length}`} className="w-full max-w-[720px] border border-border shadow-sm" />
             ))}
             {cv.pages.length === 0 && (
-              <div className="flex min-h-[240px] w-full max-w-[720px] items-start rounded-banner border border-dashed border-border p-6 font-serif text-body text-muted">
+              <div className="flex min-h-[240px] w-full max-w-[720px] items-start border border-dashed border-border p-6 font-serif text-body text-muted">
                 {previewPlaceholder(cv.rendering)}
               </div>
             )}

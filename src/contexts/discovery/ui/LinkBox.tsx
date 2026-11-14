@@ -68,7 +68,7 @@ export function LinkBox({ adding, waiting, failures, note }: Props) {
               type="button"
               aria-label="Clear"
               onClick={() => setRaw("")}
-              className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-chip text-muted hover:bg-track hover:text-ink"
+              className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center text-muted hover:bg-track hover:text-ink"
             >
               <X aria-hidden className="size-4" />
             </button>
@@ -84,7 +84,7 @@ export function LinkBox({ adding, waiting, failures, note }: Props) {
           id="add-lead-progress"
           role="status"
           aria-label={behind ? `Reading the posting, ${behind}` : "Reading the posting"}
-          className="flex items-center gap-2 rounded-button border border-border bg-surface px-3 py-2 text-body text-muted"
+          className="flex items-center gap-2 border border-border bg-surface px-3 py-2 text-body text-muted"
         >
           <Spinner className="text-accent" />
           <span>Reading the posting&hellip;</span>

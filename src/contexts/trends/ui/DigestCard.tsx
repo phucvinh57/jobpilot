@@ -22,7 +22,7 @@ export function DigestCard({ digest, adds }: { digest: Digest | null; adds: Pref
     );
   }
   return (
-    <section id="trends-digest" aria-label={digest.title} className="flex flex-col gap-4 rounded-card border border-border bg-surface p-5">
+    <section id="trends-digest" aria-label={digest.title} className="flex flex-col gap-4 border border-border bg-surface p-5">
       <div className="flex flex-col gap-0.5">
         <Heading>{digest.title}</Heading>
         <Caption>{digestHint(digest.when, digest.itemsRead)}</Caption>
@@ -72,7 +72,7 @@ function PointRow({ point, adds }: { point: Point; adds: PreferenceAdds }) {
   const state = suggest ? adds.stateOf(suggest.field, point.topic, suggest.presence) : undefined;
   return (
     <li className="flex items-start gap-3">
-      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-small font-semibold text-accent-dark">
+      <span className="flex size-7 shrink-0 items-center justify-center bg-accent-soft text-small font-semibold text-accent-dark">
         {point.number}
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">

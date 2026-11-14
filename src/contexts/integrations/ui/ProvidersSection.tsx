@@ -17,7 +17,7 @@ function ProviderRow({ provider, editing, onOpen }: { provider: Provider; editin
       aria-pressed={editing}
       onClick={onOpen}
       className={clsx(
-        "flex min-h-11 w-full cursor-pointer flex-wrap items-center gap-3 rounded-button px-3 py-2 text-left hover:bg-track",
+        "flex min-h-11 w-full cursor-pointer flex-wrap items-center gap-3 px-3 py-2 text-left hover:bg-track",
         editing && "bg-accent-soft hover:bg-accent-soft",
       )}
     >

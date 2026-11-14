@@ -57,7 +57,7 @@ function Row({ row, session }: { row: ReviewRow; session: ApplySession }) {
   const highlighted = row.editable && isHighlighted(row, value);
   const step = stepTag(row);
   return (
-    <div id={`row-${row.id}`} className={clsx("flex flex-col gap-1.5 rounded-banner border p-3", highlighted ? "border-warn bg-warn-bg" : "border-border bg-surface")}>
+    <div id={`row-${row.id}`} className={clsx("flex flex-col gap-1.5 border p-3", highlighted ? "border-warn bg-warn-bg" : "border-border bg-surface")}>
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 text-body font-semibold text-ink">{rowLabel(row)}</span>
         {step !== null && <Tag tone="neutral">{step}</Tag>}

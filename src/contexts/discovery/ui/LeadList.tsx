@@ -34,7 +34,7 @@ function LeadCard({
     <li
       id={`lead-card-${lead.id}`}
       className={clsx(
-        "group flex items-center rounded-banner border transition-colors",
+        "group flex items-center border transition-colors",
         selected ? "border-accent bg-surface" : "border-border bg-transparent hover:bg-surface",
       )}
     >

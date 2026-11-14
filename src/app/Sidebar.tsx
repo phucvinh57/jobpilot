@@ -31,8 +31,8 @@ function NavItem({
       aria-current={current ? "page" : undefined}
       onClick={onClick}
       className={clsx(
-        "flex min-h-10 w-full cursor-pointer items-center gap-2.5 rounded-button px-3 text-left text-body transition-colors",
-        current ? "bg-accent-soft font-semibold text-accent-dark" : "text-ink hover:bg-track",
+        "flex h-9 w-full cursor-pointer items-center gap-2.5 border-l-2 px-3 text-left text-body transition-colors",
+        current ? "border-accent bg-track font-medium text-ink" : "border-transparent text-muted hover:bg-track hover:text-ink",
       )}
     >
       <Icon aria-hidden className={clsx("size-4", current ? "text-accent" : "text-muted")} />
@@ -40,10 +40,10 @@ function NavItem({
       {shown && (
         <span
           className={clsx(
-            "shrink-0 rounded-full px-1.5 text-tiny font-semibold",
+            "shrink-0 px-1.5 text-tiny font-semibold tabular-nums",
             shown.kind === "new" && "bg-accent text-on-fill",
             shown.kind === "needsYou" && "bg-warn text-on-fill",
-            shown.kind === "total" && (current ? "text-accent-dark" : "text-subtle"),
+            shown.kind === "total" && (current ? "text-ink" : "text-subtle"),
           )}
         >
           {shown.count}
@@ -65,7 +65,7 @@ function HealthLine() {
       <span className="min-w-0 flex-1 truncate">{text}</span>
     </>
   );
-  const base = "flex items-center gap-2 px-2.5 pt-3 text-left text-small text-subtle";
+  const base = "flex items-center gap-2 border-t border-border px-3 pt-3 mt-2 text-left text-small text-subtle";
   const focus = health && !health.ok ? health.focus : null;
   if (!focus) {
     return (
@@ -91,14 +91,14 @@ export function Sidebar() {
   const entry = (target: Screen) => ({ current: current === target, onClick: () => show(target) });
 
   return (
-    <aside className="flex h-full w-56 shrink-0 flex-col gap-1 border-r border-border bg-surface-alt px-3 py-5 text-ink">
-      <div className="flex items-center gap-2.5 px-2.5 pt-1 pb-5">
-        <span className="flex size-[26px] shrink-0 items-center justify-center rounded-full border-2 border-accent">
-          <ArrowUpRight aria-hidden className="size-3 text-accent" />
+    <aside className="flex h-full w-56 shrink-0 flex-col gap-0.5 border-r border-border bg-surface-alt px-2 py-4 text-ink">
+      <div className="flex items-center gap-2.5 px-3 pt-1 pb-5">
+        <span className="flex size-6 shrink-0 items-center justify-center bg-accent">
+          <ArrowUpRight aria-hidden className="size-3.5 text-on-fill" />
         </span>
         <Heading>JobPilot</Heading>
       </div>
-      <nav aria-label="Navigation" className="flex flex-col gap-1">
+      <nav aria-label="Navigation" className="flex flex-col gap-0.5">
         <NavItem id="nav-today" icon={Inbox} label="Today" badge={todayBadge(needsYou, status?.newLeads ?? 0)} {...entry("today")} />
         <NavItem
           id="nav-pipeline"

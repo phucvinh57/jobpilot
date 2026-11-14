@@ -24,9 +24,9 @@ describe("tokens", () => {
   });
 
   it("keeps the design hexes", () => {
-    expect(LIGHT.bg).toBe("#F6F6F3");
-    expect(LIGHT.accent).toBe("#2A4FD6");
-    expect(DARK.bg).toBe("#121317");
+    expect(LIGHT.bg).toBe("#FAFAFA");
+    expect(LIGHT.accent).toBe("#2563EB");
+    expect(DARK.bg).toBe("#09090B");
   });
 
   it("names css variables in kebab case", () => {

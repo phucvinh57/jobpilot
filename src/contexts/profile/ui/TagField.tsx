@@ -30,7 +30,7 @@ export function TagField({ field, onAdd, onRemove }: { field: ListField; onAdd: 
               <li
                 key={item}
                 id={`profile-${key}-${index}`}
-                className="inline-flex min-h-7 items-center gap-0.5 rounded-chip bg-accent-soft pl-2.5 pr-0.5 text-small text-accent-dark"
+                className="inline-flex min-h-7 items-center gap-0.5 bg-accent-soft pl-2.5 pr-0.5 text-small text-accent-dark"
               >
                 {item}
                 <button
@@ -39,7 +39,7 @@ export function TagField({ field, onAdd, onRemove }: { field: ListField; onAdd: 
                   aria-label={`Remove ${item}`}
                   title={`Remove ${item}`}
                   onClick={() => onRemove(item)}
-                  className="inline-flex size-6 cursor-pointer items-center justify-center rounded-chip hover:bg-accent/25"
+                  className="inline-flex size-6 cursor-pointer items-center justify-center hover:bg-accent/25"
                 >
                   <X aria-hidden className="size-3.5" />
                 </button>

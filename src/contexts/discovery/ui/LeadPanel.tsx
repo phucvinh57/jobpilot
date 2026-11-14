@@ -85,7 +85,7 @@ function DismissForm({ lead, onClose }: { lead: Lead; onClose: () => void }) {
   const dismiss = useDismiss(lead.id);
   const company = lead.company.trim();
   return (
-    <div id="queue-dismiss" role="group" aria-label="Dismiss this lead" className="flex flex-col gap-2.5 rounded-card border border-border bg-surface-alt p-4">
+    <div id="queue-dismiss" role="group" aria-label="Dismiss this lead" className="flex flex-col gap-2.5 border border-border bg-surface-alt p-4">
       <p className="font-semibold text-ink">Dismiss {leadTitle(lead.company, lead.role)}</p>
       <TextInput id="queue-reason" aria-label="Why dismiss this lead" placeholder="Why? (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
       {company !== "" && (
@@ -131,7 +131,7 @@ export function LeadPanel({ lead, source, primary, targets, jobs, profileSkills 
   const hasFit = lead.criteria !== null || (insight !== null && (insight.requiredSkills.length > 0 || insight.preferredSkills.length > 0));
   return (
     <div id="queue-lead" role="group" aria-label={`${lead.company}: ${lead.role}`} className="fade-in flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
-      <div className="flex flex-col gap-5 rounded-card border border-border bg-surface p-6">
+      <div className="flex flex-col gap-5 border border-border bg-surface p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex min-w-[240px] flex-1 flex-col gap-1">
             <p className="text-body text-muted">
