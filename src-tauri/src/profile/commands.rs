@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use jobpilot_core::pipeline::Cv;
-use jobpilot_core::prefs::{clean_notes, cv_upload, PrefSuggestions, Preferences};
-use jobpilot_core::Core;
+use crate::engine::pipeline::Cv;
+use crate::engine::prefs::{clean_notes, cv_upload, PrefSuggestions, Preferences};
+use crate::engine::Core;
 use tauri::ipc::Invoke;
 use tauri::State;
 
@@ -273,8 +273,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
 mod tests {
     use std::sync::Arc;
 
-    use jobpilot_core::prefs::chat::MAX_LIST_ITEMS;
-    use jobpilot_core::{runtime, Core, Paths, Secrets};
+    use crate::engine::prefs::chat::MAX_LIST_ITEMS;
+    use crate::engine::{runtime, Core, Paths, Secrets};
 
     use super::{
         add_item, field_named, remove_item, save_notes, set_job_type, set_profile_file, undo,

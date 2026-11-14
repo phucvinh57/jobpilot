@@ -3,13 +3,13 @@
 //! Nothing secret travels here: leads, sources, run summaries and session names only. Posting and
 //! brief text is data for the web app to show as text.
 
-use jobpilot_core::discover::promote::{Dismissed, FailedPrepare};
-use jobpilot_core::discover::queue::{criteria_rows, QueueItem, QueueSnapshot};
-use jobpilot_core::discover::{RunSummary, WaitingSource};
-use jobpilot_core::graph::WaitReason;
-use jobpilot_core::health;
-use jobpilot_core::pipeline::JdInput;
-use jobpilot_core::store::{Application, Lead, Session, Source};
+use crate::engine::discover::promote::{Dismissed, FailedPrepare};
+use crate::engine::discover::queue::{criteria_rows, QueueItem, QueueSnapshot};
+use crate::engine::discover::{RunSummary, WaitingSource};
+use crate::engine::graph::WaitReason;
+use crate::engine::health;
+use crate::engine::pipeline::JdInput;
+use crate::engine::store::{Application, Lead, Session, Source};
 use serde::{Deserialize, Serialize};
 
 use super::rules::host_of;
@@ -418,13 +418,13 @@ pub struct JobSourcesDto {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::chrono::{TimeZone, Utc};
-    use jobpilot_core::discover::queue::QueueItem;
-    use jobpilot_core::discover::score::{Criteria, Criterion, Scored};
-    use jobpilot_core::discover::WaitingSource;
-    use jobpilot_core::graph::WaitReason;
-    use jobpilot_core::prefs::Weights;
-    use jobpilot_core::store::{Lead, LeadState, Source, SourcePurpose};
+    use chrono::{TimeZone, Utc};
+    use crate::engine::discover::queue::QueueItem;
+    use crate::engine::discover::score::{Criteria, Criterion, Scored};
+    use crate::engine::discover::WaitingSource;
+    use crate::engine::graph::WaitReason;
+    use crate::engine::prefs::Weights;
+    use crate::engine::store::{Lead, LeadState, Source, SourcePurpose};
 
     use super::{
         AddedLeadDto, LeadDto, LeadInput, PrepareOutcomeDto, SearchFinishedDto, SourceDto,
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn a_search_ends_with_its_summary_or_its_error() {
-        let ok = SearchFinishedDto::new(Ok(jobpilot_core::discover::RunSummary {
+        let ok = SearchFinishedDto::new(Ok(crate::engine::discover::RunSummary {
             saved: 3,
             waiting: 1,
             ..Default::default()

@@ -4,11 +4,11 @@
 
 use std::collections::HashMap;
 
-use jobpilot_core::apply::{Edit, FieldKind, Review, Row, SessionState, Source};
-use jobpilot_core::browser::SessionStatus;
-use jobpilot_core::chrono::{NaiveDate, NaiveDateTime};
-use jobpilot_core::pipeline::{Analysis, Progress};
-use jobpilot_core::store::{Application, Email, Event, Status};
+use crate::engine::apply::{Edit, FieldKind, Review, Row, SessionState, Source};
+use crate::engine::browser::SessionStatus;
+use chrono::{NaiveDate, NaiveDateTime};
+use crate::engine::pipeline::{Analysis, Progress};
+use crate::engine::store::{Application, Email, Event, Status};
 use serde::Serialize;
 
 /// What a status or a tag means; the web app maps each to its colours.
@@ -797,9 +797,9 @@ pub fn review_notice(review: &Review, missing: usize) -> Option<(Tone, &'static 
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::apply::Ats;
-    use jobpilot_core::chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
-    use jobpilot_core::pipeline::{Analysis, Stage};
+    use crate::engine::apply::Ats;
+    use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
+    use crate::engine::pipeline::{Analysis, Stage};
 
     use super::*;
 

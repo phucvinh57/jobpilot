@@ -2,13 +2,13 @@
 //! citations. Every address is on `example.com`; nothing is fetched.
 
 use anyhow::Result;
-use jobpilot_core::chrono::{Duration, Utc};
-use jobpilot_core::store::NewTrendItem;
-use jobpilot_core::trends::digest::month_window;
-use jobpilot_core::trends::{
+use chrono::{Duration, Utc};
+use crate::engine::store::NewTrendItem;
+use crate::engine::trends::digest::month_window;
+use crate::engine::trends::{
     CitedItem, DigestData, Period, Point, Section, SkillCount, SkillCounts, SourceKind,
 };
-use jobpilot_core::Core;
+use crate::engine::Core;
 
 /// Insert the sample sources, items and digest when there are none yet.
 pub fn seed_demo(core: &Core) -> Result<()> {

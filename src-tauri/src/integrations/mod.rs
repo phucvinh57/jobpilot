@@ -9,7 +9,7 @@ pub mod rules;
 
 use std::sync::Arc;
 
-use jobpilot_core::{mail, runtime, Core};
+use crate::engine::{mail, runtime, Core};
 use tauri::{AppHandle, Manager};
 
 use crate::shared::events::emit;

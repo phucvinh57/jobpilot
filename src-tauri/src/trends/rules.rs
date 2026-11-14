@@ -2,11 +2,11 @@
 //! worded (counted in code, never by the AI), how a source's last run reads, how a finished run is
 //! summarised, and where a topic stands in the saved preferences.
 
-use jobpilot_core::chrono::{Local, NaiveDate};
-use jobpilot_core::graph::nodes::ChallengeKind;
-use jobpilot_core::prefs::Preferences;
-use jobpilot_core::store::{Report, Source};
-use jobpilot_core::trends::{
+use chrono::{Local, NaiveDate};
+use crate::engine::graph::nodes::ChallengeKind;
+use crate::engine::prefs::Preferences;
+use crate::engine::store::{Report, Source};
+use crate::engine::trends::{
     Digest, Period, Section, SkillCount, SourceKind, SourceStatus, TrendRun,
 };
 
@@ -354,8 +354,8 @@ pub fn target(section: Section) -> Field {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::store::{Source, SourcePurpose};
-    use jobpilot_core::trends::{
+    use crate::engine::store::{Source, SourcePurpose};
+    use crate::engine::trends::{
         Period, Section, SkillCount, SourceOutcome, SourceStatus, TrendRun,
     };
 
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn a_cadence_is_the_week_or_quarter_of_today() {
-        let today = jobpilot_core::chrono::NaiveDate::from_ymd_opt(2026, 11, 14).unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 14).unwrap();
         assert_eq!(Cadence::Weekly.period(today).label(), "2026-W46");
         assert_eq!(Cadence::Quarterly.period(today).label(), "2026-Q4");
         assert_eq!(Cadence::parse("weekly"), Some(Cadence::Weekly));
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn a_full_list_says_why_nothing_was_added() {
         let mut prefs = Preferences {
-            must_skills: (0..jobpilot_core::prefs::chat::MAX_LIST_ITEMS)
+            must_skills: (0..crate::engine::prefs::chat::MAX_LIST_ITEMS)
                 .map(|i| format!("skill {i}"))
                 .collect(),
             ..Preferences::default()

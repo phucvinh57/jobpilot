@@ -2476,37 +2476,18 @@ dependencies = [
 name = "jobpilot"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "cairo-rs",
- "gtk",
- "jobpilot-core",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tempfile",
- "tokio",
- "tracing",
- "url",
- "webkit2gtk",
-]
-
-[[package]]
-name = "jobpilot-core"
-version = "0.1.0"
-dependencies = [
  "adk-graph",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "cairo-rs",
  "chromiumoxide",
  "chrono",
  "dirs 6.0.0",
  "dom_smoothie",
  "encoding_rs",
  "futures",
+ "gtk",
  "html2text",
  "jsonschema",
  "keyring",
@@ -2521,6 +2502,10 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -2528,6 +2513,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "url",
+ "webkit2gtk",
  "zip",
 ]
 

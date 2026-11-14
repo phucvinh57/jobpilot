@@ -19,7 +19,7 @@ Set by the paths touched. The highest wins. Each PR gets exactly one label: `ris
 - **High** (a human reads the diff): `profile.yaml`, `assets/cv.typ`, `assets/prompts/`, `scripts/`, `.githooks/`, `.github/`, `.claude/`, `.agents/`, `AGENTS.md`, `CLAUDE.md`, `docs/REVIEW.md`.
 - **Low:** `README.md`, other docs.
 - **No PR:** a change that touches only `docs/` (except this file) is pushed directly to `main`, and CI ignores `docs/**`.
-- **Medium:** everything else (`crates/`, `src-tauri/`, `src/`, the web config at the root, `Cargo.*`).
+- **Medium:** everything else (`src-tauri/`, `src/`, the web config at the root, `Cargo.*`).
 
 ## Ignore
 

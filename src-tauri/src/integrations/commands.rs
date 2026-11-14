@@ -8,10 +8,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use jobpilot_core::llm;
-use jobpilot_core::mail::{self, SECRET_CLIENT_SECRET};
-use jobpilot_core::redact::redact;
-use jobpilot_core::Core;
+use crate::engine::llm;
+use crate::engine::mail::{self, SECRET_CLIENT_SECRET};
+use crate::engine::redact::redact;
+use crate::engine::Core;
 use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
 
@@ -349,7 +349,7 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::{Core, Paths, Secrets};
+    use crate::engine::{Core, Paths, Secrets};
 
     use super::{gmail, provider_has_key, providers, save_provider, scrub, ProviderInput};
     use crate::shared::CommandError;

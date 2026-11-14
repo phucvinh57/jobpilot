@@ -2,8 +2,8 @@
 //! each kind starts with, which host a session shows.
 
 use anyhow::{anyhow, ensure, Result};
-use jobpilot_core::llm;
-use jobpilot_core::store::{Provider, ProviderKind};
+use crate::engine::llm;
+use crate::engine::store::{Provider, ProviderKind};
 
 /// `json_schema` is what every provider is asked for unless the endpoint cannot do it.
 const JSON_MODE_SCHEMA: &str = "json_schema";
@@ -86,7 +86,7 @@ pub fn host(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::store::ProviderKind;
+    use crate::engine::store::ProviderKind;
 
     use super::{client_id, host, kind_defaults, kind_label, provider_from_form, typed_key, KINDS};
 
@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(schema.json_mode, "json_schema");
         assert_eq!(
             schema.base_url,
-            jobpilot_core::llm::default_base_url(ProviderKind::OpenAi),
+            crate::engine::llm::default_base_url(ProviderKind::OpenAi),
             "an empty base URL is the kind's own"
         );
 
@@ -125,7 +125,7 @@ mod tests {
         assert_eq!(anthropic.json_mode, "json_schema");
         assert_eq!(
             anthropic.base_url,
-            jobpilot_core::llm::default_base_url(ProviderKind::Anthropic)
+            crate::engine::llm::default_base_url(ProviderKind::Anthropic)
         );
     }
 

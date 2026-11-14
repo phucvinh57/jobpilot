@@ -2,20 +2,20 @@
 //! company brief and trends. Every address is on `example.com`; nothing is fetched.
 
 use anyhow::Result;
-use jobpilot_core::chrono::{Duration, Utc};
-use jobpilot_core::discover::dedup::dedup_key;
-use jobpilot_core::discover::lead_dir;
-use jobpilot_core::discover::score::{Criteria, Criterion, Scored};
-use jobpilot_core::discover::{RunSummary, LAST_RUN_KEY};
-use jobpilot_core::pipeline::insight::{CompanyFacts, Interview, Skills};
-use jobpilot_core::pipeline::Insight;
-use jobpilot_core::prefs::Weights;
-use jobpilot_core::store::{LeadState, NewApplication, NewLead, NewSource, SourcePurpose, Status};
-use jobpilot_core::Core;
+use chrono::{Duration, Utc};
+use crate::engine::discover::dedup::dedup_key;
+use crate::engine::discover::lead_dir;
+use crate::engine::discover::score::{Criteria, Criterion, Scored};
+use crate::engine::discover::{RunSummary, LAST_RUN_KEY};
+use crate::engine::pipeline::insight::{CompanyFacts, Interview, Skills};
+use crate::engine::pipeline::Insight;
+use crate::engine::prefs::Weights;
+use crate::engine::store::{LeadState, NewApplication, NewLead, NewSource, SourcePurpose, Status};
+use crate::engine::Core;
 
 /// Insert a few sample applications when the store is empty (`JOBPILOT_DEMO=1`).
 pub fn seed(core: &Core) -> Result<()> {
-    jobpilot_core::prefs::seed_demo(core)?;
+    crate::engine::prefs::seed_demo(core)?;
     crate::trends::demo::seed_demo(core)?;
     seed_demo_applications(core)?;
     seed_demo_queue(core)

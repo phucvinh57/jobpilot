@@ -7,7 +7,7 @@ pub mod rules;
 
 use std::sync::Arc;
 
-use jobpilot_core::Core;
+use crate::engine::Core;
 use tauri::AppHandle;
 
 /// Called once at startup, before the window opens: register this context's own state
