@@ -6,6 +6,7 @@
 //! | `greenhouse` | board URL or slug (`boards.greenhouse.io/acme`) | public board JSON |
 //! | `lever` | `jobs.lever.co/acme` or slug | public postings JSON |
 //! | `ashby` | `jobs.ashbyhq.com/acme` or slug | public job-board JSON |
+//! | `workday` | `https://acme.wd5.myworkdayjobs.com/[en-US/]External` | the board page's own job search (POST), one query per wanted role |
 //! | `hn_hiring` | unused | HN Algolia, the latest "Who is hiring?" thread, one comment per candidate |
 //! | `yc` | `https://www.ycombinator.com/jobs` (default) or a workatastartup.com page | the job links of the listing page; the browser (and a bound session) when the page needs it |
 //! | `career_page` | a careers page | the same-site links that look like postings; the browser when the page is drawn by JavaScript |
@@ -22,6 +23,7 @@ mod hn_hiring;
 mod http;
 mod lever;
 mod web;
+mod workday;
 mod yc;
 
 use std::collections::HashSet;
@@ -39,6 +41,7 @@ pub use hn_hiring::HnHiring;
 pub use http::{Http, NetHttp};
 pub use lever::Lever;
 pub use web::{NetPages, Page, Pages};
+pub use workday::Workday;
 pub use yc::Yc;
 
 #[cfg(test)]
@@ -116,6 +119,11 @@ pub fn adapter_for(source: &Source, http: Arc<dyn Http>) -> Result<Arc<dyn JobSo
             Arc::new(Ashby::new(http, ashby::DEFAULT_BASE, &slug, &company(&slug)))
         }
         "hn_hiring" => Arc::new(HnHiring::new(http, hn_hiring::DEFAULT_BASE)),
+        "workday" => {
+            let board = workday::Board::parse(&source.url).context("Workday source")?;
+            let company = company(&board.tenant);
+            Arc::new(Workday::new(http, board, &company))
+        }
         other => bail!("no adapter for source kind `{other}` yet"),
     })
 }
@@ -149,6 +157,7 @@ pub fn check_source(kind: &str, url: &str) -> Result<(String, String)> {
         "lever" => slug_of(&["lever.co"], "Lever source"),
         "ashby" => slug_of(&["ashbyhq.com"], "Ashby source"),
         "hn_hiring" => Ok((String::new(), "Hacker News: Who is hiring".to_string())),
+        "workday" => Ok((url.to_string(), workday::Board::parse(url).context("Workday source")?.tenant)),
         "yc" => {
             let url = if url.is_empty() { yc::DEFAULT_URL } else { url };
             yc::check_url(url)?;
@@ -404,8 +413,10 @@ mod tests {
         assert!(adapter_for(&add("lever", "https://jobs.lever.co/acme"), http.clone()).is_ok());
         assert!(adapter_for(&add("ashby", "jobs.ashbyhq.com/acme"), http.clone()).is_ok());
         assert!(adapter_for(&add("hn_hiring", ""), http.clone()).is_ok());
+        assert!(adapter_for(&add("workday", "https://acme.wd5.myworkdayjobs.com/External"), http.clone()).is_ok());
         let err = |s: Source| format!("{:#}", adapter_for(&s, http.clone()).err().unwrap());
         assert!(err(add("greenhouse", "")).contains("no company board"));
+        assert!(err(add("workday", "https://acme.wd5.myworkdayjobs.com.evil.test/External")).contains("not a Workday board"));
         assert!(err(add("nope", "")).contains("no adapter for source kind `nope`"));
         assert!(err(add("yc", "")).contains("no adapter for source kind `yc`"), "the page adapters need `adapter_for_pages`");
     }
@@ -434,9 +445,13 @@ mod tests {
         assert_eq!(check_source("lever", "acme").unwrap(), ("acme".into(), "acme".into()));
         assert_eq!(check_source("ashby", "jobs.ashbyhq.com/acme").unwrap().1, "acme");
         assert_eq!(check_source("hn_hiring", "ignored").unwrap().0, "");
+        assert_eq!(
+            check_source("workday", " acme.wd5.myworkdayjobs.com/en-US/External ").unwrap(),
+            ("acme.wd5.myworkdayjobs.com/en-US/External".into(), "acme".into())
+        );
         assert_eq!(check_source("yc", "").unwrap(), (yc::DEFAULT_URL.into(), "Y Combinator jobs".into()));
         assert_eq!(check_source("career_page", "https://www.acme.test/careers").unwrap(), ("https://www.acme.test/careers".into(), "acme.test".into()));
-        for (kind, url) in [("greenhouse", ""), ("lever", "https://evil.test/acme"), ("career_page", "javascript:x"), ("yc", "https://evil.test"), ("linkedin", "https://www.linkedin.com/jobs")] {
+        for (kind, url) in [("greenhouse", ""), ("lever", "https://evil.test/acme"), ("career_page", "javascript:x"), ("yc", "https://evil.test"), ("workday", ""), ("workday", "https://acme.wd5.myworkdayjobs.com/.."), ("workday", "myworkdayjobs.com.evil.test/External"), ("linkedin", "https://www.linkedin.com/jobs")] {
             assert!(check_source(kind, url).is_err(), "{kind} {url}");
         }
     }
