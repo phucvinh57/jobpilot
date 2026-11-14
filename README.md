@@ -40,7 +40,7 @@ Throwaway state for trying it out: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=m
 
 **When a site stops the search.** If a source meets a login, a captcha or a block page, JobPilot never tries to get past it. That source pauses, you get a desktop notification and a "needs you" line in the Queue. **Open browser** shows the page in a visible window (in the source's session, if it has one); log in or solve the check yourself, then press **Continue** (or **Skip** to leave the source for the next run). The other sources keep going meanwhile, and a paused source survives restarting the app. Three stops in a row rest that source for the day.
 
-Coming in pending pull requests: a **Preferences** chat that asks about what you want (and can read an uploaded CV for context) and saves it, and a **Trends** digest of market signals from sources you add, with every statement linked to its source. Until then the two sidebar entries are placeholders and scoring uses default preferences.
+**Preferences** is a chat that asks what you want (it can read an uploaded CV for context, without changing your profile) and saves it; you can also edit every field directly. Discovery scores leads with these preferences. **Trends** builds a digest of market signals from sources you add, with every statement linked to its source; "Add to preferences" puts a suggestion in the Preferences chat for you to send.
 
 ## Package
 
