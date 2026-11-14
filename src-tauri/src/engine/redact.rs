@@ -14,6 +14,9 @@ use regex::Regex;
 
 /// What replaces a secret.
 pub const MASK: &str = "[REDACTED]";
+/// Bumped whenever the patterns below change, so stored text is scrubbed again with the new ones
+/// (`store::events::scrub_old_events`).
+pub const PATTERNS_VERSION: u32 = 2;
 /// Shorter values are not registered: they would mangle ordinary text.
 const MIN_SECRET_LEN: usize = 8;
 
@@ -30,7 +33,9 @@ pub fn register(value: &str) {
 struct Patterns {
     /// `name: value`, `name=value`, `"name": "value"`, `Authorization: Bearer value`.
     keyed: Regex,
-    /// Credentials carried in a URL query (`?code=...`, `&key=...`).
+    /// Credentials carried in a URL query or fragment: a parameter named by a credential word, alone
+    /// or as the last part of its name (`?code=`, `&key=`, `?afd_azwaf_tok=`, `X-Amz-Signature=`,
+    /// `#access_token=`, `sessionid=`), not a word that merely contains one (`keywords`, `author`).
     query: Regex,
     /// Token shapes recognisable without a name.
     shapes: Regex,
@@ -40,10 +45,12 @@ fn patterns() -> &'static Patterns {
     static P: OnceLock<Patterns> = OnceLock::new();
     P.get_or_init(|| Patterns {
         keyed: Regex::new(
-            r#"(?i)\b((?:proxy-)?authorization|x-api-key|x-goog-api-key|api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|id[-_]?token|client[-_]?secret|code[-_]?verifier|password|passwd|secret|token)(["']?\s*[:=]\s*["']?)((?:bearer|basic)\s+)?[^\s"'&,;}\])]{6,}|\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=-]{8,}"#,
+            r#"(?i)\b((?:proxy-)?authorization|x-api-key|x-goog-api-key|api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|id[-_]?token|client[-_]?secret|code[-_]?verifier|password|passwd|secret|token)(["']?\s*[:=]\s*["']?)((?:bearer|basic)\s+)?([^\s"'&,;}\[\])]{6,})|\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=-]{8,}"#,
         )
         .expect("static regex"),
-        query: Regex::new(r#"(?i)([?&](?:code|key|token|api_key|access_token|refresh_token|id_token|client_secret|code_verifier)=)[^&\s"'#]+"#)
+        query: Regex::new(
+            r#"(?i)([?&#](?:[A-Za-z0-9_.\-]*[_.\-])?(?:tok|token|sig|signature|auth|session|sessionid|sid|secret|password|passwd|jwt|key|apikey|code|credential|nonce)=)[^&\s"'#\[]+"#,
+        )
             .expect("static regex"),
         shapes: Regex::new(
             r"\b(?:sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{30,}|ya29\.[0-9A-Za-z_-]{20,}|1//[0-9A-Za-z_-]{20,}|GOCSPX-[0-9A-Za-z_-]{10,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})",
@@ -62,9 +69,11 @@ pub fn redact(text: &str) -> Cow<'_, str> {
     }
     let p = patterns();
     // `Authorization: Bearer abc` keeps the scheme visible and masks the credential only.
+    // A scheme word alone is not the credential: `Bearer [REDACTED]` (already masked) stays as it is.
     let replaced = p.keyed.replace_all(&out, |c: &regex::Captures| match c.get(1) {
+        Some(_) if c.get(3).is_none() && matches!(c[4].to_ascii_lowercase().as_str(), "bearer" | "basic") => c[0].to_string(),
         Some(name) => format!("{}{}{}{}", name.as_str(), &c[2], c.get(3).map_or("", |m| m.as_str()), MASK),
-        None => format!("{}{}{}", &c[4], &c[5], MASK),
+        None => format!("{}{}{}", &c[5], &c[6], MASK),
     });
     if let Cow::Owned(s) = replaced {
         out = Cow::Owned(s);
@@ -118,6 +127,37 @@ mod tests {
         ];
         for (input, expected) in cases {
             assert_eq!(redact(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn credentials_in_any_url_parameter_are_masked() {
+        let cases = [
+            (
+                "fetching https://www.grab.careers/jobs/1/?afd_azwaf_tok=eyJhbGciOi.abc&x=1 failed",
+                "fetching https://www.grab.careers/jobs/1/?afd_azwaf_tok=[REDACTED]&x=1 failed",
+            ),
+            ("https://s3.test/f?X-Amz-Credential=AKIA1&X-Amz-Signature=abc123", "https://s3.test/f?X-Amz-Credential=[REDACTED]&X-Amz-Signature=[REDACTED]"),
+            ("https://a.test/cb#access_token=abc123&state=s", "https://a.test/cb#access_token=[REDACTED]&state=s"),
+            ("https://a.test/?sessionid=abc&sig=xyz", "https://a.test/?sessionid=[REDACTED]&sig=[REDACTED]"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(redact(input), expected, "{input}");
+        }
+        let plain = "opened https://a.test/jobs/1?page=2&q=rust&keywords=go&author=bob&postcode=SW1&signup=1#apply";
+        assert!(matches!(redact(plain), Cow::Borrowed(_)), "a link without a credential stays as it is");
+    }
+
+    #[test]
+    fn masking_twice_changes_nothing() {
+        for input in [
+            "Authorization: Bearer abcdef123456",
+            "token: abcdef123456 and password=hunter2hunter2",
+            "https://a.test/?afd_azwaf_tok=abc&code=xyz#access_token=t0k3n",
+            r#"{"api_key":"abcdef123456"}"#,
+        ] {
+            let once = redact(input).into_owned();
+            assert_eq!(redact(&once), once, "{input}");
         }
     }
 

@@ -294,9 +294,10 @@ fn status_words(kind: &str, message: &str) -> String {
     }
 }
 
-/// Every `http(s)://` link in `text` as host and path only: no scheme, query or fragment (a link in
-/// an error can carry a session or anti-bot token), no trailing `/`. Punctuation that ends a sentence
-/// right after a link stays outside it.
+/// Every `http(s)://` link in `text` as host and path only: no scheme, query or fragment, no trailing
+/// `/`, so a row stays short. Punctuation that ends a sentence right after a link stays outside it.
+/// Dropping the query also keeps any token there off the screen; events are masked by
+/// `engine::redact` as well, when stored and read.
 pub fn short_urls(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
     let mut out = String::with_capacity(text.len());

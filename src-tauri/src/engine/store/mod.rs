@@ -215,6 +215,12 @@ impl Store {
     fn init(mut conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&mut conn)?;
+        // Best effort: events are masked on read as well, so a failure here never stops the app.
+        match events::scrub_old_events(&mut conn) {
+            Ok(0) => {}
+            Ok(count) => tracing::info!(count, "masked secrets in old events"),
+            Err(error) => tracing::warn!(error = %error, "masking secrets in old events failed"),
+        }
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
