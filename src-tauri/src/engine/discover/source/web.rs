@@ -94,18 +94,24 @@ pub(crate) async fn read_listing(
     url: &str,
     extract: impl Fn(&Page) -> Vec<Candidate>,
 ) -> Result<Vec<Candidate>> {
-    match pages.plain(url).await {
-        Ok(page) => {
-            let found = extract(&page);
-            if !found.is_empty() {
-                return Ok(found);
-            }
+    if let Some(page) = read_plain_page(pages, url).await? {
+        let found = extract(&page);
+        if !found.is_empty() {
+            return Ok(found);
         }
-        Err(e) if e.downcast_ref::<NeedsBrowser>().is_none() => return Err(e),
-        Err(_) => {}
     }
     let page = pages.rendered(source, url).await?;
     Ok(extract(&page))
+}
+
+/// The plain read of [`read_listing`]: `None` when it met a wall (the browser may do better), any
+/// other failure as the error.
+pub(crate) async fn read_plain_page(pages: &dyn Pages, url: &str) -> Result<Option<Page>> {
+    match pages.plain(url).await {
+        Ok(page) => Ok(Some(page)),
+        Err(e) if e.downcast_ref::<NeedsBrowser>().is_none() => Err(e),
+        Err(_) => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------- links
@@ -248,7 +254,7 @@ pub(crate) fn same_site(site: &Url, link: &Url) -> bool {
 }
 
 /// Path words that mark a place where jobs live.
-const JOB_WORDS: [&str; 14] = [
+pub(crate) const JOB_WORDS: [&str; 14] = [
     "job", "jobs", "career", "careers", "position", "positions", "opening", "openings", "vacancy", "vacancies", "posting",
     "postings", "role", "roles",
 ];
