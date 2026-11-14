@@ -119,7 +119,7 @@ impl JobSource for SmartRecruiters {
             if !page.more {
                 return Ok(SearchPage { candidates, next: None });
             }
-            offset += API_PAGE;
+            offset = offset.saturating_add(API_PAGE);
             skip = 0;
             if candidates.len() >= want {
                 break;
@@ -277,11 +277,31 @@ mod tests {
 
     #[tokio::test]
     async fn a_search_reads_a_few_api_pages_at_most() {
-        let http = FakeHttp::with([(LIST_URL, LIST), (NEXT_URL, NEXT)]);
+        // Five API pages (500 found), none with a fitting title.
+        let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+        let pages: Vec<(&'static str, &'static str)> = (0..5)
+            .map(|i| {
+                let url = leak(format!("https://sr.test/v1/companies/AcmeGroup/postings?limit=100&offset={}", i * 100));
+                let body = leak(format!(r#"{{"offset":{},"limit":100,"totalFound":500,"content":[{{"id":"9{i}","name":"Office Manager"}}]}}"#, i * 100));
+                (url, body)
+            })
+            .collect();
+        let http = FakeHttp::with(pages.clone());
+        let sr = adapter(http.clone());
         let prefs = Preferences { roles: vec!["Pastry Chef".into()], ..Default::default() };
-        let page = adapter(http).search(&prefs, &ctx(None, 5)).await.unwrap();
+        let page = sr.search(&prefs, &ctx(None, 5)).await.unwrap();
         assert!(page.candidates.is_empty());
-        assert_eq!(page.next, None, "two API pages, both read, nothing fits");
+        assert_eq!(page.next.as_deref(), Some("300:0"), "three API pages read, the next one is where the cursor points");
+        assert_eq!(http.requested(), pages[..3].iter().map(|(u, _)| u.to_string()).collect::<Vec<_>>());
+        let rest = sr.search(&prefs, &ctx(page.next.as_deref(), 5)).await.unwrap();
+        assert_eq!((rest.candidates.len(), rest.next), (0, None), "the last two pages, then the end");
+        assert_eq!(http.requested().len(), 5);
+
+        let two = FakeHttp::with([(LIST_URL, LIST), (NEXT_URL, NEXT)]);
+        let page = adapter(two).search(&prefs, &ctx(None, 5)).await.unwrap();
+        assert_eq!((page.candidates.len(), page.next), (0, None), "two API pages, both read, nothing fits");
+        let far = format!("{}:0", usize::MAX);
+        assert!(adapter(FakeHttp::with([])).search(&prefs, &ctx(Some(&far), 5)).await.is_err(), "no overflow on a huge offset");
         assert!(adapter(FakeHttp::with([])).search(&prefs, &ctx(Some("x"), 5)).await.unwrap_err().to_string().contains("not valid"));
         assert!(adapter(FakeHttp::with([])).search(&prefs, &ctx(Some("1:a"), 5)).await.is_err());
     }

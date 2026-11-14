@@ -21,6 +21,9 @@ pub(super) const HOSTS: &[&str] = &["jobs.personio.de", "jobs.personio.com"];
 
 const ACCEPT: &str = "application/xml, text/xml;q=0.9";
 
+/// Deepest element nesting a feed may have (a real one is 5 deep, its descriptions a few more).
+const MAX_DEPTH: usize = 64;
+
 pub struct Personio {
     http: Arc<dyn Http>,
     origin: String,
@@ -146,33 +149,44 @@ fn parse_positions(xml: &str) -> Result<Vec<Position>> {
     let mut positions = Vec::new();
     let mut current: Option<Position> = None;
     let mut description = (String::new(), String::new());
+    // Elements open from a description's `<value>` down (0 outside one): markup inside it is text,
+    // so it is counted here rather than kept on `stack`.
+    let mut value_depth = 0usize;
     loop {
         let event = reader.read_event().map_err(|e| anyhow!("the Personio answer is not readable XML: {e} (byte {})", reader.buffer_position()))?;
-        let in_value = stack.iter().any(|n| n == "value");
         match event {
             Event::Eof if !stack.is_empty() => bail!("the Personio answer is not readable XML: it ends early"),
             Event::Eof => break,
             Event::Start(e) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                if in_value {
+                if stack.len() + value_depth >= MAX_DEPTH {
+                    bail!("the Personio answer is not a job feed: its elements nest too deep");
+                }
+                if value_depth > 0 {
+                    value_depth += 1;
                     text.push(' ');
-                } else {
-                    match (stack.last().map(String::as_str), name.as_str()) {
-                        (None, "workzag-jobs") => seen_root = true,
-                        (Some("workzag-jobs"), "position") => current = Some(Position::default()),
-                        (Some("jobDescriptions"), "jobDescription") => description = Default::default(),
-                        _ => {}
-                    }
-                    text.clear();
+                    continue;
+                }
+                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                match (stack.last().map(String::as_str), name.as_str()) {
+                    (None, "workzag-jobs") => seen_root = true,
+                    (Some("workzag-jobs"), "position") => current = Some(Position::default()),
+                    (Some("jobDescriptions"), "jobDescription") => description = Default::default(),
+                    _ => {}
+                }
+                text.clear();
+                if name == "value" {
+                    value_depth = 1;
                 }
                 stack.push(name);
             }
             Event::End(_) => {
-                let name = stack.pop().unwrap_or_default();
-                if stack.iter().any(|n| n == "value") {
+                if value_depth > 1 {
+                    value_depth -= 1;
                     text.push(' ');
                     continue;
                 }
+                value_depth = 0;
+                let name = stack.pop().unwrap_or_default();
                 let value = std::mem::take(&mut text).trim().to_string();
                 let parent = stack.last().map(String::as_str).unwrap_or_default();
                 if (parent, name.as_str()) == ("workzag-jobs", "position") {
@@ -294,6 +308,19 @@ mod tests {
         let (heading, html) = &positions[0].descriptions[0];
         assert_eq!(heading, "Role");
         assert!(html.contains("Rust") && html.contains("& Go"), "{html}");
+    }
+
+    #[test]
+    fn deep_nesting_is_refused_quickly() {
+        let started = std::time::Instant::now();
+        for inner in ["<value>", "<x>"] {
+            let deep = format!("<workzag-jobs><position><jobDescriptions><jobDescription>{}", inner.repeat(1_000_000));
+            let err = format!("{:#}", parse_positions(&deep).err().unwrap());
+            assert!(err.contains("Personio answer is not a job feed") && err.contains("too deep"), "{err}");
+        }
+        let ok = format!("<workzag-jobs><position><id>1</id><name>Dev</name><jobDescriptions><jobDescription><name>R</name><value>{}a{}</value></jobDescription></jobDescriptions></position></workzag-jobs>", "<b>".repeat(50), "</b>".repeat(50));
+        assert!(parse_positions(&ok).unwrap()[0].descriptions[0].1.contains('a'), "nesting below the limit is read");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
     #[tokio::test]

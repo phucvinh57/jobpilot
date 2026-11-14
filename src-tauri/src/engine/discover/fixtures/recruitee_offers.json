@@ -18,7 +18,12 @@
       "description": "<p style=\"text-align:start;\">At Acme we make anvils easy to order.</p><p><strong>Take ownership</strong></p><ul><li><p>Build our order API in Go.</p></li></ul>",
       "requirements": "<ul><li><p>You have shipped Go services.</p></li><li><p>You know PostgreSQL.</p></li></ul>",
       "published_at": "2026-11-11 13:21:40 UTC",
-      "salary": { "min": "60000", "max": "80000", "period": "year", "currency": "EUR" },
+      "salary": {
+        "min": "60000",
+        "max": "80000",
+        "period": "year",
+        "currency": "EUR"
+      },
       "status": "published"
     },
     {
@@ -34,7 +39,12 @@
       "description": "<p>Sell anvils.</p>",
       "requirements": "",
       "published_at": "2026-11-10 08:00:00 UTC",
-      "salary": { "min": null, "max": null, "period": null, "currency": null }
+      "salary": {
+        "min": null,
+        "max": null,
+        "period": null,
+        "currency": null
+      }
     },
     {
       "id": 2800003,
@@ -49,6 +59,18 @@
       "description": "<p>Run our Kubernetes clusters.</p>",
       "requirements": "<p>Terraform</p>",
       "published_at": "2026-11-09 08:00:00 UTC"
+    },
+    {
+      "id": 2800005,
+      "slug": "data-analyst",
+      "title": "Data Analyst",
+      "company_name": "Acme",
+      "careers_url": "https://10.0.0.5/o/data-analyst",
+      "location": "Amsterdam",
+      "remote": false,
+      "description": "",
+      "requirements": "<p> </p>",
+      "published_at": "2026-11-08 08:00:00 UTC"
     },
     {
       "id": 2800004,

@@ -12,6 +12,7 @@ use super::{
     html_to_text, last_segment, one_line, page_of, title_fits_roles, Cached, Candidate, Http, JobSource, SearchCtx, SearchPage,
     LISTING_TTL, SNIPPET_CHARS,
 };
+use crate::engine::net::http::public_http_url;
 use crate::engine::prefs::Preferences;
 
 /// The board hosts: `<company>.recruitee.com`.
@@ -27,7 +28,8 @@ pub struct Recruitee {
 struct Posting {
     slug: String,
     candidate: Candidate,
-    text: String,
+    /// `None` when the offer has no description: the runner loads its page instead.
+    text: Option<String>,
 }
 
 impl Recruitee {
@@ -74,7 +76,8 @@ impl Recruitee {
             full.push_str(&format!("\n\n## Requirements\n\n{requirements}"));
         }
         let snippet = one_line(&description, SNIPPET_CHARS);
-        Some(Posting { slug, candidate: Candidate { url, title, company, location, snippet }, text: full.trim_end().to_string() })
+        let text = (!description.is_empty() || !requirements.is_empty()).then(|| full.trim_end().to_string());
+        Some(Posting { slug, candidate: Candidate { url, title, company, location, snippet }, text })
     }
 }
 
@@ -90,7 +93,7 @@ impl JobSource for Recruitee {
     async fn posting(&self, candidate: &Candidate) -> Result<Option<String>> {
         let wanted = last_segment(&candidate.url);
         let postings = self.postings().await?;
-        Ok(postings.iter().find(|p| p.candidate.url == candidate.url || Some(&p.slug) == wanted.as_ref()).map(|p| p.text.clone()))
+        Ok(postings.iter().find(|p| p.candidate.url == candidate.url || Some(&p.slug) == wanted.as_ref()).and_then(|p| p.text.clone()))
     }
 }
 
@@ -102,11 +105,14 @@ fn valid_slug(slug: &str) -> bool {
     !slug.is_empty() && slug.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
 }
 
-/// The offer's own `careers_url` when it is an http(s) address of this offer (its path ends in
-/// `/o/<slug>`); it may be on the company's own domain. Anything else is not used.
+/// The offer's own `careers_url` when it is an https address of this offer (its path ends in
+/// `/o/<slug>`) on a public host name; it may be on the company's own domain. An IP address, this
+/// machine or a private network name, or anything else is not used.
 fn posting_url(careers_url: &str, slug: &str) -> Option<String> {
-    let url = url::Url::parse(careers_url).ok()?;
-    let fits = matches!(url.scheme(), "http" | "https") && url.host_str().is_some() && url.path().trim_end_matches('/').ends_with(&format!("/o/{slug}"));
+    let url = public_http_url(careers_url, false).ok()?;
+    let fits = url.scheme() == "https"
+        && matches!(url.host(), Some(url::Host::Domain(_)))
+        && url.path().trim_end_matches('/').ends_with(&format!("/o/{slug}"));
     fits.then(|| url.to_string())
 }
 
@@ -179,8 +185,8 @@ mod tests {
         let http = FakeHttp::with([(URL, LIST)]);
         let page = adapter(http.clone()).search(&Preferences::default(), &ctx(None, 10)).await.unwrap();
         let titles: Vec<_> = page.candidates.iter().map(|c| c.title.as_str()).collect();
-        assert_eq!(titles, ["Backend Engineer", "Account Manager", "Platform Engineer"], "no slug: dropped");
-        let [backend, sales, platform] = &page.candidates[..] else { panic!("three offers") };
+        assert_eq!(titles, ["Backend Engineer", "Account Manager", "Platform Engineer", "Data Analyst"], "no slug: dropped");
+        let [backend, sales, platform, _] = &page.candidates[..] else { panic!("four offers") };
         assert_eq!(backend.url, "https://careers.acme.test/o/backend-engineer", "the offer's own careers page");
         assert_eq!((backend.company.as_str(), backend.location.as_str()), ("Acme", "Amsterdam, Noord-Holland, Netherlands (Hybrid)"));
         assert!(backend.snippet.starts_with("At Acme we make anvils easy to order."), "{}", backend.snippet);
@@ -222,6 +228,9 @@ mod tests {
         let by_slug = Candidate { url: "https://acme.recruitee.com/o/platform-engineer".into(), ..Default::default() };
         assert!(rc.posting(&by_slug).await.unwrap().unwrap().contains("Kubernetes"));
         let unknown = Candidate { url: "https://acme.recruitee.com/o/zzz".into(), ..Default::default() };
+        let empty = rc.search(&Preferences::default(), &ctx(None, 10)).await.unwrap().candidates.into_iter().find(|c| c.title == "Data Analyst").unwrap();
+        assert_eq!(empty.url, "https://acme.recruitee.com/o/data-analyst", "a careers_url on a private host is not used");
+        assert_eq!(rc.posting(&empty).await.unwrap(), None, "no description: the runner loads the page");
         assert_eq!(rc.posting(&unknown).await.unwrap(), None);
         assert_eq!(http.requested().len(), 1);
     }
@@ -247,6 +256,19 @@ mod tests {
         assert_eq!(posting_url("https://careers.acme.test/o/dev-2", "dev"), None, "another offer");
         assert_eq!(posting_url("javascript:alert(1)//o/dev", "dev"), None);
         assert_eq!(posting_url("", "dev"), None);
+        for private in [
+            "http://careers.acme.test/o/dev",
+            "https://localhost/o/dev",
+            "https://jobs.localhost/o/dev",
+            "https://intranet/o/dev",
+            "https://careers.corp.internal/o/dev",
+            "https://127.0.0.1/o/dev",
+            "https://10.0.0.5/o/dev",
+            "https://8.8.8.8/o/dev",
+            "https://[::1]/o/dev",
+        ] {
+            assert_eq!(posting_url(private, "dev"), None, "{private}");
+        }
         let salary = |v: serde_json::Value| salary_of(Some(&v));
         assert_eq!(salary(serde_json::json!({"min": 5000, "max": 5000, "currency": "EUR", "period": "month"})).as_deref(), Some("5000 EUR per month"));
         assert_eq!(salary(serde_json::json!({"min": null, "max": "90000"})).as_deref(), Some("90000"));
