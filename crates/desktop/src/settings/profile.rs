@@ -36,7 +36,7 @@ use jobpilot_core::prefs::chat::MAX_LIST_ITEMS;
 use jobpilot_core::prefs::{clean_notes, cv_upload, NotesRead, PrefSuggestions, Preferences, Remote, UploadedCv};
 use jobpilot_core::{runtime, Core};
 
-use super::section_with;
+use crate::ui::{section_with, segmented};
 use crate::app::{is_latest_read, AppState, Screen};
 
 /// Longest list entry typed by hand, in characters.
@@ -990,7 +990,7 @@ impl Render for ProfileSection {
             .child({
                 let this = cx.entity();
                 let choices = [Remote::Any, Remote::Remote, Remote::Hybrid, Remote::Onsite].map(|r| (r, r.label()));
-                let control = super::segmented("profile-job-type", "Job type", &choices, snap.prefs.remote, move |remote, window, cx| {
+                let control = segmented("profile-job-type", "Job type", &choices, snap.prefs.remote, move |remote, window, cx| {
                     this.update(cx, |this, cx| {
                         this.edit(
                             move |prefs| {

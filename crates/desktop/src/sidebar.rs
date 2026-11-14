@@ -7,6 +7,7 @@ use gpui_kit::*;
 
 use crate::app::jobs::group_by_stage;
 use crate::app::{status_color, AppState, Screen, FADE};
+use crate::ui;
 
 /// Width of the icon / status-dot column, so every label starts at the same x.
 const GUTTER: f32 = 16.0;
@@ -126,7 +127,7 @@ impl Render for Sidebar {
         };
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let caption = |text: &'static str| div().px_3().pb_1().text_xs().font_semibold().text_color(muted).child(text);
+        let caption = |text: &'static str| ui::caption(text, cx).px_3().pb_1().font_semibold();
 
         let groups: Vec<AnyElement> = group_by_stage(&apps)
             .into_iter()

@@ -8,9 +8,6 @@ mod providers;
 mod sessions;
 mod sources;
 
-use std::rc::Rc;
-
-use gpui_kit::component::button::*;
 use gpui_kit::component::*;
 use gpui_kit::*;
 
@@ -50,73 +47,6 @@ impl SettingsView {
             state,
         }
     }
-}
-
-/// Shared frame of a settings section: bordered card with a title and a hint line.
-/// Append the section's own content with `.child(..)`.
-pub fn section(title: &str, hint: &str, cx: &App) -> Div {
-    section_with(title, hint, div(), cx)
-}
-
-/// [`section`] with `actions` at the right end of the title line.
-pub fn section_with(title: &str, hint: &str, actions: impl IntoElement, cx: &App) -> Div {
-    let theme = cx.theme();
-    div()
-        .v_flex()
-        .gap_2()
-        .p_4()
-        .border_1()
-        .border_color(theme.border)
-        .rounded_md()
-        .child(
-            div()
-                .h_flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(div().text_lg().font_semibold().child(title.to_string()))
-                .child(actions),
-        )
-        .child(div().text_sm().text_color(theme.muted_foreground).child(hint.to_string()))
-}
-
-/// A row of exclusive choices: one compact button per choice, the current one selected. Each
-/// button keeps its own id (`<id>-<label>`), so it stays reachable by assistive tools.
-pub fn segmented<T: Copy + PartialEq + 'static>(
-    id: &'static str,
-    label: &'static str,
-    choices: &[(T, &'static str)],
-    current: T,
-    on_pick: impl Fn(T, &mut Window, &mut App) + 'static,
-    cx: &App,
-) -> Stateful<Div> {
-    let on_pick = Rc::new(on_pick);
-    let primary = cx.theme().primary;
-    let fill = ButtonCustomVariant::new(cx)
-        .color(primary.opacity(0.22))
-        .hover(primary.opacity(0.30))
-        .active(primary.opacity(0.30))
-        .foreground(cx.theme().foreground);
-    div()
-        .id(id)
-        .role(Role::Group)
-        .aria_label(label)
-        .h_flex()
-        .flex_wrap()
-        .gap_1()
-        .children(choices.iter().map(|&(value, text)| {
-            let on_pick = on_pick.clone();
-            let chosen = value == current;
-            // The chosen one is tinted with the theme's primary colour, the others are outlined.
-            // "Job type: Remote", not "Remote": other buttons of the page may share the visible word.
-            let button = Button::new(SharedString::from(format!("{id}-{text}")))
-                .compact()
-                .label(text)
-                .accessibility_label(format!("{label}: {text}"))
-                .selected(chosen);
-            let button = if chosen { button.custom(fill) } else { button.outline() };
-            button.on_click(move |_, window, cx| on_pick(value, window, cx))
-        }))
 }
 
 impl Render for SettingsView {

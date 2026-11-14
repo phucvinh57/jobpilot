@@ -8,7 +8,7 @@
 //! The one primary button is at the bottom right: "Prepare CV" while there are leads, "Search now"
 //! when the list is empty (`logic::queue_primary_for`). Everything else is a plain button.
 
-mod logic;
+pub(crate) mod logic;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::time::Duration;
@@ -38,6 +38,7 @@ use crate::app::jobs::parse_input;
 use crate::app::{AppState, FADE};
 use crate::detail::insight_brief;
 use crate::problem::{self, RetryFn};
+use crate::ui;
 use logic::{
     ago, dismissed_note, drop_unreported, is_web_link, meta_line, queue_behind, queue_primary_for, score_label, score_tone, source_name,
     source_needs_attention, source_status, waiting_label, QueueAction, QueueFacts, Queued, Tone, ALREADY_READING,
@@ -1075,7 +1076,7 @@ impl QueueView {
         let sources: Vec<(i64, String)> =
             self.snap.iter().flat_map(|s| s.sources.iter()).map(|s| (s.id, source_name(s))).collect();
         let chip = |id: SharedString, label: String, on: bool| Button::new(id).ghost().compact().label(label).selected(on);
-        let caption = |text: &'static str| div().text_xs().text_color(muted).child(text);
+        let caption = |text: &'static str| ui::caption(text, cx);
         let (shown, total) = (self.shown().len(), self.items().len());
         div()
             .id("queue-filters")

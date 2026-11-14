@@ -10,8 +10,9 @@ use gpui_kit::*;
 use jobpilot_core::prefs::Appearance;
 use jobpilot_core::runtime;
 
-use super::{section, segmented};
 use crate::app::AppState;
+use crate::ui::theme::{set_mode, sync_system};
+use crate::ui::{section, segmented};
 
 /// The appearance applied now.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -29,9 +30,9 @@ pub fn current(cx: &App) -> Appearance {
 pub fn apply(appearance: Appearance, window: Option<&mut Window>, cx: &mut App) {
     cx.set_global(Current(appearance));
     match appearance {
-        Appearance::Light => Theme::change(ThemeMode::Light, window, cx),
-        Appearance::Dark => Theme::change(ThemeMode::Dark, window, cx),
-        Appearance::System => Theme::sync_system_appearance(window, cx),
+        Appearance::Light => set_mode(ThemeMode::Light, window, cx),
+        Appearance::Dark => set_mode(ThemeMode::Dark, window, cx),
+        Appearance::System => sync_system(window, cx),
     }
 }
 
@@ -40,7 +41,7 @@ pub fn watch_system(window: &mut Window) {
     window
         .observe_window_appearance(|window, cx| {
             if current(cx) == Appearance::System {
-                Theme::sync_system_appearance(Some(window), cx);
+                sync_system(Some(window), cx);
             }
         })
         .detach();

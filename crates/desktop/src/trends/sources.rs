@@ -10,7 +10,7 @@ use jobpilot_core::store::Source;
 use jobpilot_core::trends::{SearchProvider, SourceKind};
 
 use super::{Colors, TrendsView};
-use crate::settings::section;
+use crate::ui::section;
 
 /// What the source's last run says, in words.
 fn status_text(source: &Source) -> String {

@@ -19,7 +19,7 @@ use jobpilot_core::discover::{source_url_hint, JOB_SOURCE_KINDS};
 use jobpilot_core::runtime;
 use jobpilot_core::store::{Session, Source};
 
-use super::section;
+use crate::ui::section;
 use super::sessions::{ago, host};
 use crate::app::AppState;
 

@@ -16,7 +16,7 @@ use gpui_kit::*;
 use jobpilot_core::store::{Provider, ProviderKind};
 use jobpilot_core::{llm, runtime};
 
-use super::section;
+use crate::ui::{field, section};
 use crate::app::AppState;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -349,11 +349,7 @@ impl ProvidersSection {
         );
     }
 
-    fn field(label: &str, muted: Hsla, input: impl IntoElement) -> Div {
-        div().v_flex().gap_1().child(div().text_sm().text_color(muted).child(label.to_string())).child(input)
-    }
-
-    fn render_form(&self, edit: &Edit, form: &Form, muted: Hsla, ok: Hsla, bad: Hsla, cx: &mut Context<Self>) -> Div {
+    fn render_form(&self, edit: &Edit, form: &Form, ok: Hsla, bad: Hsla, cx: &mut Context<Self>) -> Div {
         let idle = self.busy == Busy::Idle;
         let kind_button = |id: &'static str, kind: ProviderKind| {
             Button::new(id)
@@ -371,7 +367,7 @@ impl ProvidersSection {
                     .on_click(cx.listener(|this, _, window, cx| this.load_models(window, cx))),
             );
 
-        let mut model_field = Self::field("Model", muted, model_row);
+        let mut model_field = field("Model", model_row, cx);
         if !edit.models.is_empty() {
             model_field = model_field.child(Select::new(&form.picker).placeholder("Pick from the loaded models"));
         }
@@ -388,21 +384,21 @@ impl ProvidersSection {
             .v_flex()
             .gap_3()
             .pt_2()
-            .child(Self::field(
+            .child(field(
                 "Type",
-                muted,
                 div()
                     .h_flex()
                     .gap_2()
                     .child(kind_button("kind-openai", ProviderKind::OpenAi))
                     .child(kind_button("kind-anthropic", ProviderKind::Anthropic)),
+                cx,
             ))
-            .child(Self::field("Name", muted, Input::new(&form.name)))
-            .child(Self::field("Base URL", muted, Input::new(&form.base_url)))
-            .child(Self::field(
+            .child(field("Name", Input::new(&form.name), cx))
+            .child(field("Base URL", Input::new(&form.base_url), cx))
+            .child(field(
                 if edit.id == 0 { "API key" } else { "API key (leave empty to keep the saved one)" },
-                muted,
                 Input::new(&form.api_key).mask_toggle(),
+                cx,
             ))
             .child(model_field)
             .when(edit.kind == ProviderKind::OpenAi, |d| {
@@ -528,7 +524,7 @@ impl Render for ProvidersSection {
             );
         }
         if let (Some(edit), Some(form)) = (self.edit.as_ref(), self.form.as_ref()) {
-            let form_view = self.render_form(edit, form, muted, ok, bad, cx);
+            let form_view = self.render_form(edit, form, ok, bad, cx);
             body = body.child(form_view);
         }
         body

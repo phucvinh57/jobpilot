@@ -7,6 +7,7 @@ mod queue;
 mod settings;
 mod sidebar;
 mod trends;
+mod ui;
 
 use std::sync::Arc;
 
@@ -44,6 +45,8 @@ fn main() -> anyhow::Result<()> {
     let opened_in_run = opened.clone();
     gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
         gpui_kit::init(cx);
+        // Fonts before the first frame: the theme asks for Inter by name.
+        ui::fonts::register(cx);
         settings::appearance::apply(appearance, None, cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
