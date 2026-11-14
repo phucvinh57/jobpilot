@@ -15,8 +15,6 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     host: "127.0.0.1",
-    // The bundled fonts live in the repository's `assets/fonts`.
-    fs: { allow: [here("./src"), here("./assets"), here("./index.html")] },
     // The Rust side rebuilds through the Tauri CLI, not through Vite.
     watch: { ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**", "**/.claude/**"] },
   },

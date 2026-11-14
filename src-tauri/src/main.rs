@@ -1,6 +1,6 @@
 //! JobPilot desktop app (Tauri). The composition root: it opens `Core`, wires the bounded contexts'
 //! commands and the event bridge, and opens the one window. All logic lives in `jobpilot-core`;
-//! the views are the web app in `../src`.
+//! the views are the web app in the repository's `src/`.
 
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
