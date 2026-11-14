@@ -12,6 +12,7 @@
 //! sitemap `<loc>`; links and sitemap entries must also have a posting-shaped path
 //! ([`super::web::looks_like_posting`]). A posting's text is read by the runner's own fetch.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -22,7 +23,7 @@ use url::Url;
 
 use super::jsonld::job_postings;
 use super::sitemap::read_sitemap;
-use super::web::{check_site, is_generic, links, looks_like_posting, normalize_page_url, page_url, read_plain_listing, same_site, title_from_url, Page, Pages};
+use super::web::{check_site, is_generic, links, looks_like_posting, normalize_page_url, page_url, read_plain_page, same_site, title_from_url, Page, Pages};
 use super::{page_of, title_fits_roles, Cached, Candidate, JobSource, SearchCtx, SearchPage, LISTING_TTL};
 use crate::engine::prefs::Preferences;
 use crate::engine::store::Source;
@@ -57,34 +58,41 @@ impl CareerPage {
     async fn read(&self) -> Result<Vec<Candidate>> {
         let pages = self.pages.as_ref();
         let url = self.url.as_str();
-        let found = read_plain_listing(pages, url, |page| self.candidates(page)).await?;
-        if !found.is_empty() {
-            return Ok(found);
+        // Postings the page's JSON-LD says are closed: the fallbacks (links, sitemap, browser) would
+        // otherwise bring them back.
+        let mut closed = HashSet::new();
+        if let Some(page) = read_plain_page(pages, url).await? {
+            let found = self.candidates(&page, &mut closed);
+            if !found.is_empty() {
+                return Ok(found);
+            }
         }
-        let found = read_sitemap(pages, &self.url, &self.url, &self.company, MAX_POSTINGS).await;
+        let found: Vec<Candidate> =
+            read_sitemap(pages, &self.url, &self.url, &self.company, MAX_POSTINGS).await.into_iter().filter(|c| !closed.contains(&c.url)).collect();
         if !found.is_empty() {
             return Ok(found);
         }
         let page = pages.rendered(&self.source, url).await?;
-        Ok(self.candidates(&page))
+        Ok(self.candidates(&page, &mut closed))
     }
 
-    /// The postings of `page`: its JSON-LD postings when it has any on the configured site, else its
-    /// same-site, posting-shaped links, titled by their text (or their address).
-    fn candidates(&self, page: &Page) -> Vec<Candidate> {
+    /// The postings of `page`: its open JSON-LD postings when it has any on the configured site, else
+    /// its same-site, posting-shaped links, titled by their text (or their address). The addresses of
+    /// closed JSON-LD postings are added to `closed`, and no link to one of `closed` is a candidate.
+    fn candidates(&self, page: &Page, closed: &mut HashSet<String>) -> Vec<Candidate> {
         let Ok(base) = page_url(page) else { return Vec::new() };
         // The site is the one the user configured: a redirect to another site (or links that lead
         // there) does not move it, and a page read from another site has no candidates at all.
         if !same_site(&self.url, &base) {
             return Vec::new();
         }
-        let structured = self.structured(page, &base, Utc::now());
+        let structured = self.structured(page, &base, Utc::now(), closed);
         if !structured.is_empty() {
             return structured;
         }
         links(&page.html, &base)
             .into_iter()
-            .filter(|l| looks_like_posting(&self.url, &base, &l.url))
+            .filter(|l| looks_like_posting(&self.url, &base, &l.url) && !closed.contains(l.url.as_str()))
             .filter_map(|l| {
                 let title = if is_generic(&l.text) { title_from_url(&l.url)? } else { l.text };
                 Some(Candidate { url: l.url.to_string(), title, company: self.company.clone(), location: String::new(), snippet: String::new() })
@@ -94,28 +102,29 @@ impl CareerPage {
     }
 
     /// The page's `JobPosting` JSON-LD items that are still open at `now` and whose address is on
-    /// the configured site (JSON-LD is page text: its `url` gets the same rule as a link).
-    fn structured(&self, page: &Page, base: &Url, now: DateTime<Utc>) -> Vec<Candidate> {
+    /// the configured site (JSON-LD is page text: its `url` gets the same rule as a link). The
+    /// addresses of the closed ones go to `closed`.
+    fn structured(&self, page: &Page, base: &Url, now: DateTime<Utc>, closed: &mut HashSet<String>) -> Vec<Candidate> {
         let postings = job_postings(&page.html, base);
         if postings.is_empty() {
             return Vec::new();
         }
         let total = postings.len();
-        let mut seen = std::collections::HashSet::new();
-        let found: Vec<Candidate> = postings
-            .into_iter()
-            .filter(|p| !p.expired(now))
-            .filter_map(|p| {
-                let url = p.url.filter(|u| same_site(&self.url, u) && *u != self.url)?;
-                if !seen.insert(url.to_string()) {
-                    return None;
-                }
-                let title = if p.title.is_empty() { title_from_url(&url)? } else { p.title };
-                Some(Candidate { url: url.to_string(), title, company: self.company.clone(), location: p.location, snippet: String::new() })
-            })
-            .take(MAX_POSTINGS)
-            .collect();
-        info!(postings = total, candidates = found.len(), "career page: JSON-LD postings read");
+        let mut seen = HashSet::new();
+        let mut found = Vec::new();
+        for p in postings {
+            let Some(url) = p.url.as_ref().filter(|u| same_site(&self.url, u) && **u != self.url) else { continue };
+            if p.expired(now) {
+                closed.insert(url.to_string());
+                continue;
+            }
+            if found.len() >= MAX_POSTINGS || !seen.insert(url.to_string()) {
+                continue;
+            }
+            let Some(title) = (if p.title.is_empty() { title_from_url(url) } else { Some(p.title.clone()) }) else { continue };
+            found.push(Candidate { url: url.to_string(), title, company: self.company.clone(), location: p.location.clone(), snippet: String::new() });
+        }
+        info!(postings = total, candidates = found.len(), closed = closed.len(), "career page: JSON-LD postings read");
         found
     }
 }
@@ -234,19 +243,41 @@ mod tests {
         assert_eq!(fake.asked(), [format!("plain {LIST}"), format!("plain {SITEMAP_URL}"), format!("browser {LIST}")]);
     }
 
+    #[tokio::test]
+    async fn postings_the_json_ld_calls_closed_do_not_come_back_through_the_fallbacks() {
+        let closed = r#"<script type="application/ld+json">{"@type":"JobPosting","title":"Platform Engineer","url":"/careers/platform-engineer","validThrough":"2020-01-31"}</script>"#;
+        // The page's links.
+        let html = format!(r#"{closed}<a href="/careers/platform-engineer">Platform Engineer</a><a href="/careers/rust-engineer">Rust Engineer</a>"#);
+        let adapter = CareerPage::new(pages(FakePages::new().plain(LIST, &html)), &source(LIST), "Acme").unwrap();
+        let urls: Vec<_> = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap().candidates.into_iter().map(|c| c.url).collect();
+        assert_eq!(urls, ["https://acme.test/careers/rust-engineer"]);
+        // The sitemap.
+        let sitemap = r#"<urlset><url><loc>https://acme.test/careers/platform-engineer</loc></url><url><loc>https://acme.test/careers/data-engineer</loc></url></urlset>"#;
+        let fake = pages(FakePages::new().plain(LIST, closed).plain(SITEMAP_URL, sitemap));
+        let adapter = CareerPage::new(fake, &source(LIST), "Acme").unwrap();
+        let urls: Vec<_> = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap().candidates.into_iter().map(|c| c.url).collect();
+        assert_eq!(urls, ["https://acme.test/careers/data-engineer"]);
+        // The rendered page.
+        let rendered = r#"<a href="/careers/platform-engineer">Platform Engineer</a><a href="/careers/ml-engineer">ML Engineer</a>"#;
+        let fake = pages(FakePages::new().plain(LIST, closed).rendered(LIST, rendered));
+        let adapter = CareerPage::new(fake, &source(LIST), "Acme").unwrap();
+        let urls: Vec<_> = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap().candidates.into_iter().map(|c| c.url).collect();
+        assert_eq!(urls, ["https://acme.test/careers/ml-engineer"]);
+    }
+
     #[test]
     fn json_ld_on_a_listing_that_moved_to_another_site_is_ignored() {
         let adapter = CareerPage::new(pages(FakePages::new()), &source(LIST), "Acme").unwrap();
         let moved = Page { url: "https://evil.test/careers".into(), html: JSONLD_PAGE.into() };
-        assert!(adapter.candidates(&moved).is_empty());
+        assert!(adapter.candidates(&moved, &mut HashSet::new()).is_empty());
         // Later, the dated posting has closed; the undated one stays.
         let now = DateTime::parse_from_rfc3339("2100-01-01T00:00:00Z").unwrap().with_timezone(&Utc);
         let page = Page { url: LIST.into(), html: JSONLD_PAGE.into() };
-        let open: Vec<_> = adapter.structured(&page, &Url::parse(LIST).unwrap(), now).into_iter().map(|c| c.title).collect();
+        let open: Vec<_> = adapter.structured(&page, &Url::parse(LIST).unwrap(), now, &mut HashSet::new()).into_iter().map(|c| c.title).collect();
         assert_eq!(open, ["Data Engineer"]);
         // JSON-LD with no posting on the site: the page's links are read instead.
         let html = r#"<script type="application/ld+json">{"@type":"JobPosting","title":"Elsewhere","url":"https://evil.test/jobs/1"}</script><a href="/careers/rust-engineer">Rust Engineer</a>"#;
-        let urls: Vec<_> = adapter.candidates(&Page { url: LIST.into(), html: html.into() }).into_iter().map(|c| c.url).collect();
+        let urls: Vec<_> = adapter.candidates(&Page { url: LIST.into(), html: html.into() }, &mut HashSet::new()).into_iter().map(|c| c.url).collect();
         assert_eq!(urls, ["https://acme.test/careers/rust-engineer"]);
     }
 
@@ -271,7 +302,7 @@ mod tests {
         let html = r#"<a href="/jobs/8812345">Backend Engineer</a><a href="https://acme.test/jobs/9912345">Other host, same site</a><a href="https://evil.test/jobs/1234567">Evil</a>"#;
         let adapter = CareerPage::new(pages(FakePages::new().plain(LIST, html)), &source(LIST), "Acme").unwrap();
         let page = Page { url: "https://careers.acme.test/open".into(), html: html.into() };
-        let urls: Vec<_> = adapter.candidates(&page).into_iter().map(|c| c.url).collect();
+        let urls: Vec<_> = adapter.candidates(&page, &mut HashSet::new()).into_iter().map(|c| c.url).collect();
         assert_eq!(urls, ["https://careers.acme.test/jobs/8812345", "https://acme.test/jobs/9912345"]);
     }
 

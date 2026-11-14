@@ -94,21 +94,23 @@ pub(crate) async fn read_listing(
     url: &str,
     extract: impl Fn(&Page) -> Vec<Candidate>,
 ) -> Result<Vec<Candidate>> {
-    let found = read_plain_listing(pages, url, &extract).await?;
-    if !found.is_empty() {
-        return Ok(found);
+    if let Some(page) = read_plain_page(pages, url).await? {
+        let found = extract(&page);
+        if !found.is_empty() {
+            return Ok(found);
+        }
     }
     let page = pages.rendered(source, url).await?;
     Ok(extract(&page))
 }
 
-/// The plain half of [`read_listing`]: the candidates of the plain read, none when it met a wall
-/// (the browser may do better), and any other failure as the error.
-pub(crate) async fn read_plain_listing(pages: &dyn Pages, url: &str, extract: impl Fn(&Page) -> Vec<Candidate>) -> Result<Vec<Candidate>> {
+/// The plain read of [`read_listing`]: `None` when it met a wall (the browser may do better), any
+/// other failure as the error.
+pub(crate) async fn read_plain_page(pages: &dyn Pages, url: &str) -> Result<Option<Page>> {
     match pages.plain(url).await {
-        Ok(page) => Ok(extract(&page)),
+        Ok(page) => Ok(Some(page)),
         Err(e) if e.downcast_ref::<NeedsBrowser>().is_none() => Err(e),
-        Err(_) => Ok(Vec::new()),
+        Err(_) => Ok(None),
     }
 }
 

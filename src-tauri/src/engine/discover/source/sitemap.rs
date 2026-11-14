@@ -49,18 +49,23 @@ pub(crate) fn parse(xml: &str) -> Result<Sitemap> {
     let mut entry: Option<Entry> = None;
     let mut field = String::new();
     let mut text = String::new();
+    // How deep the open element is: the root is 1, an entry (`<url>`, `<sitemap>`) 2, its own
+    // `<loc>` and `<lastmod>` 3. Deeper ones (`<image:image><image:loc>` in WordPress sitemaps)
+    // are other things' addresses and are ignored.
+    let mut depth = 0usize;
     loop {
         let event = reader.read_event().map_err(|e| anyhow!("not a readable sitemap: {e}"))?;
         match event {
             Event::Eof => break,
             Event::Start(e) => {
+                depth += 1;
                 let name = local_name(e.name().as_ref());
-                match (root, name.as_str()) {
-                    (None, "urlset") => root = Some(false),
-                    (None, "sitemapindex") => root = Some(true),
-                    (None, other) => bail!("not a sitemap (root element `{other}`)"),
-                    (Some(_), "url" | "sitemap") => entry = Some(Entry::default()),
-                    (Some(_), "loc" | "lastmod") if entry.is_some() => {
+                match (root, depth, name.as_str()) {
+                    (None, _, "urlset") => root = Some(false),
+                    (None, _, "sitemapindex") => root = Some(true),
+                    (None, _, other) => bail!("not a sitemap (root element `{other}`)"),
+                    (Some(_), 2, "url" | "sitemap") => entry = Some(Entry::default()),
+                    (Some(_), 3, "loc" | "lastmod") if entry.is_some() => {
                         field = name;
                         text.clear();
                     }
@@ -69,15 +74,15 @@ pub(crate) fn parse(xml: &str) -> Result<Sitemap> {
             }
             Event::End(e) => {
                 let name = local_name(e.name().as_ref());
-                match name.as_str() {
-                    "url" | "sitemap" => {
+                match (depth, name.as_str()) {
+                    (2, "url" | "sitemap") => {
                         if let Some(done) = entry.take().filter(|d| !d.loc.is_empty()) {
                             if entries.len() < MAX_ENTRIES {
                                 entries.push(done);
                             }
                         }
                     }
-                    "loc" | "lastmod" if name == field => {
+                    (3, "loc" | "lastmod") if name == field => {
                         if let Some(d) = entry.as_mut() {
                             let value = text.trim().to_string();
                             if name == "loc" {
@@ -90,6 +95,7 @@ pub(crate) fn parse(xml: &str) -> Result<Sitemap> {
                     }
                     _ => {}
                 }
+                depth = depth.saturating_sub(1);
             }
             Event::Text(t) if !field.is_empty() => {
                 if let Ok(t) = t.decode() {
@@ -233,6 +239,10 @@ mod tests {
         let Sitemap::Index(children) = parse(INDEX).unwrap() else { panic!("an index") };
         assert_eq!(children.len(), 8);
         assert!(matches!(parse(r#"<?xml version="1.0"?><x:urlset xmlns:x="s"><x:url><x:loc>https://a.test/jobs/1</x:loc></x:url></x:urlset>"#), Ok(Sitemap::Urls(u)) if u.len() == 1));
+        // WordPress (Yoast) puts image addresses inside each entry: only the entry's own `<loc>` counts.
+        let images = r#"<urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"><url><loc>https://a.test/jobs/1-rust-engineer</loc>
+            <image:image><image:loc>https://a.test/wp-content/logo.png</image:loc></image:image><lastmod>2026-11-01</lastmod></url></urlset>"#;
+        assert_eq!(parse(images).unwrap(), Sitemap::Urls(vec![Entry { loc: "https://a.test/jobs/1-rust-engineer".into(), lastmod: "2026-11-01".into() }]));
         for broken in ["", "<html><body>Not found</body></html>", "not xml at all"] {
             let ok_but_empty = matches!(parse(broken), Ok(Sitemap::Urls(ref u)) if u.is_empty());
             assert!(parse(broken).is_err() || ok_but_empty, "{broken}: {:?}", parse(broken));

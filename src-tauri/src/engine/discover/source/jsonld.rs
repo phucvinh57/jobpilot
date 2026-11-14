@@ -57,8 +57,11 @@ impl JsonLdPosting {
         }
     }
 
-    /// Did the posting close before `now`? A date without a time closes at the end of that day; a
-    /// missing or unreadable date never expires.
+    /// Did the posting close before `now`? A date-time (with an offset, or without one read as
+    /// UTC) is compared as an instant. A date without a time is compared with `now`'s **UTC** date
+    /// and closes at the end of that day: the page gives no time zone, so a posting may count as
+    /// open for up to a day longer than the site meant, never shorter. A missing or unreadable date
+    /// never expires.
     pub(crate) fn expired(&self, now: DateTime<Utc>) -> bool {
         let raw = self.valid_through.trim();
         if raw.is_empty() {
@@ -71,11 +74,11 @@ impl JsonLdPosting {
     }
 }
 
-/// The text of a posting page built from its `JobPosting`: a short header (only the fields the
-/// page gives), a blank line, then the description as text.
-pub(crate) fn posting_text(posting: &JsonLdPosting) -> String {
+/// The header lines of a posting: `Title`, `Company`, `Location`, `Remote`, `Employment type`,
+/// `Salary`, `Posted`, `Valid through`, only those the page gives, one per line (`""` for none).
+pub(crate) fn header_text(posting: &JsonLdPosting) -> String {
     let remote = if posting.remote { "yes" } else { "" };
-    let header: Vec<String> = [
+    [
         ("Title", posting.title.as_str()),
         ("Company", &posting.company),
         ("Location", &posting.location),
@@ -88,13 +91,23 @@ pub(crate) fn posting_text(posting: &JsonLdPosting) -> String {
     .into_iter()
     .filter(|(_, v)| !v.is_empty())
     .map(|(k, v)| format!("{k}: {v}"))
-    .collect();
-    let body = posting.description_text();
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+/// `header` and `body` as one text, a blank line between them (either may be empty).
+pub(crate) fn with_header(header: &str, body: &str) -> String {
     match (header.is_empty(), body.is_empty()) {
-        (true, _) => body,
-        (false, true) => header.join("\n"),
-        (false, false) => format!("{}\n\n{body}", header.join("\n")),
+        (true, _) => body.to_string(),
+        (false, true) => header.to_string(),
+        (false, false) => format!("{header}\n\n{body}"),
     }
+}
+
+/// The text of a posting page built from its `JobPosting`: the [`header_text`], a blank line, then
+/// the description as text.
+pub(crate) fn posting_text(posting: &JsonLdPosting) -> String {
+    with_header(&header_text(posting), &posting.description_text())
 }
 
 /// Every `JobPosting` in the `application/ld+json` blocks of `html`, in page order, at most
