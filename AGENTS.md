@@ -32,17 +32,19 @@ crates/core  (jobpilot-core, lib jobpilot_core)   no UI
                   SQLite checkpoints, `nodes::challenge` interrupt shared by discovery and trends
   net        P8/P10   `net::http`: the one safe HTTP client for third-party data (public hosts only, per-host delay, size cap, hop-by-hop redirects)
   notify     P8   desktop notifications (best effort)
-  prefs      P8   `Preferences` model + `Core::preferences/save_preferences` (the chat that fills it is P9, open PR)
+  prefs      P8/P9   `Preferences` model + `Core::preferences/save_preferences`; P9 `chat` + `chat_graph` (graph `prefs_chat`), `cv_upload` (context only), `undo`
   discover   P10/P12   `source/` (greenhouse, lever, ashby, hn_hiring, yc, career_page), `run` (graphs `discovery` and `source_run`), `score`, `dedup`, `handoff`,
                   `sources`, `queue` (QueueSnapshot), `promote` (graph `prepare_cv`, dismiss)
-  trends     P13a collection only: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`; the digest is P13b (open PR)
+  trends     P13a collection: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`;
+                  P13b `digest/` (extract, count, synthesize, cite: every point must cite stored items)
 crates/desktop (package `jobpilot`)               GPUI views only
   main.rs    logging init, window (app id `jobpilot`)
   app.rs     AppState (Arc<Core>, selection, screen, health, retry), root view + setup banner
   problem.rs Problem -> help text / call-to-action / Retry (shared by every view)
   sidebar.rs detail/{mod,jd,cv,apply,timeline}.rs   settings/{providers,sessions,sources,gmail}.rs
   queue.rs   queue/logic.rs: Queue screen (leads by score, brief + score breakdown, Prepare CV / Dismiss / Open posting, Search now, "needs you" banner)
-  prefs.rs   trends.rs: screens that are placeholders on main until P9 / P13b merge
+  prefs.rs   Preferences screen (chat + editable summary; takes `AppState::prefs_suggestion` from Trends into the message box)
+  trends/    Trends screen (digest with citations, skill chart, history, sources)
   detail/mod.rs  the ONE primary action (primary_for: Generate -> Approve CV -> Review & Submit -> Submit); the rest are plain buttons
 ```
 
