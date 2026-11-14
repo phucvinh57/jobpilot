@@ -9,6 +9,7 @@
 //! | `smartrecruiters` | `jobs.smartrecruiters.com/Acme` or company id | public postings JSON, one API page (100) at a time |
 //! | `recruitee` | `acme.recruitee.com` or name | public offers JSON |
 //! | `personio` | `acme.jobs.personio.de` (or `.com`) or name | public XML job feed |
+//! | `workday` | `https://acme.wd5.myworkdayjobs.com/[en-US/]External` | the board page's own job search (POST), one query per wanted role |
 //! | `hn_hiring` | unused | HN Algolia, the latest "Who is hiring?" thread, one comment per candidate |
 //! | `yc` | `https://www.ycombinator.com/jobs` (default) or a workatastartup.com page | the job links of the listing page; the browser (and a bound session) when the page needs it |
 //! | `career_page` | a careers page | the same-site links that look like postings; the browser when the page is drawn by JavaScript |
@@ -28,6 +29,7 @@ mod personio;
 mod recruitee;
 mod smartrecruiters;
 mod web;
+mod workday;
 mod yc;
 
 use std::collections::HashSet;
@@ -48,6 +50,7 @@ pub use personio::Personio;
 pub use recruitee::Recruitee;
 pub use smartrecruiters::SmartRecruiters;
 pub use web::{NetPages, Page, Pages};
+pub use workday::Workday;
 pub use yc::Yc;
 
 #[cfg(test)]
@@ -137,6 +140,11 @@ pub fn adapter_for(source: &Source, http: Arc<dyn Http>) -> Result<Arc<dyn JobSo
             Arc::new(Personio::new(http, &format!("https://{name}.{suffix}"), &company(&name)))
         }
         "hn_hiring" => Arc::new(HnHiring::new(http, hn_hiring::DEFAULT_BASE)),
+        "workday" => {
+            let board = workday::Board::parse(&source.url).context("Workday source")?;
+            let company = company(&board.tenant);
+            Arc::new(Workday::new(http, board, &company))
+        }
         other => bail!("no adapter for source kind `{other}` yet"),
     })
 }
@@ -173,6 +181,7 @@ pub fn check_source(kind: &str, url: &str) -> Result<(String, String)> {
         "recruitee" => Ok((url.to_string(), board_host(url, recruitee::HOSTS).context("Recruitee source")?.0)),
         "personio" => Ok((url.to_string(), board_host(url, personio::HOSTS).context("Personio source")?.0)),
         "hn_hiring" => Ok((String::new(), "Hacker News: Who is hiring".to_string())),
+        "workday" => Ok((url.to_string(), workday::Board::parse(url).context("Workday source")?.tenant)),
         "yc" => {
             let url = if url.is_empty() { yc::DEFAULT_URL } else { url };
             yc::check_url(url)?;
@@ -497,6 +506,8 @@ mod tests {
         assert!(err(add("recruitee", "recruitee.com.evil.test")).contains("Recruitee source"));
         assert!(err(add("personio", "..")).contains("Personio source"));
         assert!(err(add("smartrecruiters", "https://evil.test/Acme")).contains("SmartRecruiters source"));
+        assert!(adapter_for(&add("workday", "https://acme.wd5.myworkdayjobs.com/External"), http.clone()).is_ok());
+        assert!(err(add("workday", "https://acme.wd5.myworkdayjobs.com.evil.test/External")).contains("not a Workday board"));
         assert!(err(add("nope", "")).contains("no adapter for source kind `nope`"));
         assert!(err(add("yc", "")).contains("no adapter for source kind `yc`"), "the page adapters need `adapter_for_pages`");
     }
@@ -525,6 +536,10 @@ mod tests {
         assert_eq!(check_source("lever", "acme").unwrap(), ("acme".into(), "acme".into()));
         assert_eq!(check_source("ashby", "jobs.ashbyhq.com/acme").unwrap().1, "acme");
         assert_eq!(check_source("hn_hiring", "ignored").unwrap().0, "");
+        assert_eq!(
+            check_source("workday", " acme.wd5.myworkdayjobs.com/en-US/External ").unwrap(),
+            ("acme.wd5.myworkdayjobs.com/en-US/External".into(), "acme".into())
+        );
         assert_eq!(check_source("smartrecruiters", "https://jobs.smartrecruiters.com/AcmeGroup").unwrap().1, "AcmeGroup");
         assert_eq!(check_source("smartrecruiters", "AcmeGroup").unwrap(), ("AcmeGroup".into(), "AcmeGroup".into()));
         assert_eq!(check_source("recruitee", " https://acme.recruitee.com/ ").unwrap(), ("https://acme.recruitee.com/".into(), "acme".into()));
@@ -535,7 +550,8 @@ mod tests {
         for (kind, url) in [("greenhouse", ""), ("lever", "https://evil.test/acme"), ("career_page", "javascript:x"), ("yc", "https://evil.test"), ("linkedin", "https://www.linkedin.com/jobs"),
             ("smartrecruiters", ""), ("smartrecruiters", ".."), ("smartrecruiters", "https://smartrecruiters.com.evil.test/Acme"),
             ("recruitee", ""), ("recruitee", "recruitee.com.evil.test"), ("recruitee", "a.b.recruitee.com"), ("recruitee", "https://evil.test/o/x"),
-            ("personio", ".."), ("personio", "acme.jobs.personio.de.evil.test"), ("personio", "acme.personio.de"), ("personio", "jobs.personio.de")] {
+            ("personio", ".."), ("personio", "acme.jobs.personio.de.evil.test"), ("personio", "acme.personio.de"), ("personio", "jobs.personio.de"),
+            ("workday", ""), ("workday", "https://acme.wd5.myworkdayjobs.com/.."), ("workday", "myworkdayjobs.com.evil.test/External")] {
             assert!(check_source(kind, url).is_err(), "{kind} {url}");
         }
     }

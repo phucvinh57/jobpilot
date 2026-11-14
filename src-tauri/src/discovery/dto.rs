@@ -154,7 +154,7 @@ impl From<&QueueItem> for LeadDto {
 #[serde(rename_all = "camelCase")]
 pub struct SourceDto {
     pub id: i64,
-    /// `greenhouse` / `lever` / `ashby` / `smartrecruiters` / `recruitee` / `personio` / `hn_hiring` / `yc` / `career_page`.
+    /// `greenhouse` / `lever` / `ashby` / `smartrecruiters` / `recruitee` / `personio` / `workday` / `hn_hiring` / `yc` / `career_page`.
     pub kind: String,
     /// The name the user (or the adapter) gave; may be blank.
     pub name: String,
