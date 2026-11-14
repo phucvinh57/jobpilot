@@ -18,7 +18,7 @@ pub const GRAPH_PROGRESS: &str = "shared:graph-progress";
 
 /// Which data changed, so a screen re-reads only what it shows. These are the scopes the shell
 /// itself reports (mail sync, background searches); the web app also notifies `trends`, `profile`,
-/// `integrations` and `health` after its own commands (`web/src/shared/bridge`).
+/// `integrations` and `health` after its own commands (`src/shared/bridge` of the web app).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Scope {

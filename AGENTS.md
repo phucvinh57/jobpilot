@@ -11,8 +11,8 @@ assets/cv.typ              Typst renderer: typst compile --root <dir> --input da
 assets/prompts/            tailor.md (system prompt), example-cv.yaml (few-shot)
 assets/jobpilot.desktop    desktop entry (StartupWMClass=jobpilot, same as the window app id)
 assets/icons/              app icon (svg + png), used by the deb / AppImage
-assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) bundled by the web app (`web/src/styles.css`)
-scripts/package.sh         release .deb + AppImage (Tauri bundler) -> dist/
+assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) bundled by the web app (`src/styles.css`)
+scripts/package.sh         release .deb + AppImage (Tauri bundler) -> release/
 crates/core  (jobpilot-core, lib jobpilot_core)   no UI
   paths      data dir ($XDG_DATA_HOME/jobpilot, override JOBPILOT_DATA_DIR), profile path, logs_dir
   runtime    global tokio runtime; spawn(fut) -> oneshot::Receiver
@@ -37,7 +37,7 @@ crates/core  (jobpilot-core, lib jobpilot_core)   no UI
                   `sources`, `queue` (QueueSnapshot), `promote` (graph `prepare_cv`, dismiss), `manual` (`Core::add_lead`: pasted link/file -> scored lead)
   trends     P13a collection: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`;
                   P13b `digest/` (extract, count, synthesize, cite: every point must cite stored items)
-crates/desktop (package `jobpilot`)               Tauri v2 shell + web UI, split by bounded context (never by technical layer)
+src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, Today, job Sources) | applications (Pipeline, Application: JD/CV/apply/timeline) |
              profile (profile.yaml, preferences) | integrations (AI Providers, Gmail, browser Sessions) | trends (Digest, trend sources)
   tauri.conf.json, capabilities/default.json   one window `main`; permissions: core + the file picker only; strict CSP (no remote origin)
@@ -51,27 +51,28 @@ crates/desktop (package `jobpilot`)               Tauri v2 shell + web UI, split
                        `commands.rs` application services: thin `#[tauri::command]`s that call `Core` through `shared::run`
   src/demo.rs          `JOBPILOT_DEMO=1` sample data
   src/devtools.rs      cargo feature `dev-tools` only: webview snapshot + UI script runner (see "Check the UI")
-  web/                 React + Vite + TypeScript + Tailwind (pnpm)
-    src/app/           composition root of the web app: App (screen switch, file drop), Sidebar, SetupBanner, SettingsScreen
-    src/shared/        `bridge` (the only Tauri imports: invoke / listen / file picker), `ui/kit.tsx` (design kit: Page, Card, Section,
+package.json, bun.lock, index.html, vite.config.ts, tsconfig.json, eslint.config.js   the web app (bun), standard Tauri layout
+src/                   React + Vite + TypeScript + Tailwind
+  app/                 composition root of the web app: App (screen switch, file drop), Sidebar, SetupBanner, SettingsScreen
+  shared/              `bridge` (the only Tauri imports: invoke / listen / file picker), `ui/kit.tsx` (design kit: Page, Card, Section,
                        Banner, Button, Chip, Tag, Segmented, Tabs, ScoreBadge, Stepper, ...), `theme` (tokens light/dark as `--jp-*`
                        CSS variables; `styles.css` maps them to the only Tailwind colours), `problem` (ErrorBanner, ProblemHelp),
                        `nav` (screen, open Application / Lead, Today badge), `shell`, `lib/async` (`useQuery`, `useAction`), `insight`
-    src/contexts/<context>/   `domain/` (types mirroring the DTOs + pure helpers + vitest), `api/` (typed functions over the bridge),
+  contexts/<context>/  `domain/` (types mirroring the DTOs + pure helpers + vitest), `api/` (typed functions over the bridge),
                        `hooks/` (use-cases), `ui/` (screens), `index.ts` (public surface)
                        direction: ui -> hooks -> api / domain; another context only through its `index.ts` (eslint enforces both)
 ```
 
 ## Commands
 
-- Web app first (the shell embeds `crates/desktop/web/dist` at compile time): `pnpm --dir crates/desktop/web install`, then `pnpm --dir crates/desktop/web build`.
-- Run: `cargo run -p jobpilot` (the built web app; sample data: `JOBPILOT_DEMO=1`; throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory`). With hot reload: `cd crates/desktop && web/node_modules/.bin/tauri dev`.
-- Web checks: `pnpm --dir crates/desktop/web check` (tsc, eslint with the context-boundary rules, vitest).
+- Web app first (the shell embeds `dist/` at compile time): `bun install`, then `bun run build`.
+- Run: `cargo run -p jobpilot` (the built web app; sample data: `JOBPILOT_DEMO=1`; throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory`). With hot reload: `bun run tauri dev`.
+- Web checks: `bun run check` (tsc, eslint with the context-boundary rules, vitest).
 - Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace`
 - Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-core -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
 - End-to-end without real services: `cargo test -p jobpilot-core --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
-- Package: `scripts/package.sh` -> `dist/`
-- Needs: Rust, Node + pnpm, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
+- Package: `scripts/package.sh` -> `release/`
+- Needs: Rust, Node + bun, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
 - Pre-PR checks: `scripts/check.sh [--all]` (paths changed since main: web typecheck/lint/test/build, clippy + test, typst render); CI adds `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps) and restores the cache saved by main; `git config core.hooksPath .githooks` once per clone runs it before every push.
 - Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_core=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
 
@@ -80,13 +81,13 @@ crates/desktop (package `jobpilot`)               Tauri v2 shell + web UI, split
 A window capture cannot see the webview on a Wayland session and a screen capture asks the user for consent, so the app checks itself: with the cargo feature `dev-tools` (off by default, never packaged) the webview takes its own picture and runs a script that drives the page.
 
 ```
-pnpm --dir crates/desktop/web build
+bun run build
 JOBPILOT_UI_SCRIPT=/tmp/check.js JOBPILOT_UI_SHOTS=/tmp/shots \
 JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory JOBPILOT_DEMO=1 \
   cargo run -p jobpilot --features dev-tools
 ```
 
-`check.js` is the body of an async function; the app exits when it ends. Helpers (`src/devtools.rs`): `shot(name)` (PNG in `JOBPILOT_UI_SHOTS`), `log(text)` (app log), `sleep(ms)`, `waitFor(fn, ms)`, `$(selector)`, `byText(text, selector)`, `click(target)` (a selector, or the text / aria-label of a button), `type(target, text)`, `invoke(command, args)`. Example:
+`check.js` is the body of an async function; the app exits when it ends. Helpers (`src-tauri/src/devtools.rs`): `shot(name)` (PNG in `JOBPILOT_UI_SHOTS`), `log(text)` (app log), `sleep(ms)`, `waitFor(fn, ms)`, `$(selector)`, `byText(text, selector)`, `click(target)` (a selector, or the text / aria-label of a button), `type(target, text)`, `invoke(command, args)`. Example:
 
 ```text
 await waitFor(() => $("#nav-today"));
@@ -115,8 +116,8 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 - Never add facts to a CV that are not in `profile.yaml` (employers, titles, dates, institutions, numbers, technologies).
 - Secrets (API keys, OAuth tokens) only in the OS keyring via `core::secrets`; never in the DB, logs or files. Logs are redacted as a second line of defence: still never put a secret in a log call, an error message or a `Debug` dump.
 - The UI never blocks and never owns I/O: a command calls core through `shared::run(fut)` / `shared::run_sync(f)` (the core runtime); long work streams progress as events and the command returns the final result.
-- The shell reads/writes through `Core` only; no SQL or HTTP in `crates/desktop`. The web app talks to the shell only through `web/src/shared/bridge`, and only from a context's `api/` layer.
-- Bounded contexts do not depend on each other: Rust `src/<context>` uses `shared` and core only; a web context imports another only through its `index.ts`. What two contexts share goes to the shared kernel.
+- The shell reads/writes through `Core` only; no SQL or HTTP in `src-tauri`. The web app talks to the shell only through `src/shared/bridge`, and only from a context's `api/` layer.
+- Bounded contexts do not depend on each other: Rust `src-tauri/src/<context>` uses `shared` and core only; a web context imports another only through its `index.ts`. What two contexts share goes to the shared kernel.
 - DTOs (`<context>/dto.rs`) never carry a secret: keys and tokens are write-only from the web app (it can learn that one is saved, never its value).
 - The webview shows the app only: no remote origin in the CSP, navigation is refused (`main.rs::may_show`), and http(s) links open in the system browser through `shared_open_url`. Untrusted text is rendered as text, never as HTML.
 - Statuses only move forward (`Status::can_advance_to`); use `Store::set_status` so a timeline event is recorded.
@@ -125,7 +126,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 - No `unwrap()` / `expect()` on runtime paths (only tests and provably-infallible statics like a constant regex). Return errors with `anyhow::Context`, or recover.
 - Failures the user can act on become a `health::Problem` (no provider, no Chrome, no typst, network) and are shown with a call to action; network errors get a Retry.
 - Log key steps at `info!` with ids/counts only (no page, JD, email or CV text); failures at `warn!`/`error!`.
-- Views use the design kit (`web/src/shared`) and the theme classes (`bg-surface`, `text-ink`, ...) for colours and widgets: no hard-coded colours (Tailwind's stock palette is removed), no local copies of kit components.
+- Views use the design kit (`src/shared`) and the theme classes (`bg-surface`, `text-ink`, ...) for colours and widgets: no hard-coded colours (Tailwind's stock palette is removed), no local copies of kit components.
 - Exactly one primary button at a time (`applications/rules.rs::primary_for`, unit-tested; the web app renders what the DTO says); it is disabled while work runs. Secondary actions are plain buttons.
 - Outgoing HTTP to a URL that is not the user's own (job boards, feeds, postings, search results) goes through `net::http`; discovery browsers go through `browser::guard`. Both refuse machine-local and private hosts. `allow_private_hosts` exists for tests only.
 - Discovery browsers never disguise automation (no hidden webdriver flag, no user-agent change), and a login, captcha or block page is never solved, evaded or waited out: the source pauses and the user deals with it in the visible browser.
@@ -138,7 +139,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 
 Core: each sub-plan edits only its own modules: `llm/` P1; `pipeline/` P2; `browser/` P4; `apply/` P5; `mail/` P6; `health`, `logging`, `redact`, packaging and docs P7. Add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
 
-Desktop: a change belongs to one bounded context and edits only `crates/desktop/src/<context>/` and `crates/desktop/web/src/contexts/<context>/`: discovery (P10 sources, P12 queue), applications (P2/P3/P5 screens), profile (P9), integrations (P1 providers, P4 sessions, P6 Gmail), trends (P13). The shared kernel (`src/shared`, `web/src/shared`, `web/src/app`, `main.rs`) changes only for something every context needs.
+Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and `src/contexts/<context>/`: discovery (P10 sources, P12 queue), applications (P2/P3/P5 screens), profile (P9), integrations (P1 providers, P4 sessions, P6 Gmail), trends (P13). The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`, `src/shared`, `src/app`) changes only for something every context needs.
 
 The product plans (`docs/plans/`, status table in `docs/plans/README.md`):
 

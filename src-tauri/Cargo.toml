@@ -9,7 +9,7 @@ description = "Tailored CVs, managed-browser job applications and Gmail status t
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-jobpilot-core = { path = "../core" }
+jobpilot-core = { path = "../crates/core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
@@ -24,8 +24,8 @@ url = "2"
 tempfile = "3"
 
 [features]
-# The bundled web app (`web/dist`) instead of the dev server. On by default, so `cargo run -p jobpilot`
-# shows the built UI; `pnpm tauri dev` turns it off (`--no-default-features`) and loads Vite on :1420.
+# The bundled web app (`dist`) instead of the dev server. On by default, so `cargo run -p jobpilot`
+# shows the built UI; `bun run tauri dev` turns it off (`--no-default-features`) and loads Vite on :1420.
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 # UI checks without a person at the screen: the webview snapshots itself and runs a script

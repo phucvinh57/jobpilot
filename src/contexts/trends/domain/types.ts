@@ -1,4 +1,4 @@
-// What the shell sends for the Trends screen (mirrors `crates/desktop/src/trends/dto.rs`).
+// What the shell sends for the Trends screen (mirrors `src-tauri/src/trends/dto.rs`).
 // Feed, page and posting text in these types is untrusted: it is rendered as text, never as HTML.
 
 import type { Tone } from "@/shared";

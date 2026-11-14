@@ -8,7 +8,7 @@ It can also find the jobs for you: job sources (Greenhouse, Lever, Ashby boards,
 
 ## Requirements
 
-- Rust (stable), Node and pnpm to build
+- Rust (stable), Node and bun to build
 - [`typst`](https://typst.app) CLI: `cargo install --locked typst-cli` (the app tells you if it is missing)
 - Chrome or Chromium for browser automation (Settings > Browser sessions can also download Chrome for Testing, only when you click it)
 - Linux with Wayland or X11, WebKitGTK 4.1 (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev` to build), and a Secret Service (gnome-keyring / KWallet, libdbus) for the keyring
@@ -17,8 +17,8 @@ It can also find the jobs for you: job sources (Greenhouse, Lever, Ashby boards,
 ## Run
 
 ```
-pnpm --dir crates/desktop/web install
-pnpm --dir crates/desktop/web build     # the UI, embedded in the binary
+bun install
+bun run build     # the UI, embedded in the binary
 cargo run -p jobpilot --release
 ```
 
@@ -50,7 +50,7 @@ Throwaway state for trying it out: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=m
 scripts/package.sh
 ```
 
-Writes a `.deb` and an AppImage to `dist/` with the Tauri bundler (`BUNDLES=deb scripts/package.sh` for the `.deb` only; the AppImage step downloads its tooling on first use). The `.deb` depends on WebKitGTK 4.1. The `typst` CLI is not bundled.
+Writes a `.deb` and an AppImage to `release/` with the Tauri bundler (`BUNDLES=deb scripts/package.sh` for the `.deb` only; the AppImage step downloads its tooling on first use). The `.deb` depends on WebKitGTK 4.1. The `typst` CLI is not bundled.
 
 ## Where data lives
 
