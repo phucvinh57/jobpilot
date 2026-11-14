@@ -6,6 +6,9 @@
 //! | `greenhouse` | board URL or slug (`boards.greenhouse.io/acme`) | public board JSON |
 //! | `lever` | `jobs.lever.co/acme` or slug | public postings JSON |
 //! | `ashby` | `jobs.ashbyhq.com/acme` or slug | public job-board JSON |
+//! | `smartrecruiters` | `jobs.smartrecruiters.com/Acme` or company id | public postings JSON, one API page (100) at a time |
+//! | `recruitee` | `acme.recruitee.com` or name | public offers JSON |
+//! | `personio` | `acme.jobs.personio.de` (or `.com`) or name | public XML job feed |
 //! | `hn_hiring` | unused | HN Algolia, the latest "Who is hiring?" thread, one comment per candidate |
 //! | `yc` | `https://www.ycombinator.com/jobs` (default) or a workatastartup.com page | the job links of the listing page; the browser (and a bound session) when the page needs it |
 //! | `career_page` | a careers page | its `JobPosting` JSON-LD, else the same-site links that look like postings; else the site's `sitemap.xml`; else the browser (a page drawn by JavaScript) |
@@ -22,7 +25,10 @@ mod hn_hiring;
 mod http;
 pub(crate) mod jsonld;
 mod lever;
+mod personio;
+mod recruitee;
 mod sitemap;
+mod smartrecruiters;
 mod web;
 mod yc;
 
@@ -40,6 +46,9 @@ pub use greenhouse::Greenhouse;
 pub use hn_hiring::HnHiring;
 pub use http::{Http, NetHttp};
 pub use lever::Lever;
+pub use personio::Personio;
+pub use recruitee::Recruitee;
+pub use smartrecruiters::SmartRecruiters;
 pub use web::{NetPages, Page, Pages};
 pub use yc::Yc;
 
@@ -117,6 +126,18 @@ pub fn adapter_for(source: &Source, http: Arc<dyn Http>) -> Result<Arc<dyn JobSo
             let slug = board_slug(&source.url, &["ashbyhq.com"]).context("Ashby source")?;
             Arc::new(Ashby::new(http, ashby::DEFAULT_BASE, &slug, &company(&slug)))
         }
+        "smartrecruiters" => {
+            let id = board_slug(&source.url, &["smartrecruiters.com"]).context("SmartRecruiters source")?;
+            Arc::new(SmartRecruiters::new(http, smartrecruiters::DEFAULT_BASE, &id, &company(&id)))
+        }
+        "recruitee" => {
+            let (name, suffix) = board_host(&source.url, recruitee::HOSTS).context("Recruitee source")?;
+            Arc::new(Recruitee::new(http, &format!("https://{name}.{suffix}"), &company(&name)))
+        }
+        "personio" => {
+            let (name, suffix) = board_host(&source.url, personio::HOSTS).context("Personio source")?;
+            Arc::new(Personio::new(http, &format!("https://{name}.{suffix}"), &company(&name)))
+        }
         "hn_hiring" => Arc::new(HnHiring::new(http, hn_hiring::DEFAULT_BASE)),
         other => bail!("no adapter for source kind `{other}` yet"),
     })
@@ -150,6 +171,9 @@ pub fn check_source(kind: &str, url: &str) -> Result<(String, String)> {
         "greenhouse" => slug_of(&["greenhouse.io"], "Greenhouse source"),
         "lever" => slug_of(&["lever.co"], "Lever source"),
         "ashby" => slug_of(&["ashbyhq.com"], "Ashby source"),
+        "smartrecruiters" => slug_of(&["smartrecruiters.com"], "SmartRecruiters source"),
+        "recruitee" => Ok((url.to_string(), board_host(url, recruitee::HOSTS).context("Recruitee source")?.0)),
+        "personio" => Ok((url.to_string(), board_host(url, personio::HOSTS).context("Personio source")?.0)),
         "hn_hiring" => Ok((String::new(), "Hacker News: Who is hiring".to_string())),
         "yc" => {
             let url = if url.is_empty() { yc::DEFAULT_URL } else { url };
@@ -192,6 +216,33 @@ pub(crate) fn board_slug(input: &str, hosts: &[&str]) -> Result<String> {
         Some(slug) if valid(&slug) => Ok(slug),
         _ => bail!("the board name is missing in `{input}`"),
     }
+}
+
+/// The company of a board that lives on its own subdomain (`https://acme.recruitee.com/o/x` with
+/// `suffixes` `["recruitee.com"]` -> `acme`) or a bare name, and the suffix the address used (the
+/// first one for a bare name). The name becomes a host label in the address the adapter builds, so
+/// it must be exactly one label of `[A-Za-z0-9_-]` (no dots, so no `..` and no other domain); it is
+/// lower-cased.
+pub(crate) fn board_host(input: &str, suffixes: &[&'static str]) -> Result<(String, &'static str)> {
+    let input = input.trim();
+    if input.is_empty() {
+        bail!("no company board is set: enter the board URL or its short name");
+    }
+    let Some(&default) = suffixes.first() else { bail!("no board host is known for this kind") };
+    let valid = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
+    if !input.contains(['/', ':', '.']) {
+        return if valid(input) { Ok((input.to_ascii_lowercase(), default)) } else { bail!("`{input}` is not a board name") };
+    }
+    let with_scheme = if input.contains("://") { input.to_string() } else { format!("https://{input}") };
+    let url = url::Url::parse(&with_scheme).with_context(|| format!("`{input}` is not a board URL"))?;
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    for &suffix in suffixes {
+        if let Some(label) = host.strip_suffix(suffix).and_then(|h| h.strip_suffix('.')) {
+            return if valid(label) { Ok((label.to_string(), suffix)) } else { bail!("`{host}` is not a company board on {suffix}") };
+        }
+    }
+    let forms: Vec<String> = suffixes.iter().map(|s| format!("<company>.{s}")).collect();
+    bail!("`{host}` is not {}", forms.join(" or "))
 }
 
 // ---------------------------------------------------------------- shared helpers
@@ -334,6 +385,40 @@ mod tests {
     }
 
     #[test]
+    fn board_hosts_from_subdomains_and_names() {
+        let rc = ["recruitee.com"];
+        assert_eq!(board_host("acme", &rc).unwrap(), ("acme".into(), "recruitee.com"));
+        assert_eq!(board_host(" Acme-Labs_2 ", &rc).unwrap(), ("acme-labs_2".into(), "recruitee.com"), "lower-cased");
+        assert_eq!(board_host("acme.recruitee.com", &rc).unwrap().0, "acme");
+        assert_eq!(board_host("https://ACME.recruitee.com/o/backend-engineer?x=1", &rc).unwrap().0, "acme");
+        let pe = ["jobs.personio.de", "jobs.personio.com"];
+        assert_eq!(board_host("acme", &pe).unwrap(), ("acme".into(), "jobs.personio.de"), "a bare name gets the first suffix");
+        assert_eq!(board_host("https://acme.jobs.personio.com/job/1", &pe).unwrap(), ("acme".into(), "jobs.personio.com"));
+        assert_eq!(board_host("acme.jobs.personio.de", &pe).unwrap(), ("acme".into(), "jobs.personio.de"));
+        for bad in [
+            "",
+            ".",
+            "..",
+            "a b",
+            "acme/..",
+            "recruitee.com",
+            ".recruitee.com",
+            "a.b.recruitee.com",
+            "...recruitee.com",
+            "recruitee.com.evil.test",
+            "acme.recruitee.com.evil.test",
+            "https://evil.test/acme.recruitee.com",
+            "acmerecruitee.com",
+            "https://acme.recruitee.com@evil.test/",
+            "javascript:alert(1)",
+        ] {
+            assert!(board_host(bad, &rc).is_err(), "{bad}");
+        }
+        assert!(board_host("acme.personio.de", &pe).unwrap_err().to_string().contains("<company>.jobs.personio.de or <company>.jobs.personio.com"));
+        assert!(board_host("acme.jobs.personio.de.evil.test", &pe).is_err());
+    }
+
+    #[test]
     fn titles_are_matched_to_roles_loosely() {
         let roles = vec!["Senior Backend Engineer".to_string()];
         assert!(title_fits_roles("Software Engineer, Payments", &roles));
@@ -406,8 +491,14 @@ mod tests {
         assert!(adapter_for(&add("lever", "https://jobs.lever.co/acme"), http.clone()).is_ok());
         assert!(adapter_for(&add("ashby", "jobs.ashbyhq.com/acme"), http.clone()).is_ok());
         assert!(adapter_for(&add("hn_hiring", ""), http.clone()).is_ok());
+        assert!(adapter_for(&add("smartrecruiters", "jobs.smartrecruiters.com/Acme"), http.clone()).is_ok());
+        assert!(adapter_for(&add("recruitee", "acme.recruitee.com"), http.clone()).is_ok());
+        assert!(adapter_for(&add("personio", "acme.jobs.personio.com"), http.clone()).is_ok());
         let err = |s: Source| format!("{:#}", adapter_for(&s, http.clone()).err().unwrap());
         assert!(err(add("greenhouse", "")).contains("no company board"));
+        assert!(err(add("recruitee", "recruitee.com.evil.test")).contains("Recruitee source"));
+        assert!(err(add("personio", "..")).contains("Personio source"));
+        assert!(err(add("smartrecruiters", "https://evil.test/Acme")).contains("SmartRecruiters source"));
         assert!(err(add("nope", "")).contains("no adapter for source kind `nope`"));
         assert!(err(add("yc", "")).contains("no adapter for source kind `yc`"), "the page adapters need `adapter_for_pages`");
     }
@@ -436,9 +527,17 @@ mod tests {
         assert_eq!(check_source("lever", "acme").unwrap(), ("acme".into(), "acme".into()));
         assert_eq!(check_source("ashby", "jobs.ashbyhq.com/acme").unwrap().1, "acme");
         assert_eq!(check_source("hn_hiring", "ignored").unwrap().0, "");
+        assert_eq!(check_source("smartrecruiters", "https://jobs.smartrecruiters.com/AcmeGroup").unwrap().1, "AcmeGroup");
+        assert_eq!(check_source("smartrecruiters", "AcmeGroup").unwrap(), ("AcmeGroup".into(), "AcmeGroup".into()));
+        assert_eq!(check_source("recruitee", " https://acme.recruitee.com/ ").unwrap(), ("https://acme.recruitee.com/".into(), "acme".into()));
+        assert_eq!(check_source("personio", "acme.jobs.personio.com").unwrap().1, "acme");
+        assert_eq!(check_source("personio", "acme").unwrap().1, "acme");
         assert_eq!(check_source("yc", "").unwrap(), (yc::DEFAULT_URL.into(), "Y Combinator jobs".into()));
         assert_eq!(check_source("career_page", "https://www.acme.test/careers").unwrap(), ("https://www.acme.test/careers".into(), "acme.test".into()));
-        for (kind, url) in [("greenhouse", ""), ("lever", "https://evil.test/acme"), ("career_page", "javascript:x"), ("yc", "https://evil.test"), ("linkedin", "https://www.linkedin.com/jobs")] {
+        for (kind, url) in [("greenhouse", ""), ("lever", "https://evil.test/acme"), ("career_page", "javascript:x"), ("yc", "https://evil.test"), ("linkedin", "https://www.linkedin.com/jobs"),
+            ("smartrecruiters", ""), ("smartrecruiters", ".."), ("smartrecruiters", "https://smartrecruiters.com.evil.test/Acme"),
+            ("recruitee", ""), ("recruitee", "recruitee.com.evil.test"), ("recruitee", "a.b.recruitee.com"), ("recruitee", "https://evil.test/o/x"),
+            ("personio", ".."), ("personio", "acme.jobs.personio.de.evil.test"), ("personio", "acme.personio.de"), ("personio", "jobs.personio.de")] {
             assert!(check_source(kind, url).is_err(), "{kind} {url}");
         }
     }

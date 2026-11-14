@@ -17,6 +17,7 @@ Updated 2026-11-14: every plan is merged. On `main` unless noted.
 | P13b digest and view | #16 | merged | |
 | Phase 3 end-to-end and docs | #19 | merged | `crates/core/tests/e2e_discovery.rs`, CLAUDE.md / README updates |
 | No browser disguise | #21 | merged | The login, apply and JD-reading browsers no longer hide automation either |
+| P14 structured job sources | | planned | SmartRecruiters, Recruitee, Personio, Workday adapters; JSON-LD, sitemap and board detection for career pages |
 
 End-to-end check (fake provider and fake Greenhouse board on loopback, real typst, real Chrome for the apply step): source -> `discover_now` -> leads with score and insight -> `prepare_cv` -> Approve CV -> dry-run apply on a local form passes. It was checked before P9 and P13b merged: discovery and the queue work with default preferences, as planned. Still unchecked end to end: any live site, the live provider, Gmail, and the P9 / P13b screens with a live provider.
 
@@ -47,6 +48,7 @@ Numbering continues the existing P1-P7 ownership scheme in `CLAUDE.md`.
 | [P11](P11-job-insight.md) | Domain, company info, skills, interview process per job | `pipeline/insight.rs`, `detail/jd.rs` |
 | [P12](P12-queue.md) | Queue view, lead -> application, CV preparation, entry to apply | `desktop/queue.rs`, `core/discover/promote.rs` |
 | [P13](P13-market-trends.md) | Trend sources, report search, cited digest | `core/trends/`, `desktop/trends.rs`, `assets/prompts/trends.md` |
+| [P14](P14-structured-sources.md) | More job-board API adapters; JSON-LD, sitemap and board detection for career pages | `engine/discover/source/`, `engine/discover/fetch.rs`, desktop `discovery` context (Job sources) |
 
 ## Execution flow
 
