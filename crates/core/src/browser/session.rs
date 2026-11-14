@@ -41,7 +41,6 @@ const LAUNCH_ARGS: &[&str] = &[
     "--use-mock-keychain",
     "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection,PasswordImport,AutofillServerCommunication,TranslateUI,MediaRouter,OptimizationHints",
     "--disable-save-password-bubble",
-    "--disable-blink-features=AutomationControlled",
     "--disable-background-mode",
     "--disable-breakpad",
     "--disable-component-extensions-with-background-pages",
@@ -109,8 +108,6 @@ pub struct BrowserHandle {
 struct HandleInner {
     session_id: i64,
     headless: bool,
-    /// Headless Chrome announces itself as `HeadlessChrome`; pages get this UA instead.
-    user_agent: Option<String>,
     browser: tokio::sync::Mutex<Option<Browser>>,
     handler_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     lock: Mutex<Option<ProfileLock>>,
@@ -160,9 +157,6 @@ impl BrowserHandle {
         let browser = guard.as_ref().context("the browser is closed")?;
         let page = browser.new_page("about:blank").await.context("opening a tab")?;
         drop(guard);
-        if let Some(ua) = &self.inner.user_agent {
-            page.set_user_agent(ua.clone()).await.context("setting the user agent")?;
-        }
         page.goto(url).await.with_context(|| format!("navigating to {url}"))?;
         wait_loaded(&page, load_timeout).await;
         Ok(page)
@@ -382,10 +376,9 @@ impl SessionManager {
         self.launch_inner(id, headless, None, Flavor::Managed).await
     }
 
-    /// Like [`launch`](Self::launch) for **reading third-party pages** (job discovery): the browser
-    /// does not hide that it is automated (no `AutomationControlled` switch, no change to the
-    /// `HeadlessChrome` user agent), and with `proxy` (a [`Guard`](super::guard::Guard)'s flags) every
-    /// request goes through the request guard. The profile and its lock are the session's, so the
+    /// Like [`launch`](Self::launch) for **reading third-party pages** (job discovery): with
+    /// `guard_args` (a [`Guard`](super::guard::Guard)'s flags) every request goes through the
+    /// request guard. The profile and its lock are the session's, so the
     /// cookies of a login the user made are what the page is read with.
     pub(crate) async fn launch_reading(&self, id: i64, headless: bool, guard_args: &[String]) -> Result<BrowserHandle> {
         self.launch_inner(id, headless, None, Flavor::Reading(guard_args)).await
@@ -417,12 +410,10 @@ impl SessionManager {
             }
         });
 
-        let user_agent = if headless && matches!(flavor, Flavor::Managed) { headless_user_agent(&browser).await } else { None };
         let handle = BrowserHandle {
             inner: Arc::new(HandleInner {
                 session_id: id,
                 headless,
-                user_agent,
                 browser: tokio::sync::Mutex::new(Some(browser)),
                 handler_task: Mutex::new(Some(handler_task)),
                 lock: Mutex::new(Some(lock)),
@@ -479,10 +470,10 @@ fn normalize_start_url(raw: &str) -> Result<String> {
 /// How a browser is started.
 #[derive(Clone, Copy)]
 pub(crate) enum Flavor<'a> {
-    /// The managed flag set: logins and the apply flow (`LAUNCH_ARGS`, headless user agent rewritten).
+    /// The managed flag set: logins and the apply flow (`LAUNCH_ARGS`).
     Managed,
-    /// For reading third-party pages (job discovery): the managed flags **minus** the one that hides
-    /// automation, plus these extra flags (the request guard's). Nothing about the browser is disguised.
+    /// For reading third-party pages (job discovery): the managed flags plus these extra flags (the
+    /// request guard's).
     Reading(&'a [String]),
 }
 
@@ -490,14 +481,10 @@ pub(crate) fn browser_config(chrome: &Path, dir: &Path, headless: bool, start_ur
     browser_config_for(chrome, dir, headless, start_url, Flavor::Managed)
 }
 
-/// The switch of [`LAUNCH_ARGS`] that hides automation from pages; [`Flavor::Reading`] leaves it out.
-const HIDE_AUTOMATION: &str = "--disable-blink-features=AutomationControlled";
-
 /// The launch flags of `flavor`.
 fn launch_args(flavor: Flavor<'_>) -> Vec<String> {
     let mut args: Vec<String> = LAUNCH_ARGS.iter().map(|a| a.to_string()).collect();
     if let Flavor::Reading(extra) = flavor {
-        args.retain(|a| a != HIDE_AUTOMATION);
         args.extend(extra.iter().cloned());
     }
     args
@@ -528,12 +515,6 @@ pub(crate) fn browser_config_for(chrome: &Path, dir: &Path, headless: bool, star
         builder = builder.arg(url);
     }
     builder.build().map_err(|e| anyhow!(e))
-}
-
-/// `HeadlessChrome/..` -> `Chrome/..` so sites do not serve bot walls to the health check.
-pub(crate) async fn headless_user_agent(browser: &Browser) -> Option<String> {
-    let ua = browser.user_agent().await.ok()?;
-    ua.contains("HeadlessChrome").then(|| ua.replace("HeadlessChrome", "Chrome"))
 }
 
 /// Create the profile dir (mode 0700) and make sure the password manager and autofill are off.
@@ -624,10 +605,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reading_pages_for_discovery_does_not_disguise_the_browser() {
-        // Managed browsers (logins, apply) keep their flag set as it was.
-        assert!(launch_args(Flavor::Managed).iter().any(|a| a == "--disable-blink-features=AutomationControlled"));
-        // Discovery reads without it, and with the request guard's flags added.
+    fn no_browser_is_disguised() {
+        // No browser hides that it is automated (docs/plans/README.md: no fingerprint spoofing).
+        assert!(!launch_args(Flavor::Managed).iter().any(|a| a.contains("AutomationControlled") || a.contains("user-agent")));
+        // Discovery adds the request guard's flags.
         let guard = vec!["--proxy-server=http://127.0.0.1:1".to_string()];
         let reading = launch_args(Flavor::Reading(&guard));
         assert!(!reading.iter().any(|a| a.contains("AutomationControlled") || a.contains("user-agent")), "{reading:?}");
@@ -636,7 +617,7 @@ mod tests {
         for kept in ["--disable-sync", "--password-store=basic", "--no-first-run"] {
             assert!(reading.iter().any(|a| a == kept), "{kept}");
         }
-        assert_eq!(reading.len(), launch_args(Flavor::Managed).len());
+        assert_eq!(reading.len(), launch_args(Flavor::Managed).len() + 1);
     }
 
     #[test]

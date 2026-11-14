@@ -7,9 +7,8 @@
 //! - [`open_visible`]: a **visible** browser on a page, with a throwaway profile, for a source
 //!   without a session. The user looks at the page, or deals with it, themselves.
 //!
-//! These browsers **do not disguise themselves**: they are started without the switch that hides
-//! automation and without changing the user agent (`HeadlessChrome` stays what it is), unlike the
-//! managed browsers of logins and the apply flow (see [`Flavor`](super::session::Flavor)).
+//! These browsers **do not disguise themselves**: no switch that hides automation and no change to
+//! the user agent (`HeadlessChrome` stays what it is). No JobPilot browser does either.
 //!
 //! **Where they may go.** Only http(s) addresses are opened, and every request the browser makes,
 //! for the page, its redirects and everything the page loads, goes through the request guard
