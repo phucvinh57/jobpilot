@@ -8,10 +8,10 @@ use std::path::Path;
 
 use crate::shared::topics::{self, presence_in};
 pub use crate::shared::topics::{item_text, with_item, Presence, MAX_ITEM_CHARS};
-use jobpilot_core::health::{classify, Problem};
-use jobpilot_core::prefs::chat::MAX_LIST_ITEMS;
+use crate::engine::health::{classify, Problem};
+use crate::engine::prefs::chat::MAX_LIST_ITEMS;
 
-use jobpilot_core::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
+use crate::engine::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
 
 /// Suggestion chips shown under a field.
 pub const SUGGESTION_CHIPS: usize = 8;
@@ -264,8 +264,8 @@ mod tests {
     use crate::shared::topics::item_key;
     use std::path::Path;
 
-    use jobpilot_core::prefs::chat::MAX_LIST_ITEMS;
-    use jobpilot_core::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
+    use crate::engine::prefs::chat::MAX_LIST_ITEMS;
+    use crate::engine::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
 
     use super::{
         add_check, already_there_message, is_profile_file_name, job_type_key, notes_status,

@@ -5,9 +5,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use jobpilot_core::pipeline::{self, JdInput, Violation};
-use jobpilot_core::store::Application;
-use jobpilot_core::Core;
+use crate::engine::pipeline::{self, JdInput, Violation};
+use crate::engine::store::Application;
+use crate::engine::Core;
 
 /// How to (re)produce a CV for a Draft that has none.
 #[derive(Clone, Debug)]
@@ -166,8 +166,8 @@ pub fn open_path(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::store::NewApplication;
-    use jobpilot_core::{runtime, Paths, Secrets};
+    use crate::engine::store::NewApplication;
+    use crate::engine::{runtime, Paths, Secrets};
 
     use super::*;
 

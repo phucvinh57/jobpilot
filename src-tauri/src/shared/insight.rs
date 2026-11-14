@@ -1,8 +1,8 @@
 //! The company brief (`pipeline::Insight`) as the web app reads it. Discovery shows it under a
 //! lead and Applications under the posting, so the read model is part of the shared kernel.
 
-use jobpilot_core::pipeline::insight::{CompanyFacts, Interview};
-use jobpilot_core::pipeline::Insight;
+use crate::engine::pipeline::insight::{CompanyFacts, Interview};
+use crate::engine::pipeline::Insight;
 use serde::Serialize;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -89,8 +89,8 @@ pub fn interview_steps(i: &Interview) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::pipeline::insight::{CompanyFacts, Interview};
-    use jobpilot_core::pipeline::Insight;
+    use crate::engine::pipeline::insight::{CompanyFacts, Interview};
+    use crate::engine::pipeline::Insight;
 
     use super::{facts_line, interview_steps, InsightDto};
 

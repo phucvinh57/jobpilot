@@ -43,7 +43,7 @@ const tauriOnlyInBridge = {
 };
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", "src-tauri", "crates", "target", "release", ".claude"] },
+  { ignores: ["dist", "node_modules", "src-tauri", "target", "release", ".claude"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

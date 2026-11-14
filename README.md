@@ -89,8 +89,8 @@ Other env vars: `JOBPILOT_CHROME` (Chrome path), `JOBPILOT_TYPST` (typst path), 
 ```
 cargo build --workspace
 cargo test --workspace
-JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-core -- --ignored   # real Chrome
-cargo test -p jobpilot-core --test e2e_discovery                 # source -> lead -> CV -> approve, fake provider and board
+JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored        # real Chrome
+cargo test -p jobpilot --test e2e_discovery                      # source -> lead -> CV -> approve, fake provider and board
 ```
 
 See `AGENTS.md` for the module map, conventions and how to check the UI visually.

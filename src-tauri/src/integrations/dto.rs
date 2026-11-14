@@ -5,10 +5,10 @@
 
 use std::fmt;
 
-use jobpilot_core::browser::Chrome;
-use jobpilot_core::llm;
-use jobpilot_core::mail::{GmailState, ReportSummary};
-use jobpilot_core::store::{Provider, ProviderKind, Session};
+use crate::engine::browser::Chrome;
+use crate::engine::llm;
+use crate::engine::mail::{GmailState, ReportSummary};
+use crate::engine::store::{Provider, ProviderKind, Session};
 use serde::{Deserialize, Serialize};
 
 use super::rules::{host, kind_defaults, kind_label, KINDS};
@@ -232,9 +232,9 @@ impl GmailDto {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::chrono::{TimeZone, Utc};
-    use jobpilot_core::mail::{GmailState, ReportSummary};
-    use jobpilot_core::store::{Provider, ProviderKind, Session};
+    use chrono::{TimeZone, Utc};
+    use crate::engine::mail::{GmailState, ReportSummary};
+    use crate::engine::store::{Provider, ProviderKind, Session};
     use serde_json::Value;
 
     use super::{GmailDto, ProviderDto, ProviderInput, ProvidersDto, SessionDto};
@@ -246,7 +246,7 @@ mod tests {
             kind: ProviderKind::OpenAi,
             base_url: "http://localhost:11434/v1".into(),
             model: "llama3".into(),
-            json_mode: jobpilot_core::llm::openai::JSON_MODE_OBJECT.into(),
+            json_mode: crate::engine::llm::openai::JSON_MODE_OBJECT.into(),
             is_default: true,
         }
     }

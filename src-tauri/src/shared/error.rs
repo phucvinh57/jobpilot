@@ -1,14 +1,14 @@
 //! What a failed command tells the web app: the message and what the user can do about it.
 //!
 //! The classification (no AI provider, no Chrome, no typst, network, a site that needs the user)
-//! lives in `jobpilot_core::health`; this file only carries it over the bridge, so every screen
+//! lives in `crate::engine::health`; this file only carries it over the bridge, so every screen
 //! shows the same advice, Settings shortcut and Retry.
 
 use std::future::Future;
 
-use jobpilot_core::health::{self, Problem};
-use jobpilot_core::redact::redact;
-use jobpilot_core::runtime;
+use crate::engine::health::{self, Problem};
+use crate::engine::redact::redact;
+use crate::engine::runtime;
 use serde::Serialize;
 
 /// A [`Problem`] as the web app reads it.
@@ -107,7 +107,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::health::{Challenge, Problem};
+    use crate::engine::health::{Challenge, Problem};
 
     use super::{CommandError, ProblemDto};
 

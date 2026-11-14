@@ -31,7 +31,7 @@ From [activity-diagram.md](activity-diagram.md):
 **Use `adk-graph`, behind a thin `core/graph` facade, with our own checkpointer on `rusqlite`.**
 
 - It is the only Rust crate that matches the diagrams as drawn (parallel fan-out and join, multi-way edges, interrupts).
-- Only `adk-graph` with default features (which pulls `adk-core`). Not the `adk-rust` umbrella, not its model or tool crates: LLM calls keep going through `crates/core/src/llm`, so the rules on secrets, redaction and untrusted text are unchanged.
+- Only `adk-graph` with default features (which pulls `adk-core`). Not the `adk-rust` umbrella, not its model or tool crates: LLM calls keep going through `src-tauri/src/engine/llm` (then `crates/core/src/llm`), so the rules on secrets, redaction and untrusted text are unchanged.
 - **Do not enable its `sqlite` feature.** It brings `sqlx`, a second SQLite binding next to `rusqlite` in the same binary. Implement `Checkpointer` over `Store` instead (one new table).
 - The facade (`core/graph`: build, run, resume, events for the UI) is the only code that names `adk_graph`. If the crate stalls or breaks, the fallback is `graph-flow`, then an own runner, without touching P9-P13.
 

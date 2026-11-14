@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use jobpilot_core::prefs::chat::{MAX_LIST_ITEMS, MAX_NOTES_CHARS};
-use jobpilot_core::prefs::{PrefSuggestions, Preferences, UploadedCv};
+use crate::engine::prefs::chat::{MAX_LIST_ITEMS, MAX_NOTES_CHARS};
+use crate::engine::prefs::{PrefSuggestions, Preferences, UploadedCv};
 use serde::Serialize;
 
 use super::rules::{job_type_key, visible_suggestions, Field, MAX_ITEM_CHARS};
@@ -121,7 +121,7 @@ pub struct NotesReadDto {
 mod tests {
     use std::path::Path;
 
-    use jobpilot_core::prefs::{PrefSuggestions, Preferences, Remote, UploadedCv};
+    use crate::engine::prefs::{PrefSuggestions, Preferences, Remote, UploadedCv};
 
     use super::ProfileDto;
 

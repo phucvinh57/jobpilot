@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use jobpilot_core::apply::{Edit, Handoff, Live, Prepared, Review, Submitted};
-use jobpilot_core::pipeline::{JdInput, Progress, Stage};
+use crate::engine::apply::{Edit, Handoff, Live, Prepared, Review, Submitted};
+use crate::engine::pipeline::{JdInput, Progress, Stage};
 
 use super::rules::{edits_for, missing_count, progress_label, ApplyUi};
 
@@ -462,7 +462,7 @@ impl Applications {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::apply::{Ats, FieldKind, Row, Source};
+    use crate::engine::apply::{Ats, FieldKind, Row, Source};
 
     use super::*;
 

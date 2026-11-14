@@ -13,7 +13,7 @@ assets/jobpilot.desktop    desktop entry (StartupWMClass=jobpilot, same as the w
 assets/icons/              app icon (svg + png), used by the deb / AppImage
 assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) bundled by the web app (`src/styles.css`)
 scripts/package.sh         release .deb + AppImage (Tauri bundler) -> release/
-crates/core  (jobpilot-core, lib jobpilot_core)   no UI
+src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri; the shell's contexts call it, never the reverse
   paths      data dir ($XDG_DATA_HOME/jobpilot, override JOBPILOT_DATA_DIR), profile path, logs_dir
   runtime    global tokio runtime; spawn(fut) -> oneshot::Receiver
   store/     SQLite (rusqlite), one file per table: applications, events, providers, sessions, emails, kv, status, sources, leads, preferences, chat, trends, graph
@@ -41,7 +41,8 @@ src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bound
   contexts   discovery (Leads, Today, job Sources) | applications (Pipeline, Application: JD/CV/apply/timeline) |
              profile (profile.yaml, preferences) | integrations (AI Providers, Gmail, browser Sessions) | trends (Digest, trend sources)
   tauri.conf.json, capabilities/default.json   one window `main`; permissions: core + the file picker only; strict CSP (no remote origin)
-  src/main.rs          composition root: logging, `Core`, demo seed, mail autostart, the window (app id `jobpilot`), `apply::close_all` on exit;
+  src/main.rs          only calls `jobpilot_lib::run()`
+  src/lib.rs           composition root: logging, `Core`, demo seed, mail autostart, the window (app id `jobpilot`), `apply::close_all` on exit;
                        routes a command to its context by name prefix (`<context>_<name>`)
   src/shared/          shared kernel: `error` (CommandError { problem, message } via `health::classify`, `run` / `run_sync`), `events`
                        (`shared:data-changed`, `shared:graph-progress` bridge), `insight` (company brief read model), `topics` (preference-list rules that Profile and Trends share), `shell` (health line,
@@ -68,13 +69,13 @@ src/                   React + Vite + TypeScript + Tailwind
 - Web app first (the shell embeds `dist/` at compile time): `bun install`, then `bun run build`.
 - Run: `cargo run -p jobpilot` (the built web app; sample data: `JOBPILOT_DEMO=1`; throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory`). With hot reload: `bun run tauri dev`.
 - Web checks: `bun run check` (tsc, eslint with the context-boundary rules, vitest).
-- Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace`
-- Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-core -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
-- End-to-end without real services: `cargo test -p jobpilot-core --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
+- Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace` (the engine shares the `jobpilot` crate with Tauri: even engine-only tests need `dist/` built and the Linux libs below)
+- Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
+- End-to-end without real services: `cargo test -p jobpilot --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
 - Package: `scripts/package.sh` -> `release/`
 - Needs: Rust, Node + bun, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
 - Pre-PR checks: `scripts/check.sh [--all]` (paths changed since main: web typecheck/lint/test/build, clippy + test, typst render); CI adds `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps) and restores the cache saved by main; `git config core.hooksPath .githooks` once per clone runs it before every push.
-- Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_core=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
+- Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_lib::engine=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
 
 ## Check the UI visually
 
@@ -101,7 +102,7 @@ await shot("settings-light");
 
 Page errors, unhandled rejections and CSP violations are written to the app log (`ui script: ...`). Every interactive element has an `id` or an accessible name, so a script (or assistive technology) can reach it.
 
-For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), so a fake job board cannot be driven from the GUI: that path is covered by `crates/core/tests/e2e_discovery.rs`, and the GUI check of Today, a Lead, Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
+For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), so a fake job board cannot be driven from the GUI: that path is covered by `src-tauri/tests/e2e_discovery.rs`, and the GUI check of Today, a Lead, Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
 
 ## Workflow
 
@@ -114,10 +115,10 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 ## Rules
 
 - Never add facts to a CV that are not in `profile.yaml` (employers, titles, dates, institutions, numbers, technologies).
-- Secrets (API keys, OAuth tokens) only in the OS keyring via `core::secrets`; never in the DB, logs or files. Logs are redacted as a second line of defence: still never put a secret in a log call, an error message or a `Debug` dump.
-- The UI never blocks and never owns I/O: a command calls core through `shared::run(fut)` / `shared::run_sync(f)` (the core runtime); long work streams progress as events and the command returns the final result.
-- The shell reads/writes through `Core` only; no SQL or HTTP in `src-tauri`. The web app talks to the shell only through `src/shared/bridge`, and only from a context's `api/` layer.
-- Bounded contexts do not depend on each other: Rust `src-tauri/src/<context>` uses `shared` and core only; a web context imports another only through its `index.ts`. What two contexts share goes to the shared kernel.
+- Secrets (API keys, OAuth tokens) only in the OS keyring via `engine::secrets`; never in the DB, logs or files. Logs are redacted as a second line of defence: still never put a secret in a log call, an error message or a `Debug` dump.
+- The UI never blocks and never owns I/O: a command calls the engine through `shared::run(fut)` / `shared::run_sync(f)` (the engine runtime); long work streams progress as events and the command returns the final result.
+- The shell reads/writes through `Core` only; no SQL or HTTP in `src-tauri` outside `engine/`. The web app talks to the shell only through `src/shared/bridge`, and only from a context's `api/` layer.
+- Bounded contexts do not depend on each other: Rust `src-tauri/src/<context>` uses `shared` and `engine` only; a web context imports another only through its `index.ts`. What two contexts share goes to the shared kernel.
 - DTOs (`<context>/dto.rs`) never carry a secret: keys and tokens are write-only from the web app (it can learn that one is saved, never its value).
 - The webview shows the app only: no remote origin in the CSP, navigation is refused (`main.rs::may_show`), and http(s) links open in the system browser through `shared_open_url`. Untrusted text is rendered as text, never as HTML.
 - Statuses only move forward (`Status::can_advance_to`); use `Store::set_status` so a timeline event is recorded.
@@ -130,24 +131,24 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 - Exactly one primary button at a time (`applications/rules.rs::primary_for`, unit-tested; the web app renders what the DTO says); it is disabled while work runs. Secondary actions are plain buttons.
 - Outgoing HTTP to a URL that is not the user's own (job boards, feeds, postings, search results) goes through `net::http`; discovery browsers go through `browser::guard`. Both refuse machine-local and private hosts. `allow_private_hosts` exists for tests only.
 - Discovery browsers never disguise automation (no hidden webdriver flag, no user-agent change), and a login, captcha or block page is never solved, evaded or waited out: the source pauses and the user deals with it in the visible browser.
-- Graphs (`core/graph`): state is one `serde` struct, nodes return the new state and must be idempotent (a resume re-runs the node). A node with several plain incoming edges is an AND join and waits for all of them, so a loop or an alternative path must use `route`, never a second edge. A paused branch holds back its siblings in the same run: independent work runs as its own thread (`Graphs::run_each`). Parallel nodes only share a field declared with `append`.
+- Graphs (`engine/graph`): state is one `serde` struct, nodes return the new state and must be idempotent (a resume re-runs the node). A node with several plain incoming edges is an AND join and waits for all of them, so a loop or an alternative path must use `route`, never a second edge. A paused branch holds back its siblings in the same run: independent work runs as its own thread (`Graphs::run_each`). Parallel nodes only share a field declared with `append`.
 - Leads are not applications: a found job is a `leads` row; it becomes an application only when the user presses Prepare CV (`Core::promote`, idempotent). Discovery never promotes and never writes a CV.
 - Doc examples that are not compilable use ```` ```text ````, not ```` ```ignore ````: `cargo test -- --ignored` (the Chrome tests) also runs ignored doctests, and they fail to compile.
 - Untrusted text (postings, feed items, company pages) reaches the model only between markers, as data, and the model fills fixed schemas; URLs come from adapters in code.
 
 ## Ownership (parallel work)
 
-Core: each sub-plan edits only its own modules: `llm/` P1; `pipeline/` P2; `browser/` P4; `apply/` P5; `mail/` P6; `health`, `logging`, `redact`, packaging and docs P7. Add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
+Engine (`src-tauri/src/engine`): each sub-plan edits only its own modules: `llm/` P1; `pipeline/` P2; `browser/` P4; `apply/` P5; `mail/` P6; `health`, `logging`, `redact`, packaging and docs P7. Add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
 
 Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and `src/contexts/<context>/`: discovery (P10 sources, P12 queue), applications (P2/P3/P5 screens), profile (P9), integrations (P1 providers, P4 sessions, P6 Gmail), trends (P13). The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`, `src/shared`, `src/app`) changes only for something every context needs.
 
 The product plans (`docs/plans/`, status table in `docs/plans/README.md`):
 
-- P8 foundation: `core/graph/`, the new `store/` files and migrations, `notify.rs`, `Llm::chat_json`, `Problem::NeedsHuman`.
-- P9 preference chat: `core/prefs/` (chat), the desktop `profile` context, `assets/prompts/preferences.md`.
-- P10 discovery: `core/discover/` except `promote.rs` and `queue.rs`, `core/net/`, `browser/{challenge,render,guard,gate}.rs`, Job sources in the desktop `discovery` context.
+- P8 foundation: `engine/graph/`, the new `store/` files and migrations, `notify.rs`, `Llm::chat_json`, `Problem::NeedsHuman`.
+- P9 preference chat: `engine/prefs/` (chat), the desktop `profile` context, `assets/prompts/preferences.md`.
+- P10 discovery: `engine/discover/` except `promote.rs` and `queue.rs`, `engine/net/`, `browser/{challenge,render,guard,gate}.rs`, Job sources in the desktop `discovery` context.
 - P11 job insight: `pipeline/insight*`, the company brief (`shared/insight`).
-- P12 queue: Today in the desktop `discovery` context, `core/discover/{promote,queue}.rs`.
-- P13 trends: `core/trends/`, the desktop `trends` context, `assets/prompts/trends.md`.
+- P12 queue: Today in the desktop `discovery` context, `engine/discover/{promote,queue}.rs`.
+- P13 trends: `engine/trends/`, the desktop `trends` context, `assets/prompts/trends.md`.
 
 Prompts under `assets/prompts/` are High risk (a human reads the diff).

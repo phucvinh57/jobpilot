@@ -1,5 +1,5 @@
 // Why something failed, in terms the user can act on. The classification is done by the shell
-// (`jobpilot_core::health`); the web app only shows it.
+// (`engine::health`); the web app only shows it.
 
 export type ProblemKind = "noProvider" | "noTypst" | "noChrome" | "network" | "needsHuman" | "other";
 

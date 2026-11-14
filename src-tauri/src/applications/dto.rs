@@ -6,12 +6,12 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use jobpilot_core::apply::{self, FieldKind, Handoff, Review, UrlSource};
-use jobpilot_core::chrono::Local;
-use jobpilot_core::health;
-use jobpilot_core::pipeline::{read_jd_text, Analysis, Insight};
-use jobpilot_core::store::{Application, Event};
-use jobpilot_core::Core;
+use crate::engine::apply::{self, FieldKind, Handoff, Review, UrlSource};
+use chrono::Local;
+use crate::engine::health;
+use crate::engine::pipeline::{read_jd_text, Analysis, Insight};
+use crate::engine::store::{Application, Event};
+use crate::engine::Core;
 use serde::Serialize;
 
 use super::files::CvFiles;
@@ -104,7 +104,7 @@ pub fn board_dto(
     has_cv: &dyn Fn(&Application) -> bool,
 ) -> BoardDto {
     let now = Local::now().naive_local();
-    let local = |at: jobpilot_core::chrono::DateTime<jobpilot_core::chrono::Utc>| {
+    let local = |at: chrono::DateTime<chrono::Utc>| {
         at.with_timezone(&Local).naive_local()
     };
     let columns = board(apps)
@@ -412,7 +412,7 @@ pub struct TimelineDto {
     pub reviews: Vec<EmailReviewDto>,
 }
 
-pub fn timeline_dto(events: Vec<Event>, reviews: &[jobpilot_core::store::Email]) -> TimelineDto {
+pub fn timeline_dto(events: Vec<Event>, reviews: &[crate::engine::store::Email]) -> TimelineDto {
     let events = newest_first(events)
         .into_iter()
         .map(|e| {
@@ -775,9 +775,9 @@ pub fn require_application(core: &Core, id: i64) -> Result<Application> {
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use jobpilot_core::apply::{Ats, FieldKind, Row, Source};
-    use jobpilot_core::chrono::{TimeZone, Utc};
-    use jobpilot_core::store::{Email, Status};
+    use crate::engine::apply::{Ats, FieldKind, Row, Source};
+    use chrono::{TimeZone, Utc};
+    use crate::engine::store::{Email, Status};
 
     use super::*;
 
@@ -996,8 +996,8 @@ mod tests {
     fn only_files_of_the_run_are_served() {
         let dir = tempfile::tempdir().expect("a temporary directory");
         let core = Core::open_at(
-            jobpilot_core::Paths::new(dir.path().join("jp")),
-            jobpilot_core::Secrets::memory(),
+            crate::engine::Paths::new(dir.path().join("jp")),
+            crate::engine::Secrets::memory(),
         )
         .expect("a core");
         let application = app(1, Status::Submitting);
@@ -1054,8 +1054,8 @@ mod tests {
     fn the_header_offers_next_job_instead_of_the_primary_button_once_sent() {
         let dir = tempfile::tempdir().expect("a temporary directory");
         let core = Core::open_at(
-            jobpilot_core::Paths::new(dir.path().join("jp")),
-            jobpilot_core::Secrets::memory(),
+            crate::engine::Paths::new(dir.path().join("jp")),
+            crate::engine::Secrets::memory(),
         )
         .expect("a core");
         let none = || JobView {

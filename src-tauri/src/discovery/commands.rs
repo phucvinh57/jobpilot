@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use jobpilot_core::Core;
+use crate::engine::Core;
 use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
 
@@ -196,12 +196,12 @@ pub async fn discovery_job_sources(core: State<'_, Arc<Core>>) -> CommandResult<
                 .map(SessionOptionDto::from)
                 .collect(),
             daily: core.discover_daily_enabled()?,
-            kinds: jobpilot_core::discover::JOB_SOURCE_KINDS
+            kinds: crate::engine::discover::JOB_SOURCE_KINDS
                 .iter()
                 .map(|(kind, label)| SourceKindDto {
                     kind,
                     label,
-                    hint: jobpilot_core::discover::source_url_hint(kind),
+                    hint: crate::engine::discover::source_url_hint(kind),
                 })
                 .collect(),
         })

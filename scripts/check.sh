@@ -57,7 +57,7 @@ read -ra prof <<<"${CARGO_PROFILE_ARG:-}"
 
 # The web app first: the Tauri shell embeds its build (`dist/`) at compile time, so clippy and
 # the tests of the desktop crate need it. Fonts come from assets/fonts.
-if touches '^(Cargo\.(toml|lock)$|crates/|src-tauri/|src/|assets/|(package|tsconfig)\.json$|bun\.lock$|index\.html$|(vite|eslint)\.config\.[jt]s$|scripts/check\.sh$|\.github/workflows/ci\.yml$)'; then
+if touches '^(Cargo\.(toml|lock)$|src-tauri/|src/|assets/|(package|tsconfig)\.json$|bun\.lock$|index\.html$|(vite|eslint)\.config\.[jt]s$|scripts/check\.sh$|\.github/workflows/ci\.yml$)'; then
   run web-install bun install --frozen-lockfile &&
     run web-typecheck bun run typecheck &&
     run web-lint bun run lint &&

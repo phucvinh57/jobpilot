@@ -5,15 +5,15 @@
 //! sources and which search keys are saved (never the keys themselves).
 
 use anyhow::Result;
-use jobpilot_core::chrono::Utc;
-use jobpilot_core::graph::Outcome;
-use jobpilot_core::prefs::Preferences;
-use jobpilot_core::store::{Report, Source};
-use jobpilot_core::trends::{
+use chrono::Utc;
+use crate::engine::graph::Outcome;
+use crate::engine::prefs::Preferences;
+use crate::engine::store::{Report, Source};
+use crate::engine::trends::{
     Digest, DigestData, Period, Point, SearchProvider, Section, SourceKind, TrendChallenge,
     TrendRun,
 };
-use jobpilot_core::Core;
+use crate::engine::Core;
 use serde::Serialize;
 
 use super::rules::{
@@ -509,19 +509,19 @@ pub struct AddedDto {
 
 #[cfg(test)]
 mod tests {
-    use jobpilot_core::graph::{Failure, Outcome, WaitReason};
-    use jobpilot_core::health::Problem;
-    use jobpilot_core::trends::{
+    use crate::engine::graph::{Failure, Outcome, WaitReason};
+    use crate::engine::health::Problem;
+    use crate::engine::trends::{
         CitedItem, Digest, DigestData, Period, Point, Section, SkillCount, SkillCounts, TrendRun,
     };
-    use jobpilot_core::{Core, Paths, Secrets};
+    use crate::engine::{Core, Paths, Secrets};
 
     use super::{
         overview, parse_provider, provider_name, run_result, sections, ChartDto, DigestBodyDto,
     };
     use crate::trends::demo;
     use crate::trends::rules::Cadence;
-    use jobpilot_core::prefs::Preferences;
+    use crate::engine::prefs::Preferences;
 
     fn item(id: i64, url: &str) -> CitedItem {
         CitedItem {
@@ -612,14 +612,14 @@ mod tests {
             ..DigestData::default()
         };
         let digest = Digest {
-            report: jobpilot_core::store::Report {
+            report: crate::engine::store::Report {
                 id: 1,
                 kind: "weekly".into(),
                 period: "2026-W46".into(),
                 title: "t".into(),
                 body_md: String::new(),
                 citations_json: String::new(),
-                created_at: jobpilot_core::chrono::Utc::now(),
+                created_at: chrono::Utc::now(),
             },
             data: Some(data),
         };

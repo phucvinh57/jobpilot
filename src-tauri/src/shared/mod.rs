@@ -1,7 +1,7 @@
 //! Shared kernel: what every bounded context uses and none of them owns. The command error with
 //! its `Problem`, the event bridge, the company brief read model and the app shell's commands.
 //!
-//! Contexts depend on this module and on `jobpilot_core`, never on each other.
+//! Contexts depend on this module and on `crate::engine`, never on each other.
 
 pub mod error;
 pub mod events;

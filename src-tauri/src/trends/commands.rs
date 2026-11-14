@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use jobpilot_core::trends::{Period, SourceKind, TrendConfig};
-use jobpilot_core::Core;
+use crate::engine::trends::{Period, SourceKind, TrendConfig};
+use crate::engine::Core;
 use tauri::ipc::Invoke;
 use tauri::State;
 

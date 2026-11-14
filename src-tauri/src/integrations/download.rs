@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use jobpilot_core::browser::chrome::{self, DownloadProgress};
-use jobpilot_core::{runtime, Core};
+use crate::engine::browser::chrome::{self, DownloadProgress};
+use crate::engine::{runtime, Core};
 use tauri::AppHandle;
 
 use super::dto::DownloadDto;
