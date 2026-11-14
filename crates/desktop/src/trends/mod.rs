@@ -21,7 +21,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use gpui_kit::component::button::*;
 use gpui_kit::component::input::*;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::*;
@@ -42,6 +41,9 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::app::{AppState, Screen};
 use crate::problem::{self, RetryFn};
 use crate::settings::profile::{item_key, Field, Presence};
+use crate::ui::{
+    banner, caption, card, heading, palette, primary_button, secondary_button, segmented, Level, Palette, Tone,
+};
 pub use demo::seed_demo;
 
 /// Weekly digest or quarterly summary.
@@ -191,33 +193,6 @@ struct Form {
     tavily: Entity<InputState>,
 }
 
-/// Colours copied out of the theme, so helpers can take the context mutably.
-#[derive(Clone, Copy)]
-struct Colors {
-    muted: Hsla,
-    border: Hsla,
-    primary: Hsla,
-    link: Hsla,
-    danger: Hsla,
-    warning: Hsla,
-    accent: Hsla,
-    track: Hsla,
-}
-
-fn colors(cx: &App) -> Colors {
-    let t = cx.theme();
-    Colors {
-        muted: t.muted_foreground,
-        border: t.border,
-        primary: t.primary,
-        link: t.link,
-        danger: t.danger,
-        warning: t.warning,
-        accent: t.accent,
-        track: t.muted,
-    }
-}
-
 /// Market trends from the sources you add.
 pub struct TrendsView {
     state: Entity<AppState>,
@@ -239,6 +214,8 @@ pub struct TrendsView {
     sources_error: Option<String>,
     /// The report shown (`None`: the newest).
     selected: Option<i64>,
+    /// The list of earlier digests is open ("Earlier digests").
+    show_history: bool,
     /// The screen was shown at the last app-state change: reload when it becomes visible.
     visible: bool,
     form: Form,
@@ -293,6 +270,7 @@ impl TrendsView {
             adding_topics: HashSet::new(),
             sources_error: None,
             selected: None,
+            show_history: false,
             visible: false,
             form,
         };
@@ -473,17 +451,71 @@ impl TrendsView {
 
     // ------------------------------------------------------------ render
 
-    fn render_controls(&self, c: &Colors, cx: &Context<Self>) -> Div {
+    /// The page title with what the shown digest covers, and the two secondary actions.
+    fn render_header(&self, p: &Palette, cx: &Context<Self>) -> Div {
         let running = self.busy.is_some();
         let period = self.cadence.period();
-        let cadence = |id: &'static str, label: &'static str, value: Cadence| {
-            Button::new(id).label(label).selected(self.cadence == value).disabled(running).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    this.cadence = value;
-                    cx.notify();
-                },
-            ))
-        };
+        let summary = header_summary(self.snap.shown.as_ref(), period);
+        div()
+            .h_flex()
+            .flex_wrap()
+            .items_end()
+            .justify_between()
+            .gap_4()
+            .child(
+                div()
+                    .v_flex()
+                    .flex_1()
+                    .min_w(px(260.))
+                    .gap_0p5()
+                    .child(heading("Trends", Level::H1, cx))
+                    .child(div().id("trends-summary").role(Role::Paragraph).aria_label(summary.clone()).text_color(p.muted).child(summary)),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        secondary_button("trends-history-toggle", "Earlier digests")
+                            .selected(self.show_history)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_history = !this.show_history;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        secondary_button("trends-regenerate", "Refresh")
+                            .icon(IconName::RefreshCw)
+                            .accessibility_label("Regenerate from stored items")
+                            .tooltip("Write the digest again from the stored items, without collecting")
+                            .disabled(running)
+                            .on_click(cx.listener(move |this, _, _, cx| this.start(Job::Regenerate(period), cx))),
+                    ),
+            )
+    }
+
+    /// Weekly or quarterly, and the one primary button of the screen.
+    fn render_controls(&self, p: &Palette, cx: &Context<Self>) -> Div {
+        let running = self.busy.is_some();
+        let period = self.cadence.period();
+        let view = cx.entity();
+        let cadence = segmented(
+            "trends-cadence",
+            "Digest period",
+            &[(Cadence::Weekly, "Weekly"), (Cadence::Quarterly, "Quarterly")],
+            self.cadence,
+            // A run in progress keeps its period: the choice waits for it to finish.
+            move |value, _, cx| {
+                view.update(cx, |this, cx| {
+                    if this.busy.is_none() {
+                        this.cadence = value;
+                        cx.notify();
+                    }
+                })
+            },
+            cx,
+        );
         div()
             .v_flex()
             .gap_2()
@@ -492,61 +524,53 @@ impl TrendsView {
                     .h_flex()
                     .flex_wrap()
                     .items_center()
-                    .gap_2()
-                    .child(cadence("trends-weekly", "Weekly", Cadence::Weekly))
-                    .child(cadence("trends-quarterly", "Quarterly", Cadence::Quarterly))
+                    .gap_3()
+                    .child(cadence)
                     .child(
-                        Button::new("trends-collect")
-                            .primary()
-                            .label("Collect & build digest")
+                        primary_button("trends-collect", "Collect & build digest")
                             .loading(running)
                             .disabled(running)
                             .on_click(cx.listener(move |this, _, _, cx| this.start(Job::Collect(period), cx))),
                     )
-                    .child(
-                        Button::new("trends-regenerate")
-                            .outline()
-                            .icon(IconName::RefreshCw)
-                            .label("Regenerate from stored items")
-                            .disabled(running)
-                            .on_click(cx.listener(move |this, _, _, cx| this.start(Job::Regenerate(period), cx))),
-                    )
                     .when_some(self.step, |d, step| {
-                        d.child(Spinner::new().xsmall().color(c.primary))
-                            .child(div().id("trends-step").role(Role::Paragraph).aria_label(step).text_sm().text_color(c.muted).child(step))
+                        d.child(Spinner::new().xsmall().color(p.accent))
+                            .child(div().id("trends-step").role(Role::Paragraph).aria_label(step).text_sm().text_color(p.muted).child(step))
                     }),
             )
-            .child(div().text_sm().text_color(c.muted).child(format!(
-                "{}: collects from your sources, then your AI provider writes the digest. Every point links to the items it rests on.",
-                period.label()
-            )))
+            .child(caption(
+                format!(
+                    "{}: collects from your sources, then your AI provider writes the digest. Every point links to the items it rests on.",
+                    period.label()
+                ),
+                cx,
+            ))
     }
 
-    fn render_notice(&self, c: &Colors, cx: &Context<Self>) -> Option<Stateful<Div>> {
-        let (border, body) = match self.notice.as_ref()? {
+    fn render_notice(&self, p: &Palette, cx: &Context<Self>) -> Option<Stateful<Div>> {
+        let body = match self.notice.as_ref()? {
             Notice::Info(text) => {
-                let mut body = div().v_flex().gap_1().child(div().text_sm().child(text.clone()));
+                let mut body = card(cx).gap_1().child(div().text_sm().child(text.clone()));
                 for line in &self.details {
-                    body = body.child(div().text_xs().text_color(c.muted).child(line.clone()));
+                    body = body.child(div().text_xs().text_color(p.muted).child(line.clone()));
                 }
-                (c.border, body)
+                body
             }
             Notice::Error { message, problem, job } => {
                 let job = *job;
                 let view = cx.entity();
                 let retry: RetryFn = Rc::new(move |_, cx| view.update(cx, |this, cx| this.start(job, cx)));
-                let mut body = div().v_flex().gap_1().child(div().text_sm().text_color(c.danger).min_w_0().child(message.clone()));
+                let mut body = div().v_flex().gap_2().child(banner(Tone::Danger, "The run did not finish", message, div(), cx));
                 if let Some(help) = problem::help("trends-error", *problem, &self.state, Some(retry), cx) {
                     body = body.child(help);
                 }
-                (c.danger, body)
+                body
             }
         };
-        Some(div().id("trends-notice").role(Role::Group).aria_label("Result").p_3().rounded_md().border_1().border_color(border).child(body))
+        Some(div().id("trends-notice").role(Role::Group).aria_label("Result").child(body))
     }
 
     /// One banner per collection that waits at a login, captcha or block page.
-    fn render_challenges(&self, c: &Colors, cx: &Context<Self>) -> Vec<Stateful<Div>> {
+    fn render_challenges(&self, cx: &Context<Self>) -> Vec<Stateful<Div>> {
         let running = self.busy.is_some();
         self.snap
             .challenges
@@ -559,50 +583,36 @@ impl TrendsView {
                     ChallengeKind::Blocked => "blocks automated access",
                 };
                 let (period, url) = (wait.period, wait.url.clone());
-                div()
-                    .id(("trends-waiting", i))
-                    .role(Role::Group)
-                    .aria_label(format!("{} {what}", wait.source_name))
-                    .v_flex()
+                let actions = div()
+                    .h_flex()
+                    .flex_wrap()
+                    .flex_shrink_0()
                     .gap_2()
-                    .p_3()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(c.warning)
-                    .child(div().text_sm().font_semibold().child(format!("{} {what} ({})", wait.source_name, period.label())))
-                    .child(div().text_sm().text_color(c.muted).child(
-                        "Open the page, deal with it yourself, then continue. The other sources are already stored: you can build the digest without this one.",
-                    ))
                     .child(
-                        div()
-                            .h_flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                Button::new(("trends-open-page", i))
-                                    .outline()
-                                    .compact()
-                                    .icon(IconName::ExternalLink)
-                                    .label("Open page")
-                                    .when(report::is_web_url(&url), |b| b.on_click(move |_, _, cx| cx.open_url(&url))),
-                            )
-                            .child(
-                                Button::new(("trends-continue", i))
-                                    .outline()
-                                    .compact()
-                                    .label("Continue")
-                                    .disabled(running)
-                                    .on_click(cx.listener(move |this, _, _, cx| this.start(Job::Resume(period), cx))),
-                            )
-                            .child(
-                                Button::new(("trends-without", i))
-                                    .outline()
-                                    .compact()
-                                    .label("Build digest without it")
-                                    .disabled(running)
-                                    .on_click(cx.listener(move |this, _, _, cx| this.start(Job::Regenerate(period), cx))),
-                            ),
+                        secondary_button(("trends-open-page", i), "Open page")
+                            .icon(IconName::ExternalLink)
+                            .when(report::is_web_url(&url), |b| b.on_click(move |_, _, cx| cx.open_url(&url))),
                     )
+                    .child(
+                        secondary_button(("trends-continue", i), "Continue")
+                            .disabled(running)
+                            .on_click(cx.listener(move |this, _, _, cx| this.start(Job::Resume(period), cx))),
+                    )
+                    .child(
+                        secondary_button(("trends-without", i), "Build digest without it")
+                            .disabled(running)
+                            .on_click(cx.listener(move |this, _, _, cx| this.start(Job::Regenerate(period), cx))),
+                    );
+                banner(
+                    Tone::Warn,
+                    &format!("{} {what} ({})", wait.source_name, period.label()),
+                    "Open the page, deal with it yourself, then continue. The other sources are already stored: you can build the digest without this one.",
+                    actions,
+                    cx,
+                )
+                .id(("trends-waiting", i))
+                .role(Role::Group)
+                .aria_label(format!("{} {what}", wait.source_name))
             })
             .collect()
     }
@@ -610,24 +620,63 @@ impl TrendsView {
 
 impl Render for TrendsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let c = colors(cx);
+        let p = *palette(cx);
+        // The digest on the left, the skill chart beside it (below it when narrow).
+        let columns = div()
+            .h_flex()
+            .flex_wrap()
+            .items_start()
+            .gap_5()
+            .child(div().v_flex().flex_grow(1.4).flex_basis(px(440.)).min_w(px(380.)).child(self.render_digest(&p, cx)))
+            .child(
+                div()
+                    .v_flex()
+                    .flex_grow(1.0)
+                    .flex_basis(px(340.))
+                    .min_w(px(320.))
+                    .gap_5()
+                    .children(self.render_chart(&p, cx)),
+            );
         div()
             .id("trends")
             .role(Role::Group)
             .aria_label("Trends")
             .v_flex()
             .size_full()
-            .gap_4()
-            .p_6()
+            .gap_5()
+            .px_8()
+            .py_7()
             .overflow_y_scroll()
-            .child(div().text_2xl().font_semibold().child("Trends"))
-            .child(self.render_controls(&c, cx))
-            .children(self.render_notice(&c, cx))
-            .children(self.render_challenges(&c, cx))
-            .child(self.render_digest(&c, cx))
-            .child(self.render_history(&c, cx))
-            .child(self.render_sources(&c, cx))
-            .child(self.render_search(&c, cx))
+            .child(self.render_header(&p, cx))
+            .child(self.render_controls(&p, cx))
+            .children(self.render_notice(&p, cx))
+            .children(self.render_challenges(cx))
+            .child(columns)
+            .child(self.render_sources(&p, cx))
+            .when(self.show_history, |d| d.child(self.render_history(&p, cx)))
+            .child(self.render_search(&p, cx))
+    }
+}
+
+/// What the page header says under the title: the period of the digest shown and how much it read.
+fn header_summary(shown: Option<&Digest>, current: Period) -> String {
+    match shown {
+        Some(digest) => {
+            let covers = digest.period().map_or_else(|| digest.report.title.clone(), period_title);
+            match &digest.data {
+                Some(data) => format!("{covers} \u{b7} from {} postings and articles in your sources", data.items_read),
+                None => covers,
+            }
+        }
+        None => format!("No digest yet \u{b7} {} is the current period", period_title(current)),
+    }
+}
+
+/// `Week of 9 November` or `Q4 2026`.
+fn period_title(period: Period) -> String {
+    match period {
+        Period::Week { .. } => format!("Week of {}", period.start().format("%-d %B")),
+        Period::Quarter { year, quarter } => format!("Q{quarter} {year}"),
     }
 }
 
@@ -683,7 +732,7 @@ fn summarize(run: &TrendRun) -> (String, Vec<String>) {
 mod tests {
     use jobpilot_core::trends::{Period, SourceOutcome, SourceStatus, TrendRun};
 
-    use super::{step_label, summarize, AddButton, Job};
+    use super::{header_summary, period_title, step_label, summarize, AddButton, Job};
     use crate::settings::profile::Presence;
 
     fn period() -> Period {
@@ -705,6 +754,13 @@ mod tests {
         assert_eq!(AddButton::Avoided.label(), "Add to preferences");
         assert_eq!(AddButton::Avoided.tooltip(), "In your avoid list");
         assert!(AddButton::Avoided.accessibility("Go").contains("avoid"));
+    }
+
+    #[test]
+    fn a_period_is_named_for_the_header() {
+        assert_eq!(period_title(period()), "Week of 9 November");
+        assert_eq!(period_title(Period::parse("2026-Q4").unwrap()), "Q4 2026");
+        assert_eq!(header_summary(None, period()), "No digest yet \u{b7} Week of 9 November is the current period");
     }
 
     #[test]

@@ -36,7 +36,7 @@ use jobpilot_core::prefs::chat::MAX_LIST_ITEMS;
 use jobpilot_core::prefs::{clean_notes, cv_upload, NotesRead, PrefSuggestions, Preferences, Remote, UploadedCv};
 use jobpilot_core::{runtime, Core};
 
-use crate::ui::{section_with, segmented};
+use crate::ui::{field as labelled, filter_chip, ghost_button, palette, secondary_button, section_with, segmented};
 use crate::app::{is_latest_read, AppState, Screen};
 
 /// Longest list entry typed by hand, in characters.
@@ -717,31 +717,25 @@ impl ProfileSection {
 
     // ------------------------------------------------------------ rendering
 
-    /// A labelled row of the card.
+    /// A labelled row of the card: the label, an optional hint under it, then the control.
     fn row(&self, label: &'static str, hint: Option<&'static str>, body: impl IntoElement, cx: &App) -> Div {
-        let muted = cx.theme().muted_foreground;
-        div()
-            .v_flex()
-            .gap_1p5()
-            .child(
-                div()
-                    .h_flex()
-                    .items_baseline()
-                    .gap_2()
-                    .child(div().text_sm().font_semibold().child(label))
-                    .children(hint.map(|h| div().text_xs().text_color(muted).child(h))),
-            )
-            .child(body)
+        let muted = palette(cx).muted;
+        labelled(
+            label,
+            div()
+                .v_flex()
+                .gap_1p5()
+                .children(hint.map(|h| div().text_xs().text_color(muted).child(h)))
+                .child(body),
+            cx,
+        )
     }
 
     fn render_cv(&self, cv: Option<&UploadedCv>, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().muted_foreground;
+        let muted = palette(cx).muted;
         let button = |id: &'static str, label: &'static str| {
-            Button::new(id)
-                .outline()
-                .compact()
+            secondary_button(id, label)
                 .icon(IconName::FileText)
-                .label(label)
                 .loading(self.cv_busy)
                 .disabled(self.cv_busy)
                 .on_click(cx.listener(|this, _, window, cx| this.pick_cv(window, cx)))
@@ -767,10 +761,7 @@ impl ProfileSection {
                     .child(div().text_xs().text_color(muted).child(format!("{} characters read{cut}", cv.chars)))
                     .child(button("profile-cv-replace", "Replace"))
                     .child(
-                        Button::new("profile-cv-remove")
-                            .ghost()
-                            .compact()
-                            .label("Remove")
+                        ghost_button("profile-cv-remove", "Remove")
                             .disabled(self.cv_busy)
                             .on_click(cx.listener(|this, _, window, cx| this.remove_cv(window, cx))),
                     )
@@ -787,7 +778,7 @@ impl ProfileSection {
 
     /// One removable chip.
     fn chip(&self, field: Field, index: usize, item: &str, cx: &mut Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
+        let p = *palette(cx);
         div()
             .id(SharedString::from(format!("profile-{}-{index}", field.key())))
             .role(Role::ListItem)
@@ -799,8 +790,8 @@ impl ProfileSection {
             .pr_0p5()
             .py_0p5()
             .rounded_full()
-            .bg(theme.secondary)
-            .text_color(theme.secondary_foreground)
+            .bg(p.accent_soft)
+            .text_color(p.accent_dark)
             .text_sm()
             .child(item.to_string())
             .child(
@@ -822,7 +813,7 @@ impl ProfileSection {
         let list = field.list(&snap.prefs);
         let chips: Vec<Stateful<Div>> = list.iter().enumerate().map(|(i, item)| self.chip(field, i, item, cx)).collect();
         let suggestions = visible_suggestions(field, &snap.prefs, field.suggestions(&snap.suggestions));
-        let muted = cx.theme().muted_foreground;
+        let muted = palette(cx).muted;
         let body = div()
             .v_flex()
             .gap_2()
@@ -841,10 +832,7 @@ impl ProfileSection {
                         ),
                     )
                     .child(
-                        Button::new(SharedString::from(format!("profile-{}-add", field.key())))
-                            .outline()
-                            .compact()
-                            .label("Add")
+                        secondary_button(SharedString::from(format!("profile-{}-add", field.key())), "Add")
                             .accessibility_label(format!("Add to {}", field.label()))
                             .on_click(cx.listener(move |this, _, window, cx| this.add_typed(field, window, cx))),
                     ),
@@ -859,11 +847,8 @@ impl ProfileSection {
                         .child(div().text_xs().text_color(muted).pr_1().child("Suggestions"))
                         .children(suggestions.into_iter().enumerate().map(|(i, s)| {
                             let add = s.clone();
-                            Button::new(SharedString::from(format!("profile-{}-suggest-{i}", field.key())))
-                                .ghost()
-                                .compact()
+                            filter_chip(SharedString::from(format!("profile-{}-suggest-{i}", field.key())), s.clone(), false)
                                 .icon(IconName::Plus)
-                                .label(s.clone())
                                 .accessibility_label(format!("Add {s} to {}", field.label()))
                                 .on_click(cx.listener(move |this, _, window, cx| this.add_item(field, add.clone(), window, cx)))
                         })),
@@ -873,7 +858,7 @@ impl ProfileSection {
     }
 
     fn render_notes(&self, snap: &Snapshot, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().muted_foreground;
+        let muted = palette(cx).muted;
         let Some(form) = &self.form else { return div() };
         let typed = form.notes.read(cx).value().to_string();
         // Also on when the saved notes could not be read: Save reads them again.
@@ -919,10 +904,7 @@ impl ProfileSection {
                     .items_center()
                     .gap_2()
                     .child(
-                        Button::new("profile-notes-save")
-                            .outline()
-                            .compact()
-                            .label("Save")
+                        secondary_button("profile-notes-save", "Save")
                             .disabled(!can_save)
                             .on_click(cx.listener(|this, _, window, cx| this.save_notes(window, cx))),
                     )
@@ -941,8 +923,8 @@ impl Render for ProfileSection {
             cx.defer_in(window, |this, window, cx| this.reload(window, cx));
         }
         let (muted, ok, danger) = {
-            let t = cx.theme();
-            (t.muted_foreground, t.success, t.danger)
+            let p = palette(cx);
+            (p.muted, p.ok, p.danger)
         };
         let can_undo = self.snap.as_ref().is_some_and(|s| s.can_undo) && self.saving == 0;
         let flash = self.flash.map(|(n, label)| {
@@ -960,11 +942,8 @@ impl Render for ProfileSection {
                 )
         });
         let actions = div().h_flex().items_center().gap_2().children(flash).child(
-            Button::new("profile-undo")
-                .ghost()
-                .compact()
+            ghost_button("profile-undo", "Undo")
                 .icon(IconName::Undo2)
-                .label("Undo")
                 .disabled(!can_undo)
                 .on_click(cx.listener(|this, _, window, cx| this.undo(window, cx))),
         );

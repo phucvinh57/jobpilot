@@ -53,6 +53,9 @@ pub struct Palette {
     /// Navigation and table heads: slightly off the surface.
     pub surface_alt: Hsla,
     pub border: Hsla,
+    /// The edge of controls (buttons, inputs): a step darker than `border`, so a white control
+    /// stays visible on a white card.
+    pub control_border: Hsla,
     /// Primary text.
     pub ink: Hsla,
     /// Secondary text.
@@ -92,6 +95,7 @@ fn light() -> Palette {
         surface: hex(0xFFFFFF),
         surface_alt: hex(0xFBFBF9),
         border: hex(0xE4E4DF),
+        control_border: hex(0xD6D6D0),
         ink: hex(0x17181C),
         muted: hex(0x5D6068),
         subtle: hex(0x64676F),
@@ -119,6 +123,7 @@ fn dark() -> Palette {
         surface: hex(0x1A1B20),
         surface_alt: hex(0x16171B),
         border: hex(0x2A2C33),
+        control_border: hex(0x3A3D45),
         ink: hex(0xECECEA),
         muted: hex(0xA3A6AE),
         subtle: hex(0x9396A0),

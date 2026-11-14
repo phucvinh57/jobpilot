@@ -2,6 +2,7 @@
 
 mod app;
 mod detail;
+mod pipeline;
 mod problem;
 mod queue;
 mod settings;

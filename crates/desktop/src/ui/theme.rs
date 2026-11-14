@@ -54,8 +54,10 @@ pub fn set_colors(c: &mut ThemeColor, p: &Palette, dark: bool) {
     c.foreground = p.ink;
     c.muted = p.track;
     c.muted_foreground = p.muted;
-    c.border = p.border;
-    c.input = p.border;
+    // Stock widgets draw `border` around secondary buttons and `input` around inputs: both use the
+    // control edge. Cards and dividers built with `ui` use `palette.border` directly.
+    c.border = p.control_border;
+    c.input = p.control_border;
     c.ring = p.accent;
     c.caret = p.ink;
     c.selection = p.accent.opacity(0.28);
@@ -213,7 +215,7 @@ mod tests {
             set_colors(&mut c, p, dark);
             assert_eq!(c.background, p.bg);
             assert_eq!(c.foreground, p.ink);
-            assert_eq!(c.border, p.border);
+            assert_eq!(c.border, p.control_border);
             assert_eq!(c.muted_foreground, p.muted);
             assert_eq!(c.primary, p.accent);
             assert_eq!(c.primary_foreground, p.on_fill);

@@ -1,5 +1,6 @@
-//! Settings: six cards, each in its own file (Profile & preferences, AI providers: P1,
-//! Browser sessions: P4, Job sources: P10, Gmail: P6, Appearance).
+//! Settings: one scrolling page of cards, in this order: Profile & preferences, Connections (AI
+//! providers: P1, Gmail: P6, Browser sessions: P4), Job sources (P10), Appearance. Each card is
+//! its own file.
 
 pub mod appearance;
 mod gmail;
@@ -12,6 +13,7 @@ use gpui_kit::component::*;
 use gpui_kit::*;
 
 use crate::app::AppState;
+use crate::ui::{caption, heading, Level};
 use appearance::AppearanceSection;
 use gmail::GmailSection;
 use profile::ProfileSection;
@@ -19,9 +21,15 @@ use providers::ProvidersSection;
 use sessions::SessionsSection;
 use sources::SourcesSection;
 
-/// Section titles in display order; `settings_focus` names one of them. Child 0 is the header.
-const SECTIONS: [&str; 6] =
-    ["Profile & preferences", "AI providers", "Browser sessions", "Job sources", "Gmail", "Appearance"];
+/// The page's blocks in display order, one child each after the title: `settings_focus` names one
+/// of them. "Connections" is the heading over the three cards that follow it.
+const SECTIONS: [&str; 7] =
+    ["Profile & preferences", "Connections", "AI providers", "Gmail", "Browser sessions", "Job sources", "Appearance"];
+
+/// The child of the page that shows `section` (child 0 is the title), if it is one of [`SECTIONS`].
+fn child_of(section: &str) -> Option<usize> {
+    SECTIONS.iter().position(|s| *s == section).map(|ix| ix + 1)
+}
 
 pub struct SettingsView {
     scroll: ScrollHandle,
@@ -53,29 +61,49 @@ impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Opened from a call to action ("Open Settings > Browser sessions"): scroll to that section.
         let target = self.state.update(cx, |state, _| state.settings_focus.take());
-        if let Some(ix) = target.and_then(|t| SECTIONS.iter().position(|s| *s == t)) {
-            self.scroll.scroll_to_item(ix + 1);
+        if let Some(ix) = target.and_then(child_of) {
+            self.scroll.scroll_to_item(ix);
         }
         div()
             .id("settings")
             .track_scroll(&self.scroll)
             .v_flex()
             .size_full()
-            .gap_4()
-            .p_6()
+            .gap_5()
+            .px_8()
+            .py_7()
             .overflow_y_scroll()
+            .child(heading("Settings", Level::H1, cx))
+            .child(self.profile.clone())
             .child(
                 div()
-                    .h_flex()
-                    .items_center()
-                    .justify_between()
-                    .child(div().text_2xl().font_semibold().child("Settings")),
+                    .id("settings-connections")
+                    .role(Role::Heading)
+                    .aria_label("Connections")
+                    .v_flex()
+                    .gap_0p5()
+                    .child(heading("Connections", Level::H2, cx))
+                    .child(caption("Keys and tokens are kept in your system keyring, never in files.", cx)),
             )
-            .child(self.profile.clone())
             .child(self.providers.clone())
+            .child(self.gmail.clone())
             .child(self.sessions.clone())
             .child(self.sources.clone())
-            .child(self.gmail.clone())
             .child(self.appearance.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{child_of, SECTIONS};
+
+    #[test]
+    fn a_call_to_action_finds_its_card() {
+        // Child 0 is the title; each block of the page follows in order.
+        assert_eq!(child_of("Profile & preferences"), Some(1));
+        assert_eq!(child_of("AI providers"), Some(3));
+        assert_eq!(child_of("Browser sessions"), Some(5));
+        assert_eq!(child_of("Nothing"), None);
+        assert!(SECTIONS.contains(&"Job sources") && SECTIONS.contains(&"Appearance"));
     }
 }

@@ -1,6 +1,6 @@
 //! Timeline tab: the application's events, newest first, and the emails that need a review.
 
-use gpui_kit::component::button::*;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -9,6 +9,10 @@ use jobpilot_core::store::{Email, Event};
 use jobpilot_core::{runtime, Core};
 
 use crate::app::AppState;
+use crate::ui::{self, Level, Tone};
+
+/// Longest event text shown on its row; the full text is in the tooltip.
+const ROW_CHARS: usize = 110;
 
 /// Look of one timeline line, derived from the event's free-form `kind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,28 +41,25 @@ impl EventStyle {
         }
     }
 
-    fn icon(self) -> IconName {
+    /// The colour of the row's dot.
+    fn tone(self) -> Tone {
         match self {
-            Self::Created => IconName::Plus,
-            Self::Status => IconName::ArrowRight,
-            Self::Cv => IconName::FileText,
-            Self::Mail => IconName::Inbox,
-            Self::Review => IconName::Bell,
-            Self::Warning => IconName::TriangleAlert,
-            Self::Error => IconName::CircleX,
-            Self::Note => IconName::Info,
+            Self::Created | Self::Note => Tone::Neutral,
+            Self::Status | Self::Cv | Self::Mail => Tone::Accent,
+            Self::Review | Self::Warning => Tone::Warn,
+            Self::Error => Tone::Danger,
         }
     }
+}
 
-    fn color(self, theme: &Theme) -> Hsla {
-        match self {
-            Self::Created | Self::Note => theme.muted_foreground,
-            Self::Status => theme.primary,
-            Self::Cv | Self::Mail => theme.info,
-            Self::Review | Self::Warning => theme.warning,
-            Self::Error => theme.danger,
-        }
+/// What a row shows of an event text: its first non-empty line, cut at [`ROW_CHARS`]; `true` when something was left out.
+fn row_text(message: &str) -> (String, bool) {
+    let first = message.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    if first.chars().count() > ROW_CHARS {
+        let cut: String = first.chars().take(ROW_CHARS).collect();
+        return (format!("{}...", cut.trim_end()), true);
     }
+    (first.to_string(), first.len() != message.trim().len())
 }
 
 /// Newest first (the store returns oldest first).
@@ -164,76 +165,60 @@ impl TimelineTab {
 
 impl Render for TimelineTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let p = ui::palette(cx);
 
         let reviews = self.data.reviews.iter().map(|email| {
             let accept_id = email.id.clone();
             let dismiss_id = email.id.clone();
             let ix = gpui_kit::ElementId::from(SharedString::from(format!("review-{}", email.id)));
-            div()
-                .id(ix)
-                .v_flex()
-                .gap_1()
-                .p_3()
-                .rounded_md()
-                .border_1()
-                .border_color(theme.warning)
-                .child(div().text_sm().font_semibold().child(review_title(email)))
-                .child(div().text_xs().text_color(muted).child(format!(
-                    "From {}{}",
-                    email.from_addr,
-                    email.summary.as_deref().filter(|s| !s.is_empty()).map(|s| format!(" - {s}")).unwrap_or_default()
-                )))
+            let body = format!(
+                "From {}{}",
+                email.from_addr,
+                email.summary.as_deref().filter(|s| !s.is_empty()).map(|s| format!(" - {s}")).unwrap_or_default()
+            );
+            let actions = div()
+                .h_flex()
+                .flex_shrink_0()
+                .gap_2()
                 .child(
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .pt_1()
-                        .child(
-                            Button::new(SharedString::from(format!("accept-{}", email.id)))
-                                .primary()
-                                .compact()
-                                .label("Accept")
-                                .on_click(cx.listener(move |this, _, _, cx| this.resolve(accept_id.clone(), true, cx))),
-                        )
-                        .child(
-                            Button::new(SharedString::from(format!("dismiss-{}", email.id)))
-                                .outline()
-                                .compact()
-                                .label("Dismiss")
-                                .on_click(cx.listener(move |this, _, _, cx| this.resolve(dismiss_id.clone(), false, cx))),
-                        ),
+                    ui::secondary_button(SharedString::from(format!("accept-{}", email.id)), "Accept")
+                        .on_click(cx.listener(move |this, _, _, cx| this.resolve(accept_id.clone(), true, cx))),
                 )
+                .child(
+                    ui::ghost_button(SharedString::from(format!("dismiss-{}", email.id)), "Dismiss")
+                        .on_click(cx.listener(move |this, _, _, cx| this.resolve(dismiss_id.clone(), false, cx))),
+                );
+            div().id(ix).child(ui::banner(Tone::Warn, &review_title(email), &body, actions, cx))
         });
 
         let events = self.data.events.iter().map(|e| {
             let style = EventStyle::of(&e.kind);
+            let when = e.at.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string();
+            let (text, cut) = row_text(&e.message);
+            let full = e.message.clone();
             div()
-                .h_flex()
-                .items_start()
-                .gap_3()
-                .text_sm()
-                .child(
-                    div()
-                        .w(px(120.))
-                        .flex_shrink_0()
-                        .text_color(muted)
-                        .child(e.at.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()),
-                )
-                .child(div().flex_shrink_0().pt_0p5().text_color(style.color(theme)).child(Icon::new(style.icon())))
-                .child(div().flex_1().min_w_0().child(e.message.clone()))
+                .id(("event", usize::try_from(e.id).unwrap_or_default()))
+                .child(ui::activity_row(style.tone(), &text, &when, cx))
+                .when(cut, |d| d.tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx)))
         });
+
+        let history = if self.data.events.is_empty() {
+            div().text_size(px(ui::tokens::TEXT_BODY)).text_color(p.muted).child("Nothing has happened yet.").into_any_element()
+        } else {
+            div().v_flex().children(events).into_any_element()
+        };
 
         div()
             .id("timeline")
             .v_flex()
             .size_full()
-            .gap_2()
+            .gap_3()
             .overflow_y_scroll()
-            .when_some(self.error.clone(), |d, message| d.child(div().text_sm().text_color(theme.danger).child(message)))
+            .when_some(self.error.clone(), |d, message| {
+                d.child(div().text_size(px(ui::tokens::TEXT_BODY)).text_color(p.danger).child(message))
+            })
             .children(reviews)
-            .children(events)
+            .child(ui::card(cx).child(ui::heading("History", Level::H2, cx)).child(history))
     }
 }
 
@@ -242,7 +227,8 @@ mod tests {
     use jobpilot_core::chrono::Utc;
     use jobpilot_core::store::{Email, Event};
 
-    use super::{newest_first, review_title, EventStyle};
+    use super::{newest_first, review_title, row_text, EventStyle, ROW_CHARS};
+    use crate::ui::Tone;
 
     fn event(id: i64, kind: &str) -> Event {
         Event { id, app_id: 1, at: Utc::now(), kind: kind.into(), message: format!("m{id}") }
@@ -254,6 +240,24 @@ mod tests {
         assert_eq!(EventStyle::of("email_review"), EventStyle::Review);
         assert_eq!(EventStyle::of("status"), EventStyle::Status);
         assert_eq!(EventStyle::of("whatever"), EventStyle::Note);
+    }
+
+    #[test]
+    fn kinds_have_a_dot_colour() {
+        assert_eq!(EventStyle::of("error").tone(), Tone::Danger);
+        assert_eq!(EventStyle::of("warning").tone(), Tone::Warn);
+        assert_eq!(EventStyle::of("email_review").tone(), Tone::Warn);
+        assert_eq!(EventStyle::of("status").tone(), Tone::Accent);
+        assert_eq!(EventStyle::of("created").tone(), Tone::Neutral);
+    }
+
+    #[test]
+    fn a_row_shows_one_short_line() {
+        assert_eq!(row_text("CV generated"), ("CV generated".to_string(), false));
+        let (first, cut) = row_text("Gaps: Haskell\nsecond line");
+        assert_eq!((first.as_str(), cut), ("Gaps: Haskell", true));
+        let (long, cut) = row_text(&"x".repeat(ROW_CHARS + 20));
+        assert!(cut && long.ends_with("...") && long.chars().count() == ROW_CHARS + 3);
     }
 
     #[test]

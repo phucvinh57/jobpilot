@@ -1,7 +1,6 @@
 //! JD tab: the company brief (domain, business, facts, skills, interview process, sources), the job
 //! description text, its source link and the key terms found in it.
 
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -13,6 +12,7 @@ use jobpilot_core::store::Application;
 use jobpilot_core::runtime;
 
 use crate::app::AppState;
+use crate::ui::{self, Level, Tone};
 
 /// What the tab shows for one application.
 #[derive(Default)]
@@ -99,25 +99,23 @@ fn interview_steps(i: &Interview) -> Option<String> {
     (i.found && !i.stages.is_empty()).then(|| i.stages.join(" \u{2192} "))
 }
 
-/// A row of tags with a label in front: skills.
-fn tag_row(label: &'static str, items: &[String], must: bool, muted: Hsla) -> Div {
+/// A row of tags with a label in front: skills. `must` = required (accent), else neutral.
+fn tag_row(label: &'static str, items: &[String], must: bool, cx: &App) -> Div {
+    let tone = if must { Tone::Accent } else { Tone::Neutral };
     div()
         .h_flex()
         .flex_wrap()
         .items_center()
-        .gap_1()
-        .child(div().text_xs().text_color(muted).pr_1().child(label))
-        .children(items.iter().map(|item| {
-            let tag = if must { Tag::info().outline() } else { Tag::secondary() };
-            tag.small().child(item.clone())
-        }))
+        .gap_1p5()
+        .child(div().w(px(84.)).flex_shrink_0().child(ui::caption(label, cx)))
+        .children(items.iter().map(|item| ui::tag(item.clone(), tone, cx)))
 }
 
 /// The company brief: domain, business, company facts, skills, interview process and sources, with
 /// "not found" for what the texts did not say.
-pub(crate) fn brief(insight: &Insight, cx: &App) -> Div {
-    let theme = cx.theme();
-    let (muted, link) = (theme.muted_foreground, theme.link);
+fn brief(insight: &Insight, cx: &App) -> Div {
+    let p = ui::palette(cx);
+    let (muted, link) = (p.muted, p.accent);
     let not_found = || div().text_color(muted).child(NOT_FOUND).into_any_element();
     let text = |value: &str| match non_empty(value) {
         Some(v) => div().child(v.to_string()).into_any_element(),
@@ -128,8 +126,9 @@ pub(crate) fn brief(insight: &Insight, cx: &App) -> Div {
             .h_flex()
             .items_start()
             .gap_2()
-            .text_sm()
-            .child(div().w(px(84.)).flex_shrink_0().text_xs().text_color(muted).pt_0p5().child(label))
+            .text_size(px(ui::tokens::TEXT_BODY))
+            .text_color(p.ink)
+            .child(div().w(px(84.)).flex_shrink_0().pt_0p5().child(ui::caption(label, cx)))
             .child(div().flex_1().min_w_0().child(body))
     };
 
@@ -149,9 +148,9 @@ pub(crate) fn brief(insight: &Insight, cx: &App) -> Div {
     } else {
         div()
             .v_flex()
-            .gap_1()
-            .when(!skills.required.is_empty(), |d| d.child(tag_row("Required", &skills.required, true, muted)))
-            .when(!skills.preferred.is_empty(), |d| d.child(tag_row("Preferred", &skills.preferred, false, muted)))
+            .gap_1p5()
+            .when(!skills.required.is_empty(), |d| d.child(tag_row("Required", &skills.required, true, cx)))
+            .when(!skills.preferred.is_empty(), |d| d.child(tag_row("Preferred", &skills.preferred, false, cx)))
             .into_any_element()
     };
 
@@ -179,14 +178,9 @@ pub(crate) fn brief(insight: &Insight, cx: &App) -> Div {
     });
     let sources: Vec<_> = sources.collect();
 
-    div()
-        .v_flex()
-        .gap_1p5()
-        .p_3()
-        .rounded_md()
-        .border_1()
-        .border_color(theme.border)
-        .child(div().text_xs().text_color(muted).child("Company brief"))
+    ui::card(cx)
+        .gap_2()
+        .child(ui::heading("Company brief", Level::H2, cx))
         .child(row("Domain", text(&insight.domain)))
         .child(row("Business", text(&insight.business_summary)))
         .child(row("Company", facts.into_any_element()))
@@ -205,24 +199,40 @@ impl Render for JdTab {
                 self.load(app.clone(), cx);
             }
         }
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+        let p = ui::palette(cx);
         let source = app.as_ref().and_then(|a| a.source.clone());
 
         let brief_view = self.view.insight.as_ref().map(|i| brief(i, cx));
 
+        // The posting text, in a card of its own: it scrolls inside the card.
+        let posting = ui::card(cx)
+            .flex_1()
+            .min_h(px(260.))
+            .gap_2()
+            .child(ui::heading("Job description", Level::H2, cx))
+            .child(match &self.view.text {
+                Some(text) => div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(TextView::markdown("jd-text", jd_markdown(text)).selectable(true).scrollable(true))
+                    .into_any_element(),
+                None => div().text_color(p.muted).child("No JD text yet.").into_any_element(),
+            });
+
         div()
+            .id("jd-tab")
             .v_flex()
             .size_full()
-            .gap_2()
+            .gap_3()
+            .overflow_y_scroll()
             .when_some(source, |d, src| {
                 if is_link(&src) {
                     let url = src.clone();
                     d.child(
                         div()
                             .id("jd-source")
-                            .text_sm()
-                            .text_color(theme.link)
+                            .text_size(px(ui::tokens::TEXT_BODY))
+                            .text_color(p.accent)
                             .underline()
                             .cursor_pointer()
                             .truncate()
@@ -230,21 +240,29 @@ impl Render for JdTab {
                             .on_click(move |_, _, cx| cx.open_url(&url)),
                     )
                 } else {
-                    d.child(div().text_sm().text_color(muted).truncate().child(src))
+                    d.child(div().text_size(px(ui::tokens::TEXT_BODY)).text_color(p.muted).truncate().child(src))
                 }
             })
             // The brief lists the skills too, so the plain tags are for jobs without one.
             .when_some(brief_view, |d, brief| d.child(brief))
-            .when_some(self.view.analysis.as_ref().filter(|_| self.view.insight.is_none()), |d, a| {
-                d.when(!a.must_have.is_empty(), |d| d.child(tag_row("Must have", &a.must_have, true, muted)))
-                    .when(!a.nice_to_have.is_empty(), |d| d.child(tag_row("Nice to have", &a.nice_to_have, false, muted)))
-            })
-            .child(match &self.view.text {
-                Some(text) => div().flex_1().min_h_0().child(
-                    TextView::markdown("jd-text", jd_markdown(text)).selectable(true).scrollable(true),
-                ),
-                None => div().text_color(muted).child("No JD text yet."),
-            })
+            .when_some(
+                self.view
+                    .analysis
+                    .as_ref()
+                    .filter(|a| self.view.insight.is_none() && !(a.must_have.is_empty() && a.nice_to_have.is_empty())),
+                |d, a| {
+                    d.child(
+                        ui::card(cx)
+                            .gap_2()
+                            .child(ui::heading("Key requirements", Level::H2, cx))
+                            .when(!a.must_have.is_empty(), |d| d.child(tag_row("Must have", &a.must_have, true, cx)))
+                            .when(!a.nice_to_have.is_empty(), |d| {
+                                d.child(tag_row("Nice to have", &a.nice_to_have, false, cx))
+                            }),
+                    )
+                },
+            )
+            .child(posting)
     }
 }
 

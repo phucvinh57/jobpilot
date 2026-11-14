@@ -7,10 +7,8 @@
 
 use std::future::Future;
 
-use gpui_kit::component::button::*;
 use gpui_kit::component::input::*;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -19,9 +17,9 @@ use jobpilot_core::discover::{source_url_hint, JOB_SOURCE_KINDS};
 use jobpilot_core::runtime;
 use jobpilot_core::store::{Session, Source};
 
-use crate::ui::section;
 use super::sessions::{ago, host};
 use crate::app::AppState;
+use crate::ui::{danger_button, field, filter_chip, ghost_button, palette, secondary_button, section_with, tag, Tone};
 
 /// Longest status text shown on a row (a failure note can be long).
 const STATUS_CHARS: usize = 90;
@@ -270,8 +268,7 @@ impl Render for SourcesSection {
         if self.dirty && !self.loading {
             self.reload(cx);
         }
-        let theme = cx.theme();
-        let (muted, border) = (theme.muted_foreground, theme.border);
+        let p = *palette(cx);
         let now = Utc::now();
 
         let rows: Vec<_> = self
@@ -282,11 +279,11 @@ impl Render for SourcesSection {
                 let name = if s.name.trim().is_empty() { kind_label(&s.kind).to_string() } else { s.name.trim().to_string() };
                 let (line, outcome) = status_line(s, now);
                 let waiting = self.waiting.contains(&id);
-                let tag = match if waiting { Outcome::NeedsYou } else { outcome } {
-                    Outcome::Ok => Tag::success(),
-                    Outcome::NeedsYou => Tag::warning(),
-                    Outcome::Failed => Tag::danger(),
-                    Outcome::Never | Outcome::Other => Tag::secondary(),
+                let tone = match if waiting { Outcome::NeedsYou } else { outcome } {
+                    Outcome::Ok => Tone::Ok,
+                    Outcome::NeedsYou => Tone::Warn,
+                    Outcome::Failed => Tone::Danger,
+                    Outcome::Never | Outcome::Other => Tone::Neutral,
                 };
                 let tag_text = match (waiting, outcome) {
                     (true, _) | (_, Outcome::NeedsYou) => "needs you",
@@ -299,20 +296,14 @@ impl Render for SourcesSection {
                 let confirm = self.confirm_remove == Some(id);
 
                 let session_chips = {
-                    let none = Button::new(SharedString::from(format!("source-{id}-session-none")))
-                        .small()
-                        .label("No session")
-                        .selected(s.session_id.is_none())
+                    let none = filter_chip(SharedString::from(format!("source-{id}-session-none")), "No session", s.session_id.is_none())
                         .on_click(cx.listener(move |this, _, _, cx| this.set_session(id, None, cx)));
                     let chips = self.sessions.iter().map(|session| {
                         let sid = session.id;
-                        Button::new(SharedString::from(format!("source-{id}-session-{sid}")))
-                            .small()
-                            .label(session.name.clone())
-                            .selected(s.session_id == Some(sid))
+                        filter_chip(SharedString::from(format!("source-{id}-session-{sid}")), session.name.clone(), s.session_id == Some(sid))
                             .on_click(cx.listener(move |this, _, _, cx| this.set_session(id, Some(sid), cx)))
                     });
-                    div().h_flex().flex_wrap().items_center().gap_1().child(div().text_xs().text_color(muted).child("Browser session:")).child(none).children(chips)
+                    div().h_flex().flex_wrap().items_center().gap_1p5().child(div().text_xs().text_color(p.muted).child("Browser session:")).child(none).children(chips)
                 };
 
                 div()
@@ -320,11 +311,12 @@ impl Render for SourcesSection {
                     .role(Role::ListItem)
                     .aria_label(format!("{name}: {line}"))
                     .v_flex()
-                    .gap_1()
-                    .p_2()
+                    .gap_2()
+                    .p_3()
                     .border_1()
-                    .border_color(border)
-                    .rounded_md()
+                    .border_color(p.border)
+                    .rounded(px(10.))
+                    .bg(p.surface_alt)
                     .child(
                         div()
                             .h_flex()
@@ -342,19 +334,15 @@ impl Render for SourcesSection {
                                     .flex_1()
                                     .min_w_0()
                                     .child(div().font_semibold().truncate().child(name.clone()))
-                                    .child(div().text_xs().text_color(muted).truncate().child(format!("{} {address}", kind_label(&s.kind)).trim().to_string())),
+                                    .child(div().text_xs().text_color(p.muted).truncate().child(format!("{} {address}", kind_label(&s.kind)).trim().to_string())),
                             )
-                            .child(tag.child(tag_text))
+                            .child(tag(tag_text, tone, cx))
                             .child(
-                                Button::new(SharedString::from(format!("source-{id}-remove")))
-                                    .small()
-                                    .outline()
-                                    .danger()
-                                    .label(if confirm { "Sure?" } else { "Remove" })
+                                danger_button(SharedString::from(format!("source-{id}-remove")), if confirm { "Sure?" } else { "Remove" })
                                     .on_click(cx.listener(move |this, _, _, cx| this.remove(id, cx))),
                             ),
                     )
-                    .child(div().text_xs().text_color(muted).child(line))
+                    .child(div().text_xs().text_color(p.muted).child(line))
                     .child(session_chips)
             })
             .collect();
@@ -362,10 +350,7 @@ impl Render for SourcesSection {
         let form = if self.form_open {
             let kind_chips = JOB_SOURCE_KINDS.iter().map(|(kind, label)| {
                 let kind: &'static str = kind;
-                Button::new(SharedString::from(format!("new-source-kind-{kind}")))
-                    .small()
-                    .label(*label)
-                    .selected(self.kind == kind)
+                filter_chip(SharedString::from(format!("new-source-kind-{kind}")), *label, self.kind == kind)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.kind = kind;
                         cx.notify();
@@ -373,33 +358,28 @@ impl Render for SourcesSection {
             });
             div()
                 .v_flex()
-                .gap_2()
+                .gap_3()
                 .p_3()
                 .border_1()
-                .border_color(border)
-                .rounded_md()
-                .child(div().h_flex().flex_wrap().gap_1().children(kind_chips))
-                .children(self.name_input.as_ref().map(Input::new))
-                .children(self.url_input.as_ref().map(Input::new))
-                .child(div().text_xs().text_color(muted).child(source_url_hint(self.kind)))
+                .border_color(p.border)
+                .rounded(px(10.))
+                .bg(p.surface_alt)
+                .child(field("Kind", div().h_flex().flex_wrap().gap_1p5().children(kind_chips), cx))
+                .children(self.name_input.as_ref().map(|i| field("Name", Input::new(i), cx)))
+                .children(self.url_input.as_ref().map(|i| field("Board name or address", Input::new(i), cx)))
+                .child(div().text_xs().text_color(p.muted).child(source_url_hint(self.kind)))
                 .child(
                     div()
                         .h_flex()
                         .gap_2()
                         .child(
-                            Button::new("save-source")
-                                .small()
-                                .primary()
-                                .label("Add")
+                            secondary_button("save-source", "Add")
                                 .loading(self.adding)
                                 .disabled(self.adding)
                                 .on_click(cx.listener(|this, _, _, cx| this.add(cx))),
                         )
                         .child(
-                            Button::new("cancel-source")
-                                .small()
-                                .ghost()
-                                .label("Cancel")
+                            ghost_button("cancel-source", "Cancel")
                                 .disabled(self.adding)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.form_open = false;
@@ -410,23 +390,22 @@ impl Render for SourcesSection {
                 )
                 .into_any_element()
         } else {
-            div()
-                .h_flex()
-                .child(
-                    Button::new("add-source")
-                        .small()
-                        .primary()
-                        .label("Add source")
-                        .on_click(cx.listener(|this, _, window, cx| this.open_form(window, cx))),
-                )
-                .into_any_element()
+            div().into_any_element()
         };
+        // "Add source" sits in the card's title line while the form is closed.
+        let add = (!self.form_open).then(|| {
+            secondary_button("add-source", "Add source").on_click(cx.listener(|this, _, window, cx| this.open_form(window, cx)))
+        });
 
-        section(
+        section_with(
             "Job sources",
             "Where to look for jobs. Public boards and Hacker News need no login; for a site that wants one, pick a browser session you logged in to.",
+            div().children(add),
             cx,
         )
+        .id("settings-sources")
+        .role(Role::Group)
+        .aria_label("Job sources")
         .child(
             div()
                 .v_flex()
@@ -437,14 +416,14 @@ impl Render for SourcesSection {
                         .label("Search daily while JobPilot is open")
                         .on_click(cx.listener(|this, checked: &bool, _, cx| this.set_daily(*checked, cx))),
                 )
-                .child(div().text_xs().text_color(muted).child("Looks again when the last search is a day old. Never while one is running.")),
+                .child(div().text_xs().text_color(p.muted).child("Looks again when the last search is a day old. Never while one is running.")),
         )
         .child(div().v_flex().gap_2().children(rows))
         .when(self.loaded && self.sources.is_empty() && !self.form_open, |d| {
-            d.child(div().text_sm().text_color(muted).child("No sources yet. Add a company board, a careers page or Hacker News."))
+            d.child(div().text_sm().text_color(p.muted).child("No sources yet. Add a company board, a careers page or Hacker News."))
         })
         .child(form)
-        .children(self.error.clone().map(|e| div().text_sm().text_color(cx.theme().danger).child(e)))
+        .children(self.error.clone().map(|e| div().text_sm().text_color(p.danger).child(e)))
     }
 }
 

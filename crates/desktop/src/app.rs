@@ -25,10 +25,12 @@ use jobpilot_core::{mail, runtime, Core};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use crate::detail::Detail;
+use crate::pipeline::PipelineView;
 use crate::queue::QueueView;
 use crate::settings::SettingsView;
 use crate::sidebar::Sidebar;
 use crate::trends::TrendsView;
+use crate::ui;
 use jobs::{generate_plan, progress_label, GeneratePlan};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -36,8 +38,10 @@ pub enum Screen {
     /// The selected application.
     Detail,
     Settings,
-    /// The Job list: found jobs sorted by match, and the box that turns a pasted link into one (P12).
+    /// Today (the Job list): found jobs sorted by match, and the box that turns a pasted link into one (P12).
     Jobs,
+    /// The kanban board of every application, and the latest activity.
+    Pipeline,
     /// Market trends and reports (P13).
     Trends,
 }
@@ -50,6 +54,7 @@ impl Screen {
             Screen::Settings => 1,
             Screen::Jobs => 2,
             Screen::Trends => 3,
+            Screen::Pipeline => 4,
         }
     }
 }
@@ -89,9 +94,14 @@ pub struct AppState {
     pub queue_selected: Option<i64>,
     /// Bumped whenever the Job list is shown, so it reads its leads again.
     pub queue_epoch: u64,
+    /// Bumped whenever the Pipeline is shown, so it reads the latest activity again.
+    pub pipeline_epoch: u64,
     /// New leads in the Job list (the badge on the sidebar entry), kept current by
     /// [`refresh_lead_count`](Self::refresh_lead_count) whichever screen is shown.
     pub lead_count: usize,
+    /// What waits for the user on Today: job sources paused at a login / captcha / block page, plus
+    /// failed "Prepare CV" runs (the badge on the Today entry). Read together with `lead_count`.
+    pub needs_you: usize,
     /// Counts started so far: only the answer of the latest one is shown.
     lead_count_reads: u64,
     /// A file dropped on the window (or why it was refused), waiting for the Job list to turn it into
@@ -117,7 +127,9 @@ impl AppState {
             settings_focus: None,
             queue_selected: None,
             queue_epoch: 0,
+            pipeline_epoch: 0,
             lead_count: 0,
+            needs_you: 0,
             lead_count_reads: 0,
             dropped: None,
             prefs_saved: false,
@@ -155,8 +167,10 @@ impl AppState {
 
     pub fn show(&mut self, screen: Screen, cx: &mut Context<Self>) {
         let leaving_settings = self.screen == Screen::Settings && screen != Screen::Settings;
-        if screen == Screen::Jobs {
-            self.queue_epoch += 1;
+        match screen {
+            Screen::Jobs => self.queue_epoch += 1,
+            Screen::Pipeline => self.pipeline_epoch += 1,
+            _ => {}
         }
         self.screen = screen;
         if leaving_settings {
@@ -198,29 +212,33 @@ impl AppState {
         .detach();
     }
 
-    /// Read the number of leads in the Job list again (the sidebar badge), off the UI thread and
-    /// without the Job list screen: call it once at startup and after anything that adds, prepares
-    /// or dismisses leads (a search, the daily run, an add by hand). An older answer that arrives
+    /// Read the Today badge again: the number of leads in the Job list and what needs the user
+    /// (see [`needs_you`](Self::needs_you)), off the UI thread and without the Job list screen:
+    /// call it once at startup and after anything that adds, prepares or dismisses leads, or pauses
+    /// or resumes a source (a search, the daily run, an add by hand). An older answer that arrives
     /// after a newer one is dropped.
     pub fn refresh_lead_count(&mut self, cx: &mut Context<Self>) {
         self.lead_count_reads += 1;
         let read = self.lead_count_reads;
         let core = self.core.clone();
-        let rx = runtime::spawn(async move { core.new_lead_count() });
+        let rx = runtime::spawn(async move { (core.new_lead_count(), needs_you_count(&core)) });
         cx.spawn(async move |this, cx| {
-            match rx.await {
-                Ok(Ok(count)) => {
-                    this.update(cx, |state, cx| {
-                        if is_latest_read(read, state.lead_count_reads) && state.lead_count != count {
-                            state.lead_count = count;
-                            cx.notify();
-                        }
-                    })
-                    .ok();
+            let Ok((leads, needs_you)) = rx.await else { return };
+            this.update(cx, |state, cx| {
+                if !is_latest_read(read, state.lead_count_reads) {
+                    return;
                 }
-                Ok(Err(e)) => tracing::warn!("counting the new leads failed: {e:#}"),
-                Err(_) => {}
-            }
+                match leads {
+                    Ok(count) => state.lead_count = count,
+                    Err(e) => tracing::warn!("counting the new leads failed: {e:#}"),
+                }
+                match needs_you {
+                    Ok(count) => state.needs_you = count,
+                    Err(e) => tracing::warn!("counting what needs the user failed: {e:#}"),
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
@@ -456,22 +474,15 @@ impl AppState {
     }
 }
 
-/// Colour of the status dot.
+/// Sources paused for the user plus failed "Prepare CV" runs: the "needs you" count of Today. A
+/// database read: run it off the UI thread.
+fn needs_you_count(core: &Core) -> Result<usize> {
+    Ok(core.discover_waiting()?.len() + core.prepare_failures()?.len())
+}
+
 /// The answer of read number `read` is the one to show only while it is the latest started.
 pub(crate) fn is_latest_read(read: u64, latest: u64) -> bool {
     read == latest
-}
-
-pub fn status_color(status: Status, theme: &Theme) -> Hsla {
-    match status {
-        Status::Draft => theme.muted_foreground,
-        Status::CvReady => theme.info,
-        Status::Submitting => theme.warning,
-        Status::Applied => theme.primary,
-        Status::Interview => theme.success,
-        Status::Offer => theme.success,
-        Status::Rejected | Status::Failed => theme.danger,
-    }
 }
 
 /// Root view: sidebar on the left, the current [`Screen`] on the right (fading in when it changes).
@@ -481,6 +492,7 @@ pub struct JobPilot {
     detail: Entity<Detail>,
     settings: Entity<SettingsView>,
     queue: Entity<QueueView>,
+    pipeline: Entity<PipelineView>,
     trends: Entity<TrendsView>,
 }
 
@@ -498,6 +510,7 @@ impl JobPilot {
             detail: cx.new(|cx| Detail::new(state.clone(), window, cx)),
             settings: cx.new(|cx| SettingsView::new(state.clone(), cx)),
             queue: cx.new(|cx| QueueView::new(state.clone(), window, cx)),
+            pipeline: cx.new(|cx| PipelineView::new(state.clone(), cx)),
             trends: cx.new(|cx| TrendsView::new(state.clone(), window, cx)),
             state,
         }
@@ -511,15 +524,16 @@ impl Render for JobPilot {
             Screen::Detail => self.detail.clone().into_any_element(),
             Screen::Settings => self.settings.clone().into_any_element(),
             Screen::Jobs => self.queue.clone().into_any_element(),
+            Screen::Pipeline => self.pipeline.clone().into_any_element(),
             Screen::Trends => self.trends.clone().into_any_element(),
         };
-        let theme = cx.theme();
-        let highlight = theme.accent;
+        let p = ui::palette(cx);
+        let highlight = p.accent_soft;
         div()
             .h_flex()
             .size_full()
-            .bg(theme.background)
-            .text_color(theme.foreground)
+            .bg(p.bg)
+            .text_color(p.ink)
             // Drop a .md/.txt/.html/.pdf file anywhere on the window to add it to the Job list as a lead.
             .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(highlight))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
