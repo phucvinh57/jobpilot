@@ -1,18 +1,20 @@
-//! P13 - market trends. This is part A, collection: sources the user adds (Hacker News, the YC
-//! directory, feeds, pages) and, with a search API key, annual and quarterly reports, all
-//! collected into `trend_items` by the `trends` graph ([`collect`]). The digest, the LLM calls and
-//! the view are part B.
+//! P13 - market trends. Part A, collection: sources the user adds (Hacker News, the YC directory,
+//! feeds, pages) and, with a search API key, annual and quarterly reports, all collected into
+//! `trend_items` by the `trends` graph ([`collect`]). Part B, the digest ([`digest`]): what the
+//! items say, with skill counts and checked citations, saved as a report.
 //!
 //! ```text
 //! core.add_trend_source(SourceKind::HackerNews, "", "")?;
 //! core.add_trend_source(SourceKind::Rss, "Eng blog", "https://blog.example.com/feed.xml")?;
 //! core.set_search_key(SearchProvider::Brave, "BSA...")?;            // keyring only
 //! let outcome = core.collect_trends(Period::current_week()).await?; // Outcome<TrendRun>
+//! let outcome = core.collect_trends_and_digest(Period::current_week()).await?; // and the digest
+//! let latest = core.latest_trend_digest()?;                         // Option<Digest>
 //! ```
 //!
 //! Layout: [`source`] has one adapter per kind (no store, no disk, only [`http::Http`]), [`collect`]
-//! the graph and its state, [`config`] the injectable endpoints and limits, [`period`] the week or
-//! quarter a run covers.
+//! the graph and its state, [`digest`] the nodes after the collection and the report API,
+//! [`config`] the injectable endpoints and limits, [`period`] the week or quarter a run covers.
 //!
 //! Rules that hold for every adapter: read-only GET (the search APIs take a POST for the query),
 //! http(s) only, a minimum gap per host and caps on items and bytes ([`CollectLimits`]), text from a
@@ -22,6 +24,7 @@
 
 pub mod collect;
 pub mod config;
+pub mod digest;
 pub use crate::net::http;
 pub mod period;
 pub mod source;
@@ -39,10 +42,14 @@ pub use collect::{
     detect_challenge, graph, thread_id, Collected, Plan, SearchPlan, SourceOutcome, SourceStatus, Stored, TrendRun, GRAPH,
 };
 pub use config::{CollectLimits, Endpoints, TrendConfig};
+pub use digest::{
+    digest_graph, digest_thread_id, Claim, CitedItem, Digest, DigestConfig, DigestData, DigestLimits, DigestState, Extraction,
+    Point, Section, SkillCount, SkillCounts, TrendChallenge, DIGEST_GRAPH,
+};
 pub use period::Period;
 pub use source::{Item, SearchProvider, SourceKind};
 
-use crate::graph::{Outcome, ThreadStatus};
+use crate::graph::Outcome;
 use crate::store::{NewSource, Source, SourcePurpose};
 use crate::{Core, Paths, Secrets};
 
@@ -150,24 +157,24 @@ impl Core {
     /// [`resume_trends_collection`](Self::resume_trends_collection) to carry on). A run that is
     /// still going is an error. Per-source trouble never fails the run: see [`TrendRun::outcomes`].
     pub async fn collect_trends_with(&self, period: Period, config: TrendConfig) -> Result<Outcome<TrendRun>> {
-        let graph = self.trends_graph(config)?;
-        let thread = thread_id(&period);
-        if let Some(info) = self.graphs.status(&thread)? {
-            if !matches!(info.status, ThreadStatus::Running | ThreadStatus::Done) {
-                self.graphs.cancel(&thread)?;
-            }
-        }
-        self.graphs.run(&graph, &thread, TrendRun::new(period)).await
+        self.run_trends(period, config, DigestConfig::default(), false).await
     }
 
     /// Carry on a paused ("Continue" after a login or captcha) or failed ("Retry") collection of
-    /// `period`.
+    /// `period`. A run started with the digest goes on to the digest.
     pub async fn resume_trends_collection(&self, period: Period, config: TrendConfig) -> Result<Outcome<TrendRun>> {
-        let graph = self.trends_graph(config)?;
-        self.graphs.resume(&graph, &thread_id(&period), |s| s.challenge = None).await
+        self.resume_trends_collection_with(period, config, DigestConfig::default()).await
     }
 
-    fn trends_graph(&self, config: TrendConfig) -> Result<crate::graph::GraphDef<TrendRun>> {
-        graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config)
+    /// [`resume_trends_collection`](Self::resume_trends_collection) with an explicit model and
+    /// digest limits (tests).
+    pub async fn resume_trends_collection_with(
+        &self,
+        period: Period,
+        config: TrendConfig,
+        digest: DigestConfig,
+    ) -> Result<Outcome<TrendRun>> {
+        let graph = graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config, digest)?;
+        self.graphs.resume(&graph, &thread_id(&period), |s| s.challenge = None).await
     }
 }

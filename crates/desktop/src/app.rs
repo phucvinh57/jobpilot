@@ -82,6 +82,10 @@ pub struct AppState {
     pub queue_epoch: u64,
     /// Job-search preferences were saved at least once (the setup banner points to Preferences until then).
     pub prefs_saved: bool,
+    /// A skill or domain the user asked to add to their preferences (Trends > "Add to preferences"),
+    /// as a message for the preference chat. The Preferences view reads it with `.take()` when it is
+    /// shown, so it is used once; until P9's view does, the Preferences screen just opens.
+    pub prefs_suggestion: Option<String>,
 }
 
 impl AppState {
@@ -103,6 +107,7 @@ impl AppState {
             queue_selected: None,
             queue_epoch: 0,
             prefs_saved: false,
+            prefs_suggestion: None,
         };
         state.load();
         state.selected = state.applications.first().map(|a| a.id);
@@ -149,6 +154,13 @@ impl AppState {
     pub fn open_settings(&mut self, section: Option<&'static str>, cx: &mut Context<Self>) {
         self.settings_focus = section;
         self.show(Screen::Settings, cx);
+    }
+
+    /// Open Preferences with `message` as a suggestion for the preference chat (see
+    /// [`prefs_suggestion`](Self::prefs_suggestion)).
+    pub fn suggest_preference(&mut self, message: String, cx: &mut Context<Self>) {
+        self.prefs_suggestion = Some(message);
+        self.show(Screen::Preferences, cx);
     }
 
     /// Re-check the prerequisites in the background (also at startup).
@@ -505,7 +517,7 @@ impl JobPilot {
             settings: cx.new(|cx| SettingsView::new(state.clone(), cx)),
             queue: cx.new(|cx| QueueView::new(state.clone(), window, cx)),
             prefs: cx.new(|cx| PreferencesView::new(state.clone(), cx)),
-            trends: cx.new(|_| TrendsView::new(state.clone())),
+            trends: cx.new(|cx| TrendsView::new(state.clone(), window, cx)),
             state,
         }
     }
@@ -555,6 +567,7 @@ impl Render for JobPilot {
 /// Insert a few sample applications when the store is empty (`JOBPILOT_DEMO=1`).
 pub fn seed_demo(core: &Core) -> Result<()> {
     jobpilot_core::prefs::seed_demo(core)?;
+    crate::trends::seed_demo(core)?;
     seed_demo_applications(core)?;
     seed_demo_queue(core)
 }
