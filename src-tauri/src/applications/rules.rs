@@ -1,4 +1,4 @@
-//! Pure rules of this context, unit-tested here: the Pipeline board, the Application screen's
+//! Pure rules of this context, unit-tested here: the stages of the Jobs page, the Application screen's
 //! one primary action and stepper, the timeline's wording, the CV checklist and the Apply tab's
 //! review rows. No I/O, no Tauri.
 
@@ -8,7 +8,7 @@ use crate::engine::apply::{Edit, FieldKind, Review, Row, SessionState, Source};
 use crate::engine::browser::SessionStatus;
 use chrono::{NaiveDate, NaiveDateTime};
 use crate::engine::pipeline::{Analysis, Progress};
-use crate::engine::store::{Application, Email, Event, Status};
+use crate::engine::store::{clean_round, Application, Email, Event, Status};
 use serde::Serialize;
 
 /// What a status or a tag means; the web app maps each to its colours.
@@ -22,90 +22,199 @@ pub enum Tone {
     Danger,
 }
 
-// ---------------------------------------------------------------- Pipeline board
+// ---------------------------------------------------------------- Jobs page
 
-/// The five stages of the board, left to right.
+/// The stages of the Jobs page that hold applications, left to right. The page's first stage,
+/// Leads, comes from discovery: a lead becomes an application (stage `Cv`) on Prepare CV.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Column {
-    CvReview,
-    ReadyToApply,
-    Submitted,
-    Interview,
-    Closed,
+pub enum Stage {
+    Cv,
+    Applied,
+    InProgress,
+    Done,
 }
 
-impl Column {
-    pub const ALL: [Column; 5] = [
-        Column::CvReview,
-        Column::ReadyToApply,
-        Column::Submitted,
-        Column::Interview,
-        Column::Closed,
-    ];
+impl Stage {
+    pub const ALL: [Stage; 4] = [Stage::Cv, Stage::Applied, Stage::InProgress, Stage::Done];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::CvReview => "CV review",
-            Self::ReadyToApply => "Ready to apply",
-            Self::Submitted => "Submitted",
-            Self::Interview => "Interview",
-            Self::Closed => "Closed",
+            Self::Cv => "CVs",
+            Self::Applied => "Applied",
+            Self::InProgress => "In progress",
+            Self::Done => "Done",
         }
     }
 
-    /// Stable identifier for the web app (`cvReview`, `readyToApply`, ...).
+    /// Stable identifier for the web app (`cv`, `applied`, `inProgress`, `done`).
     pub fn key(self) -> &'static str {
         match self {
-            Self::CvReview => "cvReview",
-            Self::ReadyToApply => "readyToApply",
-            Self::Submitted => "submitted",
-            Self::Interview => "interview",
-            Self::Closed => "closed",
+            Self::Cv => "cv",
+            Self::Applied => "applied",
+            Self::InProgress => "inProgress",
+            Self::Done => "done",
         }
     }
 }
 
-/// The column a status belongs in. Every status has one: a failed submit waits in "Ready to apply"
-/// (the primary button there is "Review & Submit" again), an offer stays with the interviews.
-pub fn column_for(status: Status) -> Column {
+/// The stage a status belongs in. Every status has one: until the application is sent it is about
+/// its CV (a failed submit too: the primary button there is "Review & Submit" again); an interview
+/// is in progress; an answer (offer or rejection) is done.
+pub fn stage_for(status: Status) -> Stage {
     match status {
-        Status::Draft => Column::CvReview,
-        Status::CvReady | Status::Submitting | Status::Failed => Column::ReadyToApply,
-        Status::Applied => Column::Submitted,
-        Status::Interview | Status::Offer => Column::Interview,
-        Status::Rejected => Column::Closed,
+        Status::Draft | Status::CvReady | Status::Submitting | Status::Failed => Stage::Cv,
+        Status::Applied => Stage::Applied,
+        Status::Interview => Stage::InProgress,
+        Status::Offer | Status::Rejected => Stage::Done,
     }
 }
 
-/// All five columns in order (empty ones too), each with its applications in the order of `apps`
+/// All stages in order (empty ones too), each with its applications in the order of `apps`
 /// (the store lists the most recently updated first).
-pub fn board(apps: &[Application]) -> Vec<(Column, Vec<&Application>)> {
-    Column::ALL
+pub fn board(apps: &[Application]) -> Vec<(Stage, Vec<&Application>)> {
+    Stage::ALL
         .into_iter()
-        .map(|c| {
-            (
-                c,
-                apps.iter().filter(|a| column_for(a.status) == c).collect(),
-            )
-        })
+        .map(|s| (s, apps.iter().filter(|a| stage_for(a.status) == s).collect()))
+        .collect()
+}
+
+/// How a finished application ended: an offer is a success, a rejection a failure.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Outcome {
+    Success,
+    Failed,
+}
+
+impl Outcome {
+    /// Stable identifier for the web app (`success`, `failed`).
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// The outcome of a status: an offer is a success, a rejection a failure; anything else is open.
+pub fn outcome_for(status: Status) -> Option<Outcome> {
+    match status {
+        Status::Offer => Some(Outcome::Success),
+        Status::Rejected => Some(Outcome::Failed),
+        _ => None,
+    }
+}
+
+/// Rounds offered when the company brief does not list the interview process.
+pub const DEFAULT_ROUNDS: [&str; 4] = ["HR screen", "Technical interview", "System design", "Final interview"];
+
+/// Most rounds offered.
+pub const MAX_ROUNDS: usize = 8;
+
+/// The rounds the user can mark: the brief's interview steps in order, each cleaned as the store
+/// keeps a round (`clean_round`: trimmed, cut to `ROUND_MAX_CHARS`, so a saved chip shows as selected),
+/// without the offer step, without repeats (ignoring case) and at most [`MAX_ROUNDS`];
+/// [`DEFAULT_ROUNDS`] when that leaves none.
+pub fn round_options(insight_steps: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in insight_steps {
+        // The offer step is recognised on the whole text, before it is cut.
+        if raw.to_lowercase().contains("offer") {
+            continue;
+        }
+        let Some(step) = clean_round(Some(raw)) else {
+            continue;
+        };
+        let lower = step.to_lowercase();
+        if out.iter().any(|o| o.to_lowercase() == lower) {
+            continue;
+        }
+        out.push(step);
+        if out.len() == MAX_ROUNDS {
+            break;
+        }
+    }
+    if out.is_empty() {
+        out = DEFAULT_ROUNDS.iter().map(|s| s.to_string()).collect();
+    }
+    out
+}
+
+/// What the user can mark by hand once the application was sent: the company's answers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mark {
+    Interview,
+    Offer,
+    Rejected,
+}
+
+impl Mark {
+    pub const ALL: [Mark; 3] = [Mark::Interview, Mark::Offer, Mark::Rejected];
+
+    /// Stable identifier for the web app (`interview`, `offer`, `rejected`).
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Interview => "interview",
+            Self::Offer => "offer",
+            Self::Rejected => "rejected",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Interview => "Got an interview",
+            Self::Offer => "Offer",
+            Self::Rejected => "Rejected",
+        }
+    }
+
+    pub fn parse(key: &str) -> Option<Mark> {
+        Mark::ALL.into_iter().find(|m| m.key() == key)
+    }
+
+    /// The status the mark moves the application to.
+    pub fn status(self) -> Status {
+        match self {
+            Self::Interview => Status::Interview,
+            Self::Offer => Status::Offer,
+            Self::Rejected => Status::Rejected,
+        }
+    }
+}
+
+/// The marks offered for a status: only a sent application (Applied) or one in interviews can be
+/// marked, and only forward (`Status::can_advance_to`).
+pub fn marks_for(status: Status) -> Vec<Mark> {
+    if !matches!(status, Status::Applied | Status::Interview) {
+        return Vec::new();
+    }
+    Mark::ALL
+        .into_iter()
+        .filter(|m| status.can_advance_to(m.status()))
         .collect()
 }
 
 /// What the user does next with an application, as the card's tag says it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct NextAction {
-    pub label: &'static str,
+    pub label: String,
     pub tone: Tone,
 }
 
-const fn next(label: &'static str, tone: Tone) -> NextAction {
-    NextAction { label, tone }
+fn next(label: &str, tone: Tone) -> NextAction {
+    NextAction { label: label.to_string(), tone }
 }
 
 /// The tag of a card. It follows the Application screen's one primary button (Generate -> Approve
-/// CV -> Review & Submit) while the application is open, and says where it stands once it is not:
-/// `busy` = a generate / revise job is running for it, `has_cv` = its `cv.yaml` exists.
-pub fn next_action(status: Status, has_cv: bool, busy: bool) -> NextAction {
+/// CV -> Review & Submit) while the application is open, and says where it stands once it is not
+/// (in interviews: the round the user marked): `busy` = a generate / revise job is running for it,
+/// `has_cv` = its `cv.yaml` exists.
+pub fn next_action(status: Status, has_cv: bool, busy: bool, round: Option<&str>) -> NextAction {
+    // How an application ended stays visible, even while its CV is being revised.
+    match status {
+        Status::Offer => return next("Offer", Tone::Ok),
+        Status::Rejected => return next("Rejected", Tone::Danger),
+        _ => {}
+    }
     if busy {
         return next(if has_cv { "Working" } else { "Generating" }, Tone::Neutral);
     }
@@ -115,9 +224,12 @@ pub fn next_action(status: Status, has_cv: bool, busy: bool) -> NextAction {
         Status::CvReady | Status::Submitting => next("Review & submit", Tone::Accent),
         Status::Failed => next("Submit failed", Tone::Danger),
         Status::Applied => next("No reply yet", Tone::Neutral),
-        Status::Interview => next("Check your email", Tone::Warn),
+        Status::Interview => match round.map(str::trim).filter(|r| !r.is_empty()) {
+            Some(round) => next(round, Tone::Warn),
+            None => next("Check your email", Tone::Warn),
+        },
         Status::Offer => next("Offer", Tone::Ok),
-        Status::Rejected => next("Rejected", Tone::Neutral),
+        Status::Rejected => next("Rejected", Tone::Danger),
     }
 }
 
@@ -153,14 +265,19 @@ pub fn activity_tone(kind: &str) -> Tone {
     match kind {
         "error" => Tone::Danger,
         "email" | "email_review" | "warning" => Tone::Warn,
-        "status" => Tone::Accent,
+        "status" | "round" => Tone::Accent,
         _ => Tone::Neutral,
     }
 }
 
 /// An event's text for people: a stored status move (`cv_ready -> applied: note`) reads
-/// "moved to Applied: note"; anything else is shown as stored.
+/// "moved to Applied: note"; anything else is shown as stored. Links are cut to host and path
+/// ([`short_urls`]).
 pub fn activity_text(kind: &str, message: &str) -> String {
+    short_urls(&status_words(kind, message))
+}
+
+fn status_words(kind: &str, message: &str) -> String {
     if kind != "status" {
         return message.to_string();
     }
@@ -175,6 +292,46 @@ pub fn activity_text(kind: &str, message: &str) -> String {
         (Some(st), None) => format!("moved to {}", st.label()),
         (None, _) => message.to_string(),
     }
+}
+
+/// Every `http(s)://` link in `text` as host and path only: no scheme, query or fragment, no trailing
+/// `/`, so a row stays short. Punctuation that ends a sentence right after a link stays outside it.
+/// Dropping the query also keeps any token there off the screen; events are masked by
+/// `engine::redact` as well, when stored and read.
+pub fn short_urls(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = 0;
+    while let Some(start) = next_link(&lower, rest) {
+        out.push_str(&text[rest..start]);
+        let end = text[start..]
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | ')' | ']' | '}'))
+            .map_or(text.len(), |n| start + n);
+        let link = &text[start..end];
+        let trimmed = link.trim_end_matches(['.', ',', ';', ':', '!']);
+        let tail = &link[trimmed.len()..];
+        let without_scheme = trimmed.split_once("://").map_or(trimmed, |(_, r)| r);
+        let bare = without_scheme
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches('/');
+        out.push_str(bare);
+        out.push_str(tail);
+        rest = end;
+    }
+    out.push_str(&text[rest..]);
+    out
+}
+
+/// Where the next `http://` or `https://` link of `lower` (an ASCII-lowercased text) starts, from `from` on.
+fn next_link(lower: &str, from: usize) -> Option<usize> {
+    let tail = &lower[from..];
+    [tail.find("https://"), tail.find("http://")]
+        .into_iter()
+        .flatten()
+        .min()
+        .map(|n| from + n)
 }
 
 // ---------------------------------------------------------------- Application screen
@@ -430,6 +587,8 @@ pub const ROW_CHARS: usize = 110;
 pub enum EventStyle {
     Created,
     Status,
+    /// The user marked an interview round.
+    Round,
     Cv,
     Mail,
     Review,
@@ -443,6 +602,7 @@ impl EventStyle {
         match kind {
             "created" => Self::Created,
             "status" => Self::Status,
+            "round" => Self::Round,
             "cv" => Self::Cv,
             "email" => Self::Mail,
             "email_review" => Self::Review,
@@ -456,7 +616,7 @@ impl EventStyle {
     pub fn tone(self) -> Tone {
         match self {
             Self::Created | Self::Note => Tone::Neutral,
-            Self::Status | Self::Cv | Self::Mail => Tone::Accent,
+            Self::Status | Self::Round | Self::Cv | Self::Mail => Tone::Accent,
             Self::Review | Self::Warning => Tone::Warn,
             Self::Error => Tone::Danger,
         }
@@ -799,7 +959,7 @@ pub fn review_notice(review: &Review, missing: usize) -> Option<(Tone, &'static 
 mod tests {
     use crate::engine::apply::Ats;
     use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
-    use crate::engine::pipeline::{Analysis, Stage};
+    use crate::engine::pipeline::{Analysis, Stage as JobStage};
 
     use super::*;
 
@@ -811,41 +971,109 @@ mod tests {
         day(d).and_hms_opt(h, m, 0).expect("a valid time")
     }
 
-    // ------------------------------------------------------------ Pipeline board
+    // ------------------------------------------------------------ Jobs page
 
     #[test]
-    fn every_status_has_a_column() {
-        for (status, column) in [
-            (Status::Draft, Column::CvReview),
-            (Status::CvReady, Column::ReadyToApply),
-            (Status::Submitting, Column::ReadyToApply),
-            (Status::Failed, Column::ReadyToApply),
-            (Status::Applied, Column::Submitted),
-            (Status::Interview, Column::Interview),
-            (Status::Offer, Column::Interview),
-            (Status::Rejected, Column::Closed),
+    fn every_status_has_a_stage() {
+        for (status, stage) in [
+            (Status::Draft, Stage::Cv),
+            (Status::CvReady, Stage::Cv),
+            (Status::Submitting, Stage::Cv),
+            (Status::Failed, Stage::Cv),
+            (Status::Applied, Stage::Applied),
+            (Status::Interview, Stage::InProgress),
+            (Status::Offer, Stage::Done),
+            (Status::Rejected, Stage::Done),
         ] {
-            assert_eq!(column_for(status), column, "{status:?}");
+            assert_eq!(stage_for(status), stage, "{status:?}");
         }
         // The table above must list every status, so a new one cannot be forgotten.
         assert_eq!(Status::ALL.len(), 8);
         for status in Status::ALL {
-            assert!(Column::ALL.contains(&column_for(status)), "{status:?}");
+            assert!(Stage::ALL.contains(&stage_for(status)), "{status:?}");
         }
     }
 
     #[test]
-    fn columns_run_from_review_to_closed() {
+    fn stages_run_from_cvs_to_done() {
+        assert_eq!(Stage::ALL.map(Stage::label), ["CVs", "Applied", "In progress", "Done"]);
+        assert_eq!(Stage::ALL.map(Stage::key), ["cv", "applied", "inProgress", "done"]);
+    }
+
+    #[test]
+    fn only_an_answer_has_an_outcome() {
+        assert_eq!(outcome_for(Status::Offer), Some(Outcome::Success));
+        assert_eq!(outcome_for(Status::Rejected), Some(Outcome::Failed));
+        for status in Status::ALL {
+            if !matches!(status, Status::Offer | Status::Rejected) {
+                assert_eq!(outcome_for(status), None, "{status:?}");
+            }
+        }
+        assert_eq!((Outcome::Success.key(), Outcome::Failed.key()), ("success", "failed"));
+    }
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn rounds_come_from_the_brief_without_the_offer() {
         assert_eq!(
-            Column::ALL.map(Column::label),
-            [
-                "CV review",
-                "Ready to apply",
-                "Submitted",
-                "Interview",
-                "Closed"
-            ]
+            round_options(&strings(&["Recruiter call", " Technical screen ", "recruiter CALL", "", "Offer", "Job offer & references"])),
+            strings(&["Recruiter call", "Technical screen"])
         );
+        let many: Vec<String> = (1..=12).map(|n| format!("Round {n}")).collect();
+        assert_eq!(round_options(&many), many[..MAX_ROUNDS].to_vec());
+    }
+
+    #[test]
+    fn a_long_round_is_offered_as_the_store_keeps_it() {
+        use crate::engine::store::ROUND_MAX_CHARS;
+        let long = format!("  {}  ", "Pair programming with the platform team ".repeat(3));
+        let options = round_options(&strings(&[&long, "HR screen"]));
+        let kept = clean_round(Some(&long));
+        assert_eq!(options.first(), kept.as_ref());
+        assert!(options[0].chars().count() <= ROUND_MAX_CHARS);
+        assert_eq!(options[1], "HR screen");
+    }
+
+    #[test]
+    fn an_offer_step_is_left_out_even_when_offer_comes_after_the_cut() {
+        let step = "Final conversation with the VP of Engineering and the team, then a written offer".to_string();
+        assert!(step.chars().count() > crate::engine::store::ROUND_MAX_CHARS);
+        let rounds = round_options(&[step, "Technical screen".to_string()]);
+        assert_eq!(rounds, vec!["Technical screen".to_string()]);
+    }
+
+    #[test]
+    fn without_a_process_the_usual_rounds_are_offered() {
+        assert_eq!(round_options(&[]), strings(&DEFAULT_ROUNDS));
+        assert_eq!(round_options(&strings(&["Offer", "  "])), strings(&DEFAULT_ROUNDS));
+    }
+
+    #[test]
+    fn only_a_sent_application_can_be_marked_and_only_forward() {
+        assert_eq!(marks_for(Status::Applied), [Mark::Interview, Mark::Offer, Mark::Rejected]);
+        assert_eq!(marks_for(Status::Interview), [Mark::Offer, Mark::Rejected]);
+        for status in [Status::Draft, Status::CvReady, Status::Submitting, Status::Failed, Status::Offer, Status::Rejected] {
+            assert!(marks_for(status).is_empty(), "{status:?}");
+        }
+        // Every mark offered is a move the store accepts.
+        for status in Status::ALL {
+            for mark in marks_for(status) {
+                assert!(status.can_advance_to(mark.status()), "{status:?} -> {mark:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn marks_have_keys_and_labels() {
+        assert_eq!(Mark::ALL.map(Mark::key), ["interview", "offer", "rejected"]);
+        assert_eq!(Mark::ALL.map(Mark::label), ["Got an interview", "Offer", "Rejected"]);
+        assert_eq!(Mark::parse("offer"), Some(Mark::Offer));
+        assert_eq!(Mark::parse("Offer"), None);
+        assert_eq!(Mark::parse("applied"), None);
+        assert_eq!(Mark::Interview.status(), Status::Interview);
     }
 
     fn app(id: i64, status: Status) -> Application {
@@ -867,39 +1095,33 @@ mod tests {
             created_at: moment,
             updated_at: moment,
             insight_json: None,
+            interview_round: None,
         }
     }
 
     #[test]
-    fn the_board_lists_all_columns_and_keeps_the_order() {
+    fn the_board_lists_all_stages_and_keeps_the_order() {
         let apps = vec![
             app(1, Status::Applied),
             app(2, Status::Draft),
             app(3, Status::Applied),
             app(4, Status::Offer),
             app(5, Status::Rejected),
+            app(6, Status::Failed),
         ];
         let ids = |rows: &[&Application]| rows.iter().map(|a| a.id).collect::<Vec<_>>();
-        let columns = board(&apps);
-        assert_eq!(
-            columns.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
-            Column::ALL
-        );
-        assert_eq!(ids(&columns[0].1), [2]);
-        assert!(columns[1].1.is_empty(), "an empty column is still there");
-        assert_eq!(
-            ids(&columns[2].1),
-            [1, 3],
-            "the list's order is kept inside a column"
-        );
-        assert_eq!(ids(&columns[3].1), [4]);
-        assert_eq!(ids(&columns[4].1), [5]);
+        let stages = board(&apps);
+        assert_eq!(stages.iter().map(|(s, _)| *s).collect::<Vec<_>>(), Stage::ALL);
+        assert_eq!(ids(&stages[0].1), [2, 6]);
+        assert_eq!(ids(&stages[1].1), [1, 3], "the list's order is kept inside a stage");
+        assert!(stages[2].1.is_empty(), "an empty stage is still there");
+        assert_eq!(ids(&stages[3].1), [4, 5]);
         assert!(board(&[]).iter().all(|(_, rows)| rows.is_empty()));
     }
 
     #[test]
     fn the_tag_is_the_next_action() {
-        let label = |status, has_cv| next_action(status, has_cv, false).label;
+        let label = |status, has_cv| next_action(status, has_cv, false, None).label;
         assert_eq!(label(Status::Draft, false), "Generate CV");
         assert_eq!(label(Status::Draft, true), "Approve CV");
         assert_eq!(label(Status::CvReady, true), "Review & submit");
@@ -911,22 +1133,34 @@ mod tests {
         assert_eq!(label(Status::Rejected, true), "Rejected");
         // Every status says something, with a tone that fits.
         for status in Status::ALL {
-            assert!(
-                !next_action(status, true, false).label.is_empty(),
-                "{status:?}"
-            );
+            assert!(!next_action(status, true, false, None).label.is_empty(), "{status:?}");
         }
-        assert_eq!(next_action(Status::Failed, true, false).tone, Tone::Danger);
-        assert_eq!(next_action(Status::Interview, true, false).tone, Tone::Warn);
-        assert_eq!(next_action(Status::Offer, true, false).tone, Tone::Ok);
+        assert_eq!(next_action(Status::Failed, true, false, None).tone, Tone::Danger);
+        assert_eq!(next_action(Status::Interview, true, false, None).tone, Tone::Warn);
+        assert_eq!(next_action(Status::Offer, true, false, None).tone, Tone::Ok);
+        // A failed outcome reads red.
+        assert_eq!(next_action(Status::Rejected, true, false, None).tone, Tone::Danger);
+    }
+
+    #[test]
+    fn an_interview_card_shows_the_marked_round() {
+        let tag = next_action(Status::Interview, true, false, Some("Technical interview"));
+        assert_eq!((tag.label.as_str(), tag.tone), ("Technical interview", Tone::Warn));
+        assert_eq!(next_action(Status::Interview, true, false, Some("  ")).label, "Check your email");
+        // A round kept from the interviews does not hide the answer.
+        assert_eq!(next_action(Status::Offer, true, false, Some("Final interview")).label, "Offer");
+        assert_eq!(next_action(Status::Rejected, true, false, Some("HR screen")).label, "Rejected");
     }
 
     #[test]
     fn running_work_wins_over_the_status() {
-        assert_eq!(next_action(Status::Draft, false, true).label, "Generating");
-        assert_eq!(next_action(Status::Draft, true, true).label, "Working");
-        assert_eq!(next_action(Status::CvReady, true, true).label, "Working");
-        assert_eq!(next_action(Status::Draft, false, true).tone, Tone::Neutral);
+        assert_eq!(next_action(Status::Draft, false, true, None).label, "Generating");
+        assert_eq!(next_action(Status::Draft, true, true, None).label, "Working");
+        assert_eq!(next_action(Status::CvReady, true, true, None).label, "Working");
+        // How it ended stays visible while a CV job runs.
+        assert_eq!(next_action(Status::Offer, true, true, None).label, "Offer");
+        assert_eq!(next_action(Status::Rejected, true, true, None).label, "Rejected");
+        assert_eq!(next_action(Status::Draft, false, true, None).tone, Tone::Neutral);
     }
 
     #[test]
@@ -973,6 +1207,7 @@ mod tests {
         assert_eq!(activity_tone("email"), Tone::Warn);
         assert_eq!(activity_tone("email_review"), Tone::Warn);
         assert_eq!(activity_tone("status"), Tone::Accent);
+        assert_eq!(activity_tone("round"), Tone::Accent);
         assert_eq!(activity_tone("created"), Tone::Neutral);
         assert_eq!(activity_tone("anything else"), Tone::Neutral);
     }
@@ -989,6 +1224,37 @@ mod tests {
         );
         assert_eq!(activity_text("status", "odd text"), "odd text");
         assert_eq!(activity_text("email", "a -> b"), "a -> b");
+        assert_eq!(activity_text("round", "Round: HR screen"), "Round: HR screen");
+    }
+
+    #[test]
+    fn activity_links_lose_their_query() {
+        assert_eq!(
+            activity_text(
+                "error",
+                "fetching https://grab.careers/jobs/123/?afd_azwaf_tok=eyJhbGciOi.secret#top failed: 403"
+            ),
+            "fetching grab.careers/jobs/123 failed: 403"
+        );
+        assert_eq!(
+            activity_text("status", "applied -> interview: see https://acme.test/x?t=1."),
+            "moved to Interview: see acme.test/x."
+        );
+    }
+
+    #[test]
+    fn links_are_shown_as_host_and_path() {
+        assert_eq!(short_urls("no link here"), "no link here");
+        assert_eq!(short_urls("https://a.test"), "a.test");
+        assert_eq!(short_urls("HTTPS://A.test/Path/?q=1"), "A.test/Path");
+        assert_eq!(short_urls("http://a.test/p#frag, then"), "a.test/p, then");
+        assert_eq!(
+            short_urls("(https://a.test/x?y=1) and \"http://b.test/?z\""),
+            "(a.test/x) and \"b.test\""
+        );
+        assert_eq!(short_urls("two: https://a.test/1?x https://b.test/2?y"), "two: a.test/1 b.test/2");
+        assert_eq!(short_urls("caf\u{e9} https://a.test/\u{e9}?t=1 \u{2192} ok"), "caf\u{e9} a.test/\u{e9} \u{2192} ok");
+        assert_eq!(short_urls("ftp://a.test/x?y"), "ftp://a.test/x?y", "only web links");
     }
 
     // ------------------------------------------------------------ Application screen
@@ -1238,7 +1504,7 @@ mod tests {
     fn progress_lines_carry_the_detail() {
         let p = Progress {
             app_id: 1,
-            stage: Stage::Tailoring,
+            stage: JobStage::Tailoring,
             detail: String::new(),
         };
         assert_eq!(progress_label(&p), "Tailoring the CV");
@@ -1269,6 +1535,7 @@ mod tests {
         assert_eq!(EventStyle::of("error"), EventStyle::Error);
         assert_eq!(EventStyle::of("email_review"), EventStyle::Review);
         assert_eq!(EventStyle::of("status"), EventStyle::Status);
+        assert_eq!(EventStyle::of("round"), EventStyle::Round);
         assert_eq!(EventStyle::of("whatever"), EventStyle::Note);
     }
 
@@ -1278,6 +1545,7 @@ mod tests {
         assert_eq!(EventStyle::of("warning").tone(), Tone::Warn);
         assert_eq!(EventStyle::of("email_review").tone(), Tone::Warn);
         assert_eq!(EventStyle::of("status").tone(), Tone::Accent);
+        assert_eq!(EventStyle::of("round").tone(), Tone::Accent);
         assert_eq!(EventStyle::of("created").tone(), Tone::Neutral);
     }
 

@@ -7,7 +7,7 @@ use rusqlite::{params, OptionalExtension, Row};
 use super::{events, now, Status, Store};
 
 const COLS: &str =
-    "id, slug, company, role, source, apply_url, status, dir, analysis_json, gaps_json, created_at, updated_at, insight_json";
+    "id, slug, company, role, source, apply_url, status, dir, analysis_json, gaps_json, created_at, updated_at, insight_json, interview_round";
 
 #[derive(Clone, Debug)]
 pub struct Application {
@@ -30,6 +30,8 @@ pub struct Application {
     pub updated_at: DateTime<Utc>,
     /// Job insight (domain, company, skills, interview process) as JSON text (P11).
     pub insight_json: Option<String>,
+    /// The interview round the user marked while the status is `Interview` (`Technical interview`).
+    pub interview_round: Option<String>,
 }
 
 impl Application {
@@ -48,6 +50,7 @@ impl Application {
             created_at: r.get(10)?,
             updated_at: r.get(11)?,
             insight_json: r.get(12)?,
+            interview_round: r.get(13)?,
         })
     }
 
@@ -60,6 +63,17 @@ impl Application {
     pub fn cv_pdf_path(&self) -> PathBuf {
         self.dir.join("cv.pdf")
     }
+}
+
+/// Longest interview round stored, in characters.
+pub const ROUND_MAX_CHARS: usize = 60;
+
+/// A round as stored: trimmed, at most [`ROUND_MAX_CHARS`] characters; blank is no round.
+pub fn clean_round(round: Option<&str>) -> Option<String> {
+    let round = round?.trim();
+    let cut: String = round.chars().take(ROUND_MAX_CHARS).collect();
+    let cut = cut.trim_end();
+    (!cut.is_empty()).then(|| cut.to_string())
 }
 
 /// Fields needed to create a `Draft` application.
@@ -153,6 +167,40 @@ impl Store {
         })
     }
 
+    /// Mark (or clear) the interview round the application is in, e.g. `Technical interview`.
+    /// The text is trimmed and cut to [`ROUND_MAX_CHARS`]; an empty one clears the round. Only an
+    /// application in `Interview` has a round. A change bumps `updated_at` and appends a `round`
+    /// event (`Round: Technical interview` / `Round cleared`); setting the same round again is a no-op.
+    pub fn set_interview_round(&self, id: i64, round: Option<&str>) -> Result<()> {
+        let round = clean_round(round);
+        self.with_tx(|tx| {
+            let (status, current): (Status, Option<String>) = tx
+                .query_row("SELECT status, interview_round FROM applications WHERE id = ?1", [id], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .optional()?
+                .with_context(|| format!("application {id} not found"))?;
+            anyhow::ensure!(
+                status == Status::Interview,
+                "only an application in Interview has a round (application {id} is {})",
+                status.label()
+            );
+            if current == round {
+                return Ok(());
+            }
+            tx.execute(
+                "UPDATE applications SET interview_round = ?1, updated_at = ?2 WHERE id = ?3",
+                params![round, now(), id],
+            )?;
+            let text = match &round {
+                Some(r) => format!("Round: {r}"),
+                None => "Round cleared".to_string(),
+            };
+            events::insert_event(tx, id, "round", &text)?;
+            Ok(())
+        })
+    }
+
     /// Deletes the row and its events (files on disk are the caller's job).
     pub fn delete_application(&self, id: i64) -> Result<()> {
         self.with_conn(|c| {
@@ -170,5 +218,72 @@ impl Store {
             candidate = format!("{base}-{n}");
         }
         Ok(candidate)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clean_round, ROUND_MAX_CHARS};
+    use crate::engine::store::{NewApplication, Status, Store};
+
+    fn store_with_app() -> (tempfile::TempDir, Store, i64) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).unwrap();
+        let app = store
+            .create_application(&NewApplication {
+                slug: "acme".into(),
+                company: "Acme".into(),
+                role: "Engineer".into(),
+                dir: "/tmp/acme".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        (dir, store, app.id)
+    }
+
+    #[test]
+    fn a_round_is_trimmed_capped_and_blank_means_none() {
+        assert_eq!(clean_round(Some("  Technical interview ")).as_deref(), Some("Technical interview"));
+        assert_eq!(clean_round(Some("   ")), None);
+        assert_eq!(clean_round(None), None);
+        let long = "x".repeat(ROUND_MAX_CHARS + 10);
+        assert_eq!(clean_round(Some(&long)).map(|r| r.chars().count()), Some(ROUND_MAX_CHARS));
+        // Multi-byte text is cut on characters, not bytes.
+        let wide = "\u{e9}".repeat(ROUND_MAX_CHARS + 1);
+        assert_eq!(clean_round(Some(&wide)).map(|r| r.chars().count()), Some(ROUND_MAX_CHARS));
+    }
+
+    #[test]
+    fn the_round_is_stored_with_a_timeline_event_only_in_interview() {
+        let (_dir, store, id) = store_with_app();
+        assert!(store.get_application(id).unwrap().unwrap().interview_round.is_none());
+
+        let err = store.set_interview_round(id, Some("HR screen")).unwrap_err();
+        assert!(format!("{err:#}").contains("Interview"), "{err:#}");
+        assert!(store.set_interview_round(999, Some("HR screen")).is_err());
+
+        store.set_status(id, Status::Applied, "").unwrap();
+        store.set_status(id, Status::Interview, "").unwrap();
+        store.set_interview_round(id, Some("  Technical interview ")).unwrap();
+        let app = store.get_application(id).unwrap().unwrap();
+        assert_eq!(app.interview_round.as_deref(), Some("Technical interview"));
+        let last = store.list_events(id).unwrap().pop().unwrap();
+        assert_eq!((last.kind.as_str(), last.message.as_str()), ("round", "Round: Technical interview"));
+
+        // The same round again records nothing.
+        let before = store.list_events(id).unwrap().len();
+        store.set_interview_round(id, Some("Technical interview")).unwrap();
+        assert_eq!(store.list_events(id).unwrap().len(), before);
+
+        store.set_interview_round(id, Some(" ")).unwrap();
+        assert_eq!(store.get_application(id).unwrap().unwrap().interview_round, None);
+        let last = store.list_events(id).unwrap().pop().unwrap();
+        assert_eq!((last.kind.as_str(), last.message.as_str()), ("round", "Round cleared"));
+
+        // The round is kept when the application moves on, but cannot be changed any more.
+        store.set_interview_round(id, Some("Final interview")).unwrap();
+        store.set_status(id, Status::Offer, "").unwrap();
+        assert_eq!(store.get_application(id).unwrap().unwrap().interview_round.as_deref(), Some("Final interview"));
+        assert!(store.set_interview_round(id, None).is_err());
     }
 }

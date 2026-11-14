@@ -17,13 +17,14 @@ use serde::Serialize;
 use super::files::CvFiles;
 use super::rules::{
     activity_text, activity_tone, activity_when, age_label, board, card_title, current_value,
-    field_input, file_name, host, is_sent, newest_first, next_action, next_job_offered, parse_gaps,
-    placeholder, primary_for, requirements, review_body, review_notice, review_title, row_text,
-    session_line, source_tag, status_tone, step_index, subtitle, ApplyUi, Blocker, EventStyle,
-    Primary, Tone, STEPS,
+    field_input, file_name, host, is_sent, marks_for, newest_first, next_action, next_job_offered,
+    outcome_for, parse_gaps, placeholder, primary_for, requirements, review_body, review_notice,
+    review_title, round_options, row_text, session_line, short_urls, source_tag, stage_for,
+    status_tone, step_index, subtitle, ApplyUi, Blocker, EventStyle, Mark, Outcome, Primary, Tone,
+    STEPS,
 };
 use super::state::{ApplyView, JobView, Phase};
-use crate::shared::insight::is_web_link;
+use crate::shared::insight::{interview_steps, is_web_link};
 use crate::shared::{CommandError, InsightDto, ProblemDto};
 
 /// How many events "Recent activity" shows.
@@ -47,19 +48,21 @@ pub struct ApplyProgressDto {
     pub lines: Vec<String>,
 }
 
-// ---------------------------------------------------------------- Pipeline
+// ---------------------------------------------------------------- Jobs page
 
+/// The application stages of the Jobs page (CVs | Applied | In progress | Done) and the latest events.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardDto {
     pub count: usize,
-    pub columns: Vec<ColumnDto>,
+    pub stages: Vec<StageDto>,
     pub activity: Vec<ActivityDto>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ColumnDto {
+pub struct StageDto {
+    /// `cv` / `applied` / `inProgress` / `done`.
     pub key: &'static str,
     pub label: &'static str,
     pub cards: Vec<CardDto>,
@@ -84,6 +87,12 @@ pub struct CardDto {
     pub next: TagDto,
     /// How long ago the card last changed (`today`, `3 d`).
     pub age: String,
+    /// The interview round the user marked (kept once the application is answered).
+    pub round: Option<String>,
+    /// `success` (offer) / `failed` (rejected); `None` while open.
+    pub outcome: Option<&'static str>,
+    /// The key of the stage the card is in.
+    pub stage: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -107,15 +116,20 @@ pub fn board_dto(
     let local = |at: chrono::DateTime<chrono::Utc>| {
         at.with_timezone(&Local).naive_local()
     };
-    let columns = board(apps)
+    let stages = board(apps)
         .into_iter()
-        .map(|(column, rows)| ColumnDto {
-            key: column.key(),
-            label: column.label(),
+        .map(|(stage, rows)| StageDto {
+            key: stage.key(),
+            label: stage.label(),
             cards: rows
                 .into_iter()
                 .map(|app| {
-                    let next = next_action(app.status, has_cv(app), busy.contains(&app.id));
+                    let next = next_action(
+                        app.status,
+                        has_cv(app),
+                        busy.contains(&app.id),
+                        app.interview_round.as_deref(),
+                    );
                     let (title, subtitle) = card_title(&app.role, &app.company);
                     CardDto {
                         id: app.id,
@@ -123,10 +137,13 @@ pub fn board_dto(
                         subtitle,
                         status: app.status.label(),
                         next: TagDto {
-                            label: next.label.to_string(),
+                            label: next.label,
                             tone: next.tone,
                         },
                         age: age_label(now.date(), local(app.updated_at).date()),
+                        round: app.interview_round.clone(),
+                        outcome: outcome_for(app.status).map(Outcome::key),
+                        stage: stage.key(),
                     }
                 })
                 .collect(),
@@ -148,7 +165,7 @@ pub fn board_dto(
         .collect();
     BoardDto {
         count: apps.len(),
-        columns,
+        stages,
         activity,
     }
 }
@@ -213,6 +230,43 @@ pub struct ApplicationDto {
     pub show_next_job: bool,
     /// Changes whenever a job rewrote the CV files.
     pub cv_epoch: u64,
+    /// The interview round the user marked; `None`: none marked.
+    pub round: Option<String>,
+    /// The rounds to pick from (the brief's interview process, or the usual ones); the web app
+    /// offers them while the status is `interview` and also lets the user type their own.
+    pub round_options: Vec<String>,
+    /// What the user can mark by hand (empty unless the status is `applied` or `interview`).
+    pub marks: Vec<MarkDto>,
+    /// The key of the Jobs page stage (`cv` / `applied` / `inProgress` / `done`).
+    pub stage: &'static str,
+    /// `success` (offer) / `failed` (rejected); `None` while open.
+    pub outcome: Option<&'static str>,
+}
+
+/// A manual marker: `interview` ("Got an interview") / `offer` / `rejected`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkDto {
+    pub key: &'static str,
+    pub label: &'static str,
+}
+
+impl From<Mark> for MarkDto {
+    fn from(m: Mark) -> Self {
+        Self {
+            key: m.key(),
+            label: m.label(),
+        }
+    }
+}
+
+/// The interview stages of the application's company brief; empty without a brief.
+fn insight_steps(app: &Application) -> Vec<String> {
+    app.insight_json
+        .as_deref()
+        .and_then(Insight::from_json)
+        .map(|i| interview_steps(&i.interview))
+        .unwrap_or_default()
 }
 
 fn blocker_of(core: &Core, app: &Application) -> Option<Blocker> {
@@ -272,6 +326,11 @@ pub fn application_dto(
         primary: primary.map(PrimaryDto::from),
         show_next_job,
         cv_epoch: job.cv_epoch,
+        round: app.interview_round.clone(),
+        round_options: round_options(&insight_steps(app)),
+        marks: marks_for(app.status).into_iter().map(MarkDto::from).collect(),
+        stage: stage_for(app.status).key(),
+        outcome: outcome_for(app.status).map(Outcome::key),
     }
 }
 
@@ -416,12 +475,14 @@ pub fn timeline_dto(events: Vec<Event>, reviews: &[crate::engine::store::Email])
     let events = newest_first(events)
         .into_iter()
         .map(|e| {
-            let (text, cut) = row_text(&e.message);
+            // Links in an event (an error's URL can carry a token) are shown as host and path.
+            let message = short_urls(&e.message);
+            let (text, cut) = row_text(&message);
             EventDto {
                 id: e.id,
                 tone: EventStyle::of(&e.kind).tone(),
                 text,
-                full: cut.then(|| e.message.clone()),
+                full: cut.then_some(message),
                 when: e
                     .at
                     .with_timezone(&Local)
@@ -797,6 +858,7 @@ mod tests {
             created_at: moment,
             updated_at: moment,
             insight_json: None,
+            interview_round: None,
         }
     }
 
@@ -823,14 +885,19 @@ mod tests {
         ];
         let dto = board_dto(&apps, &events, &HashSet::from([1]), &|a| a.id == 2);
         assert_eq!(dto.count, 2);
-        assert_eq!(dto.columns.len(), 5);
         assert_eq!(
-            dto.columns[0].cards[0].next.label, "Generating",
+            dto.stages.iter().map(|s| s.key).collect::<Vec<_>>(),
+            ["cv", "applied", "inProgress", "done"]
+        );
+        assert_eq!(
+            dto.stages[0].cards[0].next.label, "Generating",
             "a running job wins"
         );
-        assert_eq!(dto.columns[2].cards[0].next.label, "No reply yet");
-        assert_eq!(dto.columns[2].cards[0].subtitle, "Company 2");
-        assert_eq!(dto.columns[2].cards[0].age, "today");
+        let applied = &dto.stages[1].cards[0];
+        assert_eq!(applied.next.label, "No reply yet");
+        assert_eq!(applied.subtitle, "Company 2");
+        assert_eq!(applied.age, "today");
+        assert_eq!((applied.stage, applied.outcome, applied.round.as_deref()), ("applied", None, None));
         let texts: Vec<&str> = dto.activity.iter().map(|a| a.text.as_str()).collect();
         assert_eq!(
             texts,
@@ -839,6 +906,24 @@ mod tests {
                 "Company 1: application created"
             ]
         );
+    }
+
+    #[test]
+    fn cards_carry_the_round_and_the_outcome() {
+        let mut interview = app(1, Status::Interview);
+        interview.interview_round = Some("Technical interview".into());
+        let mut offer = app(2, Status::Offer);
+        offer.interview_round = Some("Final interview".into());
+        let apps = vec![interview, offer, app(3, Status::Rejected)];
+        let events = vec![event(1, 1, "error", "fetching https://grab.careers/jobs/1?afd_azwaf_tok=abc failed")];
+        let dto = board_dto(&apps, &events, &HashSet::new(), &|_| true);
+        let card = &dto.stages[2].cards[0];
+        assert_eq!((card.stage, card.next.label.as_str(), card.next.tone), ("inProgress", "Technical interview", Tone::Warn));
+        assert_eq!(card.round.as_deref(), Some("Technical interview"));
+        let done: Vec<(i64, Option<&str>, &str)> =
+            dto.stages[3].cards.iter().map(|c| (c.id, c.outcome, c.next.label.as_str())).collect();
+        assert_eq!(done, [(2, Some("success"), "Offer"), (3, Some("failed"), "Rejected")]);
+        assert_eq!(dto.activity[0].text, "Company 1: fetching grab.careers/jobs/1 failed");
     }
 
     #[test]
@@ -871,6 +956,16 @@ mod tests {
             "Rejection (60% sure): Your application"
         );
         assert_eq!(dto.reviews[0].body, "From hr@acme.test");
+
+        // Links lose their query, in the row and in the whole text.
+        let token = format!("blocked at https://a.test/jobs/1?tok=secret\n{}", "y".repeat(10));
+        let dto = timeline_dto(vec![event(3, 1, "error", &token)], &[]);
+        assert_eq!(dto.events[0].text, "blocked at a.test/jobs/1");
+        assert_eq!(
+            dto.events[0].full.as_deref(),
+            Some(format!("blocked at a.test/jobs/1\n{}", "y".repeat(10)).as_str())
+        );
+        assert!(!format!("{:?}", dto.events).contains("secret"));
     }
 
     #[test]
@@ -1083,5 +1178,45 @@ mod tests {
         let dto = application_dto(&core, &app(3, Status::Draft), failed, ApplyUi::Idle);
         assert_eq!(dto.error.as_ref().map(|e| e.problem.kind), Some("network"));
         assert_eq!(dto.cv_epoch, 3);
+    }
+
+    #[test]
+    fn the_header_offers_marks_and_rounds() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let core = Core::open_at(
+            crate::engine::Paths::new(dir.path().join("jp")),
+            crate::engine::Secrets::memory(),
+        )
+        .expect("a core");
+        let none = || JobView {
+            label: None,
+            error: None,
+            cv_epoch: 0,
+            cv_problem: None,
+        };
+        let keys = |dto: &ApplicationDto| dto.marks.iter().map(|m| m.key).collect::<Vec<_>>();
+
+        let applied = application_dto(&core, &app(1, Status::Applied), none(), ApplyUi::Idle);
+        assert_eq!(keys(&applied), ["interview", "offer", "rejected"]);
+        assert_eq!(applied.marks[0].label, "Got an interview");
+        assert_eq!((applied.stage, applied.outcome, applied.round.as_deref()), ("applied", None, None));
+        assert_eq!(applied.round_options, crate::applications::rules::DEFAULT_ROUNDS, "no brief: the usual rounds");
+
+        let mut interview = app(2, Status::Interview);
+        interview.interview_round = Some("System design".into());
+        interview.insight_json = Some(
+            r#"{"interview": {"stages": ["Recruiter call", "Pairing", "Offer"], "notes": "", "found": true}}"#.into(),
+        );
+        let dto = application_dto(&core, &interview, none(), ApplyUi::Idle);
+        assert_eq!(keys(&dto), ["offer", "rejected"]);
+        assert_eq!(dto.round_options, ["Recruiter call", "Pairing"]);
+        assert_eq!((dto.stage, dto.round.as_deref()), ("inProgress", Some("System design")));
+
+        let offer = application_dto(&core, &app(3, Status::Offer), none(), ApplyUi::Idle);
+        assert!(offer.marks.is_empty());
+        assert_eq!((offer.stage, offer.outcome), ("done", Some("success")));
+        let draft = application_dto(&core, &app(4, Status::Draft), none(), ApplyUi::Idle);
+        assert!(draft.marks.is_empty());
+        assert_eq!((draft.stage, draft.outcome), ("cv", None));
     }
 }

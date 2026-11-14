@@ -1,7 +1,7 @@
 // Settings > Job sources: where job discovery looks, and in which browser session. What a source
 // accepts is checked by the shell when it is added; a source that needs a login is read in a managed
 // session the user logged in to under Browser sessions; a source paused at a login, captcha or block
-// page is continued from Today.
+// page is continued from the Jobs page.
 
 import { useState } from "react";
 
@@ -37,7 +37,7 @@ function SourceRow({
   const { line, outcome } = statusLine(source, now);
   const tag = sourceTag(outcome, waiting);
   return (
-    <li id={`source-${id}`} aria-label={`${name}: ${line}`} className="flex flex-col gap-2 rounded-banner border border-border bg-surface-alt p-3">
+    <li id={`source-${id}`} aria-label={`${name}: ${line}`} className="flex flex-col gap-2 border border-border bg-surface-alt p-3">
       <div className="flex items-center gap-3">
         <Switch id={`source-${id}-enabled`} ariaLabel={`Search ${name}`} checked={source.enabled} onChange={onEnabled} />
         <div className="flex min-w-0 flex-1 flex-col">
@@ -81,7 +81,7 @@ function AddForm({
   const [url, setUrl] = useState("");
   const hint = kinds.find((k) => k.kind === kind)?.hint ?? "";
   return (
-    <div className="flex flex-col gap-3 rounded-banner border border-border bg-surface-alt p-3">
+    <div className="flex flex-col gap-3 border border-border bg-surface-alt p-3">
       <div className="flex flex-col gap-1">
         <span className="text-small font-medium text-muted">Kind</span>
         <div role="group" aria-label="Kind" className="flex flex-wrap gap-1.5">

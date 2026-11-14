@@ -6,6 +6,7 @@ import type {
   Apply,
   ApplicationHeader,
   Board,
+  BoardCard,
   Cv,
   Jd,
   Primary,
@@ -34,31 +35,79 @@ export function header(over: Partial<ApplicationHeader> = {}): ApplicationHeader
     primary: primary(),
     showNextJob: false,
     cvEpoch: 0,
+    round: null,
+    roundOptions: ["HR screen", "Technical interview", "System design", "Final interview"],
+    marks: [],
+    stage: "cv",
+    outcome: null,
+    ...over,
+  };
+}
+
+export function card(over: Partial<BoardCard> = {}): BoardCard {
+  return {
+    id: 1,
+    title: "Backend Engineer",
+    subtitle: "Acme",
+    status: "Draft",
+    next: { label: "Approve CV", tone: "accent" },
+    age: "today",
+    round: null,
+    outcome: null,
+    stage: "cv",
     ...over,
   };
 }
 
 export function board(): Board {
   return {
-    count: 3,
-    columns: [
+    count: 6,
+    stages: [
       {
-        key: "cvReview",
-        label: "CV review",
-        cards: [{ id: 1, title: "Backend Engineer", subtitle: "Acme", status: "Draft", next: { label: "Approve CV", tone: "accent" }, age: "today" }],
+        key: "cv",
+        label: "CVs",
+        cards: [card(), card({ id: 2, title: "SRE", subtitle: "Globex", status: "CV ready", next: { label: "Review & submit", tone: "accent" }, age: "2 d" })],
       },
       {
-        key: "readyToApply",
-        label: "Ready to apply",
-        cards: [{ id: 2, title: "SRE", subtitle: "Globex", status: "CV ready", next: { label: "Review & submit", tone: "accent" }, age: "2 d" }],
+        key: "applied",
+        label: "Applied",
+        cards: [
+          card({ id: 3, title: "Platform Engineer", subtitle: "Initech", status: "Applied", next: { label: "No reply yet", tone: "neutral" }, age: "5 d", stage: "applied" }),
+        ],
       },
       {
-        key: "submitted",
-        label: "Submitted",
-        cards: [{ id: 3, title: "Platform Engineer", subtitle: "Initech", status: "Applied", next: { label: "No reply yet", tone: "neutral" }, age: "5 d" }],
+        key: "inProgress",
+        label: "In progress",
+        cards: [
+          card({
+            id: 4,
+            title: "Data Engineer",
+            subtitle: "Umbrella",
+            status: "Interview",
+            next: { label: "Technical interview", tone: "warn" },
+            age: "1 d",
+            round: "Technical interview",
+            stage: "inProgress",
+          }),
+        ],
       },
-      { key: "interview", label: "Interview", cards: [] },
-      { key: "closed", label: "Closed", cards: [] },
+      {
+        key: "done",
+        label: "Done",
+        cards: [
+          card({ id: 5, title: "SRE", subtitle: "Hooli", status: "Offer", next: { label: "Offer", tone: "ok" }, age: "9 d", outcome: "success", stage: "done" }),
+          card({
+            id: 6,
+            title: "Go Developer",
+            subtitle: "Vandelay",
+            status: "Rejected",
+            next: { label: "Rejected", tone: "danger" },
+            age: "12 d",
+            outcome: "failed",
+            stage: "done",
+          }),
+        ],
+      },
     ],
     activity: [
       { id: 11, appId: 3, text: "Initech: moved to Applied", when: "09:05", tone: "accent" },

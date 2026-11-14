@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, Transaction};
 
-pub use applications::{Application, NewApplication};
+pub use applications::{clean_round, Application, NewApplication, ROUND_MAX_CHARS};
 pub use chat::ChatMessage;
 pub use emails::Email;
 pub use events::Event;
@@ -189,6 +189,10 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX graph_checkpoints_thread ON graph_checkpoints(thread, seq);
     CREATE INDEX graph_checkpoints_status ON graph_checkpoints(status, updated_at);
     ",
+    // 4: the interview round the user marked (Jobs page, `Store::set_interview_round`)
+    "
+    ALTER TABLE applications ADD COLUMN interview_round TEXT;
+    ",
 ];
 
 #[derive(Clone)]
@@ -211,6 +215,12 @@ impl Store {
     fn init(mut conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&mut conn)?;
+        // Best effort: events are masked on read as well, so a failure here never stops the app.
+        match events::scrub_old_events(&mut conn) {
+            Ok(0) => {}
+            Ok(count) => tracing::info!(count, "masked secrets in old events"),
+            Err(error) => tracing::warn!(error = %error, "masking secrets in old events failed"),
+        }
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -319,6 +329,7 @@ mod tests {
 
         let app = store.get_application_by_slug("old-app").unwrap().unwrap();
         assert_eq!((app.company.as_str(), app.status, app.insight_json.as_deref()), ("Acme", Status::Applied, None));
+        assert_eq!(app.interview_round, None);
         assert_eq!(store.kv_get("profile_path").unwrap().as_deref(), Some("/x/profile.yaml"));
 
         // The new column and tables are usable.

@@ -11,9 +11,12 @@ import {
   neighbourOf,
   NO_FILTER,
   openLeadId,
+  prepareManyLabel,
+  primaryPlace,
   queuePrimaryFor,
   STOPPED,
   targetsOf,
+  type PlaceFacts,
   type QueueFacts,
   type SessionFailure,
 } from "./queue";
@@ -83,6 +86,35 @@ describe("the one primary button", () => {
   });
 });
 
+describe("where the one primary button sits", () => {
+  const place = (f: Partial<PlaceFacts>) => primaryPlace({ drawerOpen: false, checked: 0, empty: false, ...f });
+
+  it("is the lead drawer while it is open, whatever is ticked", () => {
+    expect(place({ drawerOpen: true })).toBe("drawer");
+    expect(place({ drawerOpen: true, checked: 2 })).toBe("drawer");
+  });
+
+  it("is the bulk bar over ticked leads while the drawer is closed", () => {
+    expect(place({ checked: 1 })).toBe("bulk");
+    expect(place({ checked: 3, empty: true })).toBe("bulk");
+  });
+
+  it("is Search now on an empty list, and nowhere on a list with nothing open or ticked", () => {
+    expect(place({ empty: true })).toBe("search");
+    expect(place({})).toBe("none");
+  });
+
+  it("is nowhere here while another drawer owns it", () => {
+    expect(place({ otherDrawerOpen: true, empty: true })).toBe("none");
+    expect(place({ otherDrawerOpen: true, checked: 2 })).toBe("none");
+  });
+
+  it("names the bulk action by its count", () => {
+    expect(prepareManyLabel(1)).toBe("Prepare 1 CV");
+    expect(prepareManyLabel(3)).toBe("Prepare 3 CVs");
+  });
+});
+
 describe("jobs that never reported", () => {
   it("are cleared and can be retried", () => {
     const jobs: Record<number, Job> = { 2: { state: "queued" }, 3: { state: "queued" }, 9: { state: "running", label: "other batch" } };
@@ -123,11 +155,13 @@ describe("the filters", () => {
 describe("which lead is open", () => {
   const shown = [lead(10), lead(11), lead(12)];
 
-  it("is the one asked for when it is listed, else the best", () => {
+  it("is the one asked for when it is listed, the best for \"best\", else none", () => {
     expect(openLeadId(shown, 11)).toBe(11);
-    expect(openLeadId(shown, 99), "not listed").toBe(10);
-    expect(openLeadId(shown, undefined), "Next job opens the best one").toBe(10);
+    expect(openLeadId(shown, 99), "not listed: the drawer stays closed").toBeUndefined();
+    expect(openLeadId(shown, "best"), "Next job opens the best one").toBe(10);
+    expect(openLeadId(shown, undefined), "the drawer is closed: no fallback").toBeUndefined();
     expect(openLeadId([], 11)).toBeUndefined();
+    expect(openLeadId([], "best")).toBeUndefined();
   });
 
   it("moves to the neighbour once a lead leaves: the one after it, else the one before", () => {

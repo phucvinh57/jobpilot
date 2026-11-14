@@ -37,7 +37,7 @@ describe("Settings > Job sources", () => {
     expect(within(first).getByRole("button", { name: "LinkedIn" }).getAttribute("aria-pressed")).toBe("false");
 
     // A source with no name shows its kind; a paused one needs the user, whatever its status says.
-    const second = screen.getByRole("listitem", { name: "Career page: needs you: continue it from Today" });
+    const second = screen.getByRole("listitem", { name: "Career page: needs you: continue it from Jobs" });
     expect(within(second).getByText("needs you")).toBeTruthy();
     expect(within(second).getByRole("switch", { name: "Search Career page" }).getAttribute("aria-checked")).toBe("false");
     expect(within(second).getByRole("button", { name: "LinkedIn" }).getAttribute("aria-pressed")).toBe("true");

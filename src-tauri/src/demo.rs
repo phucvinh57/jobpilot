@@ -45,6 +45,18 @@ fn seed_demo_applications(core: &Core) -> Result<()> {
             Status::Interview,
         ),
         ("baz-sre", "Baz", "Site Reliability Engineer", Status::Draft),
+        (
+            "qux-backend-developer",
+            "Qux",
+            "Backend Developer",
+            Status::Offer,
+        ),
+        (
+            "zed-platform-engineer",
+            "Zed",
+            "Platform Engineer",
+            Status::Rejected,
+        ),
     ];
     for (slug, company, role, status) in samples {
         let app = core.store.create_application(&NewApplication {
@@ -56,6 +68,10 @@ fn seed_demo_applications(core: &Core) -> Result<()> {
             ..Default::default()
         })?;
         core.store.force_status(app.id, status, "demo data")?;
+        if slug == "bar-devops-engineer" {
+            core.store
+                .set_interview_round(app.id, Some("Technical interview"))?;
+        }
         if slug == "acme-backend-engineer" {
             let json = serde_json::to_string(&demo_insight(slug))?;
             core.store.set_insight_json(app.id, Some(&json))?;
@@ -279,5 +295,25 @@ fn demo_insight(slug: &str) -> Insight {
             format!("https://{slug}.example.com/about"),
             format!("https://{slug}.example.com/careers"),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::store::Status;
+    use crate::engine::{Core, Paths, Secrets};
+
+    #[test]
+    fn the_sample_applications_cover_every_stage_once() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).expect("a core");
+        super::seed_demo_applications(&core).expect("the samples");
+        super::seed_demo_applications(&core).expect("seeding again is a no-op");
+        let apps = core.store.list_applications().expect("the applications");
+        assert_eq!(apps.len(), 6);
+        let status = |slug: &str| apps.iter().find(|a| a.slug == slug).map(|a| (a.status, a.interview_round.clone()));
+        assert_eq!(status("bar-devops-engineer"), Some((Status::Interview, Some("Technical interview".into()))));
+        assert_eq!(status("qux-backend-developer"), Some((Status::Offer, None)));
+        assert_eq!(status("zed-platform-engineer"), Some((Status::Rejected, None)));
     }
 }

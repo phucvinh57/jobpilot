@@ -13,6 +13,7 @@ import type {
   Cv,
   Jd,
   JobProgress,
+  MarkKey,
   Primary,
   Rendered,
   ReviewEdits,
@@ -38,9 +39,9 @@ function png(bytes: ArrayBuffer): Blob {
   return new Blob([bytes], { type: "image/png" });
 }
 
-// ------------------------------------------------------------------ Pipeline
+// ------------------------------------------------------------------ Stages of the Jobs page
 
-/** The five columns with their cards, and the latest events across all applications. */
+/** The application stages with their cards, and the latest events across all applications. */
 export function readBoard(): Promise<Board> {
   return invoke<Board>("applications_board");
 }
@@ -50,7 +51,11 @@ export function readBoard(): Promise<Board> {
 /** The header of one application; `null` when it does not exist (any more). */
 export async function readApplication(id: number): Promise<ApplicationHeader | null> {
   const dto = await invoke<HeaderDto | null>("applications_get", { id });
-  return dto === null ? null : { ...dto, error: failure(dto.error) };
+  return dto === null ? null : header(dto);
+}
+
+function header(dto: HeaderDto): ApplicationHeader {
+  return { ...dto, error: failure(dto.error) };
 }
 
 /** Run `job`, then tell the other screens. A failure is read back from the header. */
@@ -85,6 +90,25 @@ export function dismissError(id: number): Promise<void> {
 /** "Approve CV": Draft -> CV ready. */
 export function approveCv(id: number): Promise<void> {
   return job(() => invoke<void>("applications_approve_cv", { id }));
+}
+
+/** Mark the interview round the application is at (`null`: clear it). Only while it is at
+ *  Interview. Resolves to the header as it is now. */
+export async function setRound(id: number, round: string | null): Promise<ApplicationHeader> {
+  try {
+    return header(await invoke<HeaderDto>("applications_set_round", { id, round }));
+  } finally {
+    notifyChanged("applications");
+  }
+}
+
+/** Mark what the company answered by hand (interview, offer, rejected). Resolves to the header. */
+export async function mark(id: number, mark: MarkKey): Promise<ApplicationHeader> {
+  try {
+    return header(await invoke<HeaderDto>("applications_mark", { id, mark }));
+  } finally {
+    notifyChanged("applications");
+  }
 }
 
 // ------------------------------------------------------------------ JD tab

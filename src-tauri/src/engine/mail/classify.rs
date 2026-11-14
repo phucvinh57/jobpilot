@@ -351,6 +351,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             insight_json: None,
+            interview_round: None,
         }
     }
 

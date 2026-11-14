@@ -1,20 +1,38 @@
-// The design kit: pure render. Views build from these instead of local helpers, and take every
-// colour from the theme classes (`bg-surface`, `text-ink`, ...).
+// The design kit: pure render, built on the shadcn/ui primitives (`./primitives`, square: no
+// rounded corners). Views build from these instead of local helpers or the primitives, and take
+// every colour from the theme classes (`bg-surface`, `text-ink`, ...).
 
-import clsx from "clsx";
-import { Check, LoaderCircle, type LucideIcon } from "lucide-react";
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
+import { cva } from "class-variance-authority";
+import { Check, LoaderCircle, X, type LucideIcon } from "lucide-react";
+import {
+  useRef,
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from "react";
 
 import { TONE_CLASS, type Tone } from "../theme/tokens";
+import { cn } from "./cn";
+import { Badge } from "./primitives/badge";
+import { Button as ButtonPrimitive } from "./primitives/button";
+import { Card as CardPrimitive } from "./primitives/card";
+import { Input } from "./primitives/input";
+import { Sheet, SheetContent, SheetTitle } from "./primitives/sheet";
+import { Switch as SwitchPrimitive } from "./primitives/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./primitives/table";
+import { Textarea } from "./primitives/textarea";
 import { barFraction, scoreLabel, scoreTone, stepState } from "./rules";
 
 // ------------------------------------------------------------------ text
 
-/** A heading in Space Grotesk: `h1` is the page title (30 px), `h2` a card title (18 px). */
+/** A heading in Space Grotesk: `h1` is the page title (24 px), `h2` a card title (16 px). */
 export function Heading({ level = "h2", className, children }: { level?: "h1" | "h2"; className?: string; children: ReactNode }) {
   const Tag = level;
   return (
-    <Tag className={clsx("font-heading font-semibold text-ink", level === "h1" ? "text-h1" : "text-h2", className)}>
+    <Tag className={cn("font-heading font-semibold text-ink", level === "h1" ? "text-h1 tracking-tight" : "text-h2", className)}>
       {children}
     </Tag>
   );
@@ -22,27 +40,29 @@ export function Heading({ level = "h2", className, children }: { level?: "h1" | 
 
 /** Small secondary text (12 px, muted): a label, a hint, a timestamp. */
 export function Caption({ className, children }: { className?: string; children: ReactNode }) {
-  return <p className={clsx("text-small text-muted", className)}>{children}</p>;
+  return <p className={cn("text-small text-muted", className)}>{children}</p>;
 }
 
 /** A small upper-case heading inside a card. */
 export function SectionLabel({ children }: { children: ReactNode }) {
-  return <p className="text-small font-semibold uppercase tracking-wide text-muted">{children}</p>;
+  return <p className="text-tiny font-semibold tracking-wider text-muted uppercase">{children}</p>;
 }
 
 /** A spinner for work in progress. */
 export function Spinner({ className }: { className?: string }) {
-  return <LoaderCircle aria-hidden className={clsx("size-4 animate-spin", className)} />;
+  return <LoaderCircle aria-hidden className={cn("size-4 animate-spin motion-reduce:animate-none", className)} />;
 }
 
 // ------------------------------------------------------------ containers
 
-/** A bordered card with rounded corners. */
+const CARD = "flex flex-col gap-2 border border-border bg-surface p-4 text-ink shadow-none";
+
+/** A bordered card. */
 export function Card({ className, children, ...rest }: { className?: string; children: ReactNode; id?: string }) {
   return (
-    <div {...rest} className={clsx("flex flex-col gap-2 rounded-card border border-border bg-surface p-4", className)}>
+    <CardPrimitive {...rest} className={cn(CARD, className)}>
       {children}
-    </div>
+    </CardPrimitive>
   );
 }
 
@@ -62,7 +82,7 @@ export function Section({
   children?: ReactNode;
 }) {
   return (
-    <section id={id} aria-label={title} className="flex flex-col gap-2 rounded-card border border-border bg-surface p-4">
+    <section id={id} aria-label={title} data-slot="card" className={CARD}>
       <div className="flex items-center justify-between gap-2">
         <Heading>{title}</Heading>
         {actions}
@@ -73,7 +93,7 @@ export function Section({
   );
 }
 
-/** A highlighted strip for something that needs attention: a tone dot, a bold title, a body
+/** A highlighted strip for something that needs attention: a tone mark, a bold title, a body
  *  line, and actions on the right. */
 export function Banner({
   tone,
@@ -90,9 +110,9 @@ export function Banner({
 }) {
   const c = TONE_CLASS[tone];
   return (
-    <div id={id} role="group" aria-label={title} className={clsx("flex items-center gap-3 rounded-banner border p-3", c.border, c.bg)}>
-      <span className={clsx("size-2 shrink-0 rounded-full", c.dot)} />
-      <div className={clsx("flex min-w-0 flex-1 flex-col gap-0.5", c.fg)}>
+    <div id={id} role="group" aria-label={title} className={cn("flex items-center gap-3 border border-l-2 px-3 py-2.5", c.border, c.bg)}>
+      <span className={cn("size-2 shrink-0", c.dot)} />
+      <div className={cn("flex min-w-0 flex-1 flex-col gap-0.5", c.fg)}>
         <p className="text-body font-semibold">{title}</p>
         {body && <div className="selectable text-small">{body}</div>}
       </div>
@@ -104,8 +124,8 @@ export function Banner({
 /** What a list shows when it has nothing: an icon, a title, a hint and an optional action. */
 export function EmptyState({ icon: Icon, title, body, action }: { icon: LucideIcon; title: string; body: string; action?: ReactNode }) {
   return (
-    <div className="flex flex-col items-center gap-2 rounded-card border border-dashed border-border p-6 text-center">
-      <span className="flex size-11 items-center justify-center rounded-full bg-track">
+    <div className="flex flex-col items-center gap-2 border border-dashed border-border p-6 text-center">
+      <span className="flex size-10 items-center justify-center border border-border bg-track">
         <Icon aria-hidden className="size-5 text-muted" />
       </span>
       <p className="text-body font-semibold text-ink">{title}</p>
@@ -130,31 +150,38 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   children?: ReactNode;
 }
 
-const BUTTON_VARIANT: Record<ButtonVariant, string> = {
-  primary: "border-accent bg-accent text-on-fill hover:bg-accent-dark hover:border-accent-dark",
-  secondary: "border-control-border bg-surface text-ink hover:bg-track",
-  ghost: "border-transparent bg-transparent text-muted hover:bg-track hover:text-ink",
-  danger: "border-danger/50 bg-surface text-danger hover:bg-danger-bg",
-};
+/** The kit's button looks. `primary` keeps `bg-accent`: tests find THE primary button by it. A
+ *  disabled button still takes the pointer (over the primitive's `disabled:pointer-events-none`), so
+ *  its `title` says why it is off; the browser never clicks a disabled button. */
+const buttonLook = cva("cursor-pointer border font-medium transition-colors disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-55", {
+  variants: {
+    variant: {
+      primary: "border-accent bg-accent text-on-fill enabled:hover:border-accent-dark enabled:hover:bg-accent-dark",
+      secondary: "border-control-border bg-surface text-ink enabled:hover:bg-track",
+      ghost: "border-transparent bg-transparent text-muted enabled:hover:bg-track enabled:hover:text-ink",
+      danger: "border-danger/50 bg-surface text-danger enabled:hover:bg-danger-bg",
+    },
+    size: {
+      regular: "h-9 px-4 text-body",
+      compact: "h-8 gap-1.5 px-3 text-small",
+    },
+  },
+});
 
 export function Button({ variant = "secondary", size = "regular", icon: Icon, busy = false, disabled, className, children, ...rest }: ButtonProps) {
   return (
-    <button
+    <ButtonPrimitive
       type="button"
       {...rest}
+      variant={null}
+      size={null}
       disabled={disabled || busy}
       aria-busy={busy || undefined}
-      className={clsx(
-        "inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 border font-medium whitespace-nowrap transition-colors",
-        "disabled:cursor-not-allowed disabled:opacity-55",
-        size === "regular" ? "min-h-10 rounded-button px-4 text-body" : "min-h-8 rounded-chip px-3 text-small",
-        BUTTON_VARIANT[variant],
-        className,
-      )}
+      className={cn(buttonLook({ variant, size }), className)}
     >
       {busy ? <Spinner /> : Icon && <Icon aria-hidden className="size-4" />}
       {children}
-    </button>
+    </ButtonPrimitive>
   );
 }
 
@@ -164,7 +191,7 @@ export function LinkButton({ className, children, ...rest }: ButtonHTMLAttribute
     <button
       type="button"
       {...rest}
-      className={clsx("cursor-pointer truncate text-left text-small text-accent underline hover:text-accent-dark", className)}
+      className={cn("cursor-pointer truncate text-left text-small text-accent underline-offset-2 hover:text-accent-dark hover:underline", className)}
     >
       {children}
     </button>
@@ -177,14 +204,15 @@ export function LinkButton({ className, children, ...rest }: ButtonHTMLAttribute
  *  (`gap`, dashed outline). */
 export function Chip({ kind, children }: { kind: "match" | "gap"; children: ReactNode }) {
   return (
-    <span
-      className={clsx(
-        "inline-flex min-h-7 items-center rounded-chip border px-2.5 text-small font-medium",
-        kind === "match" ? "border-accent-soft bg-accent-soft text-accent-dark" : "border-dashed border-bar-grey text-muted",
+    <Badge
+      variant={null}
+      className={cn(
+        "h-7 border px-2.5 text-small font-medium",
+        kind === "match" ? "border-accent/30 bg-accent-soft text-accent-dark" : "border-dashed border-bar-grey text-muted",
       )}
     >
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -195,10 +223,10 @@ export function FilterChip({ selected, className, children, ...rest }: ButtonHTM
       type="button"
       {...rest}
       aria-pressed={selected}
-      className={clsx(
-        "inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-chip border px-3 text-small font-medium transition-colors",
+      className={cn(
+        "inline-flex h-8 cursor-pointer items-center gap-1.5 border px-3 text-small font-medium transition-colors",
         "disabled:cursor-not-allowed disabled:opacity-55",
-        selected ? "border-accent-soft bg-accent-soft text-accent-dark" : "border-control-border bg-surface text-ink hover:bg-track",
+        selected ? "border-accent bg-accent-soft text-accent-dark" : "border-control-border bg-surface text-ink hover:bg-track",
         className,
       )}
     >
@@ -207,10 +235,14 @@ export function FilterChip({ selected, className, children, ...rest }: ButtonHTM
   );
 }
 
-/** A status tag: a small rounded pill in a tone's colours. */
+/** A status tag: a small square label in a tone's colours. */
 export function Tag({ tone, children }: { tone: Tone; children: ReactNode }) {
   const c = TONE_CLASS[tone];
-  return <span className={clsx("inline-flex shrink-0 items-center rounded-tag px-2 py-0.5 text-small font-semibold", c.fg, c.bg)}>{children}</span>;
+  return (
+    <Badge variant={null} className={cn("px-2 py-0.5 text-small font-semibold", c.fg, c.bg)}>
+      {children}
+    </Badge>
+  );
 }
 
 /** A small citation chip (`3`) that points at a stored source. */
@@ -220,20 +252,17 @@ export function CiteChip({ number, onClick }: { number: number; onClick?: () => 
       type="button"
       aria-label={`Source ${number}`}
       onClick={onClick}
-      className="inline-flex h-5 min-w-[22px] cursor-pointer items-center justify-center rounded-tag bg-accent-soft px-1.5 text-tiny font-semibold text-accent-dark hover:bg-accent/25"
+      className="inline-flex h-5 min-w-[22px] cursor-pointer items-center justify-center bg-accent-soft px-1.5 text-tiny font-semibold text-accent-dark hover:bg-accent/25"
     >
       {number}
     </button>
   );
 }
 
-/** A small status dot: green when `ok`, amber when something needs a look, grey while checking. */
+/** A small status dot: green when `ok`, amber when something needs a look, grey while checking.
+ *  (The one round shape of the app.) */
 export function HealthDot({ state }: { state: "ok" | "warn" | "checking" }) {
-  return (
-    <span
-      className={clsx("size-2 shrink-0 rounded-full", state === "ok" ? "bg-ok" : state === "warn" ? "bg-warn" : "bg-bar-grey")}
-    />
-  );
+  return <span className={cn("size-2 shrink-0 rounded-full", state === "ok" ? "bg-ok" : state === "warn" ? "bg-warn" : "bg-bar-grey")} />;
 }
 
 // ----------------------------------------------------------------- forms
@@ -241,7 +270,7 @@ export function HealthDot({ state }: { state: "ok" | "warn" | "checking" }) {
 /** A form field: a label above its input. */
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
-    <label className="flex flex-col gap-1">
+    <label className="flex flex-col gap-1.5">
       <span className="text-small font-medium text-muted">{label}</span>
       {children}
       {hint && <span className="text-small text-subtle">{hint}</span>}
@@ -250,22 +279,33 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
 }
 
 const CONTROL =
-  "w-full rounded-button border border-control-border bg-surface px-3 text-body text-ink placeholder:text-subtle " +
-  "focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-55";
+  "border-control-border bg-surface text-ink shadow-none placeholder:text-subtle focus-visible:border-accent focus-visible:ring-2 " +
+  "focus-visible:ring-accent/25 disabled:opacity-55 dark:bg-surface";
 
 export function TextInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input type="text" spellCheck={false} autoComplete="off" {...rest} className={clsx(CONTROL, "min-h-10", className)} />;
+  return <Input type="text" spellCheck={false} autoComplete="off" {...rest} className={cn(CONTROL, "h-9", className)} />;
 }
 
 export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea spellCheck={false} {...rest} className={clsx(CONTROL, "min-h-20 resize-y py-2", className)} />;
+  return <Textarea spellCheck={false} {...rest} className={cn(CONTROL, "min-h-20 resize-y", className)} />;
 }
 
-/** A checkbox with its label. */
+/** A checkbox with its label: a native input (so `onChange` gets `e.target.checked`), drawn as a
+ *  square box with a check mark. */
 export function Checkbox({ label, className, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & { label: ReactNode }) {
   return (
-    <label className={clsx("inline-flex cursor-pointer items-center gap-2 text-body text-ink", className)}>
-      <input type="checkbox" {...rest} className="size-4 cursor-pointer accent-accent" />
+    <label className={cn("inline-flex cursor-pointer items-center gap-2 text-body text-ink has-disabled:cursor-not-allowed has-disabled:opacity-55", className)}>
+      <span className="relative inline-grid size-4 shrink-0 place-items-center">
+        <input
+          type="checkbox"
+          {...rest}
+          className={cn(
+            "peer col-start-1 row-start-1 size-4 cursor-pointer appearance-none border border-control-border bg-surface transition-colors",
+            "checked:border-accent checked:bg-accent disabled:cursor-not-allowed",
+          )}
+        />
+        <Check aria-hidden strokeWidth={3} className="pointer-events-none col-start-1 row-start-1 size-3 text-on-fill opacity-0 peer-checked:opacity-100" />
+      </span>
       {label}
     </label>
   );
@@ -289,29 +329,22 @@ export function Switch({
   disabled?: boolean;
 }) {
   return (
-    <label className={clsx("inline-flex items-center gap-3 text-body text-ink", disabled ? "cursor-not-allowed opacity-55" : "cursor-pointer")}>
-      <button
+    <label className={cn("inline-flex items-center gap-3 text-body text-ink", disabled ? "cursor-not-allowed opacity-55" : "cursor-pointer")}>
+      <SwitchPrimitive
         id={id}
-        type="button"
-        role="switch"
-        aria-checked={checked}
+        checked={checked}
+        onCheckedChange={onChange}
         aria-label={ariaLabel}
         disabled={disabled}
-        onClick={() => onChange(!checked)}
-        className={clsx(
-          "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors disabled:cursor-not-allowed",
-          checked ? "bg-accent" : "bg-bar-grey",
-        )}
-      >
-        <span aria-hidden className={clsx("block size-4 rounded-full bg-on-fill shadow-sm transition-transform", checked ? "translate-x-[18px]" : "translate-x-0.5")} />
-      </button>
+        className="cursor-pointer"
+      />
       {label}
     </label>
   );
 }
 
-/** A row of exclusive choices: one compact button per choice, the current one tinted. `label`
- *  names the group ("Job type: Remote", not just "Remote"). */
+/** A row of exclusive choices: joined buttons, the current one tinted. `label` names the group
+ *  ("Job type: Remote", not just "Remote"). */
 export function Segmented<T extends string>({
   label,
   choices,
@@ -326,7 +359,7 @@ export function Segmented<T extends string>({
   disabled?: boolean;
 }) {
   return (
-    <div role="group" aria-label={label} className="flex flex-wrap gap-1">
+    <div role="group" aria-label={label} className="flex flex-wrap">
       {choices.map((choice) => (
         <FilterChip
           key={choice.value}
@@ -334,6 +367,7 @@ export function Segmented<T extends string>({
           aria-label={`${label}: ${choice.label}`}
           disabled={disabled}
           onClick={() => onChange(choice.value)}
+          className="-ml-px first:ml-0 focus-visible:z-10 aria-pressed:z-[1]"
         >
           {choice.label}
         </FilterChip>
@@ -342,7 +376,23 @@ export function Segmented<T extends string>({
   );
 }
 
-/** Tabs: a row of buttons, the current one underlined. */
+/** Arrow keys move between the tabs of a tab strip (and select the one they land on). */
+function onTabKeys<T>(event: KeyboardEvent<HTMLElement>, keys: readonly T[], value: T, onChange: (value: T) => void) {
+  const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+  const at = keys.indexOf(value);
+  if (step === 0 || at < 0 || keys.length === 0) {
+    return;
+  }
+  event.preventDefault();
+  const next = keys[(at + step + keys.length) % keys.length];
+  if (next !== undefined) {
+    onChange(next);
+    const tabs = event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]');
+    tabs[keys.indexOf(next)]?.focus();
+  }
+}
+
+/** Tabs: a row of buttons, the current one underlined in the accent. */
 export function Tabs<T extends string>({
   label,
   tabs,
@@ -354,8 +404,9 @@ export function Tabs<T extends string>({
   value: T;
   onChange: (value: T) => void;
 }) {
+  const keys = tabs.map((tab) => tab.value);
   return (
-    <div role="tablist" aria-label={label} className="flex gap-1 border-b border-border">
+    <div role="tablist" aria-label={label} onKeyDown={(e) => onTabKeys(e, keys, value, onChange)} className="flex gap-1 border-b border-border">
       {tabs.map((tab) => {
         const selected = tab.value === value;
         return (
@@ -364,10 +415,11 @@ export function Tabs<T extends string>({
             type="button"
             role="tab"
             aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.value)}
-            className={clsx(
-              "-mb-px cursor-pointer border-b-2 px-3 py-2 text-body transition-colors",
-              selected ? "border-accent font-semibold text-accent-dark" : "border-transparent text-muted hover:text-ink",
+            className={cn(
+              "-mb-px cursor-pointer border-b-2 px-3 py-2 text-body font-medium transition-colors",
+              selected ? "border-accent text-ink" : "border-transparent text-muted hover:text-ink",
             )}
           >
             {tab.label}
@@ -378,12 +430,55 @@ export function Tabs<T extends string>({
   );
 }
 
+/** A strip of pipeline stages (tabs with a count): the current one is marked by an accent bar.
+ *  Each tab has the id `stage-<key>` and is named `<label>, <count>`. */
+export function StageBar<T extends string>({
+  label,
+  stages,
+  value,
+  onChange,
+}: {
+  label: string;
+  stages: readonly { key: T; label: string; count: number }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  const keys = stages.map((stage) => stage.key);
+  return (
+    <div role="tablist" aria-label={label} onKeyDown={(e) => onTabKeys(e, keys, value, onChange)} className="flex flex-wrap border border-border bg-surface">
+      {stages.map((stage) => {
+        const selected = stage.key === value;
+        return (
+          <button
+            key={stage.key}
+            id={`stage-${stage.key}`}
+            type="button"
+            role="tab"
+            aria-label={`${stage.label}, ${stage.count}`}
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(stage.key)}
+            className={cn(
+              "-mb-px flex min-w-0 cursor-pointer items-center gap-2 border-b-2 px-3 py-2 text-body transition-colors not-last:border-r not-last:border-r-border",
+              selected ? "border-b-accent bg-track font-semibold text-ink" : "border-b-transparent text-muted hover:bg-track hover:text-ink",
+            )}
+          >
+            <span className="truncate">{stage.label}</span>
+            <span className={cn("shrink-0 px-1.5 text-tiny font-semibold", selected ? "bg-accent-soft text-accent-dark" : "bg-track text-muted")}>{stage.count}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------- data display
 
+/** A thin square bar (the look of the shadcn Progress). */
 function Bar({ fraction, colorClass }: { fraction: number; colorClass: string }) {
   return (
-    <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-track">
-      <span className={clsx("block h-full rounded-full", colorClass)} style={{ width: `${fraction * 100}%` }} />
+    <span className="h-1.5 min-w-0 flex-1 overflow-hidden bg-track">
+      <span className={cn("block h-full transition-[width]", colorClass)} style={{ width: `${fraction * 100}%` }} />
     </span>
   );
 }
@@ -394,7 +489,7 @@ export function ScoreBadge({ score }: { score: number | null | undefined }) {
   return (
     <span
       aria-label={score === null || score === undefined ? "Not scored" : `Score ${scoreLabel(score)}`}
-      className={clsx("flex size-11 shrink-0 items-center justify-center rounded-button font-heading text-h2 font-semibold", c.fg, c.bg)}
+      className={cn("flex size-10 shrink-0 items-center justify-center font-heading text-h2 font-semibold", c.fg, c.bg)}
     >
       {scoreLabel(score)}
     </span>
@@ -407,7 +502,7 @@ export function FitBar({ label, value }: { label: string; value: number }) {
     <div className="flex items-center gap-3">
       <span className="w-[120px] shrink-0 truncate text-small text-muted">{label}</span>
       <Bar fraction={barFraction(value, 100)} colorClass={TONE_CLASS[scoreTone(value)].dot} />
-      <span className="w-7 shrink-0 text-small font-semibold text-ink">{value.toFixed(0)}</span>
+      <span className="w-7 shrink-0 text-small font-semibold text-ink tabular-nums">{value.toFixed(0)}</span>
     </div>
   );
 }
@@ -419,7 +514,7 @@ export function SkillBar({ name, count, max, inProfile }: { name: string; count:
     <div className="flex items-center gap-3">
       <span className="w-[120px] shrink-0 truncate text-small text-ink">{name}</span>
       <Bar fraction={barFraction(count, max)} colorClass={inProfile ? "bg-accent" : "bg-bar-grey"} />
-      <span className="w-7 shrink-0 text-small text-muted">{count}</span>
+      <span className="w-7 shrink-0 text-small text-muted tabular-nums">{count}</span>
     </div>
   );
 }
@@ -434,8 +529,8 @@ export function Stepper({ steps, current }: { steps: readonly string[]; current:
           <li key={label} aria-label={`Step ${i + 1}: ${label}`} aria-current={state === "current" ? "step" : undefined} className="contents">
             <span className="flex items-center gap-2">
               <span
-                className={clsx(
-                  "flex size-6 shrink-0 items-center justify-center rounded-full border text-small font-semibold",
+                className={cn(
+                  "flex size-6 shrink-0 items-center justify-center border text-small font-semibold",
                   state === "done" && "border-accent bg-accent text-on-fill",
                   state === "current" && "border-accent bg-accent-soft text-accent-dark",
                   state === "todo" && "border-border bg-surface text-muted",
@@ -443,11 +538,11 @@ export function Stepper({ steps, current }: { steps: readonly string[]; current:
               >
                 {state === "done" ? <Check aria-hidden className="size-3" /> : i + 1}
               </span>
-              <span className={clsx("text-small", state === "current" && "font-semibold", state === "todo" ? "text-muted" : "text-ink")}>
+              <span className={cn("text-small", state === "current" && "font-semibold", state === "todo" ? "text-muted" : "text-ink")}>
                 {label}
               </span>
             </span>
-            {i < steps.length - 1 && <span className={clsx("h-0.5 min-w-4 flex-1 rounded-full", i < current ? "bg-accent" : "bg-border")} />}
+            {i < steps.length - 1 && <span className={cn("h-px min-w-4 flex-1", i < current ? "bg-accent" : "bg-border")} />}
           </li>
         );
       })}
@@ -455,44 +550,175 @@ export function Stepper({ steps, current }: { steps: readonly string[]; current:
   );
 }
 
-/** A card on the pipeline board: title, subtitle and a tag with the next action. */
-export function KanbanCard({
-  title,
-  subtitle,
-  next,
-  onClick,
-}: {
-  title: string;
-  subtitle: string;
-  next?: { label: string; tone: Tone };
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={`${title}, ${subtitle}`}
-      onClick={onClick}
-      className="flex cursor-pointer flex-col gap-1.5 rounded-banner border border-border bg-surface p-3 text-left transition-colors hover:border-accent/50"
-    >
-      <span className="text-body font-semibold text-ink">{title}</span>
-      <span className="text-small text-muted">{subtitle}</span>
-      {next && (
-        <span className="flex pt-1">
-          <Tag tone={next.tone}>{next.label}</Tag>
-        </span>
-      )}
-    </button>
-  );
-}
-
-/** One line of the activity feed: a tone dot, what happened, and when. */
+/** One line of the activity feed: a tone mark, what happened, and when. */
 export function ActivityRow({ tone, text, when }: { tone: Tone; text: string; when: string }) {
   return (
     <li className="flex items-center gap-3 py-1.5">
-      <span className={clsx("size-2 shrink-0 rounded-full", TONE_CLASS[tone].dot)} />
+      <span className={cn("size-2 shrink-0", TONE_CLASS[tone].dot)} />
       <span className="min-w-0 flex-1 truncate text-body text-ink">{text}</span>
       <span className="shrink-0 text-small text-subtle">{when}</span>
     </li>
+  );
+}
+
+export interface DataColumn<T> {
+  key: string;
+  header: ReactNode;
+  className?: string;
+  cell: (row: T) => ReactNode;
+}
+
+/** Whether an event started on a control inside a row (a checkbox, a button), which handles it
+ *  itself: the row must not open then. */
+function fromControl(event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>): boolean {
+  const target = event.target as HTMLElement;
+  const control = target.closest("button, a, input, select, textarea, label, [role='checkbox'], [role='switch']");
+  return control !== null && control !== event.currentTarget && event.currentTarget.contains(control);
+}
+
+/** A table of rows that open something (a drawer): click a row, or focus it and press Enter or
+ *  Space. The open row is `aria-current`. Controls inside a cell keep their own clicks. */
+export function DataTable<T>({
+  label,
+  columns,
+  rows,
+  rowKey,
+  onOpen,
+  openKey,
+  rowLabel,
+  empty,
+  id,
+}: {
+  label: string;
+  columns: readonly DataColumn<T>[];
+  rows: readonly T[];
+  rowKey: (row: T) => string;
+  onOpen?: (row: T) => void;
+  openKey?: string | null;
+  rowLabel?: (row: T) => string;
+  empty?: ReactNode;
+  id?: string;
+}) {
+  return (
+    <div className="border border-border bg-surface">
+      <Table id={id} aria-label={label} className="text-body text-ink">
+        <TableHeader className="bg-surface-alt">
+          <TableRow className="hover:bg-transparent">
+            {columns.map((column) => (
+              <TableHead key={column.key} className={cn("h-9 px-3 text-tiny font-semibold tracking-wider text-muted uppercase", column.className)}>
+                {column.header}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 && (
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={columns.length} className="px-3 py-6 text-center whitespace-normal text-muted">
+                {empty ?? "Nothing here."}
+              </TableCell>
+            </TableRow>
+          )}
+          {rows.map((row) => {
+            const key = rowKey(row);
+            const open = onOpen;
+            const current = openKey !== undefined && openKey !== null && openKey === key;
+            return (
+              <TableRow
+                key={key}
+                aria-label={rowLabel?.(row)}
+                aria-current={current ? "true" : undefined}
+                tabIndex={open ? 0 : undefined}
+                onClick={open ? (e) => !fromControl(e) && open(row) : undefined}
+                onKeyDown={
+                  open
+                    ? (e) => {
+                        if ((e.key === "Enter" || e.key === " ") && !fromControl(e)) {
+                          e.preventDefault();
+                          open(row);
+                        }
+                      }
+                    : undefined
+                }
+                className={cn(
+                  "border-border hover:bg-track focus-visible:-outline-offset-2",
+                  open && "cursor-pointer",
+                  current && "bg-track shadow-[inset_2px_0_0_var(--jp-accent)] hover:bg-track",
+                )}
+              >
+                {columns.map((column) => (
+                  <TableCell key={column.key} className={cn("px-3 py-2", column.className)}>
+                    {column.cell(row)}
+                  </TableCell>
+                ))}
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- frames
+
+/** A side panel at the right: non-modal (the page behind stays usable, so pressing another row
+ *  just switches what it shows), closed by Esc or its ✕. Focus moves in on open and goes back
+ *  where it was on close. */
+export function Drawer({
+  open,
+  title,
+  width = "md",
+  onClose,
+  actions,
+  children,
+  id = "drawer",
+}: {
+  open: boolean;
+  title: string;
+  width?: "md" | "lg";
+  onClose: () => void;
+  actions?: ReactNode;
+  children?: ReactNode;
+  id?: string;
+}) {
+  // Radix gives focus back to a dialog trigger; this drawer has none, so it remembers.
+  const returnTo = useRef<HTMLElement | null>(null);
+  return (
+    <Sheet modal={false} open={open} onOpenChange={(next) => !next && onClose()}>
+      <SheetContent
+        id={id}
+        side="right"
+        showCloseButton={false}
+        aria-describedby={undefined}
+        onOpenAutoFocus={() => {
+          returnTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          const back = returnTo.current;
+          returnTo.current = null;
+          if (back && back.isConnected) {
+            back.focus();
+          }
+        }}
+        onInteractOutside={(event) => event.preventDefault()}
+        className={cn(
+          "gap-0 border-l border-border bg-surface text-ink shadow-xl motion-reduce:animate-none!",
+          "max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-2rem)]",
+          width === "lg" ? "w-[760px]" : "w-[480px]",
+        )}
+      >
+        <header className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <SheetTitle asChild>
+            <h2 className="min-w-0 flex-1 truncate font-heading text-h2 font-semibold text-ink">{title}</h2>
+          </SheetTitle>
+          {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+          <Button id="drawer-close" variant="ghost" size="compact" aria-label="Close" icon={X} onClick={onClose} className="px-2" />
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">{children}</div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -513,8 +739,8 @@ export function Page({
   children: ReactNode;
 }) {
   return (
-    <main aria-label={label} className="fade-in flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-6">
-      <header className="flex items-start justify-between gap-4">
+    <main aria-label={label} className="fade-in flex h-full min-w-0 flex-col gap-4 overflow-y-auto px-6 py-5">
+      <header className="flex items-start justify-between gap-4 border-b border-border pb-4">
         <div className="flex min-w-0 flex-col gap-1">
           {typeof title === "string" ? <Heading level="h1">{title}</Heading> : title}
           {subtitle && <div className="text-body text-muted">{subtitle}</div>}

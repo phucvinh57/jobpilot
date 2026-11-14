@@ -1,5 +1,5 @@
-// What Today shows and does with the queue: the filters, which lead is open, which leads "Prepare
-// CV" acts on, the one primary button, and what needs the user.
+// What the Leads stage of the Jobs page shows and does with the queue: the filters, which lead its
+// drawer shows, which leads "Prepare CV" acts on, the one primary button, and what needs the user.
 
 import type { Problem } from "@/shared";
 
@@ -41,12 +41,16 @@ export function filterItems(items: readonly Lead[], filter: QueueFilter): Lead[]
 
 // ------------------------------------------------------------ selection
 
-/** The lead to show: `requested` when it is listed, else the first one (the best match). */
-export function openLeadId(shown: readonly Lead[], requested: number | undefined): number | undefined {
-  if (requested !== undefined && shown.some((l) => l.id === requested)) {
-    return requested;
+/** The lead the drawer shows: `requested` when it is listed, the first one (the best match) for
+ *  `"best"`, and none when the drawer is closed (`undefined`) or the lead is not listed. */
+export function openLeadId(shown: readonly Lead[], requested: number | "best" | undefined): number | undefined {
+  if (requested === undefined) {
+    return undefined;
   }
-  return shown[0]?.id;
+  if (requested === "best") {
+    return shown[0]?.id;
+  }
+  return shown.some((l) => l.id === requested) ? requested : undefined;
 }
 
 /** The lead to open once `id` leaves the list: the one after it, else the one before. */
@@ -100,8 +104,8 @@ export interface QueueFacts {
   sources: number;
 }
 
-/** The one primary button of Today: "Prepare CV" while there are leads, "Search now" when the list
- *  is empty. Disabled while the work it starts runs. Every other button on the screen is plain. */
+/** What the primary button does: "Prepare CV" while there are leads, "Search now" when the list is
+ *  empty. Disabled while the work it starts runs. Where it sits is `primaryPlace`. */
 export function queuePrimaryFor(f: QueueFacts): QueuePrimary {
   const ready = (action: QueueAction, hint?: string): QueuePrimary => ({ action, enabled: true, loading: false, hint });
   const blocked = (action: QueueAction, hint: string): QueuePrimary => ({ action, enabled: false, loading: false, hint });
@@ -121,6 +125,42 @@ export function queuePrimaryFor(f: QueueFacts): QueuePrimary {
     return { action: "prepareCv", enabled: false, loading: true };
   }
   return ready("prepareCv", f.targets > 1 ? `${f.targets} leads selected, their CVs are written one after the other` : undefined);
+}
+
+/** Where the one primary button of the Leads stage sits. */
+export type PrimaryPlace = "drawer" | "bulk" | "search" | "none";
+
+/** What `primaryPlace` needs to know. */
+export interface PlaceFacts {
+  /** The lead drawer is open (on a listed lead). */
+  drawerOpen: boolean;
+  /** Another drawer of the Jobs page is open (an application): it has its own primary. */
+  otherDrawerOpen?: boolean;
+  /** Ticked leads. */
+  checked: number;
+  /** The list has no lead at all (before the filters). */
+  empty: boolean;
+}
+
+/** Where the one primary button goes: the open lead drawer ("Prepare CV"), else the bulk bar over
+ *  the ticked leads ("Prepare N CVs"), else "Search now" when the list is empty. Nowhere while
+ *  another drawer is open, or when the list has leads and nothing is open or ticked. */
+export function primaryPlace(f: PlaceFacts): PrimaryPlace {
+  if (f.drawerOpen) {
+    return "drawer";
+  }
+  if (f.otherDrawerOpen) {
+    return "none";
+  }
+  if (f.checked > 0) {
+    return "bulk";
+  }
+  return f.empty ? "search" : "none";
+}
+
+/** The label of the bulk bar's button. */
+export function prepareManyLabel(n: number): string {
+  return n === 1 ? "Prepare 1 CV" : `Prepare ${n} CVs`;
 }
 
 // ------------------------------------------------------------ what needs the user

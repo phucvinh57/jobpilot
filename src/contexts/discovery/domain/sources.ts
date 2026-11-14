@@ -33,7 +33,7 @@ export function statusLine(source: Pick<Source, "lastRunAt" | "lastStatus">, now
     return { line: "never run", outcome: "never" };
   }
   if (status === "needs_human") {
-    return { line: "needs you: continue it from Today", outcome: "needsYou" };
+    return { line: "needs you: continue it from Jobs", outcome: "needsYou" };
   }
   const outcome: Outcome = status === "ok" ? "ok" : status.startsWith("failed") ? "failed" : "other";
   const chars = Array.from(status);

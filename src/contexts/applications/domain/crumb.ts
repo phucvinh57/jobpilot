@@ -1,17 +1,19 @@
-// The breadcrumb of the Application screen leads back to the screen it was opened from.
+// The breadcrumb of the Application screen leads back to the Jobs page, at the stage (and with the
+// drawer) the user left it.
 
-import type { Origin, Screen } from "@/shared";
+import type { Stage } from "@/shared";
+
+import { stageLabel } from "./pipeline";
 
 export interface Crumb {
   id: string;
+  /** `Jobs › CVs` */
   label: string;
   aria: string;
-  target: Screen;
 }
 
-/** The breadcrumb for an application opened from `from` (Today, else the Pipeline). */
-export function crumbFor(from: Origin): Crumb {
-  return from === "today"
-    ? { id: "breadcrumb-today", label: "Today", aria: "Back to Today", target: "today" }
-    : { id: "breadcrumb-pipeline", label: "Pipeline", aria: "Back to the Pipeline", target: "pipeline" };
+/** The breadcrumb back to the Jobs page at `stage`. */
+export function crumbFor(stage: Stage): Crumb {
+  const name = stage === "leads" ? "Leads" : stageLabel(stage);
+  return { id: "breadcrumb-jobs", label: `Jobs › ${name}`, aria: `Back to Jobs, ${name}` };
 }

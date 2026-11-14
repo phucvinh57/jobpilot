@@ -9,7 +9,7 @@ import { Button, ProblemActions, useNav, useShell } from "@/shared";
 
 function Line({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
-    <div id={`${id}-banner`} role="group" aria-label={title} className="flex items-center gap-3 rounded-chip border border-warn/45 bg-warn-bg px-3 py-1.5">
+    <div id={`${id}-banner`} role="group" aria-label={title} className="flex items-center gap-3 border border-l-2 border-warn/45 border-l-warn bg-warn-bg px-3 py-1.5">
       <TriangleAlert aria-hidden className="size-4 shrink-0 text-warn" />
       <p className="min-w-0 flex-1 truncate text-small text-warn-fg">{title}</p>
       <div className="flex shrink-0 gap-2">{children}</div>

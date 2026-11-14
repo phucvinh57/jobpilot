@@ -38,7 +38,7 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
   trends     P13a collection: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`;
                   P13b `digest/` (extract, count, synthesize, cite: every point must cite stored items)
 src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bounded context (never by technical layer)
-  contexts   discovery (Leads, Today, job Sources) | applications (Pipeline, Application: JD/CV/apply/timeline) |
+  contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |
              profile (profile.yaml, preferences) | integrations (AI Providers, Gmail, browser Sessions) | trends (Digest, trend sources)
   tauri.conf.json, capabilities/default.json   one window `main`; permissions: core + the file picker only; strict CSP (no remote origin)
   src/main.rs          only calls `jobpilot_lib::run()`
@@ -48,19 +48,26 @@ src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bound
                        (`shared:data-changed`, `shared:graph-progress` bridge), `insight` (company brief read model), `topics` (preference-list rules that Profile and Trends share), `shell` (health line,
                        setup banner, badges, appearance, `shared_open_url`: the only way a link leaves the app)
   src/<context>/       `dto.rs` read models (serde camelCase; core types stay free of serde/Tauri; never a secret),
-                       `rules.rs` pure rules + unit tests (`primary_for`, `column_for`, queue ordering, timeline grouping, ...),
+                       `rules.rs` pure rules + unit tests (`primary_for`, `stage_for`, queue ordering, timeline grouping, ...),
                        `commands.rs` application services: thin `#[tauri::command]`s that call `Core` through `shared::run`
   src/demo.rs          `JOBPILOT_DEMO=1` sample data
   src/devtools.rs      cargo feature `dev-tools` only: webview snapshot + UI script runner (see "Check the UI")
 package.json, bun.lock, index.html, vite.config.ts, tsconfig.json, eslint.config.js   the web app (bun), standard Tauri layout
 src/                   React + Vite + TypeScript + Tailwind
-  app/                 composition root of the web app: App (screen switch, file drop), Sidebar, SetupBanner, SettingsScreen
+  app/                 composition root of the web app: App (screen switch, file drop), Sidebar, SetupBanner, SettingsScreen,
+                       JobsScreen (the Jobs page: header, stage bar Leads | CVs | Applied | In progress | Done, the stage's list,
+                       and a right-side drawer for the open lead or application; `jobs.ts` page rules)
   shared/              `bridge` (the only Tauri imports: invoke / listen / file picker), `ui/kit.tsx` (design kit: Page, Card, Section,
-                       Banner, Button, Chip, Tag, Segmented, Tabs, ScoreBadge, Stepper, ...), `theme` (tokens light/dark as `--jp-*`
+                       Banner, Button, Chip, Tag, Segmented, Tabs, StageBar, DataTable, Drawer, ScoreBadge, Stepper, ...),
+                       `ui/primitives/` (shadcn/ui, square: no rounded corners; only the kit imports them, eslint enforces it;
+                       `bunx shadcn add` writes `import { cn } from "cn"` and adds a junk `cn` dependency: point the import at
+                       `../cn` and drop the dependency after each add), `theme` (tokens light/dark as `--jp-*`
                        CSS variables; `styles.css` maps them to the only Tailwind colours), `problem` (ErrorBanner, ProblemHelp),
-                       `nav` (screen, open Application / Lead, Today badge), `shell`, `lib/async` (`useQuery`, `useAction`), `insight`
+                       `nav` (screen, Jobs stage, drawer `{ kind: "lead" | "app", id }`, Jobs badge), `shell`, `lib/async` (`useQuery`, `useAction`), `insight`
   contexts/<context>/  `domain/` (types mirroring the DTOs + pure helpers + vitest), `api/` (typed functions over the bridge),
                        `hooks/` (use-cases), `ui/` (screens), `index.ts` (public surface)
+                       discovery = the Leads stage + lead drawer, Job sources; applications = the CVs / Applied / In progress / Done
+                       stages, the application drawer and the full Application screen (the drawer's "Open full view")
                        direction: ui -> hooks -> api / domain; another context only through its `index.ts` (eslint enforces both)
 ```
 
@@ -91,10 +98,13 @@ JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory JOBPILOT_DEMO=1 \
 `check.js` is the body of an async function; the app exits when it ends. Helpers (`src-tauri/src/devtools.rs`): `shot(name)` (PNG in `JOBPILOT_UI_SHOTS`), `log(text)` (app log), `sleep(ms)`, `waitFor(fn, ms)`, `$(selector)`, `byText(text, selector)`, `click(target)` (a selector, or the text / aria-label of a button), `type(target, text)`, `invoke(command, args)`. Example:
 
 ```text
-await waitFor(() => $("#nav-today"));
-await shot("today");
-await click("#nav-pipeline");
-await shot("pipeline");
+await waitFor(() => $("#nav-jobs"));
+await shot("jobs-leads");
+await click("#stage-cv");
+await click(await waitFor(() => $("#table-cv tr[aria-label]")));
+await waitFor(() => $("#drawer"));
+await shot("jobs-cv-drawer");
+await click("#drawer-close");
 await click("#open-settings");
 await click("Appearance: Light");
 await shot("settings-light");
@@ -102,7 +112,7 @@ await shot("settings-light");
 
 Page errors, unhandled rejections and CSP violations are written to the app log (`ui script: ...`). Every interactive element has an `id` or an accessible name, so a script (or assistive technology) can reach it.
 
-For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), so a fake job board cannot be driven from the GUI: that path is covered by `src-tauri/tests/e2e_discovery.rs`, and the GUI check of Today, a Lead, Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
+For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), so a fake job board cannot be driven from the GUI: that path is covered by `src-tauri/tests/e2e_discovery.rs`, and the GUI check of the Jobs page (Leads and a lead drawer), Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
 
 ## Workflow
 
@@ -148,7 +158,7 @@ The product plans (`docs/plans/`, status table in `docs/plans/README.md`):
 - P9 preference chat: `engine/prefs/` (chat), the desktop `profile` context, `assets/prompts/preferences.md`.
 - P10 discovery: `engine/discover/` except `promote.rs` and `queue.rs`, `engine/net/`, `browser/{challenge,render,guard,gate}.rs`, Job sources in the desktop `discovery` context.
 - P11 job insight: `pipeline/insight*`, the company brief (`shared/insight`).
-- P12 queue: Today in the desktop `discovery` context, `engine/discover/{promote,queue}.rs`.
+- P12 queue: the Leads stage of the Jobs page in the desktop `discovery` context, `engine/discover/{promote,queue}.rs`.
 - P13 trends: `engine/trends/`, the desktop `trends` context, `assets/prompts/trends.md`.
 
 Prompts under `assets/prompts/` are High risk (a human reads the diff).

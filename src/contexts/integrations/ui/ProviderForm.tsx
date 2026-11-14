@@ -55,7 +55,7 @@ export function ProviderForm({ card }: { card: ProvidersCard }) {
             aria-label="Pick from the loaded models"
             value={picked}
             onChange={(e) => card.edit({ model: e.target.value })}
-            className="min-h-10 w-full rounded-button border border-control-border bg-surface px-3 text-body text-ink focus:border-accent focus:outline-none"
+            className="min-h-10 w-full border border-control-border bg-surface px-3 text-body text-ink focus:border-accent focus:outline-none"
           >
             <option value="" disabled>
               Pick from the loaded models

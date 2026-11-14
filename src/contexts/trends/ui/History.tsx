@@ -31,7 +31,7 @@ export function History({
                 aria-current={selected ? "true" : undefined}
                 onClick={() => onSelect(report.id)}
                 className={clsx(
-                  "flex w-full cursor-pointer items-center justify-between gap-2 rounded-chip px-3 py-2 text-left text-body transition-colors",
+                  "flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-body transition-colors",
                   selected ? "bg-accent-soft font-semibold text-accent-dark" : "text-ink hover:bg-track",
                 )}
               >

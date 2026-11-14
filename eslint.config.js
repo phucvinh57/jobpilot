@@ -3,6 +3,7 @@
 //   - a context reaches another context only through its `index.ts`
 //   - `shared` knows no context; only `shared/bridge` talks to Tauri, and only a context's
 //     `api/` layer (or the app shell) calls the bridge
+//   - only the design kit (`shared/ui`) imports the shadcn/ui primitives (`shared/ui/primitives`)
 import js from "@eslint/js";
 import importPlugin from "eslint-plugin-import";
 import reactHooks from "eslint-plugin-react-hooks";
@@ -42,6 +43,12 @@ const tauriOnlyInBridge = {
   message: "Use @/shared/bridge (from a context's api/ layer).",
 };
 
+/** The shadcn/ui primitives are the kit's building blocks: views use the kit (`@/shared`). */
+const primitivesOnlyInKit = {
+  group: ["@/shared/ui/primitives", "@/shared/ui/primitives/*", "**/ui/primitives", "**/ui/primitives/*"],
+  message: "Use the design kit from @/shared; only src/shared/ui builds on the primitives.",
+};
+
 export default tseslint.config(
   { ignores: ["dist", "node_modules", "src-tauri", "target", "release", ".claude"] },
   js.configs.recommended,
@@ -66,12 +73,16 @@ export default tseslint.config(
           ],
         },
       ],
-      "no-restricted-imports": ["error", { patterns: [tauriOnlyInBridge] }],
+      "no-restricted-imports": ["error", { patterns: [tauriOnlyInBridge, primitivesOnlyInKit] }],
     },
   },
   {
     files: ["src/shared/bridge/**"],
-    rules: { "no-restricted-imports": "off" },
+    rules: { "no-restricted-imports": ["error", { patterns: [primitivesOnlyInKit] }] },
+  },
+  {
+    files: ["src/shared/ui/**"],
+    rules: { "no-restricted-imports": ["error", { patterns: [tauriOnlyInBridge] }] },
   },
   {
     // The bridge is a context's port to the shell: only its api/ layer calls it.
@@ -82,6 +93,7 @@ export default tseslint.config(
         {
           patterns: [
             tauriOnlyInBridge,
+            primitivesOnlyInKit,
             { group: ["@/shared/bridge", "@/shared/bridge/*"], message: "Call the shell from the context's api/ layer." },
           ],
         },

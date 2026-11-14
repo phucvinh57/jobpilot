@@ -10,6 +10,7 @@ import { waitingLabel } from "../domain/text";
 import type { AddFailure } from "../domain/addQueue";
 import type { LeadInput } from "../domain/types";
 import { addInput, clearAddFeedback, submitLink } from "../hooks/todayStore";
+import { useToday } from "../hooks/useToday";
 
 interface Props {
   /** The posting being read. */
@@ -20,7 +21,13 @@ interface Props {
   note: string | undefined;
 }
 
-export function LinkBox({ adding, waiting, failures, note }: Props) {
+/** The link box (`#queue-link`) with "Add job" (`#queue-add-job`), from what the store holds. */
+export function LinkBox() {
+  const t = useToday();
+  return <LinkBoxView adding={t.adding} waiting={t.waiting.length} failures={t.addFailures} note={t.linkNote} />;
+}
+
+function LinkBoxView({ adding, waiting, failures, note }: Props) {
   const [raw, setRaw] = useState("");
   const blank = raw.trim() === "";
   const behind = waitingLabel(waiting);
@@ -68,13 +75,13 @@ export function LinkBox({ adding, waiting, failures, note }: Props) {
               type="button"
               aria-label="Clear"
               onClick={() => setRaw("")}
-              className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-chip text-muted hover:bg-track hover:text-ink"
+              className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center text-muted hover:bg-track hover:text-ink"
             >
               <X aria-hidden className="size-4" />
             </button>
           )}
         </div>
-        {/* A plain button: "Prepare CV" stays the only primary one. */}
+        {/* A plain button: the primary one is "Prepare CV" or "Search now". */}
         <Button id="queue-add-job" disabled={blank} onClick={submit}>
           Add job
         </Button>
@@ -84,7 +91,7 @@ export function LinkBox({ adding, waiting, failures, note }: Props) {
           id="add-lead-progress"
           role="status"
           aria-label={behind ? `Reading the posting, ${behind}` : "Reading the posting"}
-          className="flex items-center gap-2 rounded-button border border-border bg-surface px-3 py-2 text-body text-muted"
+          className="flex items-center gap-2 border border-border bg-surface px-3 py-2 text-body text-muted"
         >
           <Spinner className="text-accent" />
           <span>Reading the posting&hellip;</span>

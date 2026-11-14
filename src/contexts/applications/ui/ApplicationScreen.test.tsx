@@ -39,7 +39,7 @@ const primaryButtons = () => Array.from(document.querySelectorAll("button.bg-acc
 beforeEach(() => {
   bridge.invoke.mockReset();
   bridge.invoke.mockResolvedValue(undefined);
-  useNav.setState({ screen: "application", applicationId: 7, detailFrom: "pipeline", leadId: undefined, settingsFocus: undefined });
+  useNav.setState({ screen: "application", applicationId: 7, stage: "cv", drawer: { kind: "app", id: 7 }, settingsFocus: undefined });
   useShell.setState({ status: undefined });
   Object.defineProperty(URL, "createObjectURL", { value: vi.fn(() => "blob:page"), configurable: true, writable: true });
   Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true, writable: true });
@@ -71,7 +71,7 @@ describe("the Application screen header", () => {
   it("shows the breadcrumb, role, company, status, steps and tabs, with exactly one primary button", async () => {
     open();
     expect(await screen.findByRole("heading", { name: "Backend Engineer", level: 1 })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Back to the Pipeline" }).textContent).toBe("Pipeline");
+    expect(screen.getByRole("button", { name: "Back to Jobs, CVs" }).textContent).toBe("Jobs › CVs");
     expect(screen.getByText("Acme · Berlin")).toBeTruthy();
     expect(screen.getByText("Draft")).toBeTruthy();
     expect(screen.getByRole("list", { name: "Steps" })).toBeTruthy();
@@ -84,12 +84,13 @@ describe("the Application screen header", () => {
     expect(approve.hasAttribute("disabled")).toBe(false);
   });
 
-  it("leads back to Today when it was opened from there", async () => {
+  it("leads back to the Jobs page as it was left: its stage and its drawer", async () => {
     const user = userEvent.setup();
-    useNav.setState({ detailFrom: "today" });
+    useNav.setState({ stage: "inProgress", drawer: { kind: "app", id: 7 } });
     open();
-    await user.click(await screen.findByRole("button", { name: "Back to Today" }));
-    expect(useNav.getState().screen).toBe("today");
+    await user.click(await screen.findByRole("button", { name: "Back to Jobs, In progress" }));
+    const nav = useNav.getState();
+    expect([nav.screen, nav.stage, nav.drawer]).toEqual(["jobs", "inProgress", { kind: "app", id: 7 }]);
   });
 
   it("disables the primary button and says why", async () => {
@@ -113,8 +114,8 @@ describe("the Application screen header", () => {
     await screen.findByRole("heading", { name: "Backend Engineer" });
     expect(primaryButtons()).toEqual([]);
     await user.click(screen.getByRole("button", { name: "Next job" }));
-    expect(useNav.getState().screen).toBe("today");
-    expect(useNav.getState().leadId).toBeUndefined();
+    const nav = useNav.getState();
+    expect([nav.screen, nav.stage, nav.drawer]).toEqual(["jobs", "leads", { kind: "lead", id: "best" }]);
   });
 
   it("shows the progress line of a running job, as it moves", async () => {

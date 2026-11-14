@@ -1,6 +1,6 @@
 // The company brief, drawn the same way wherever it is shown: "The company" (domain, what it
 // does, the facts, the pages it comes from) and "Interview process" (the stages in order, then
-// notes). Today shows it under a Lead, the Application screen's JD tab under the posting.
+// notes). The lead drawer shows it under a Lead, the Application screen's JD tab under the posting.
 
 import { openUrl } from "../shell/shell";
 import { Caption, LinkButton, SectionLabel, Tag } from "../ui/kit";

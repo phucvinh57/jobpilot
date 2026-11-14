@@ -4,23 +4,21 @@
 import clsx from "clsx";
 import { useEffect, useState } from "react";
 
-import { ApplicationScreen, PipelineScreen } from "@/contexts/applications";
-import { TodayScreen } from "@/contexts/discovery";
+import { ApplicationScreen } from "@/contexts/applications";
 import { TrendsScreen } from "@/contexts/trends";
 import { useNav, type Screen } from "@/shared";
 import { onFileDrop } from "@/shared/bridge";
 import { startShell } from "@/shared/shell/shell";
 
+import { JobsScreen } from "./JobsScreen";
 import { SettingsScreen } from "./SettingsScreen";
 import { SetupBanner } from "./SetupBanner";
 import { Sidebar } from "./Sidebar";
 
 function CurrentScreen({ screen }: { screen: Screen }) {
   switch (screen) {
-    case "today":
-      return <TodayScreen />;
-    case "pipeline":
-      return <PipelineScreen />;
+    case "jobs":
+      return <JobsScreen />;
     case "application":
       return <ApplicationScreen />;
     case "trends":
@@ -37,8 +35,8 @@ export function App() {
 
   useEffect(() => startShell(), []);
 
-  // Drop a .md/.txt/.html/.pdf file anywhere on the window to add it to Today as a Lead
-  // (Today checks the file type and reports a refusal).
+  // Drop a .md/.txt/.html/.pdf file anywhere on the window to add it as a Lead: navigation shows
+  // the Leads stage, whose lifecycle reads the file (it checks the type and reports a refusal).
   useEffect(
     () =>
       onFileDrop((drop) => {

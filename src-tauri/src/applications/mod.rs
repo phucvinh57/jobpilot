@@ -1,4 +1,4 @@
-//! Bounded context `applications`: the Pipeline board and the Application screen (JD, CV, apply, timeline).
+//! Bounded context `applications`: the application stages of the Jobs page and the Application screen (JD, CV, apply, timeline).
 //!
 //! `dto` (read models), `rules` (pure rules + tests), `commands` (application services), plus
 //! `state` (what is in memory per application: running job, apply session) and `files` (the

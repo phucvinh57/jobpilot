@@ -19,7 +19,7 @@ function TagRow({ label, items, must }: { label: string; items: readonly string[
   );
 }
 
-/** The company brief: the company and the interview process (the blocks Today shows too), and the
+/** The company brief: the company and the interview process (the blocks the lead drawer shows too), and the
  *  skills the posting asks for, with "not found" for what the texts did not say. */
 function Brief({ insight }: { insight: Insight }) {
   const none = insight.requiredSkills.length === 0 && insight.preferredSkills.length === 0;

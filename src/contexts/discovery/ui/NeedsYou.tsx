@@ -11,6 +11,7 @@ import type { FailureRow } from "../domain/queue";
 import { shorten } from "../domain/text";
 import type { Waiting } from "../domain/types";
 import { closePrepared, continueSource, forgetFailure, openBrowser, prepare, skipSource, type Prepared } from "../hooks/todayStore";
+import { useToday } from "../hooks/useToday";
 
 /** Characters of a failure message the danger banner shows; the whole text goes under it. */
 const FAILURE_SUMMARY_CHARS = 140;
@@ -88,7 +89,7 @@ function WaitingBanner({
  *  is more), what to do about it, Retry. */
 function FailureBanner({ row }: { row: FailureRow }) {
   const { leadId: id, applicationId, problem } = row;
-  const openApplication = useNav((s) => s.openApplication);
+  const openAppDrawer = useNav((s) => s.openAppDrawer);
   const title = `The CV for ${row.title} could not be written`;
   const lines = row.message.split("\n");
   const firstLine = (lines[0] ?? "").trim();
@@ -108,7 +109,7 @@ function FailureBanner({ row }: { row: FailureRow }) {
               </Button>
             )}
             {applicationId !== null && (
-              <Button id={`prepare-open-${id}`} size="compact" onClick={() => openApplication(applicationId)}>
+              <Button id={`prepare-open-${id}`} size="compact" onClick={() => openAppDrawer(applicationId)}>
                 Open application
               </Button>
             )}
@@ -130,7 +131,7 @@ function FailureBanner({ row }: { row: FailureRow }) {
 
 /** A CV that was written, as a banner that points at the application: read it, then approve it. */
 function PreparedBanner({ index, prepared }: { index: number; prepared: Prepared }) {
-  const openApplication = useNav((s) => s.openApplication);
+  const openAppDrawer = useNav((s) => s.openAppDrawer);
   return (
     <div id={`prepared-${index}`} className={BANNER}>
       <Banner
@@ -139,7 +140,7 @@ function PreparedBanner({ index, prepared }: { index: number; prepared: Prepared
         body="Read it, then approve it."
         actions={
           <>
-            <Button id={`prepared-open-${index}`} size="compact" onClick={() => openApplication(prepared.applicationId)}>
+            <Button id={`prepared-open-${index}`} size="compact" onClick={() => openAppDrawer(prepared.applicationId)}>
               Open application
             </Button>
             <Button id={`prepared-close-${index}`} size="compact" variant="ghost" icon={X} aria-label="Dismiss this message" onClick={() => closePrepared(index)} />
@@ -160,8 +161,8 @@ interface Props {
   openErrors: Readonly<Record<string, CommandError>>;
 }
 
-/** The "Needs you" block; nothing when there is nothing. */
-export function NeedsYou({ count, waiting, failures, prepared, opening, continuing, openErrors }: Props): ReactNode {
+/** The banners, from what the store holds. */
+function NeedsYouBanners({ count, waiting, failures, prepared, opening, continuing, openErrors }: Props): ReactNode {
   if (waiting.length + failures.length + prepared.length === 0) {
     return null;
   }
@@ -186,5 +187,23 @@ export function NeedsYou({ count, waiting, failures, prepared, opening, continui
         ))}
       </div>
     </div>
+  );
+}
+
+/** The "Needs you" block (`#queue-needs-you`): sources waiting at a login, CVs that failed and CVs
+ *  ready to read ("Open application" shows it in the drawer, at the CV stage). Nothing when there is
+ *  nothing. */
+export function NeedsYou(): ReactNode {
+  const t = useToday();
+  return (
+    <NeedsYouBanners
+      count={t.needsYou}
+      waiting={t.waitingSources}
+      failures={t.failureRows}
+      prepared={t.prepared}
+      opening={t.opening}
+      continuing={t.continuing}
+      openErrors={t.openErrors}
+    />
   );
 }

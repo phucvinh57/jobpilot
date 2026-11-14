@@ -8,7 +8,7 @@ function Shot({ id, kind, index, version, label }: { id: number; kind: ShotKind;
   if (url === undefined) {
     return null;
   }
-  return <img src={url} alt={label} className="max-w-full rounded-banner border border-border" />;
+  return <img src={url} alt={label} className="max-w-full border border-border" />;
 }
 
 /** `count` screenshots of one kind under a title (`count` 1 for a single one). */
