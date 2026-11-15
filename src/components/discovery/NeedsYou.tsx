@@ -8,7 +8,6 @@ import type { ReactNode } from "react";
 import { Banner, Button } from "@/components/ui/kit";
 import { ProblemHelp } from "@/components/ProblemHelp";
 import { useNav } from "@/stores/nav";
-import type { CommandError } from "@/lib/problem";
 
 import type { FailureRow } from "@/lib/discovery/queue";
 import { shorten } from "@/lib/discovery/text";
@@ -24,7 +23,7 @@ import {
 } from "@/stores/today";
 import { useToday } from "@/hooks/discovery/useToday";
 
-/** Characters of a failure message the danger banner shows; the whole text goes under it. */
+/** Characters of a failure message the banner shows; the whole text goes under it. */
 const FAILURE_SUMMARY_CHARS = 140;
 
 /** A "Needs you" banner is at least this wide, so two fit side by side on a wide window. */
@@ -44,18 +43,8 @@ function what(reason: Waiting["reason"]): string {
 }
 
 /** One source waiting for the user: Open browser (a visible window on the page), Continue and Skip.
- *  When the window could not be opened, the reason and what to do about it come under the banner. */
-function WaitingBanner({
-  waiting,
-  opening,
-  continuing,
-  openError,
-}: {
-  waiting: Waiting;
-  opening: boolean;
-  continuing: boolean;
-  openError: CommandError | undefined;
-}) {
+ *  When the window could not be opened, a toast says why and what to do about it. */
+function WaitingBanner({ waiting, opening, continuing }: { waiting: Waiting; opening: boolean; continuing: boolean }) {
   const { thread, sourceId: id } = waiting;
   const title = `${waiting.sourceName} ${what(waiting.reason)}`;
   const body =
@@ -99,23 +88,13 @@ function WaitingBanner({
           </>
         }
       />
-      {openError && (
-        <div
-          id={`waiting-open-error-${id}`}
-          role="group"
-          aria-label={`The browser could not be opened: ${openError.message}`}
-          className="flex flex-col gap-1"
-        >
-          <p className="selectable text-body text-danger-fg">The browser could not be opened: {openError.message}</p>
-          <ProblemHelp problem={openError.problem} onRetry={() => void openBrowser(thread)} />
-        </div>
-      )}
     </div>
   );
 }
 
 /** A CV that could not be written: the first line of the message (the whole text under it when there
- *  is more), what to do about it, Retry. */
+ *  is more), what to do about it, Retry. It stays until it is retried or forgotten, so it is an item
+ *  of "Needs you" (with the warn mark of the others), not an error message in red. */
 function FailureBanner({ row }: { row: FailureRow }) {
   const { leadId: id, applicationId, problem } = row;
   const openAppDrawer = useNav((s) => s.openAppDrawer);
@@ -127,7 +106,7 @@ function FailureBanner({ row }: { row: FailureRow }) {
   return (
     <div id={`failure-${id}`} className={BANNER}>
       <Banner
-        tone="danger"
+        tone="warn"
         title={title}
         body={shorten(firstLine, FAILURE_SUMMARY_CHARS)}
         actions={
@@ -151,7 +130,7 @@ function FailureBanner({ row }: { row: FailureRow }) {
       {hasMore && (
         <pre
           id={`failure-text-${id}`}
-          className="selectable max-h-[72px] overflow-y-auto font-mono text-small whitespace-pre-wrap text-danger-fg"
+          className="selectable max-h-[72px] overflow-y-auto font-mono text-small whitespace-pre-wrap text-muted"
         >
           {row.message}
         </pre>
@@ -197,11 +176,10 @@ interface Props {
   prepared: readonly Prepared[];
   opening: readonly string[];
   continuing: readonly string[];
-  openErrors: Readonly<Record<string, CommandError>>;
 }
 
 /** The banners, from what the store holds. */
-function NeedsYouBanners({ count, waiting, failures, prepared, opening, continuing, openErrors }: Props): ReactNode {
+function NeedsYouBanners({ count, waiting, failures, prepared, opening, continuing }: Props): ReactNode {
   if (waiting.length + failures.length + prepared.length === 0) {
     return null;
   }
@@ -215,7 +193,6 @@ function NeedsYouBanners({ count, waiting, failures, prepared, opening, continui
             waiting={w}
             opening={opening.includes(w.thread)}
             continuing={continuing.includes(w.thread)}
-            openError={openErrors[w.thread]}
           />
         ))}
         {failures.map((row) => (
@@ -242,7 +219,6 @@ export function NeedsYou(): ReactNode {
       prepared={t.prepared}
       opening={t.opening}
       continuing={t.continuing}
-      openErrors={t.openErrors}
     />
   );
 }

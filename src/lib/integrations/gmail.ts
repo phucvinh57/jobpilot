@@ -15,13 +15,14 @@ export function lastSyncLine(lastSync: string | null): string {
   return lastSync === null ? "Not synced yet" : `Last sync: ${formatSyncTime(new Date(lastSync))}`;
 }
 
-/** What the last sync did, and whether it went well (an empty line before the first sync). */
+/** What the last sync did, and whether it went well (an empty line before the first sync). When it
+ *  did not, `text` is the problem; the card tags it "Sync problem". */
 export function syncResult(report: SyncReport | null): { text: string; ok: boolean } {
   if (report === null) {
     return { text: "", ok: true };
   }
   if (report.error !== null) {
-    return { text: `Sync problem: ${report.error}`, ok: false };
+    return { text: report.error, ok: false };
   }
   let text = `fetched ${report.fetched}, updated ${report.updated}`;
   if (report.needsReview > 0) {

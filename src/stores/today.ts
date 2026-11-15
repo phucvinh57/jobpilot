@@ -1,5 +1,5 @@
-// State of the Leads stage: the queue, filters, ticks, CVs being written, postings being read, notes
-// and banners. CVs finish and sources pause whether or not the Jobs page is shown, and the sidebar
+// State of the Leads stage: the queue, filters, ticks, CVs being written, postings being read and
+// banners. How a search, a dismissal or a paused source's action ended is told by a toast. CVs finish and sources pause whether or not the Jobs page is shown, and the sidebar
 // badge must follow, so this store outlives the page; `startWatching` (once per app run) keeps it
 // current. Which lead is open is the nav store's drawer.
 
@@ -8,6 +8,7 @@ import { create } from "zustand";
 import { CommandError, needsRecheck, toCommandError } from "@/lib/problem";
 import { useNav, type DrawerTarget } from "./nav";
 import { useShell } from "./shell";
+import { toast } from "./toast";
 import type { GraphProgress } from "@/api/events";
 
 import * as api from "@/api/discovery";
@@ -33,7 +34,7 @@ import {
   type QueueShow,
   type SessionFailure,
 } from "@/lib/discovery/queue";
-import { dismissedNote, restoredNote, summaryLine } from "@/lib/discovery/text";
+import { dismissedDetail, restoredNote, summaryLine } from "@/lib/discovery/text";
 import type {
   Dismissed,
   DismissedJob,
@@ -49,14 +50,6 @@ import type {
 export interface Prepared {
   applicationId: number;
   label: string;
-}
-
-/** An inline message under the header. */
-export interface Note {
-  ok: boolean;
-  text: string;
-  /** What the user can do about a failure. */
-  problem?: CommandError["problem"];
 }
 
 export interface TodayState {
@@ -75,7 +68,6 @@ export interface TodayState {
   prepared: Prepared[];
   /** A search started here is running: its progress line. */
   searching: string | undefined;
-  note: Note | undefined;
   /** The posting being read ("Reading the posting..."), if any. */
   adding: LeadInput | undefined;
   /** Links pasted and files dropped while one is being read: read one after another. */
@@ -88,8 +80,6 @@ export interface TodayState {
   continuing: string[];
   /** Threads whose browser window is being opened. */
   opening: string[];
-  /** Why "Open browser" failed, by thread (cleared by the next try, Continue or Skip). */
-  openErrors: Record<string, CommandError>;
   /** The dismissed jobs as last read (read while "Show: Dismissed" is picked); `undefined` until then. */
   dismissed: DismissedJob[] | undefined;
   dismissedError: CommandError | undefined;
@@ -107,14 +97,12 @@ const INITIAL: TodayState = {
   failed: {},
   prepared: [],
   searching: undefined,
-  note: undefined,
   adding: undefined,
   waiting: [],
   addFailures: [],
   linkNote: undefined,
   continuing: [],
   opening: [],
-  openErrors: {},
   dismissed: undefined,
   dismissedError: undefined,
   restoring: [],
@@ -282,7 +270,7 @@ export function dismissedKey(job: Pick<DismissedJob, "kind" | "id">): string {
 }
 
 /** "Restore" a dismissed job: a lead goes back to the list, a job from CVs back to the status it had.
- *  The note says where it went. */
+ *  A toast says where it went. */
 export async function restoreJob(job: DismissedJob): Promise<void> {
   const key = dismissedKey(job);
   if (get().restoring.includes(key)) {
@@ -292,10 +280,16 @@ export async function restoreJob(job: DismissedJob): Promise<void> {
   try {
     // The shell says leads and applications changed: the queue and this list are read again then.
     const out = await api.restore(job.kind, job.id);
-    set({ note: { ok: out.hidden === null, text: restoredNote(job, out) } });
+    if (out.hidden === null) {
+      toast.ok("Job restored", restoredNote(job, out));
+    } else {
+      toast.info("Restored, but hidden", restoredNote(job, out));
+    }
   } catch (thrown) {
-    const error = toCommandError(thrown);
-    set({ note: { ok: false, text: error.message, problem: error.problem } });
+    toast.error(toCommandError(thrown), {
+      title: "The job could not be restored",
+      onRetry: () => void restoreJob(job),
+    });
   } finally {
     set({ restoring: without(get().restoring, key) });
   }
@@ -309,10 +303,6 @@ export function setChecked(id: number, on: boolean): void {
 /** Untick every lead (the bulk bar's "Clear"). */
 export function clearChecked(): void {
   set({ checked: [] });
-}
-
-export function setNote(note: Note | undefined): void {
-  set({ note });
 }
 
 export function closePrepared(index: number): void {
@@ -384,7 +374,7 @@ function startAdd(input: LeadInput): void {
         // moves the page to its stage).
         useNav.getState().openAppDrawer(added.applicationId);
       } else if (added.state === "dismissed") {
-        set({ note: { ok: false, text: "You dismissed this job before: find it under Show: Dismissed." } });
+        toast.info("Not added", "You dismissed this job before: find it under Show: Dismissed.");
       } else {
         // Show the new lead, whatever the filters were, once the list holds it (the drawer closes
         // on a lead that is not listed).
@@ -448,14 +438,14 @@ export async function searchNow(): Promise<void> {
   if (get().searching !== undefined) {
     return;
   }
-  set({ searching: "Searching your sources", note: undefined });
+  set({ searching: "Searching your sources" });
   try {
     const run = await api.searchNow();
-    set({ note: { ok: true, text: summaryLine(run) } });
+    toast.ok("Search finished", summaryLine(run));
   } catch (thrown) {
     const error = toCommandError(thrown);
     recheck(error);
-    set({ note: { ok: false, text: error.message, problem: error.problem } });
+    toast.error(error, { title: "The search failed", onRetry: () => void searchNow() });
   } finally {
     set({ searching: undefined });
     load();
@@ -466,9 +456,9 @@ export async function searchNow(): Promise<void> {
 export function onSearchFinished(finished: SearchFinished): void {
   if (finished.error !== null) {
     recheck(finished.error);
-    set({ note: { ok: false, text: finished.error.message, problem: finished.error.problem } });
+    toast.error(finished.error, { title: "The daily search failed", onRetry: () => void searchNow() });
   } else if (finished.summary !== null) {
-    set({ note: { ok: true, text: summaryLine(finished.summary) } });
+    toast.ok("Daily search finished", summaryLine(finished.summary));
   }
   load();
 }
@@ -559,13 +549,16 @@ export async function forgetFailure(leadId: number): Promise<void> {
   load();
 }
 
-/** A lead was dismissed: it leaves the list, and the note says what else went. */
+/** A lead was dismissed: it leaves the list, and a toast says what else went (or that its company
+ *  could not be excluded). */
 export function afterDismissed(leadId: number, out: Dismissed): void {
   openNeighbourOf(leadId);
-  set({
-    checked: get().checked.filter((id) => id !== leadId),
-    note: { ok: out.notExcluded === null, text: dismissedNote(out) },
-  });
+  set({ checked: get().checked.filter((id) => id !== leadId) });
+  if (out.notExcluded !== null) {
+    toast.error(new CommandError(out.notExcluded), { title: "Lead dismissed, but the company could not be excluded" });
+  } else {
+    toast.ok("Lead dismissed", dismissedDetail(out));
+  }
   load();
 }
 
@@ -575,23 +568,20 @@ function without<T>(list: readonly T[], item: T): T[] {
   return list.filter((x) => x !== item);
 }
 
-function withoutKey(record: Readonly<Record<string, CommandError>>, key: string): Record<string, CommandError> {
-  const next = { ...record };
-  delete next[key];
-  return next;
-}
-
 /** "Open browser" for a source that waits at a login, captcha or block page: a visible browser on that
  *  page. The user deals with the page; "Continue" goes on. */
 export async function openBrowser(thread: string): Promise<void> {
   if (get().opening.includes(thread)) {
     return;
   }
-  set({ opening: [...get().opening, thread], openErrors: withoutKey(get().openErrors, thread) });
+  set({ opening: [...get().opening, thread] });
   try {
     await api.openBrowser(thread);
   } catch (thrown) {
-    set({ openErrors: { ...get().openErrors, [thread]: toCommandError(thrown) } });
+    toast.error(toCommandError(thrown), {
+      title: "The browser could not be opened",
+      onRetry: () => void openBrowser(thread),
+    });
   } finally {
     set({ opening: without(get().opening, thread) });
   }
@@ -602,12 +592,14 @@ export async function continueSource(thread: string): Promise<void> {
   if (get().continuing.includes(thread)) {
     return;
   }
-  set({ continuing: [...get().continuing, thread], openErrors: withoutKey(get().openErrors, thread) });
+  set({ continuing: [...get().continuing, thread] });
   try {
     await api.resumeSource(thread);
   } catch (thrown) {
-    const error = toCommandError(thrown);
-    set({ note: { ok: false, text: error.message, problem: error.problem } });
+    toast.error(toCommandError(thrown), {
+      title: "The source could not continue",
+      onRetry: () => void continueSource(thread),
+    });
   } finally {
     set({ continuing: without(get().continuing, thread) });
     load();
@@ -616,11 +608,10 @@ export async function continueSource(thread: string): Promise<void> {
 
 /** Skip a paused source for this run. */
 export async function skipSource(thread: string): Promise<void> {
-  set({ openErrors: withoutKey(get().openErrors, thread) });
   try {
     await api.skipSource(thread);
   } catch (thrown) {
-    set({ note: { ok: false, text: toCommandError(thrown).message } });
+    toast.error(toCommandError(thrown), { title: "The source could not be skipped" });
   }
   load();
 }

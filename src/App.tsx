@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { onFileDrop } from "@/api/events";
 import { SetupBanner } from "@/components/layout/SetupBanner";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { Toaster } from "@/components/layout/Toaster";
 import { ApplicationPage } from "@/pages/ApplicationPage";
 import { JobsPage } from "@/pages/JobsPage";
 import { ProfilePage } from "@/pages/ProfilePage";
@@ -70,6 +71,7 @@ export function App() {
           <CurrentScreen screen={screen} />
         </div>
       </div>
+      <Toaster />
     </div>
   );
 }

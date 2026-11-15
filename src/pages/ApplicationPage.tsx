@@ -8,7 +8,7 @@ import { Inbox, Settings } from "lucide-react";
 import { useState } from "react";
 
 import { Button, Caption, EmptyState, Page, Spinner, Stepper, Tabs, Tag } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
 import { sectionPlace, useNav } from "@/stores/nav";
 import { useShell } from "@/stores/shell";
 
@@ -16,10 +16,10 @@ import { crumbFor } from "@/lib/applications/crumb";
 import { TABS, type Tab } from "@/lib/applications/tabs";
 import { useApplicationScreen } from "@/hooks/applications/useApplicationScreen";
 import { useDismissJob } from "@/hooks/applications/useDismissJob";
-import { jobDismissedNote, jobRestoredNote } from "@/lib/applications/dismiss";
+import { useJobFailureToast } from "@/hooks/applications/useFailureToast";
 import { ApplyTab } from "@/components/applications/ApplyTab";
 import { CvTab } from "@/components/applications/CvTab";
-import { DismissedNotice, DismissJobForm } from "@/components/applications/DismissJob";
+import { DismissedNotice, DismissJobDialog } from "@/components/applications/DismissJob";
 import { JdTab } from "@/components/applications/JdTab";
 import { TimelineTab } from "@/components/applications/TimelineTab";
 
@@ -66,16 +66,15 @@ function OpenApplication({ id }: { id: number }) {
   const openSection = useNav((s) => s.openSection);
   const dismissJob = useDismissJob(id);
   const [dismissing, setDismissing] = useState(false);
-  const [dismissNote, setDismissNote] = useState<string>();
-  const [restoreNote, setRestoreNote] = useState<string>();
   const { head, apply, tab } = model;
   const header = head.header;
+  useJobFailureToast(id, head);
 
   if (header === undefined) {
     return (
       <Page label="Application" title="Application">
         {head.loadError ? (
-          <ErrorBanner error={head.loadError} title="The application could not be read" />
+          <LoadError error={head.loadError} title="The application could not be read" onRetry={head.reload} />
         ) : (
           <Caption>Loading...</Caption>
         )}
@@ -142,47 +141,16 @@ function OpenApplication({ id }: { id: number }) {
       }
     >
       {primary?.hint != null && <p className="text-right text-small text-muted">{primary.hint}</p>}
-      {dismissing && canDismiss && (
-        <DismissJobForm
+      {canDismiss && (
+        <DismissJobDialog
           header={header}
+          open={dismissing}
           dismiss={dismissJob.dismiss}
-          onCancel={() => setDismissing(false)}
-          onDone={(out) => {
-            setDismissing(false);
-            setRestoreNote(undefined);
-            setDismissNote(jobDismissedNote(out));
-          }}
+          onClose={() => setDismissing(false)}
+          onDone={() => setDismissing(false)}
         />
       )}
-      {header.dismissed !== null && (
-        <DismissedNotice
-          dismissal={header.dismissed}
-          restore={dismissJob.restore}
-          onRestored={(out) => {
-            setDismissNote(undefined);
-            setRestoreNote(jobRestoredNote(out));
-          }}
-        />
-      )}
-      {restoreNote !== undefined && header.dismissed === null && (
-        <p role="status" className="text-body text-muted">
-          {restoreNote}
-        </p>
-      )}
-      {dismissNote !== undefined && header.dismissed !== null && (
-        <p role="status" className="text-body text-muted">
-          {dismissNote}
-        </p>
-      )}
-      {head.error !== null && (
-        <ErrorBanner
-          id="job-error"
-          error={head.error}
-          title="The last job failed"
-          onRetry={head.retry}
-          onDismiss={head.dismiss}
-        />
-      )}
+      {header.dismissed !== null && <DismissedNotice dismissal={header.dismissed} restore={dismissJob.restore} />}
       <Stepper steps={header.steps} current={header.stepIndex} />
       <Tabs<Tab> label="Application sections" tabs={TABS} value={tab} onChange={model.setTab} />
       {tab === "jd" && <JdTab id={id} />}

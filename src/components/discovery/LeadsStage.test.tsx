@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,7 @@ import { useNav } from "@/stores/nav";
 
 import * as api from "@/api/discovery";
 import { FAILED, INSIGHT, lead, queue, SOURCE, WAITING } from "@/test/fixtures/discovery";
+import { renderWithToasts } from "@/test/render";
 import type { DismissedJob } from "@/types/discovery";
 import { resetToday } from "@/stores/today";
 import { LeadDrawer } from "./LeadDrawer";
@@ -68,7 +69,7 @@ const primaryButtons = () => Array.from(document.querySelectorAll("button.bg-acc
 
 /** The page once the list is read. */
 async function showList() {
-  render(<JobsPage />);
+  renderWithToasts(<JobsPage />);
   return screen.findByRole("table", { name: "Leads" });
 }
 
@@ -244,7 +245,7 @@ describe("the list of leads", () => {
   it("closes the drawer asked for the best lead of an empty list", async () => {
     mocked.readQueue.mockResolvedValue(queue({ items: [] }));
     useNav.setState({ drawer: { kind: "lead", id: "best" } });
-    render(<JobsPage />);
+    renderWithToasts(<JobsPage />);
     expect(await screen.findByRole("group", { name: "No jobs yet" })).toBeTruthy();
     await waitFor(() => expect(useNav.getState().drawer).toBeUndefined());
   });
@@ -266,26 +267,55 @@ describe("the list of leads", () => {
     await showList();
     const drawer = await openLead(user, "Acme: Backend Engineer 1, score 80");
     await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
-    const form = within(drawer).getByRole("group", { name: "Dismiss this lead" });
+    const form = await screen.findByRole("dialog", { name: "Dismiss this lead" });
+    expect(within(form).getByText("Acme — Backend Engineer 1")).toBeTruthy();
     await user.type(within(form).getByRole("textbox", { name: "Why dismiss this lead" }), "too junior");
     await user.click(within(form).getByRole("checkbox", { name: "Don't show Acme again" }));
     await user.click(within(form).getByRole("button", { name: "Dismiss lead" }));
     expect(mocked.dismissLead).toHaveBeenCalledWith(1, "too junior", true);
-    expect(await screen.findByText("Lead dismissed.")).toBeTruthy();
-    // The next lead opens in its place.
+    expect(await screen.findByRole("status", { name: "Lead dismissed" })).toBeTruthy();
+    // The dialog is gone, and the next lead opens in its place.
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Dismiss this lead" })).toBeNull());
     expect(await screen.findByRole("dialog", { name: "Acme: Backend Engineer 2" })).toBeTruthy();
   });
 
-  it("cancels the dismiss form, and shows why a dismissal failed", async () => {
+  it("dismisses with Enter, and says in a toast when the company could not be excluded", async () => {
+    const user = userEvent.setup();
+    mocked.dismissLead.mockResolvedValue({ also: 1, kept: 0, notExcluded: "disk full" });
+    await showList();
+    const drawer = await openLead(user, "Acme: Backend Engineer 1, score 80");
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
+    const form = await screen.findByRole("dialog", { name: "Dismiss this lead" });
+    await user.click(within(form).getByRole("checkbox", { name: "Don't show Acme again" }));
+    await user.type(within(form).getByRole("textbox", { name: "Why dismiss this lead" }), "no{Enter}");
+    expect(mocked.dismissLead).toHaveBeenCalledWith(1, "no", true);
+    const toast = await screen.findByRole("alert", { name: "Lead dismissed, but the company could not be excluded" });
+    expect(within(toast).getByText("disk full")).toBeTruthy();
+  });
+
+  it("shows in the dialog why a dismissal failed, and cancels it", async () => {
     const user = userEvent.setup();
     mocked.dismissLead.mockRejectedValue(new CommandError("its CV is being prepared: wait for it to finish first"));
     await showList();
     const drawer = await openLead(user, "Acme: Backend Engineer 1, score 80");
     await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
-    await user.click(within(drawer).getByRole("button", { name: "Dismiss lead" }));
-    expect((await within(drawer).findByRole("alert")).textContent).toContain("its CV is being prepared");
-    await user.click(within(drawer).getByRole("button", { name: "Cancel" }));
-    expect(within(drawer).queryByRole("group", { name: "Dismiss this lead" })).toBeNull();
+    const form = await screen.findByRole("dialog", { name: "Dismiss this lead" });
+    await user.type(within(form).getByRole("textbox", { name: "Why dismiss this lead" }), "meh");
+    await user.click(within(form).getByRole("button", { name: "Dismiss lead" }));
+    expect((await within(form).findByRole("alert")).textContent).toContain("Not dismissed: its CV is being prepared");
+    await user.click(within(form).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Dismiss this lead" })).toBeNull());
+    // The drawer stays; opened again, the dialog starts afresh.
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
+    const again = await screen.findByRole("dialog", { name: "Dismiss this lead" });
+    expect(within(again).queryByRole("alert")).toBeNull();
+    expect((within(again).getByRole("textbox", { name: "Why dismiss this lead" }) as HTMLInputElement).value).toBe("");
+
+    // Escape closes the dialog only, not the drawer under it.
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Dismiss this lead" })).toBeNull());
+    expect(screen.getByRole("dialog", { name: "Acme: Backend Engineer 1" })).toBeTruthy();
+    expect(useNav.getState().drawer).toEqual({ kind: "lead", id: 1 });
   });
 });
 
@@ -296,7 +326,7 @@ describe("Needs you", () => {
     mocked.openBrowser.mockResolvedValue(undefined);
     mocked.resumeSource.mockResolvedValue(undefined);
     mocked.skipSource.mockResolvedValue(undefined);
-    render(<JobsPage />);
+    renderWithToasts(<JobsPage />);
     const group = await screen.findByRole("group", { name: "Needs you" });
     expect(within(group).getByText("NEEDS YOU · 1")).toBeTruthy();
     const banner = within(group).getByRole("group", { name: "Beta jobs needs you to sign in" });
@@ -322,13 +352,15 @@ describe("Needs you", () => {
     };
     mocked.readQueue.mockResolvedValue(queue({ waiting: [{ ...WAITING, reason: "captcha", url: null }] }));
     mocked.openBrowser.mockRejectedValue(new CommandError("no Chrome found", problem));
-    render(<JobsPage />);
+    renderWithToasts(<JobsPage />);
     const banner = await screen.findByRole("group", { name: "Beta jobs shows a captcha" });
     expect(within(banner).getByText("Deal with the page in the browser, then press Continue.")).toBeTruthy();
     await user.click(within(banner).getByRole("button", { name: "Open browser" }));
-    const error = await screen.findByRole("group", { name: "The browser could not be opened: no Chrome found" });
-    expect(within(error).getByText("Chrome is needed.")).toBeTruthy();
-    expect(within(error).getByRole("button", { name: "Open Settings > Browser sessions" })).toBeTruthy();
+    const toast = await screen.findByRole("alert", { name: "The browser could not be opened" });
+    expect(within(toast).getByText("no Chrome found")).toBeTruthy();
+    expect(within(toast).getByText("Chrome is needed.")).toBeTruthy();
+    expect(within(toast).getByRole("button", { name: "Open Settings > Browser sessions" })).toBeTruthy();
+    expect(within(banner).queryByText(/no Chrome found/), "nothing red under the banner").toBeNull();
   });
 
   it("shows a CV that could not be written, with Try again, Open application and Forget", async () => {
@@ -336,11 +368,13 @@ describe("Needs you", () => {
     mocked.readQueue.mockResolvedValue(queue({ failed: [FAILED] }));
     mocked.prepareCvs.mockReturnValue(new Promise(() => undefined));
     mocked.forgetFailure.mockResolvedValue(undefined);
-    render(<JobsPage />);
+    renderWithToasts(<JobsPage />);
     const banner = await screen.findByRole("group", { name: "The CV for Gamma — SRE could not be written" });
     expect(within(banner).getByText("the fact guard refused the CV")).toBeTruthy();
-    // More than one line: the whole text sits under the banner.
-    expect(document.getElementById("failure-text-7")?.textContent).toContain("line two");
+    // More than one line: the whole text sits under the banner, in plain (not red) text.
+    const text = document.getElementById("failure-text-7");
+    expect(text?.textContent).toContain("line two");
+    expect(text?.className).not.toContain("danger");
     await user.click(within(banner).getByRole("button", { name: "Open application" }));
     const nav = useNav.getState();
     // The application's drawer moves the page to its stage once it has read it.
@@ -399,6 +433,9 @@ describe("the link box", () => {
     const failure = await screen.findByRole("group", {
       name: "The posting could not be added: text that has no job title",
     });
+    // A form error of the link box, not a toast.
+    expect(within(failure).getByRole("alert").textContent).toContain("text that has no job title");
+    expect(document.querySelector("[data-toast-region] li"), "no toast").toBeNull();
     await user.click(within(failure).getByRole("button", { name: "Try again" }));
     expect(mocked.addLead).toHaveBeenCalledTimes(2);
     expect(await screen.findByRole("status", { name: "Reading the posting" })).toBeTruthy();
@@ -421,7 +458,7 @@ describe("no leads yet", () => {
     const user = userEvent.setup();
     mocked.readQueue.mockResolvedValue(queue({ items: [], lastRun: null }));
     mocked.searchNow.mockResolvedValue({ finishedAt: "x", saved: 0, waiting: 0, failed: 0 });
-    render(<JobsPage />);
+    renderWithToasts(<JobsPage />);
     await screen.findByRole("group", { name: "No jobs yet" });
     expect(await screen.findByText("No jobs yet")).toBeTruthy();
     const search = screen.getByRole("button", { name: "Search now" });
@@ -432,35 +469,61 @@ describe("no leads yet", () => {
     expect(screen.getByText("Leads, 0")).toBeTruthy();
     await user.click(search);
     expect(mocked.searchNow).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText("Found 0 new leads")).toBeTruthy();
+    const toast = await screen.findByRole("status", { name: "Search finished" });
+    expect(within(toast).getByText("Found 0 new leads")).toBeTruthy();
+  });
+
+  it("says in a toast why a search failed, with what to do about it", async () => {
+    const user = userEvent.setup();
+    const problem: Problem = {
+      kind: "noProvider",
+      challenge: null,
+      advice: "Add one.",
+      settingsSection: "AI providers",
+      retryable: false,
+    };
+    mocked.readQueue.mockResolvedValue(queue({ items: [], lastRun: null }));
+    mocked.searchNow.mockRejectedValue(new CommandError("no AI provider is configured", problem));
+    renderWithToasts(<JobsPage />);
+    await user.click(await screen.findByRole("button", { name: "Search now" }));
+    const toast = await screen.findByRole("alert", { name: "The search failed" });
+    expect(within(toast).getByText("no AI provider is configured")).toBeTruthy();
+    expect(within(toast).getByRole("button", { name: "Open Settings > AI providers" })).toBeTruthy();
+    expect(document.getElementById("queue-note"), "no red line under the header").toBeNull();
   });
 
   it("leaves Search now plain while another drawer holds the primary", async () => {
     mocked.readQueue.mockResolvedValue(queue({ items: [] }));
-    render(<JobsPage otherDrawerOpen />);
+    renderWithToasts(<JobsPage otherDrawerOpen />);
     expect(await screen.findByText("No jobs yet")).toBeTruthy();
     expect(primaryButtons()).toEqual([]);
   });
 
   it("says there is no source to search yet", async () => {
     mocked.readQueue.mockResolvedValue(queue({ items: [], sources: [] }));
-    render(<JobsPage />);
+    renderWithToasts(<JobsPage />);
     expect(await screen.findByText("No job source yet: add one in Settings, then search.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Search now" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("shows a search that runs in the background", async () => {
     mocked.readQueue.mockResolvedValue(queue({ items: [], searching: true }));
-    render(<JobsPage />);
+    renderWithToasts(<JobsPage />);
     expect((await screen.findAllByText("Searching your sources")).length).toBeGreaterThan(0);
   });
 
   it("says when the job list could not be read", async () => {
-    mocked.readQueue.mockRejectedValue(new CommandError("database is locked"));
-    render(<JobsPage />);
-    const banner = await screen.findByRole("group", { name: "The job list could not be read" });
-    expect(within(banner).getByText("database is locked")).toBeTruthy();
+    const user = userEvent.setup();
+    mocked.readQueue.mockRejectedValueOnce(new CommandError("database is locked"));
+    renderWithToasts(<JobsPage />);
+    const toast = await screen.findByRole("alert", { name: "The job list could not be read" });
+    expect(within(toast).getByText("database is locked")).toBeTruthy();
     expect(screen.getByText("Loading the job list")).toBeTruthy();
+    const quiet = document.getElementById("queue-load-error") as HTMLElement;
+    expect(within(quiet).getByText("The job list could not be read.")).toBeTruthy();
+    await user.click(within(quiet).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("table", { name: "Leads" })).toBeTruthy();
+    expect(document.getElementById("queue-load-error")).toBeNull();
   });
 });
 
@@ -578,7 +641,7 @@ describe("dismissed jobs", () => {
   it("offers the dismissed jobs when no lead is left", async () => {
     const user = userEvent.setup();
     mocked.readQueue.mockResolvedValue(queue({ items: [], dismissed: 2 }));
-    render(<JobsPage />);
+    renderWithToasts(<JobsPage />);
     await user.click(await screen.findByRole("button", { name: "Dismissed 2" }));
     expect(await screen.findByRole("table", { name: "Dismissed jobs" })).toBeTruthy();
   });

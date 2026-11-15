@@ -6,7 +6,7 @@
 import { Inbox, X } from "lucide-react";
 
 import { Button, Caption, EmptyState } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
 
 import { prepareManyLabel } from "@/lib/discovery/queue";
 import { clearChecked, prepare, reload, reloadDismissed } from "@/stores/today";
@@ -58,14 +58,12 @@ function DismissedView({ t }: { t: TodayView }) {
         total={t.dismissedItems.length}
         dismissed={t.dismissedCount}
       />
-      {t.dismissedError && (
-        <ErrorBanner
-          id="dismissed-load-error"
-          error={t.dismissedError}
-          title="The dismissed jobs could not be read"
-          onRetry={reloadDismissed}
-        />
-      )}
+      <LoadError
+        id="dismissed-load-error"
+        error={t.dismissedError}
+        title="The dismissed jobs could not be read"
+        onRetry={reloadDismissed}
+      />
       <DismissedList
         shown={t.dismissedShown}
         restoring={t.restoring}
@@ -99,14 +97,7 @@ export function LeadsStage({ otherDrawerOpen = false }: { otherDrawerOpen?: bool
 
   return (
     <div id="queue" className="flex flex-1 flex-col gap-3">
-      {t.loadError && (
-        <ErrorBanner
-          id="queue-load-error"
-          error={t.loadError}
-          title="The job list could not be read"
-          onRetry={reload}
-        />
-      )}
+      <LoadError id="queue-load-error" error={t.loadError} title="The job list could not be read" onRetry={reload} />
       {t.filter.show === "dismissed" ? (
         <DismissedView t={t} />
       ) : total === 0 ? (

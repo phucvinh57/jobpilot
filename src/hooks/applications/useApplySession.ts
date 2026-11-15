@@ -19,10 +19,13 @@ import { initialEdits, missingCount, snapshot, toggleRemember, withValue } from 
 import { LatestSender } from "@/lib/applications/latestSender";
 import type { Apply, ApplyProgress, Primary, ReviewEdits } from "@/types/applications";
 import { recheckOnFailure } from "./recheck";
+import { useKeptFailureToast } from "./useFailureToast";
 
 export interface ApplySession {
   apply: Apply | undefined;
   loadError: CommandError | undefined;
+  /** Read the apply step again (Retry after a failed read). */
+  reload: () => void;
   /** What the user has typed in the open review (started from the filled form). */
   edits: ReviewEdits;
   /** Required answers still empty, from what is typed right now. */
@@ -113,10 +116,21 @@ export function useApplySession(id: number, onPrimary: (primary: Primary | null)
     reload();
   });
 
+  // A failed step before the review (opening the form, the visible browser, a mark) is a toast, once
+  // per screen (not again each time the Apply tab is opened). In the review the failure belongs to the
+  // form (`ReviewPanel`). Retry only re-opens and re-fills the form (never submits); a failed submit is
+  // retried with the Submit button itself.
+  const failed = apply?.phase === "idle" || apply?.phase === "handoff" ? apply.error : null;
+  useKeptFailureToast(`apply:${id}`, failed, {
+    title: "The application step failed",
+    onRetry: apply?.canRetry ? () => void prepareAction.run() : undefined,
+  });
+
   const review = apply?.review ?? null;
   return {
     apply,
     loadError: query.error,
+    reload,
     edits,
     missing: review === null ? 0 : missingCount(review, edits),
     lines,

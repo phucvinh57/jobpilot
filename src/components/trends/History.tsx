@@ -1,25 +1,36 @@
 import clsx from "clsx";
 
-import { Caption, Section } from "@/components/ui/kit";
+import { Caption, Dialog } from "@/components/ui/kit";
 
 import { reportRowName } from "@/lib/trends/format";
 import type { ReportRow } from "@/types/trends";
 
-/** Past digests, newest first; picking one shows it again. */
+/** Past digests, newest first, in a dialog; picking one shows it again (and closes the dialog). */
 export function History({
+  open,
   reports,
   shown,
   onSelect,
+  onClose,
 }: {
+  open: boolean;
   reports: readonly ReportRow[];
   /** The report on screen. */
   shown: number | undefined;
   onSelect: (id: number) => void;
+  onClose: () => void;
 }) {
   return (
-    <Section id="trends-history" title="Earlier digests" hint="Past digests, newest first. Click one to read it again.">
+    <Dialog
+      id="trends-history"
+      open={open}
+      width="lg"
+      title="Earlier digests"
+      description="Past digests, newest first. Click one to read it again."
+      onClose={onClose}
+    >
       {reports.length === 0 && <Caption>No digests yet.</Caption>}
-      <ul className="flex flex-col">
+      <ul aria-label="Earlier digests" className="flex flex-col">
         {reports.map((report) => {
           const selected = report.id === shown;
           return (
@@ -42,6 +53,6 @@ export function History({
           );
         })}
       </ul>
-    </Section>
+    </Dialog>
   );
 }

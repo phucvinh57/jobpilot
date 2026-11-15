@@ -1,12 +1,14 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
+import { renderWithToasts as render } from "@/test/render";
 import type { GraphProgress } from "@/api/events";
 
 import type { RunResult } from "@/types/trends";
 import { useRuns } from "@/hooks/trends/runs";
+import { useToasts } from "@/stores/toast";
 import {
   ACME,
   chartFixture,
@@ -216,14 +218,17 @@ describe("the Trends screen", () => {
   it("has one primary action, the period choice and the caption of what a run does", async () => {
     const user = await shown();
     expect(collect().hasAttribute("disabled")).toBe(false);
-    // Exactly one primary button on the screen (the kit's primary fill is the only one with `text-on-fill`),
-    // also with the form of a source open.
-    const primaries = () =>
-      Array.from(document.querySelectorAll("button")).filter((b) => b.className.includes("text-on-fill"));
+    // Exactly one primary button on the screen (the kit's primary fill is the only one with `text-on-fill`);
+    // with the dialog of a source open, its Add is the one primary of the dialog.
+    const primaries = (root: ParentNode = document) =>
+      Array.from(root.querySelectorAll("button")).filter((b) => b.className.includes("text-on-fill"));
     expect(primaries()).toEqual([collect()]);
     await user.click(screen.getByRole("button", { name: "Web page" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add Web page" });
+    expect(primaries(dialog)).toEqual([within(dialog).getByRole("button", { name: "Add" })]);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(primaries()).toEqual([collect()]);
-    await user.click(screen.getByRole("button", { name: "Web page" }));
     expect(
       screen.getByText(/^2026-W46: collects from your sources, then your AI provider writes the digest/),
     ).toBeTruthy();
@@ -306,31 +311,51 @@ describe("the Trends screen", () => {
     expect(await screen.findByText("Digest ready: 8 point(s) from 6 item(s).")).toBeTruthy();
   });
 
-  it("explains a failed run, offers the fix and Retry carries on where it stopped", async () => {
+  it("explains a failed run in a toast, offers the fix and Retry carries on where it stopped", async () => {
     const user = await shown();
     mocks.api.runJob.mockRejectedValueOnce(network());
     await user.click(collect());
 
-    const banner = await screen.findByRole("group", { name: "The run did not finish" });
-    expect(within(banner).getByText("connection refused")).toBeTruthy();
-    expect(within(banner).getByText("The connection failed. Check your network and try again.")).toBeTruthy();
+    const toast = await screen.findByRole("alert", { name: "The run did not finish" });
+    expect(within(toast).getByText("connection refused")).toBeTruthy();
+    expect(within(toast).getByText("The connection failed. Check your network and try again.")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Result" }), "no banner on the page").toBeNull();
+    expect(useRuns.getState().notice, "told once, then forgotten").toBeUndefined();
 
     mocks.api.runJob.mockResolvedValueOnce(DONE);
-    await user.click(within(banner).getByRole("button", { name: "Retry" }));
+    await user.click(within(toast).getByRole("button", { name: "Retry" }));
     expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "resume", period: "2026-W46" });
     expect(await screen.findByText("Digest ready: 8 point(s) from 6 item(s).")).toBeTruthy();
+    expect(screen.queryByRole("alert", { name: "The run did not finish" }), "Retry closes the toast").toBeNull();
   });
 
   it("retries a failed refresh as a digest-only run and offers no Retry for a plain error", async () => {
     const user = await shown();
     mocks.api.runJob.mockRejectedValueOnce(network());
     await user.click(screen.getByRole("button", { name: "Regenerate from stored items" }));
-    const banner = await screen.findByRole("group", { name: "The run did not finish" });
+    const toast = await screen.findByRole("alert", { name: "The run did not finish" });
     mocks.api.runJob.mockRejectedValueOnce(new CommandError("the model answered nonsense"));
-    await user.click(within(banner).getByRole("button", { name: "Retry" }));
+    await user.click(within(toast).getByRole("button", { name: "Retry" }));
     expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "resumeDigest", period: "2026-W46" });
     const again = await screen.findByText("the model answered nonsense");
-    expect(within(again.closest("[role=group]") as HTMLElement).queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(within(again.closest("li") as HTMLElement).queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("toasts a run that failed while the screen was closed when the user comes back, once", async () => {
+    const user = await shown();
+    const run = deferred<RunResult>();
+    mocks.api.runJob.mockReturnValue(run.promise);
+    await user.click(collect());
+    cleanup();
+    await act(async () => run.reject(network()));
+    expect(useRuns.getState().notice?.kind).toBe("error");
+
+    await shown();
+    expect(await screen.findByRole("alert", { name: "The run did not finish" })).toBeTruthy();
+    cleanup();
+    act(() => useToasts.getState().clear());
+    await shown();
+    expect(screen.queryByRole("alert", { name: "The run did not finish" }), "not a second time").toBeNull();
   });
 
   it("points to Settings and tells the setup banner when there is no AI provider", async () => {
@@ -345,9 +370,9 @@ describe("the Trends screen", () => {
       }),
     );
     await user.click(collect());
-    const banner = await screen.findByRole("group", { name: "The run did not finish" });
-    expect(within(banner).getByRole("button", { name: "Open Settings > AI providers" })).toBeTruthy();
-    expect(within(banner).queryByRole("button", { name: "Retry" })).toBeNull();
+    const toast = await screen.findByRole("alert", { name: "The run did not finish" });
+    expect(within(toast).getByRole("button", { name: "Open Settings > AI providers" })).toBeTruthy();
+    expect(within(toast).queryByRole("button", { name: "Retry" })).toBeNull();
     expect(mocks.invoke).toHaveBeenCalledWith("shared_status");
   });
 
@@ -402,20 +427,27 @@ describe("the Trends screen", () => {
     expect(await screen.findByText("Digest ready: 8 point(s) from 6 item(s).")).toBeTruthy();
   });
 
-  it("shows earlier digests on demand and reads the one picked", async () => {
+  it("shows earlier digests in a dialog and reads the one picked", async () => {
     const user = await shown();
-    expect(screen.queryByRole("region", { name: "Earlier digests" })).toBeNull();
-    const toggle = screen.getByRole("button", { name: "Earlier digests" });
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
-    await user.click(toggle);
-    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("dialog", { name: "Earlier digests" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Earlier digests" }));
 
-    const history = within(screen.getByRole("region", { name: "Earlier digests" }));
+    const history = within(await screen.findByRole("dialog", { name: "Earlier digests" }));
     expect(
       history.getByRole("button", { name: "Weekly digest 2026-W46, 2026-11-14 09:12" }).getAttribute("aria-current"),
     ).toBe("true");
     await user.click(history.getByRole("button", { name: "Weekly digest 2026-W45, 2026-11-07 09:00" }));
     expect(mocks.api.overview).toHaveBeenLastCalledWith(2, "weekly");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Earlier digests" })).toBeNull());
+  });
+
+  it("closes the earlier digests without picking one", async () => {
+    const user = await shown();
+    await user.click(screen.getByRole("button", { name: "Earlier digests" }));
+    const history = within(await screen.findByRole("dialog", { name: "Earlier digests" }));
+    await user.click(history.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(mocks.api.overview).not.toHaveBeenCalledWith(2, "weekly");
   });
 
   it("tells a new user what to do first", async () => {
@@ -442,7 +474,8 @@ describe("the Trends screen", () => {
     expect(screen.queryByRole("region", { name: "Skills in demand" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Earlier digests" }));
-    expect(within(screen.getByRole("region", { name: "Earlier digests" })).getByText("No digests yet.")).toBeTruthy();
+    const history = await screen.findByRole("dialog", { name: "Earlier digests" });
+    expect(within(history).getByText("No digests yet.")).toBeTruthy();
   });
 
   it("shows a report this version cannot read back as its saved text", async () => {

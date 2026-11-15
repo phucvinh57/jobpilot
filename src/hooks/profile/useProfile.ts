@@ -8,10 +8,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { CommandError, toCommandError } from "@/lib/problem";
+import { type CommandError, toCommandError } from "@/lib/problem";
 
 import * as api from "@/api/profile";
 import { changed, cleanNotes, followNotes, NOTES_IDLE, savePlan, type NotesStatus } from "@/lib/profile";
+import { toast } from "@/stores/toast";
 import type { FieldKey, JobType, Profile } from "@/types/profile";
 
 export interface ProfileCard {
@@ -19,7 +20,7 @@ export interface ProfileCard {
   profile: Profile | undefined;
   /** The first read failed. */
   loadError: CommandError | undefined;
-  /** A change failed or was refused (the card shows it). */
+  /** A change failed (the card shows it as a toast). */
   error: CommandError | undefined;
   clearError: () => void;
   retry: () => void;
@@ -161,7 +162,7 @@ export function useProfile(): ProfileCard {
       ).then((result) => {
         // A topic in a list the form does not show (nice or avoided skills), a full list: say so.
         if (result?.message && alive.current) {
-          setError(new CommandError(result.message));
+          toast.info("Not added", result.message);
         }
       });
     },

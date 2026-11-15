@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandError } from "@/lib/problem";
 import { useNav } from "@/stores/nav";
 import { useShell } from "@/stores/shell";
+import { renderWithToasts } from "@/test/render";
 
 import * as api from "@/api/applications";
 import { cv, header, idleApply, jd, primary, timeline } from "@/test/fixtures/applications";
@@ -32,7 +33,7 @@ let progress: ((p: JobProgress) => void) | undefined;
 
 function open(over: Partial<ApplicationHeader> = {}) {
   mocked.readApplication.mockResolvedValue(header(over));
-  render(<ApplicationPage />);
+  renderWithToasts(<ApplicationPage />);
 }
 
 /** The one primary button (it carries the accent fill; plain buttons never do). */
@@ -211,9 +212,11 @@ describe("dismissing the job", () => {
     await screen.findByRole("heading", { name: "Backend Engineer", level: 1 });
     expect(primaryButtons()).toHaveLength(1);
     await user.click(document.getElementById("app-dismiss-open") as HTMLElement);
-    const form = screen.getByRole("group", { name: "Dismiss this job" });
+    const form = await screen.findByRole("dialog", { name: "Dismiss this job" });
     await user.click(within(form).getByRole("button", { name: "Dismiss job" }));
     expect(mocked.dismissApplication).toHaveBeenCalledWith(7, "", false);
+    const done = await screen.findByRole("status", { name: "Job dismissed" });
+    expect(within(done).getByText("Find it under Leads > Dismissed.")).toBeTruthy();
   });
 
   it("shows a dismissed job with a plain Restore and no primary", async () => {
@@ -235,7 +238,7 @@ describe("dismissing the job", () => {
 });
 
 describe("the failure of a job", () => {
-  it("shows it with Retry and Dismiss", async () => {
+  it("reports it in a toast with Retry that stays, and dismisses it in the shell when it is closed", async () => {
     const user = userEvent.setup();
     open({
       error: new CommandError("connection refused", {
@@ -246,12 +249,16 @@ describe("the failure of a job", () => {
         retryable: true,
       }),
     });
-    const banner = await screen.findByRole("group", { name: "The last job failed" });
-    expect(within(banner).getByText("connection refused")).toBeTruthy();
-    await user.click(within(banner).getByRole("button", { name: "Retry" }));
+    const toast = await screen.findByRole("alert", { name: "The last job failed" });
+    expect(within(toast).getByText("connection refused")).toBeTruthy();
+    expect(within(toast).getByText("The connection failed. Check your network and try again.")).toBeTruthy();
+    expect(document.getElementById("job-error"), "no banner on the page").toBeNull();
+    expect(mocked.dismissError, "kept in the shell while the toast is shown").not.toHaveBeenCalled();
+    await user.click(within(toast).getByRole("button", { name: "Retry" }));
     expect(mocked.retry).toHaveBeenCalledWith(7);
-    await user.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    // Closed: the shell forgets it, so it is not reported again on the next read.
     expect(mocked.dismissError).toHaveBeenCalledWith(7);
+    expect(screen.queryByRole("alert", { name: "The last job failed" }), "Retry closes the toast").toBeNull();
   });
 });
 

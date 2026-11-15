@@ -3,6 +3,7 @@
 
 import { useCallback, useState } from "react";
 
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { useGraphProgress } from "@/hooks/useGraphProgress";
 import { useQuery } from "@/hooks/useAsync";
 
@@ -10,7 +11,7 @@ import * as api from "@/api/trends";
 import { readFailure } from "@/lib/trends/format";
 import type { Job, JobKind } from "@/lib/trends/jobs";
 import type { Cadence, Overview } from "@/types/trends";
-import { useRuns, type Notice } from "./runs";
+import { useRuns, type InfoNotice } from "./runs";
 import { usePreferenceAdds } from "./usePreferenceAdds";
 
 /** What was read, and for which cadence (until the answer for a new one lands, its period is not known). */
@@ -22,7 +23,7 @@ export function useTrends() {
   const [cadence, setCadence] = useState<Cadence>("weekly");
   // `undefined`: the newest digest.
   const [selected, setSelected] = useState<number>();
-  const [showHistory, setShowHistory] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const overview = useQuery<Loaded>(
     () => api.overview(selected, cadence).then((o) => ({ ...o, cadence })),
@@ -36,13 +37,8 @@ export function useTrends() {
   const step = useRuns((s) => s.step);
   const stored = useRuns((s) => s.notice);
   const say = useRuns((s) => s.say);
+  const clearFailure = useRuns((s) => s.clearFailure);
   useGraphProgress(useRuns.getState().follow);
-
-  // The read failed: say so, unless a run has something more recent to tell.
-  const notice: Notice | undefined =
-    stored ?? (overview.error ? { kind: "info", text: readFailure(overview.error.message), details: [] } : undefined);
-
-  const adds = usePreferenceAdds(data, say);
 
   const start = useCallback(async (job: Job) => {
     const end = await useRuns.getState().start(job);
@@ -50,6 +46,25 @@ export function useTrends() {
       setSelected(end.reportId);
     }
   }, []);
+
+  // A run that did not finish is a toast with Retry (carrying on where it stopped), shown once:
+  // then the store forgets it. One that failed while the screen was closed toasts on return.
+  const failed = stored?.kind === "error" ? stored : undefined;
+  useErrorToast(failed?.error, {
+    title: "The run did not finish",
+    onRetry: failed && (() => void start(failed.retry)),
+    clear: clearFailure,
+  });
+
+  // The read failed: say so, unless a run has something more recent to tell.
+  const notice: InfoNotice | undefined =
+    stored?.kind === "info"
+      ? stored
+      : overview.error
+        ? { kind: "info", text: readFailure(overview.error.message), details: [] }
+        : undefined;
+
+  const adds = usePreferenceAdds(data, say);
 
   // The period of the shown cadence, once it has been read (the run commands take it).
   const period = data?.cadence === cadence ? data.period.label : undefined;
@@ -76,11 +91,15 @@ export function useTrends() {
     resume: (periodLabel: string) => start({ kind: "resume", period: periodLabel }),
     /** "Build digest without it": the digest alone, from what is stored. */
     regenerateFor: (periodLabel: string) => start({ kind: "regenerate", period: periodLabel }),
-    retry: (job: Job) => start(job),
     shownReport: data?.digest?.reportId,
-    selectReport: setSelected,
-    showHistory,
-    toggleHistory: () => setShowHistory((open) => !open),
+    /** The "Earlier digests" dialog; picking one shows it and closes the dialog. */
+    historyOpen,
+    openHistory: () => setHistoryOpen(true),
+    closeHistory: () => setHistoryOpen(false),
+    pickReport: (id: number) => {
+      setSelected(id);
+      setHistoryOpen(false);
+    },
     adds,
   };
 }

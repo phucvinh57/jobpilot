@@ -1,6 +1,6 @@
-import { RefreshCw } from "lucide-react";
+import { History as HistoryIcon, RefreshCw } from "lucide-react";
 
-import { Button, Caption, FilterChip, Page } from "@/components/ui/kit";
+import { Button, Caption, Page } from "@/components/ui/kit";
 
 import { useTrends } from "@/hooks/trends/useTrends";
 import { Challenges } from "@/components/trends/Challenges";
@@ -27,9 +27,16 @@ export function TrendsPage() {
         subtitle={data && <span id="trends-summary">{data.summary}</span>}
         actions={
           <>
-            <FilterChip id="trends-history-toggle" selected={t.showHistory} onClick={t.toggleHistory}>
+            <Button
+              id="trends-history-toggle"
+              size="compact"
+              icon={HistoryIcon}
+              aria-haspopup="dialog"
+              disabled={!data}
+              onClick={t.openHistory}
+            >
               Earlier digests
-            </FilterChip>
+            </Button>
             <Button
               id="trends-regenerate"
               size="compact"
@@ -53,7 +60,7 @@ export function TrendsPage() {
           step={t.step}
           onCollect={() => void t.collect()}
         />
-        {t.notice && <NoticeView notice={t.notice} onRetry={(job) => void t.retry(job)} />}
+        {t.notice && <NoticeView notice={t.notice} />}
         {data && (
           <Challenges
             challenges={data.challenges}
@@ -76,7 +83,13 @@ export function TrendsPage() {
               )}
             </div>
             <SourcesSection sources={data.sources} kinds={data.sourceKinds} />
-            {t.showHistory && <History reports={data.history} shown={t.shownReport} onSelect={t.selectReport} />}
+            <History
+              open={t.historyOpen}
+              reports={data.history}
+              shown={t.shownReport}
+              onSelect={t.pickReport}
+              onClose={t.closeHistory}
+            />
             <SearchSection keys={data.searchKeys} />
           </>
         ) : (

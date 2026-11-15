@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
 import { useNav } from "@/stores/nav";
+import { useToasts } from "@/stores/toast";
+import { renderWithToasts } from "@/test/render";
 
 import * as api from "@/api/applications";
 import { header, idleApply, jd, primary, timeline } from "@/test/fixtures/applications";
@@ -50,7 +52,7 @@ const INTERVIEW: Partial<ApplicationHeader> = {
 async function open(over: Partial<ApplicationHeader> = {}) {
   mocked.readApplication.mockResolvedValue(header(over));
   useNav.setState({ screen: "jobs", stage: over.stage ?? "cv", drawer: { kind: "app", id: 7 } });
-  render(<ApplicationDrawer />);
+  renderWithToasts(<ApplicationDrawer />);
   return screen.findByRole("dialog", { name: "Acme: Backend Engineer" });
 }
 
@@ -171,12 +173,45 @@ describe("the application drawer", () => {
     expect(mocked.setRound).toHaveBeenLastCalledWith(7, null);
   });
 
+  it("reports a round that could not be saved in a toast, and keeps what was typed", async () => {
+    const user = userEvent.setup();
+    mocked.setRound.mockRejectedValueOnce(new CommandError("the database is locked"));
+    const drawer = await open(INTERVIEW);
+    const picker = within(drawer).getByRole("region", { name: "Interview round" });
+    await user.type(within(picker).getByRole("textbox", { name: "Other round" }), "Onsite{Enter}");
+    const toast = await screen.findByRole("alert", { name: "The round could not be saved" });
+    expect(within(toast).getByText("the database is locked")).toBeTruthy();
+    expect(within(picker).queryByText("the database is locked"), "no banner in the drawer").toBeNull();
+    expect((within(picker).getByRole("textbox", { name: "Other round" }) as HTMLInputElement).value).toBe("Onsite");
+  });
+
+  it("reports the failure of the last job in a toast with Retry, once", async () => {
+    const user = userEvent.setup();
+    mocked.retry.mockResolvedValue(undefined);
+    mocked.dismissError.mockResolvedValue(undefined);
+    await open({
+      error: new CommandError("connection refused", {
+        kind: "network",
+        challenge: null,
+        advice: "Check your network and try again.",
+        settingsSection: null,
+        retryable: true,
+      }),
+    });
+    const toast = await screen.findByRole("alert", { name: "The last job failed" });
+    expect(within(toast).getByText("connection refused")).toBeTruthy();
+    expect(document.getElementById("job-error")).toBeNull();
+    expect(mocked.dismissError, "kept until the toast is closed").not.toHaveBeenCalled();
+    await user.click(within(toast).getByRole("button", { name: "Dismiss" }));
+    expect(mocked.dismissError).toHaveBeenCalledWith(7);
+  });
+
   it("shows a round the user typed as a selected chip", async () => {
     const drawer = await open({ ...INTERVIEW, round: "Pairing session" });
     expect(within(drawer).getByRole("button", { name: "Pairing session" }).getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("marks what the company answered once confirmed, and says when that failed", async () => {
+  it("marks what the company answered once confirmed, and reports a failure in a toast", async () => {
     const user = userEvent.setup();
     mocked.mark.mockRejectedValueOnce(new CommandError("an offer cannot go back to an interview"));
     const drawer = await open(INTERVIEW);
@@ -188,7 +223,9 @@ describe("the application drawer", () => {
     expect(mocked.mark).not.toHaveBeenCalled();
     await user.click(within(marks).getByRole("button", { name: "Confirm" }));
     expect(mocked.mark).toHaveBeenCalledWith(7, "offer");
-    expect(await within(marks).findByText("an offer cannot go back to an interview")).toBeTruthy();
+    const toast = await screen.findByRole("alert", { name: "The answer could not be saved" });
+    expect(within(toast).getByText("an offer cannot go back to an interview")).toBeTruthy();
+    expect(within(marks).queryByText("an offer cannot go back to an interview"), "no banner in the drawer").toBeNull();
     await user.click(within(marks).getByRole("button", { name: "Rejected" }));
     await user.click(within(marks).getByRole("button", { name: "Confirm" }));
     expect(mocked.mark).toHaveBeenLastCalledWith(7, "rejected");
@@ -231,13 +268,14 @@ describe("the application drawer", () => {
     const drawer = await open(INTERVIEW);
     await user.click(within(drawer).getByRole("button", { name: "Offer" }));
     await user.click(within(drawer).getByRole("button", { name: "Confirm" }));
-    expect(await within(drawer).findByText("the database is locked")).toBeTruthy();
+    expect(await screen.findByRole("alert", { name: "The answer could not be saved" })).toBeTruthy();
+    act(() => useToasts.getState().clear());
 
     mocked.readApplication.mockImplementation(async (id) => header({ ...INTERVIEW, id, company: "Globex" }));
     act(() => useNav.setState({ drawer: { kind: "app", id: 8 } }));
     const other = await screen.findByRole("dialog", { name: "Globex: Backend Engineer" });
     expect(await within(other).findByRole("region", { name: "The company answered" })).toBeTruthy();
-    expect(within(other).queryByText("the database is locked")).toBeNull();
+    expect(screen.queryByRole("alert", { name: "The answer could not be saved" }), "not reported again").toBeNull();
   });
 
   it("shows the stage the application is in, without closing", async () => {
@@ -276,13 +314,39 @@ describe("the application drawer", () => {
     expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
   });
 
-  it("reads the job description only when it is unfolded", async () => {
+  it("shows the job description in a dialog, read only once opened", async () => {
     const user = userEvent.setup();
     const drawer = await open();
     expect(mocked.readJd).not.toHaveBeenCalled();
-    await user.click(within(drawer).getByText("Job description", { selector: "summary" }));
-    expect(await within(drawer).findByText(/Remote friendly/)).toBeTruthy();
+    const button = within(drawer).getByRole("button", { name: "Job description" });
+    expect(button.id).toBe("drawer-jd");
+    expect(button.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(button.className, "a plain button").not.toContain("bg-accent");
+    const primaries = primaryButtons().length;
+    await user.click(button);
+    const dialog = await screen.findByRole("dialog", { name: "Job description" });
+    expect(await within(dialog).findByText(/Remote friendly/)).toBeTruthy();
     expect(mocked.readJd).toHaveBeenCalledWith(7);
+    expect(primaryButtons(), "never a second primary").toHaveLength(primaries);
+
+    // Closing the dialog leaves the drawer open.
+    const done = within(dialog)
+      .getAllByRole("button", { name: "Close" })
+      .find((b) => b.id === "drawer-jd-done");
+    await user.click(done ?? dialog);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Job description" })).toBeNull());
+    expect(screen.getByRole("dialog", { name: "Acme: Backend Engineer" })).toBeTruthy();
+  });
+
+  it("closes the job description with Escape, and the drawer stays", async () => {
+    const user = userEvent.setup();
+    const drawer = await open();
+    await user.click(within(drawer).getByRole("button", { name: "Job description" }));
+    await screen.findByRole("dialog", { name: "Job description" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Job description" })).toBeNull());
+    expect(screen.getByRole("dialog", { name: "Acme: Backend Engineer" })).toBeTruthy();
+    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
   });
 });
 
@@ -302,47 +366,58 @@ describe("dismissing a job in CVs", () => {
     expect(dismiss.classList.contains("bg-accent")).toBe(false);
     expect(primaryButtons()).toHaveLength(1);
     await user.click(dismiss);
-    const form = within(drawer).getByRole("group", { name: "Dismiss this job" });
+    const form = await screen.findByRole("dialog", { name: "Dismiss this job" });
+    expect(within(form).getByText("Acme — Backend Engineer")).toBeTruthy();
     await user.type(within(form).getByRole("textbox", { name: "Why dismiss this job" }), "salary too low");
     await user.click(within(form).getByRole("checkbox", { name: "Don't show Acme again" }));
     await user.click(within(form).getByRole("button", { name: "Dismiss job" }));
     expect(mocked.dismissApplication).toHaveBeenCalledWith(7, "salary too low", true);
-    // The job left CVs: the drawer closes.
+    expect(await screen.findByRole("status", { name: "Job dismissed" })).toBeTruthy();
+    // The job left CVs: the dialog and the drawer close.
     await waitFor(() => expect(useNav.getState().drawer).toBeUndefined());
+    expect(screen.queryByRole("dialog", { name: "Dismiss this job" })).toBeNull();
   });
 
-  it("cancels the form, and says why a dismissal failed", async () => {
+  it("cancels the dialog, and says in it why a dismissal failed", async () => {
     const user = userEvent.setup();
     mocked.dismissApplication.mockRejectedValue(new CommandError("its application form is open: close it first"));
     const drawer = await open();
     await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
-    await user.click(within(drawer).getByRole("button", { name: "Dismiss job" }));
-    expect((await within(drawer).findByRole("alert")).textContent).toContain("its application form is open");
+    const form = await screen.findByRole("dialog", { name: "Dismiss this job" });
+    await user.click(within(form).getByRole("button", { name: "Dismiss job" }));
+    expect((await within(form).findByRole("alert")).textContent).toContain(
+      "Not dismissed: its application form is open",
+    );
     expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
-    await user.click(within(drawer).getByRole("button", { name: "Cancel" }));
-    expect(within(drawer).queryByRole("group", { name: "Dismiss this job" })).toBeNull();
+    await user.click(within(form).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Dismiss this job" })).toBeNull());
+    // Opened again, the dialog starts afresh.
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
+    const again = await screen.findByRole("dialog", { name: "Dismiss this job" });
+    expect(within(again).queryByRole("alert")).toBeNull();
   });
 
-  it("keeps the drawer open when the company could not be excluded", async () => {
+  it("says in a toast when the company could not be excluded, and when a restored job's still is", async () => {
     const user = userEvent.setup();
     mocked.dismissApplication.mockResolvedValue({ also: 0, kept: 0, notExcluded: "disk full" });
     const drawer = await open();
     await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
-    await user.click(within(drawer).getByRole("button", { name: "Dismiss job" }));
-    // The shell says applications changed: the header is read again, dismissed.
-    mocked.readApplication.mockResolvedValue(header(DISMISSED));
-    applicationsChanged();
-    const notice = await within(drawer).findByRole("group", { name: "You dismissed this job" });
-    expect(await within(drawer).findByText(/could not be excluded: disk full/)).toBeTruthy();
-    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
+    const form = await screen.findByRole("dialog", { name: "Dismiss this job" });
+    await user.click(within(form).getByRole("button", { name: "Dismiss job" }));
+    const failed = await screen.findByRole("alert", { name: "Job dismissed, but the company could not be excluded" });
+    expect(within(failed).getByText("disk full")).toBeTruthy();
 
-    // Once restored, the warning about the dismissal goes, and Restore says the company is excluded.
+    // Opened again from Leads > Dismissed: Restore says the company is still excluded.
     mocked.restoreApplication.mockResolvedValue({ hidden: null, excluded: true });
+    mocked.readApplication.mockResolvedValue(header(DISMISSED));
+    act(() => useNav.setState({ drawer: { kind: "app", id: 7 } }));
+    applicationsChanged();
+    const reopened = await screen.findByRole("dialog", { name: "Acme: Backend Engineer" });
+    const notice = await within(reopened).findByRole("group", { name: "You dismissed this job" });
     mocked.readApplication.mockResolvedValue(header());
     await user.click(within(notice).getByRole("button", { name: "Restore" }));
-    applicationsChanged();
-    expect(await within(drawer).findByText(/Its company is still excluded/)).toBeTruthy();
-    expect(within(drawer).queryByText(/could not be excluded: disk full/)).toBeNull();
+    const restored = await screen.findByRole("status", { name: "Job restored" });
+    expect(within(restored).getByText(/Its company is still excluded/)).toBeTruthy();
   });
 
   it("offers no Dismiss when the job is not dismissible", async () => {

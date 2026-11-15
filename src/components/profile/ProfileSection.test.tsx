@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
+import { renderWithToasts } from "@/test/render";
 
 import * as api from "@/api/profile";
 import type { Profile } from "@/types/profile";
@@ -55,6 +56,8 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+const render = renderWithToasts;
 
 describe("ProfileSection", () => {
   it("shows the job type, every tag field and the notes", async () => {
@@ -132,7 +135,7 @@ describe("ProfileSection", () => {
     expect(box.value).toBe("");
   });
 
-  it("says why a topic was not added", async () => {
+  it("says in a toast why a topic was not added", async () => {
     vi.mocked(api.addItem).mockResolvedValue({
       profile: profile(),
       message: '"php" is in your avoid list, so it was not added.',
@@ -141,8 +144,9 @@ describe("ProfileSection", () => {
     const box = (await screen.findByRole("textbox", { name: "Add to Skills" })) as HTMLInputElement;
     fireEvent.change(box, { target: { value: "php" } });
     fireEvent.submit(box.closest("form") as HTMLFormElement);
-    expect(await screen.findByText(/is in your avoid list/)).toBeTruthy();
-    expect(screen.getByRole("group", { name: "Not saved" })).toBeTruthy();
+    const note = await screen.findByRole("status", { name: "Not added" });
+    expect(within(note).getByText(/is in your avoid list/)).toBeTruthy();
+    expect(screen.queryByRole("alert"), "a rule, not a failure").toBeNull();
   });
 
   it("removes an entry by its name", async () => {
@@ -199,17 +203,27 @@ describe("ProfileSection", () => {
     expect(await screen.findByRole("status", { name: "Undone" })).toBeTruthy();
   });
 
-  it("shows a failed read with its error", async () => {
-    vi.mocked(api.readProfile).mockRejectedValue(new CommandError("the database is locked"));
+  it("toasts a failed read and offers a quiet Retry", async () => {
+    vi.mocked(api.readProfile).mockRejectedValueOnce(new CommandError("the database is locked"));
     render(<ProfileSection />);
-    expect(await screen.findByText("the database is locked")).toBeTruthy();
-    expect(screen.getByRole("group", { name: "Could not read your preferences" })).toBeTruthy();
+    const toast = await screen.findByRole("alert", { name: "Could not read your preferences" });
+    expect(within(toast).getByText("the database is locked")).toBeTruthy();
+    const line = document.getElementById("profile-error") as HTMLElement;
+    fireEvent.click(within(line).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: "Job type: Hybrid" })).toBeTruthy();
   });
 
-  it("shows a failed change in the card", async () => {
-    vi.mocked(api.setJobType).mockRejectedValue(new CommandError("the preferences could not be saved"));
+  it("toasts a failed change, each time it fails", async () => {
+    vi.mocked(api.setJobType).mockImplementation(async () => {
+      throw new CommandError("the preferences could not be saved");
+    });
     render(<ProfileSection />);
     fireEvent.click(await screen.findByRole("button", { name: "Job type: Remote" }));
-    expect(await screen.findByText("the preferences could not be saved")).toBeTruthy();
+    const toast = await screen.findByRole("alert", { name: "Not saved" });
+    expect(within(toast).getByText("the preferences could not be saved")).toBeTruthy();
+    fireEvent.click(within(toast).getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(screen.queryByRole("alert", { name: "Not saved" })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Job type: Remote" }));
+    expect(await screen.findByRole("alert", { name: "Not saved" })).toBeTruthy();
   });
 });

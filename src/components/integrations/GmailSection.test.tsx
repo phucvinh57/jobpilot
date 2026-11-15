@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
+import { renderWithToasts as render } from "@/test/render";
 
 import * as api from "@/api/gmail";
 import type { Gmail } from "@/types/integrations";
@@ -59,10 +60,11 @@ describe("GmailSection", () => {
     expect(secret.value).toBe("");
   });
 
-  it("needs a client id before it connects", async () => {
+  it("needs a client id before it connects, and says so under the fields", async () => {
     render(<GmailSection />);
     fireEvent.click(await screen.findByRole("button", { name: "Connect Gmail" }));
-    expect(await screen.findByText("Enter the OAuth client ID.")).toBeTruthy();
+    expect(await screen.findByText("Could not connect: Enter the OAuth client ID.")).toBeTruthy();
+    expect(screen.queryByRole("alert", { name: "Could not connect" }), "a form error, not a toast").toBeNull();
     expect(api.connect).not.toHaveBeenCalled();
   });
 
@@ -78,7 +80,8 @@ describe("GmailSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect Gmail" }));
 
     await waitFor(() => expect(api.connect).toHaveBeenCalledWith("cid.apps.googleusercontent.com", "GOCSPX-secret"));
-    expect(await screen.findByText("Connected as me@example.com. Syncing…")).toBeTruthy();
+    const toast = await screen.findByRole("status", { name: "Gmail connected" });
+    expect(within(toast).getByText("Connected as me@example.com. Syncing…")).toBeTruthy();
     expect(screen.queryByDisplayValue("GOCSPX-secret")).toBeNull();
   });
 
@@ -93,13 +96,14 @@ describe("GmailSection", () => {
     expect(api.cancelConnect).toHaveBeenCalled();
   });
 
-  it("shows why connecting failed", async () => {
+  it("shows why connecting failed under the fields", async () => {
     vi.mocked(api.connect).mockRejectedValue(new CommandError("sign-in cancelled"));
     render(<GmailSection />);
     fireEvent.change(await screen.findByRole("textbox", { name: "Client ID" }), { target: { value: "cid" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect Gmail" }));
-    expect(await screen.findByText("sign-in cancelled")).toBeTruthy();
-    expect(screen.getByRole("group", { name: "Could not connect" })).toBeTruthy();
+    expect(await screen.findByText("Could not connect: sign-in cancelled")).toBeTruthy();
+    expect(document.getElementById("gmail-error")?.getAttribute("role")).toBe("alert");
+    expect(screen.queryByRole("alert", { name: "Could not connect" }), "a form error, not a toast").toBeNull();
   });
 
   it("shows the account, the last sync and what it did when connected", async () => {
@@ -114,15 +118,16 @@ describe("GmailSection", () => {
     expect(screen.queryByRole("textbox", { name: "Client ID" })).toBeNull();
   });
 
-  it("shows a sync problem in the danger colour", async () => {
+  it("tags a problem of the last sync as state, not in red", async () => {
     vi.mocked(api.loadGmail).mockResolvedValue({
       ...SIGNED_IN,
       lastSync: null,
       lastReport: { fetched: 0, updated: 0, needsReview: 0, error: "Gmail is not connected" },
     });
     render(<GmailSection />);
-    const line = await screen.findByText("Sync problem: Gmail is not connected");
-    expect(line.className).toContain("text-danger");
+    const line = await screen.findByText("Gmail is not connected");
+    expect(line.className).not.toContain("text-danger");
+    expect(screen.getByText("Sync problem")).toBeTruthy();
     expect(screen.getByText("Not synced yet")).toBeTruthy();
   });
 
@@ -135,6 +140,37 @@ describe("GmailSection", () => {
     await waitFor(() => expect(vi.mocked(api.loadGmail).mock.calls.length).toBeGreaterThan(1));
   });
 
+  it("reports a failed sync as a toast", async () => {
+    vi.mocked(api.loadGmail).mockResolvedValue(SIGNED_IN);
+    vi.mocked(api.syncNow).mockRejectedValue(new CommandError("token revoked"));
+    render(<GmailSection />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sync now" }));
+    const toast = await screen.findByRole("alert", { name: "Sync failed" });
+    expect(within(toast).getByText("token revoked")).toBeTruthy();
+    expect(document.getElementById("gmail-error"), "no error in the card").toBeNull();
+  });
+
+  it("reports a failed disconnect as a toast", async () => {
+    vi.mocked(api.loadGmail).mockResolvedValue(SIGNED_IN);
+    vi.mocked(api.disconnect).mockRejectedValue(new CommandError("keyring locked"));
+    render(<GmailSection />);
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Click again to disconnect" }));
+    const toast = await screen.findByRole("alert", { name: "Could not disconnect" });
+    expect(within(toast).getByText("keyring locked")).toBeTruthy();
+  });
+
+  it("says when the Gmail settings could not be read", async () => {
+    vi.mocked(api.loadGmail).mockRejectedValue(new CommandError("database is locked"));
+    render(<GmailSection />);
+    const toast = await screen.findByRole("alert", { name: "Could not read the Gmail settings" });
+    expect(within(toast).getByText("database is locked")).toBeTruthy();
+    expect(screen.getByText("Could not read the Gmail settings.")).toBeTruthy();
+    vi.mocked(api.loadGmail).mockResolvedValue(SIGNED_OUT);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Not connected")).toBeTruthy();
+  });
+
   it("disconnects in two steps", async () => {
     vi.mocked(api.loadGmail).mockResolvedValue(SIGNED_IN);
     vi.mocked(api.disconnect).mockResolvedValue(undefined);
@@ -144,7 +180,7 @@ describe("GmailSection", () => {
     vi.mocked(api.loadGmail).mockResolvedValue(SIGNED_OUT);
     fireEvent.click(screen.getByRole("button", { name: "Click again to disconnect" }));
     await waitFor(() => expect(api.disconnect).toHaveBeenCalled());
-    expect(await screen.findByText("Disconnected.")).toBeTruthy();
+    expect(await screen.findByRole("status", { name: "Gmail disconnected" })).toBeTruthy();
   });
 
   it("reads again when a background sync stored mail", async () => {

@@ -10,6 +10,8 @@ import { useGraphProgress } from "@/hooks/useGraphProgress";
 
 import * as api from "@/api/discovery";
 import { movesTheQueue } from "@/lib/discovery/progress";
+import { rowName } from "@/lib/discovery/sources";
+import { toast } from "@/stores/toast";
 import type { JobSources } from "@/types/discovery";
 
 export interface JobSourcesView {
@@ -18,7 +20,9 @@ export interface JobSourcesView {
   loadError: CommandError | undefined;
   /** The first read has answered (before that the list is not "empty", it is not there yet). */
   loaded: boolean;
-  /** Why the last change failed. */
+  /** Read the list again (a failed read has a Retry). */
+  reload: () => void;
+  /** Why the last change of a listed source (or of the daily switch) failed. */
   changeError: CommandError | undefined;
   clearChangeError: () => void;
   /** "Search daily while JobPilot is open", shown at once and until the list is read again. */
@@ -27,9 +31,12 @@ export interface JobSourcesView {
   setEnabled: (id: number, enabled: boolean) => void;
   setSession: (id: number, sessionId: number | null) => void;
   remove: (id: number) => void;
-  /** Add a source; resolves to `true` when it was added (the form can close). */
+  /** Add a source; resolves to `true` when it was added (the dialog can close: a toast says so). */
   add: (kind: string, name: string, url: string) => Promise<boolean>;
   adding: boolean;
+  /** Why the add dialog's last submit failed (shown in the dialog). */
+  addError: CommandError | undefined;
+  clearAddError: () => void;
 }
 
 export function useJobSources(): JobSourcesView {
@@ -72,23 +79,27 @@ export function useJobSources(): JobSourcesView {
   );
 
   const { run: runAdd, busy: adding, error: addError, clearError: clearAddError } = addSource;
+  const clearChangeError = useCallback(() => setChangeError(undefined), []);
+  const kinds = data?.kinds;
   const add = useCallback(
     async (kind: string, name: string, url: string): Promise<boolean> => {
-      setChangeError(undefined);
-      return (await runAdd(kind, name, url)) !== undefined;
+      const added = await runAdd(kind, name, url);
+      if (added === undefined) {
+        return false;
+      }
+      toast.ok("Source added", rowName(added, kinds ?? []));
+      return true;
     },
-    [runAdd],
+    [runAdd, kinds],
   );
 
   return {
     data,
     loadError: query.error,
     loaded: data !== undefined,
-    changeError: changeError ?? addError,
-    clearChangeError: () => {
-      setChangeError(undefined);
-      clearAddError();
-    },
+    reload,
+    changeError,
+    clearChangeError,
     daily: pendingDaily !== undefined && pendingDaily.readBefore === data ? pendingDaily.on : (data?.daily ?? false),
     setDaily,
     setEnabled: (id, enabled) => void change(() => api.setSourceEnabled(id, enabled)),
@@ -96,5 +107,7 @@ export function useJobSources(): JobSourcesView {
     remove: (id) => void change(() => api.removeSource(id)),
     add,
     adding,
+    addError,
+    clearAddError,
   };
 }

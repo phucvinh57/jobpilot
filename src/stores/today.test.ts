@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError, type Problem } from "@/lib/problem";
 import { useNav } from "./nav";
+import { useToasts } from "./toast";
 
 import * as api from "@/api/discovery";
 import type { AddedLead, DismissedJob, Lead, PrepareOutcome, Queue, Restored } from "@/types/discovery";
@@ -35,6 +36,17 @@ import {
 vi.mock("@/api/discovery");
 
 const mocked = vi.mocked(api);
+
+/** The toasts shown, as kind, title and text. */
+function toasts() {
+  return useToasts
+    .getState()
+    .toasts.map((t) =>
+      t.kind === "error"
+        ? { kind: t.kind, title: t.title, body: t.error.message }
+        : { kind: t.kind, title: t.title, body: t.body },
+    );
+}
 
 const NO_ADVICE: Problem = { kind: "other", challenge: null, advice: null, settingsSection: null, retryable: false };
 
@@ -460,10 +472,9 @@ describe("the link box", () => {
     mocked.addLead.mockResolvedValueOnce({ leadId: 8, state: "dismissed", applicationId: null });
     addInput(url);
     await settle();
-    expect(useTodayStore.getState().note).toEqual({
-      ok: false,
-      text: "You dismissed this job before: find it under Show: Dismissed.",
-    });
+    expect(toasts()).toEqual([
+      { kind: "info", title: "Not added", body: "You dismissed this job before: find it under Show: Dismissed." },
+    ]);
 
     mocked.addLead.mockResolvedValueOnce({ leadId: 9, state: "promoted", applicationId: 21 });
     addInput({ kind: "url", value: "https://a.test/jobs/10" });
@@ -502,7 +513,9 @@ describe("searching", () => {
     await done;
     const s = useTodayStore.getState();
     expect(s.searching).toBeUndefined();
-    expect(s.note).toEqual({ ok: true, text: "Found 2 new leads, 1 source waiting for you" });
+    expect(toasts()).toEqual([
+      { kind: "ok", title: "Search finished", body: "Found 2 new leads, 1 source waiting for you" },
+    ]);
   });
 
   it("shows why a search failed", async () => {
@@ -515,22 +528,23 @@ describe("searching", () => {
       }),
     );
     await searchNow();
-    const note = useTodayStore.getState().note;
-    expect(note?.ok).toBe(false);
-    expect(note?.text).toBe("no AI provider is configured");
-    expect(note?.problem?.settingsSection).toBe("AI providers");
+    const [toast] = useToasts.getState().toasts;
+    expect(toast?.kind === "error" && toast.title).toBe("The search failed");
+    expect(toast?.kind === "error" && toast.error.message).toBe("no AI provider is configured");
+    expect(toast?.kind === "error" && toast.error.problem.settingsSection).toBe("AI providers");
+    expect(useTodayStore.getState().searching).toBeUndefined();
   });
 
   it("shows how the daily search ended", () => {
     onSearchFinished({ summary: { finishedAt: "x", saved: 1, waiting: 0, failed: 0 }, error: null });
-    expect(useTodayStore.getState().note).toEqual({ ok: true, text: "Found 1 new lead" });
+    expect(toasts()).toEqual([{ kind: "ok", title: "Daily search finished", body: "Found 1 new lead" }]);
     onSearchFinished({ summary: null, error: new CommandError("connection refused") });
-    expect(useTodayStore.getState().note?.ok).toBe(false);
+    expect(toasts()[1]).toEqual({ kind: "error", title: "The daily search failed", body: "connection refused" });
   });
 });
 
 describe("paused sources", () => {
-  it("opens the browser once at a time and keeps why it could not", async () => {
+  it("opens the browser once at a time and says in a toast why it could not, with a Retry", async () => {
     const opened = deferred<void>();
     mocked.openBrowser.mockReturnValue(opened.promise);
     const first = openBrowser("discover:1:3");
@@ -539,25 +553,38 @@ describe("paused sources", () => {
     expect(useTodayStore.getState().opening).toEqual(["discover:1:3"]);
     opened.reject(new CommandError("no Chrome found"));
     await first;
-    const s = useTodayStore.getState();
-    expect(s.opening).toEqual([]);
-    expect(s.openErrors["discover:1:3"]?.message).toBe("no Chrome found");
+    expect(useTodayStore.getState().opening).toEqual([]);
+    expect(toasts()).toEqual([{ kind: "error", title: "The browser could not be opened", body: "no Chrome found" }]);
 
-    // Continue clears it.
+    // The toast's Retry opens it again.
+    mocked.openBrowser.mockResolvedValue(undefined);
+    const [toast] = useToasts.getState().toasts;
+    (toast?.kind === "error" ? toast.onRetry : undefined)?.();
+    expect(mocked.openBrowser).toHaveBeenCalledTimes(2);
+
     mocked.resumeSource.mockResolvedValue(undefined);
     await continueSource("discover:1:3");
-    expect(useTodayStore.getState().openErrors).toEqual({});
     expect(useTodayStore.getState().continuing).toEqual([]);
   });
 
   it("says why a source could not continue, and skips one", async () => {
     mocked.resumeSource.mockRejectedValue(new CommandError("that source is running right now"));
     await continueSource("discover:1:4");
-    expect(useTodayStore.getState().note).toMatchObject({ ok: false, text: "that source is running right now" });
+    expect(toasts()).toEqual([
+      { kind: "error", title: "The source could not continue", body: "that source is running right now" },
+    ]);
 
     mocked.skipSource.mockResolvedValue(undefined);
     await skipSource("discover:1:4");
     expect(mocked.skipSource).toHaveBeenCalledWith("discover:1:4");
+
+    mocked.skipSource.mockRejectedValue(new CommandError("database is locked"));
+    await skipSource("discover:1:4");
+    expect(toasts()[1]).toEqual({
+      kind: "error",
+      title: "The source could not be skipped",
+      body: "database is locked",
+    });
   });
 });
 
@@ -572,7 +599,9 @@ describe("Dismiss", () => {
     const s = useTodayStore.getState();
     expect(drawerLead()).toBe(3);
     expect(s.checked).toEqual([]);
-    expect(s.note).toEqual({ ok: true, text: "Lead dismissed, and 1 more job from the same company." });
+    expect(toasts()).toEqual([
+      { kind: "ok", title: "Lead dismissed", body: "1 more job from the same company went too." },
+    ]);
     await settle();
     expect(useTodayStore.getState().queue?.items.map((l) => l.id)).toEqual([1, 3]);
   });
@@ -586,7 +615,9 @@ describe("Dismiss", () => {
 
   it("flags a company that could not be excluded", () => {
     afterDismissed(1, { also: 0, kept: 0, notExcluded: "disk full" });
-    expect(useTodayStore.getState().note?.ok).toBe(false);
+    expect(toasts()).toEqual([
+      { kind: "error", title: "Lead dismissed, but the company could not be excluded", body: "disk full" },
+    ]);
   });
 });
 
@@ -642,7 +673,7 @@ describe("the dismissed jobs", () => {
     expect(useTodayStore.getState().dismissedError?.message).toBe("database is locked");
   });
 
-  it("are restored one at a time, with a note that says where the job went", async () => {
+  it("are restored one at a time, with a toast that says where the job went", async () => {
     const restore = deferred<Restored>();
     mocked.restore.mockReturnValue(restore.promise);
     const first = restoreJob(job);
@@ -652,7 +683,7 @@ describe("the dismissed jobs", () => {
     restore.resolve({ hidden: null, excluded: false });
     await first;
     expect(useTodayStore.getState().restoring).toEqual([]);
-    expect(useTodayStore.getState().note).toEqual({ ok: true, text: "Globex — SRE is back in CVs." });
+    expect(toasts()).toEqual([{ kind: "ok", title: "Job restored", body: "Globex — SRE is back in CVs." }]);
     // The shell's data-changed reads the lists again, not the restore itself.
     expect(mocked.readQueue).not.toHaveBeenCalled();
   });
@@ -660,15 +691,20 @@ describe("the dismissed jobs", () => {
   it("say when a restored lead stays hidden by the preferences", async () => {
     mocked.restore.mockResolvedValue({ hidden: "location: hires in United States", excluded: false });
     await restoreJob({ ...job, kind: "lead", id: 9 });
-    expect(useTodayStore.getState().note).toEqual({
-      ok: false,
-      text: "Globex — SRE is restored, but your preferences hide it (location: hires in United States). It shows in Leads once they let it pass.",
-    });
+    expect(toasts()).toEqual([
+      {
+        kind: "info",
+        title: "Restored, but hidden",
+        body: "Globex — SRE is restored, but your preferences hide it (location: hires in United States). It shows in Leads once they let it pass.",
+      },
+    ]);
   });
 
   it("say why a restore failed", async () => {
     mocked.restore.mockRejectedValue(new CommandError("lead 9 not found or not dismissed"));
     await restoreJob({ ...job, kind: "lead", id: 9 });
-    expect(useTodayStore.getState().note).toMatchObject({ ok: false, text: "lead 9 not found or not dismissed" });
+    expect(toasts()).toEqual([
+      { kind: "error", title: "The job could not be restored", body: "lead 9 not found or not dismissed" },
+    ]);
   });
 });

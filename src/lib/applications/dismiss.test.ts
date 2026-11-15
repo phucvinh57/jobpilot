@@ -1,21 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { dismissalLine, jobDismissedNote } from "./dismiss";
+import { dismissalLine, jobDismissedDetail, jobRestoredDetail } from "./dismiss";
 
 describe("dismissing a job in CVs", () => {
   it("says where the job went and what else went with it", () => {
-    expect(jobDismissedNote({ also: 0, kept: 0, notExcluded: null })).toBe(
-      "Job dismissed. Find it under Leads > Dismissed.",
+    expect(jobDismissedDetail({ also: 0, kept: 0 })).toBe("Find it under Leads > Dismissed.");
+    expect(jobDismissedDetail({ also: 2, kept: 0 })).toBe(
+      "2 leads from the same company went too. Find it under Leads > Dismissed.",
     );
-    expect(jobDismissedNote({ also: 2, kept: 0, notExcluded: null })).toBe(
-      "Job dismissed, and 2 leads from the same company. Find them under Leads > Dismissed.",
-    );
-    expect(jobDismissedNote({ also: 1, kept: 1, notExcluded: null })).toContain(
+    expect(jobDismissedDetail({ also: 1, kept: 1 })).toContain(
       "1 lead from that company was kept: the CV is being prepared.",
     );
-    expect(jobDismissedNote({ also: 0, kept: 0, notExcluded: "disk full" })).toBe(
-      "Job dismissed, but the company could not be excluded: disk full",
-    );
+  });
+
+  it("says when a restored job's company is still excluded", () => {
+    expect(jobRestoredDetail({ hidden: null, excluded: false })).toBeUndefined();
+    expect(jobRestoredDetail({ hidden: null, excluded: true })).toContain("still excluded");
   });
 
   it("says when and why a job was dismissed", () => {

@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
+import { renderWithToasts } from "@/test/render";
 
 import * as api from "@/api/profile";
 import type { About } from "@/types/profile";
@@ -41,6 +42,8 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+const render = renderWithToasts;
+
 describe("AboutYouSection", () => {
   it("lists the documents and shows what was understood, with no primary button", async () => {
     render(<AboutYouSection />);
@@ -74,7 +77,7 @@ describe("AboutYouSection", () => {
     expect(screen.queryByRole("button", { name: "Re-read" })).toBeNull();
   });
 
-  it("adds a note, then reads the documents and says so meanwhile", async () => {
+  it("adds a note in a dialog, then reads the documents and says so meanwhile", async () => {
     vi.mocked(api.readAbout).mockResolvedValue(about(EMPTY));
     const added = about({
       ...EMPTY,
@@ -86,26 +89,51 @@ describe("AboutYouSection", () => {
     vi.mocked(api.readDocuments).mockReturnValue(new Promise((resolve) => (finish = resolve)));
     render(<AboutYouSection />);
 
+    expect(screen.queryByRole("dialog"), "the dialog opens on a click").toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Add text" }));
-    const save = screen.getByRole("button", { name: "Save" });
+    const dialog = await screen.findByRole("dialog", { name: "Add a note" });
+    const save = within(dialog).getByRole("button", { name: "Save" });
     expect(save).toHaveProperty("disabled", true);
-    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Side projects" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "Text" }), { target: { value: "I built tinyqueue." } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Title" }), { target: { value: "Side projects" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Text" }), {
+      target: { value: "I built tinyqueue." },
+    });
     expect(save).toHaveProperty("disabled", false);
     fireEvent.click(save);
 
     expect(api.addText).toHaveBeenCalledWith("Side projects", "I built tinyqueue.");
     await waitFor(() => expect(api.readDocuments).toHaveBeenCalled());
-    expect((await screen.findByRole("status")).textContent).toBe("Reading your documents…");
+    const note = await screen.findByRole("status", { name: "Note added" });
+    expect(within(note).getByText("Side projects")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.getElementById("about-status")?.textContent).toBe("Reading your documents…");
     expect(screen.getByRole("button", { name: "Re-read" })).toHaveProperty("disabled", true);
-    expect(screen.queryByRole("form", { name: "Add a note" })).toBeNull();
 
     finish(about({ sources: added.sources }));
     expect(await screen.findByText("Minh Tran")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Re-read" })).toHaveProperty("disabled", false);
   });
 
-  it("shows a failed read with what to do about it", async () => {
+  it("keeps a failed note in the dialog, under its fields", async () => {
+    vi.mocked(api.addText).mockRejectedValue(new CommandError("database is locked"));
+    render(<AboutYouSection />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add text" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a note" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Text" }), {
+      target: { value: "I built tinyqueue." },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect((await within(dialog).findByRole("alert")).textContent).toContain("Not added: database is locked");
+    expect(screen.queryByRole("alert", { name: "Not added" }), "not a toast").toBeNull();
+    expect(within(dialog).getByRole("textbox", { name: "Text" })).toHaveProperty("value", "I built tinyqueue.");
+    expect(api.readDocuments).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("toasts a failed read with what to do about it", async () => {
     vi.mocked(api.readAbout).mockResolvedValue(about({ status: "stale" }));
     vi.mocked(api.readDocuments).mockRejectedValue(
       new CommandError("no AI provider configured", {
@@ -119,9 +147,29 @@ describe("AboutYouSection", () => {
     render(<AboutYouSection />);
     expect((await screen.findByRole("status")).textContent).toMatch(/^Out of date/);
     fireEvent.click(screen.getByRole("button", { name: "Re-read" }));
-    const banner = await screen.findByRole("group", { name: "Your documents were not read" });
-    expect(within(banner).getByText("no AI provider configured")).toBeTruthy();
-    expect(within(banner).getByRole("button", { name: "Open Settings > AI providers" })).toBeTruthy();
+    const toast = await screen.findByRole("alert", { name: "Your documents were not read" });
+    expect(within(toast).getByText("no AI provider configured")).toBeTruthy();
+    expect(within(toast).getByRole("button", { name: "Open Settings > AI providers" })).toBeTruthy();
+  });
+
+  it("toasts a failed removal and keeps the document", async () => {
+    vi.mocked(api.removeSource).mockRejectedValue(new CommandError("database is locked"));
+    render(<AboutYouSection />);
+    fireEvent.click(await screen.findByRole("button", { name: "Remove cv.pdf" }));
+    const toast = await screen.findByRole("alert", { name: "Not removed" });
+    expect(within(toast).getByText("database is locked")).toBeTruthy();
+    expect(screen.getByText("cv.pdf")).toBeTruthy();
+  });
+
+  it("shows a failed first read as a toast and a quiet Retry", async () => {
+    vi.mocked(api.readAbout).mockRejectedValueOnce(new CommandError("database is locked"));
+    render(<AboutYouSection />);
+    const toast = await screen.findByRole("alert", { name: "Could not read your documents" });
+    expect(within(toast).getByText("database is locked")).toBeTruthy();
+    fireEvent.click(
+      within(document.getElementById("about-error") as HTMLElement).getByRole("button", { name: "Retry" }),
+    );
+    expect(await screen.findByRole("list", { name: "Your documents" })).toBeTruthy();
   });
 
   it("removes a document by its name and reads the rest again", async () => {

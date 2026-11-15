@@ -12,6 +12,8 @@ export interface HeaderModel {
   /** `undefined` until the first read; `null` when the application does not exist (any more). */
   header: ApplicationHeader | null | undefined;
   loadError: CommandError | undefined;
+  /** Read the header again (Retry after a failed read). */
+  reload: () => void;
   /** The progress line of the running generate / revise job, moving with every step. */
   jobLabel: string | null;
   /** The primary action; the Apply tab's answer wins until the header is read again. */
@@ -87,6 +89,7 @@ export function useApplicationHeader(id: number): HeaderModel {
   return {
     header,
     loadError: query.error,
+    reload,
     jobLabel,
     primary,
     setPrimary,

@@ -5,7 +5,7 @@ import { Check, FilePlus, Minus } from "lucide-react";
 import { useState } from "react";
 
 import { Banner, Button, Caption, Card, Heading, Section, Tag, TextInput } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { FormError, LoadError } from "@/components/ProblemHelp";
 import { TONE_CLASS } from "@/lib/tokens";
 import { useNav } from "@/stores/nav";
 
@@ -46,7 +46,7 @@ export function CvTab(input: CvTabInput) {
   const data = cv.cv;
 
   if (data === undefined) {
-    return cv.loadError ? <ErrorBanner error={cv.loadError} title="The CV could not be read" /> : null;
+    return <LoadError error={cv.loadError} title="The CV could not be read" onRetry={cv.reload} />;
   }
   const traced = showTraced({
     guardClean: cv.guardClean,
@@ -95,7 +95,6 @@ export function CvTab(input: CvTabInput) {
               body="Employers, titles, dates and technologies all match your documents."
             />
           )}
-          {cv.problem && <ErrorBanner id="cv-problem" error={cv.problem} title="The CV does not compile" />}
           {cv.warnings.length > 0 && (
             <Banner
               id="cv-warnings"
@@ -110,7 +109,7 @@ export function CvTab(input: CvTabInput) {
               }
             />
           )}
-          <Card className="min-h-[340px] flex-1">
+          <Card id="cv-yaml" className="min-h-[340px] flex-1">
             <div className="flex items-center justify-between gap-2">
               <p className="text-body font-semibold text-ink">cv.yaml</p>
               {cv.note !== null && <Caption>{cv.note}</Caption>}
@@ -122,6 +121,8 @@ export function CvTab(input: CvTabInput) {
                 <p className="p-2 text-body text-muted">{emptyEditorText(input.busy)}</p>
               )}
             </div>
+            {/* The editor's own error: the edit is kept until it compiles again. */}
+            {cv.problem && <FormError id="cv-problem" error={cv.problem} title="The CV does not compile" />}
           </Card>
         </div>
 

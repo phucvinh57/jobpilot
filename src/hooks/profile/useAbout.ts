@@ -12,9 +12,10 @@ import { CommandError, toCommandError } from "@/lib/problem";
 
 import * as api from "@/api/profile";
 import { noteProblem } from "@/lib/profile/about";
+import { toast } from "@/stores/toast";
 import type { About } from "@/types/profile";
 
-/** A failed call and the banner title it is shown under. */
+/** A failed call and the toast title it is shown under. */
 export interface AboutFailure {
   error: CommandError;
   title: string;
@@ -26,7 +27,7 @@ export interface AboutCard {
   /** The first read failed. */
   loadError: CommandError | undefined;
   retry: () => void;
-  /** An add, a removal or a read failed. */
+  /** An add of a file, a removal or a read failed (shown as a toast). */
   failure: AboutFailure | undefined;
   clearFailure: () => void;
   /** The documents are being read into the profile. */
@@ -39,9 +40,10 @@ export interface AboutCard {
   remove: (id: number) => void;
   reread: () => void;
 
-  /** The "Add text" form. */
+  /** The "Add a note" dialog. */
   noteOpen: boolean;
-  setNoteOpen: (open: boolean) => void;
+  openNote: () => void;
+  closeNote: () => void;
   noteTitle: string;
   setNoteTitle: (title: string) => void;
   noteBody: string;
@@ -49,6 +51,8 @@ export interface AboutCard {
   /** Why the note cannot be saved yet (`null`: it can). */
   noteBlocked: string | null;
   savingNote: boolean;
+  /** Saving the note failed: shown in the dialog, under its fields. */
+  noteError: CommandError | undefined;
   saveNote: () => void;
 }
 
@@ -63,6 +67,7 @@ export function useAbout(): AboutCard {
   const [noteTitle, setNoteTitle] = useState("");
   const [noteBody, setNoteBody] = useState("");
   const [savingNote, setSavingNote] = useState(false);
+  const [noteError, setNoteError] = useState<CommandError>();
 
   /** Calls started so far: only the latest one's answer is shown. */
   const seq = useRef(0);
@@ -122,16 +127,23 @@ export function useAbout(): AboutCard {
     }
   }, [show, fail]);
 
-  /** Run a change of the documents; read them again when the answer says the profile is behind. */
+  /** Run a change of the documents; read them again when the answer says the profile is behind.
+   *  A failure goes to `report` (the note dialog) or else to `failure` under `title`. */
   const change = useCallback(
-    async (call: () => Promise<About>, title: string): Promise<boolean> => {
+    async (call: () => Promise<About>, title: string, report?: (error: CommandError) => void): Promise<boolean> => {
       const mine = ++seq.current;
       setFailure(undefined);
       let next: About;
       try {
         next = await call();
       } catch (thrown) {
-        fail(thrown, title);
+        if (report) {
+          if (alive.current) {
+            report(toCommandError(thrown));
+          }
+        } else {
+          fail(thrown, title);
+        }
         return false;
       }
       show(next, mine);
@@ -195,12 +207,15 @@ export function useAbout(): AboutCard {
       return;
     }
     setSavingNote(true);
-    void change(() => api.addText(noteTitle, noteBody), "Not added")
+    setNoteError(undefined);
+    const title = noteTitle.trim();
+    void change(() => api.addText(noteTitle, noteBody), "Not added", setNoteError)
       .then((saved) => {
         if (saved && alive.current) {
           setNoteTitle("");
           setNoteBody("");
           setNoteOpen(false);
+          toast.ok("Note added", title || undefined);
         }
       })
       .finally(() => {
@@ -209,6 +224,16 @@ export function useAbout(): AboutCard {
         }
       });
   }, [savingNote, noteBlocked, change, noteTitle, noteBody]);
+
+  const openNote = useCallback(() => {
+    setNoteError(undefined);
+    setNoteOpen(true);
+  }, []);
+
+  const closeNote = useCallback(() => {
+    setNoteError(undefined);
+    setNoteOpen(false);
+  }, []);
 
   const reread = useCallback(() => {
     if (!reading) {
@@ -229,13 +254,15 @@ export function useAbout(): AboutCard {
     remove,
     reread,
     noteOpen,
-    setNoteOpen,
+    openNote,
+    closeNote,
     noteTitle,
     setNoteTitle,
     noteBody,
     setNoteBody,
     noteBlocked,
     savingNote,
+    noteError,
     saveNote,
   };
 }
