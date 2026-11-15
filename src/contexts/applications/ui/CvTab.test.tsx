@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CommandError } from "@/shared";
+import { CommandError, useNav } from "@/shared";
 
 import * as api from "../api/applicationsApi";
 import { cv } from "../domain/fixtures";
@@ -86,7 +86,6 @@ beforeEach(() => {
   mocked.readCv.mockResolvedValue(cv());
   mocked.readCvPage.mockResolvedValue(new Blob(["png"], { type: "image/png" }));
   mocked.saveCv.mockResolvedValue(RENDERED);
-  mocked.openProfile.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -101,7 +100,7 @@ describe("the CV tab", () => {
     expect(within(checklist).getByRole("img", { name: "Covered" })).toBeTruthy();
     expect(within(checklist).getByRole("img", { name: "Not in your profile" })).toBeTruthy();
     expect(within(checklist).getByText("Nice to have")).toBeTruthy();
-    expect(within(checklist).getByText("Nothing in profile.yaml shows it")).toBeTruthy();
+    expect(within(checklist).getByText("Nothing in your documents shows it")).toBeTruthy();
     expect(screen.getByRole("group", { name: "Every fact traced to your profile" })).toBeTruthy();
     expect(screen.getByLabelText("loaded").textContent).toBe("name: Ada\nrole: Engineer\n");
     expect((await screen.findByRole("img", { name: "CV page 1 of 1" })).getAttribute("src")).toBe("blob:page");
@@ -115,11 +114,13 @@ describe("the CV tab", () => {
     expect(screen.queryByRole("group", { name: "Every fact traced to your profile" })).toBeNull();
   });
 
-  it("opens profile.yaml when the tailoring step reported gaps", async () => {
+  it("sends the user to Settings > About you when the tailoring step reported gaps", async () => {
     const user = userEvent.setup();
+    useNav.setState({ screen: "application", settingsFocus: undefined });
     show();
-    await user.click(await screen.findByRole("button", { name: "Open profile.yaml" }));
-    expect(mocked.openProfile).toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Add to your profile" }));
+    expect(useNav.getState().screen).toBe("settings");
+    expect(useNav.getState().settingsFocus).toBe("About you");
   });
 
   it("renders a CV whose previews are missing or out of date, once", async () => {
@@ -176,7 +177,7 @@ describe("editing", () => {
     show();
     await edit("a: 1\n");
     const warnings = await screen.findByRole("group", {
-      name: "Not backed by profile.yaml (kept, check before approving):",
+      name: "Not backed by your documents (kept, check before approving):",
     });
     expect(within(warnings).getByText("employer 'Initech' is not in the profile")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Every fact traced to your profile" })).toBeNull();

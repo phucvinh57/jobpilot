@@ -147,23 +147,6 @@ pub fn guard_clean(core: &Core, yaml: Option<&str>) -> bool {
     yaml.is_some_and(|yaml| core.cv_is_traced(yaml))
 }
 
-/// `xdg-open <path>` (`open` on macOS): hand the file to the user's default editor.
-pub fn open_path(path: &Path) -> Result<()> {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    std::process::Command::new(opener)
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .with_context(|| format!("could not run {opener} on {}", path.display()))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::engine::store::NewApplication;

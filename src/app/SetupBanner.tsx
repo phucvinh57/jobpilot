@@ -1,8 +1,9 @@
 // Compact bar above the main pane while something the main flow needs is missing (no AI
-// provider, no typst), and until the job preferences are saved. One line per missing thing, each
+// provider, no typst, no profile read from the user's documents), and until the job preferences
+// are saved. One line per missing thing, each
 // with its action button. Nothing when everything is in place or the first check has not finished.
 
-import { Settings2, TriangleAlert } from "lucide-react";
+import { FilePlus, Settings2, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Button, ProblemActions, useNav, useShell } from "@/shared";
@@ -30,7 +31,7 @@ export function SetupBanner() {
   if (!status || screen === "settings") {
     return null;
   }
-  if (status.blockers.length === 0 && status.prefsSaved) {
+  if (status.blockers.length === 0 && status.profileReady && status.prefsSaved) {
     return null;
   }
   return (
@@ -40,6 +41,13 @@ export function SetupBanner() {
           <ProblemActions problem={blocker.problem} />
         </Line>
       ))}
+      {!status.profileReady && (
+        <Line id="setup-profile" title="Tell JobPilot about your work.">
+          <Button id="setup-profile" size="compact" icon={FilePlus} onClick={() => openSettings("About you")}>
+            Add your CV
+          </Button>
+        </Line>
+      )}
       {!status.prefsSaved && (
         <Line id="setup-preferences" title="Tell JobPilot what job you are looking for.">
           <Button size="compact" icon={Settings2} onClick={() => openSettings("Profile & preferences")}>

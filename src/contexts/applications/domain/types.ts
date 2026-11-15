@@ -142,7 +142,7 @@ export interface Cv {
   /** The fact guard ran on this CV and found nothing. */
   guardClean: boolean;
   requirements: Requirement[];
-  /** The tailoring step reported gaps: offer to open `profile.yaml`. */
+  /** The tailoring step reported gaps: offer to add to the profile (Settings > About you). */
   hasGaps: boolean;
 }
 
@@ -228,7 +228,7 @@ export interface ReviewRow {
   warning: string | null;
   /** "Needs input" or a warning: highlighted. */
   flagged: boolean;
-  /** The answer can be saved to `profile.yaml`. */
+  /** The answer can be remembered for the next applications. */
   rememberable: boolean;
   remember: boolean;
 }

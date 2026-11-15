@@ -11,7 +11,6 @@ vi.mock("../api/profileApi");
 
 function profile(patch: Partial<Profile> = {}): Profile {
   return {
-    profilePath: "/home/me/.local/share/jobpilot/profile.yaml",
     jobType: "hybrid",
     fields: [
       {
@@ -37,7 +36,6 @@ function profile(patch: Partial<Profile> = {}): Profile {
       },
     ],
     notes: "Senior roles only",
-    cv: { name: "cv.pdf", chars: 1234, truncated: false },
     canUndo: true,
     limits: { maxListItems: 30, maxItemChars: 80, maxNotesChars: 2000 },
     ...patch,
@@ -51,12 +49,11 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ProfileSection", () => {
-  it("shows the CV, the job type, every tag field, the notes and the profile file", async () => {
+  it("shows the job type, every tag field and the notes", async () => {
     render(<ProfileSection />);
     expect(screen.getByRole("heading", { name: "Profile & preferences" })).toBeTruthy();
-    expect(await screen.findByText("cv.pdf")).toBeTruthy();
-    expect(screen.getByText("1234 characters read")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Replace" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Job type: Hybrid" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Upload CV" })).toBeNull();
 
     expect(screen.getByRole("button", { name: "Job type: Hybrid" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "Job type: Remote" }).getAttribute("aria-pressed")).toBe("false");
@@ -70,13 +67,12 @@ describe("ProfileSection", () => {
 
     const notes = screen.getByRole("textbox", { name: "Anything else" });
     await waitFor(() => expect((notes as HTMLTextAreaElement).value).toBe("Senior roles only"));
-    expect(screen.getByText("/home/me/.local/share/jobpilot/profile.yaml")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Undo" })).toHaveProperty("disabled", false);
   });
 
   it("has no primary action: every change is saved at once", async () => {
     render(<ProfileSection />);
-    await screen.findByText("cv.pdf");
+    await screen.findByRole("button", { name: "Job type: Hybrid" });
     // Save is plain, and off while the notes are as saved.
     expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
     for (const button of screen.getAllByRole("button")) {
@@ -172,24 +168,6 @@ describe("ProfileSection", () => {
       expect(screen.getByRole("button", { name: "Job type: Any" }).getAttribute("aria-pressed")).toBe("true"),
     );
     expect(await screen.findByRole("status", { name: "Undone" })).toBeTruthy();
-  });
-
-  it("offers Upload CV when none is attached", async () => {
-    vi.mocked(api.readProfile).mockResolvedValue(profile({ cv: null }));
-    render(<ProfileSection />);
-    expect(await screen.findByRole("button", { name: "Upload CV" })).toBeTruthy();
-    expect(screen.getByText("A .pdf, .md or .txt file.")).toBeTruthy();
-  });
-
-  it("imports the chosen CV", async () => {
-    vi.mocked(api.readProfile).mockResolvedValue(profile({ cv: null }));
-    vi.mocked(api.pickCv).mockResolvedValue("/tmp/my-cv.pdf");
-    vi.mocked(api.importCv).mockResolvedValue(profile({ cv: { name: "my-cv.pdf", chars: 99, truncated: true } }));
-    render(<ProfileSection />);
-    fireEvent.click(await screen.findByRole("button", { name: "Upload CV" }));
-    expect(await screen.findByText("my-cv.pdf")).toBeTruthy();
-    expect(api.importCv).toHaveBeenCalledWith("/tmp/my-cv.pdf");
-    expect(screen.getByText("99 characters read, cut to the limit")).toBeTruthy();
   });
 
   it("shows a failed read with its error", async () => {

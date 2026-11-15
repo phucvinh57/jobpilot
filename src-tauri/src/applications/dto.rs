@@ -395,7 +395,7 @@ pub struct CvDto {
     pub guard_clean: bool,
     /// What the posting asks for, checked against the profile; empty when the CV has no gap list yet.
     pub requirements: Vec<RequirementDto>,
-    /// The tailoring step reported gaps: offer to open `profile.yaml`.
+    /// The tailoring step reported gaps: offer to add to the profile (Settings > About you).
     pub has_gaps: bool,
 }
 
@@ -567,7 +567,7 @@ pub struct RowDto {
     pub warning: Option<String>,
     /// "Needs input" or a warning: highlighted.
     pub flagged: bool,
-    /// The answer can be saved to `profile.yaml`.
+    /// The answer can be remembered for the next applications.
     pub rememberable: bool,
     pub remember: bool,
 }

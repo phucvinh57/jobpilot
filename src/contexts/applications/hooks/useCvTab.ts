@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { toCommandError, useAction, useQuery, type CommandError } from "@/shared";
+import { toCommandError, useQuery, type CommandError } from "@/shared";
 
-import { openProfile, readCv, readCvPage, saveCv } from "../api/applicationsApi";
+import { readCv, readCvPage, saveCv } from "../api/applicationsApi";
 import { canAsk, editorNote } from "../domain/cv";
 import { Debounce, EDIT_DEBOUNCE, RenderQueue } from "../domain/renderQueue";
 import type { Cv } from "../domain/types";
@@ -46,8 +46,6 @@ export interface CvTabModel {
   edit: (text: string) => void;
   /** "Ask AI": `true` when it started (the box clears). */
   ask: (instruction: string) => boolean;
-  openProfile: () => void;
-  openError: CommandError | undefined;
 }
 
 /**
@@ -198,8 +196,6 @@ export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel 
   );
 
   const doc = useMemo(() => (data === undefined ? undefined : { text: data.yaml ?? "" }), [data]);
-  const open = useAction(openProfile);
-
   return {
     cv: data,
     loadError: query.error,
@@ -215,7 +211,5 @@ export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel 
     pages: pageUrls.urls,
     edit,
     ask,
-    openProfile: () => void open.run(),
-    openError: open.error,
   };
 }
