@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { browserLine, browserTag, downloadLabel, FIRST_SUGGESTION, sessionLine, statusTone, SUGGESTIONS, type Chrome } from "./sessions";
+import {
+  browserLine,
+  browserTag,
+  downloadLabel,
+  FIRST_SUGGESTION,
+  sessionLine,
+  statusTone,
+  SUGGESTIONS,
+  type Chrome,
+} from "./sessions";
 
 const CHROME: Chrome = { path: "/usr/bin/chromium", source: "system" };
 
@@ -14,8 +23,12 @@ describe("sessions", () => {
   it("says when a session was last verified", () => {
     const now = new Date("2026-11-14T12:00:00Z");
     expect(sessionLine({ host: "www.linkedin.com", verifiedAt: null }, now)).toBe("www.linkedin.com - never verified");
-    expect(sessionLine({ host: "www.linkedin.com", verifiedAt: "2026-11-14T11:55:00Z" }, now)).toBe("www.linkedin.com - verified 5 min ago");
-    expect(sessionLine({ host: "indeed.com", verifiedAt: "2026-11-12T12:00:00Z" }, now)).toBe("indeed.com - verified 2 d ago");
+    expect(sessionLine({ host: "www.linkedin.com", verifiedAt: "2026-11-14T11:55:00Z" }, now)).toBe(
+      "www.linkedin.com - verified 5 min ago",
+    );
+    expect(sessionLine({ host: "indeed.com", verifiedAt: "2026-11-12T12:00:00Z" }, now)).toBe(
+      "indeed.com - verified 2 d ago",
+    );
   });
 
   it("offers quick starts, the first one filling the form", () => {

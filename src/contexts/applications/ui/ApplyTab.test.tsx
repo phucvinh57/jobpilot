@@ -38,12 +38,64 @@ function show(apply: Apply) {
 
 const ROWS = [
   row({ id: "name", label: "Full name", value: "Ada Lovelace" }),
-  row({ id: "pitch", label: "Why us?", input: "area", kind: "textarea", value: "", required: true, tag: { label: "needs input", tone: "danger" }, flagged: true }),
-  row({ id: "remote", label: "Remote?", input: "chips", kind: "radio", options: ["Yes", "No"], value: "", required: false }),
-  row({ id: "tools", label: "Tools", input: "multiChips", kind: "checkbox_group", options: ["Rust", "Go"], value: "Rust", required: false }),
-  row({ id: "terms", label: "Terms", input: "checkbox", kind: "checkbox", value: "no", required: false, rememberable: false }),
-  row({ id: "cv", label: "Resume", input: "readonly", kind: "file", value: "/tmp/cv.pdf", shown: "cv.pdf", required: true, rememberable: false }),
-  row({ id: "phone", label: "Phone", input: "readonly", editable: false, step: 1, value: "", shown: "", required: true, rememberable: false }),
+  row({
+    id: "pitch",
+    label: "Why us?",
+    input: "area",
+    kind: "textarea",
+    value: "",
+    required: true,
+    tag: { label: "needs input", tone: "danger" },
+    flagged: true,
+  }),
+  row({
+    id: "remote",
+    label: "Remote?",
+    input: "chips",
+    kind: "radio",
+    options: ["Yes", "No"],
+    value: "",
+    required: false,
+  }),
+  row({
+    id: "tools",
+    label: "Tools",
+    input: "multiChips",
+    kind: "checkbox_group",
+    options: ["Rust", "Go"],
+    value: "Rust",
+    required: false,
+  }),
+  row({
+    id: "terms",
+    label: "Terms",
+    input: "checkbox",
+    kind: "checkbox",
+    value: "no",
+    required: false,
+    rememberable: false,
+  }),
+  row({
+    id: "cv",
+    label: "Resume",
+    input: "readonly",
+    kind: "file",
+    value: "/tmp/cv.pdf",
+    shown: "cv.pdf",
+    required: true,
+    rememberable: false,
+  }),
+  row({
+    id: "phone",
+    label: "Phone",
+    input: "readonly",
+    editable: false,
+    step: 1,
+    value: "",
+    shown: "",
+    required: true,
+    rememberable: false,
+  }),
 ];
 
 beforeEach(() => {
@@ -54,7 +106,9 @@ beforeEach(() => {
     applyProgress = handler;
     return () => undefined;
   });
-  mocked.syncApply.mockResolvedValue(primary({ action: "submit", label: "Submit", enabled: false, hint: "1 required field(s) still empty" }));
+  mocked.syncApply.mockResolvedValue(
+    primary({ action: "submit", label: "Submit", enabled: false, hint: "1 required field(s) still empty" }),
+  );
   mocked.setDryRun.mockResolvedValue(undefined);
   mocked.saveApplyUrl.mockResolvedValue(undefined);
   mocked.discardApply.mockResolvedValue(undefined);
@@ -62,7 +116,11 @@ beforeEach(() => {
   mocked.markApply.mockResolvedValue(undefined);
   mocked.prepareApply.mockResolvedValue(undefined);
   mocked.readShot.mockResolvedValue(new Blob(["png"], { type: "image/png" }));
-  Object.defineProperty(URL, "createObjectURL", { value: vi.fn(() => "blob:shot"), configurable: true, writable: true });
+  Object.defineProperty(URL, "createObjectURL", {
+    value: vi.fn(() => "blob:shot"),
+    configurable: true,
+    writable: true,
+  });
   Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true, writable: true });
 });
 
@@ -138,7 +196,9 @@ describe("before a form is open", () => {
 
 describe("while the form is being filled", () => {
   it("shows the steps so far, with the latest one marked", async () => {
-    show(idleApply({ phase: "preparing", working: { title: "Preparing the application", lines: ["Opening the page"] } }));
+    show(
+      idleApply({ phase: "preparing", working: { title: "Preparing the application", lines: ["Opening the page"] } }),
+    );
     expect(await screen.findByText("Preparing the application")).toBeTruthy();
     expect(screen.getByText("Opening the page")).toBeTruthy();
     act(() => applyProgress?.({ appId: 7, lines: ["Opening the page", "Reading the fields"] }));
@@ -247,8 +307,23 @@ describe("the review", () => {
       review: base.review && {
         ...base.review,
         closeLabel: "Close dry run",
-        notice: { tone: "warn", title: "Required fields empty", body: "1 required field(s) still empty: fill them to enable the Submit button." },
-        notes: [{ text: "Typst is not installed", problem: { kind: "noTypst", challenge: null, advice: "Install typst.", settingsSection: null, retryable: false } }],
+        notice: {
+          tone: "warn",
+          title: "Required fields empty",
+          body: "1 required field(s) still empty: fill them to enable the Submit button.",
+        },
+        notes: [
+          {
+            text: "Typst is not installed",
+            problem: {
+              kind: "noTypst",
+              challenge: null,
+              advice: "Install typst.",
+              settingsSection: null,
+              retryable: false,
+            },
+          },
+        ],
       },
     });
     expect(await screen.findByRole("group", { name: "Required fields empty" })).toBeTruthy();
@@ -273,13 +348,21 @@ describe("the review", () => {
     // A new review (a new generation) starts the editors again from the filled form.
     mocked.readApply.mockResolvedValue(reviewApply([row({ id: "name", value: "Ada Lovelace" })], { generation: 2 }));
     act(() => changed.forEach((handler) => handler("applications")));
-    await waitFor(() => expect((screen.getByRole("textbox", { name: "Full name" }) as HTMLInputElement).value).toBe("Ada Lovelace"));
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: "Full name" }) as HTMLInputElement).value).toBe("Ada Lovelace"),
+    );
   });
 });
 
 describe("the end of a run", () => {
   it("confirms a submitted application and shows the proof", async () => {
-    show({ ...idleApply(), phase: "done", idle: null, generation: 3, done: { body: "boards.example.com confirmed the application for Engineer.", hasProof: true } });
+    show({
+      ...idleApply(),
+      phase: "done",
+      idle: null,
+      generation: 3,
+      done: { body: "boards.example.com confirmed the application for Engineer.", hasProof: true },
+    });
     expect(await screen.findByRole("group", { name: "Application submitted" })).toBeTruthy();
     expect(screen.getByText("boards.example.com confirmed the application for Engineer.")).toBeTruthy();
     expect(await screen.findByRole("img", { name: "Proof" })).toBeTruthy();
@@ -292,17 +375,27 @@ describe("the end of a run", () => {
       ...idleApply(),
       phase: "handoff",
       idle: null,
-      handoff: { title: "A CAPTCHA is in the way", reason: "The page asked for a CAPTCHA.", captcha: true, headed: false, hasScreenshot: true },
+      handoff: {
+        title: "A CAPTCHA is in the way",
+        reason: "The page asked for a CAPTCHA.",
+        captcha: true,
+        headed: false,
+        hasScreenshot: true,
+      },
     });
     expect(await screen.findByRole("group", { name: "A CAPTCHA is in the way" })).toBeTruthy();
     expect(screen.getByText(/Open a visible browser on the same profile/)).toBeTruthy();
     expect(await screen.findByRole("img", { name: "What the page looked like" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Open visible browser" }));
     expect(mocked.openVisible).toHaveBeenCalledWith(7);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Mark as applied" }).hasAttribute("disabled")).toBe(false));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Mark as applied" }).hasAttribute("disabled")).toBe(false),
+    );
     await user.click(screen.getByRole("button", { name: "Mark as applied" }));
     expect(mocked.markApply).toHaveBeenCalledWith(7, true);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Mark failed" }).hasAttribute("disabled")).toBe(false));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Mark failed" }).hasAttribute("disabled")).toBe(false),
+    );
     await user.click(screen.getByRole("button", { name: "Mark failed" }));
     expect(mocked.markApply).toHaveBeenLastCalledWith(7, false);
   });
@@ -313,7 +406,13 @@ describe("the end of a run", () => {
       phase: "handoff",
       idle: null,
       busy: "Saving...",
-      handoff: { title: "The form needs you", reason: "A field could not be filled.", captcha: false, headed: true, hasScreenshot: false },
+      handoff: {
+        title: "The form needs you",
+        reason: "A field could not be filled.",
+        captcha: false,
+        headed: true,
+        hasScreenshot: false,
+      },
     });
     expect(await screen.findByText("Saving...")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Mark as applied" }).hasAttribute("disabled")).toBe(true);

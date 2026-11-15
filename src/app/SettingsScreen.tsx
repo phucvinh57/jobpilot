@@ -7,7 +7,21 @@ import { useEffect, type ReactNode } from "react";
 import { JobSourcesSection } from "@/contexts/discovery";
 import { GmailSection, ProvidersSection, SessionsSection } from "@/contexts/integrations";
 import { ProfileSection } from "@/contexts/profile";
-import { APPEARANCES, Caption, ErrorBanner, Heading, Page, Section, Segmented, sectionId, useAction, useNav, useShell, type Appearance, type SettingsSection } from "@/shared";
+import {
+  APPEARANCES,
+  Caption,
+  ErrorBanner,
+  Heading,
+  Page,
+  Section,
+  Segmented,
+  sectionId,
+  useAction,
+  useNav,
+  useShell,
+  type Appearance,
+  type SettingsSection,
+} from "@/shared";
 
 function Slot({ section, children }: { section: SettingsSection; children: ReactNode }) {
   return (
@@ -24,8 +38,15 @@ function AppearanceSection() {
   const save = useAction((value: Appearance) => setAppearance(value));
   return (
     <Section title="Appearance" hint="Light, dark, or follow your desktop.">
-      <Segmented label="Appearance" choices={APPEARANCES} value={appearance} onChange={(value) => void save.run(value)} />
-      {save.error && <ErrorBanner error={save.error} title="The appearance was not saved" onDismiss={save.clearError} />}
+      <Segmented
+        label="Appearance"
+        choices={APPEARANCES}
+        value={appearance}
+        onChange={(value) => void save.run(value)}
+      />
+      {save.error && (
+        <ErrorBanner error={save.error} title="The appearance was not saved" onDismiss={save.clearError} />
+      )}
     </Section>
   );
 }

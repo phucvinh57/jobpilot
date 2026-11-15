@@ -13,9 +13,16 @@ describe("the Gmail card", () => {
 
   it("says what the last sync did", () => {
     expect(syncResult(null)).toEqual({ text: "", ok: true });
-    expect(syncResult({ fetched: 4, updated: 1, needsReview: 0, error: null })).toEqual({ text: "fetched 4, updated 1", ok: true });
-    expect(syncResult({ fetched: 4, updated: 1, needsReview: 1, error: null }).text).toBe("fetched 4, updated 1, 1 needs review");
-    expect(syncResult({ fetched: 4, updated: 1, needsReview: 3, error: null }).text).toBe("fetched 4, updated 1, 3 need review");
+    expect(syncResult({ fetched: 4, updated: 1, needsReview: 0, error: null })).toEqual({
+      text: "fetched 4, updated 1",
+      ok: true,
+    });
+    expect(syncResult({ fetched: 4, updated: 1, needsReview: 1, error: null }).text).toBe(
+      "fetched 4, updated 1, 1 needs review",
+    );
+    expect(syncResult({ fetched: 4, updated: 1, needsReview: 3, error: null }).text).toBe(
+      "fetched 4, updated 1, 3 need review",
+    );
     expect(syncResult({ fetched: 0, updated: 0, needsReview: 0, error: "Gmail is not connected" })).toEqual({
       text: "Sync problem: Gmail is not connected",
       ok: false,

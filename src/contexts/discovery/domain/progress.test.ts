@@ -4,7 +4,12 @@ import type { GraphProgress } from "@/shared";
 
 import { movesTheQueue, parsePrepareThread, prepareLabel } from "./progress";
 
-const step = (graph: string, kind: GraphProgress["kind"], node: string | null = null, text: string | null = null): GraphProgress => ({
+const step = (
+  graph: string,
+  kind: GraphProgress["kind"],
+  node: string | null = null,
+  text: string | null = null,
+): GraphProgress => ({
   thread: "t",
   graph,
   kind,

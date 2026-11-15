@@ -32,7 +32,9 @@ describe("Settings > Job sources", () => {
     const first = await screen.findByRole("listitem", { name: /^Acme careers: ok - 1h ago$/ });
     expect(within(first).getByText("Greenhouse boards.greenhouse.io")).toBeTruthy();
     expect(within(first).getByText("ok")).toBeTruthy();
-    expect(within(first).getByRole("switch", { name: "Search Acme careers" }).getAttribute("aria-checked")).toBe("true");
+    expect(within(first).getByRole("switch", { name: "Search Acme careers" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
     // No session bound: "No session" is the one that is on.
     expect(within(first).getByRole("button", { name: "No session" }).getAttribute("aria-pressed")).toBe("true");
     expect(within(first).getByRole("button", { name: "LinkedIn" }).getAttribute("aria-pressed")).toBe("false");
@@ -40,7 +42,9 @@ describe("Settings > Job sources", () => {
     // A source with no name shows its kind; a paused one needs the user, whatever its status says.
     const second = screen.getByRole("listitem", { name: "Career page: needs you: continue it from Jobs" });
     expect(within(second).getByText("needs you")).toBeTruthy();
-    expect(within(second).getByRole("switch", { name: "Search Career page" }).getAttribute("aria-checked")).toBe("false");
+    expect(within(second).getByRole("switch", { name: "Search Career page" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
     expect(within(second).getByRole("button", { name: "LinkedIn" }).getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -122,7 +126,8 @@ describe("Settings > Job sources", () => {
     await user.type(address, "beta.test/careers");
     await user.tab();
 
-    const text = "This page lists its jobs on Greenhouse (boards.greenhouse.io/beta). Add it as a Greenhouse source instead?";
+    const text =
+      "This page lists its jobs on Greenhouse (boards.greenhouse.io/beta). Add it as a Greenhouse source instead?";
     const banner = await screen.findByRole("group", { name: text });
     expect(mocked.suggestBoards).toHaveBeenCalledWith("beta.test/careers");
     const offer = within(banner).getByRole("button", { name: "Add Greenhouse source" });

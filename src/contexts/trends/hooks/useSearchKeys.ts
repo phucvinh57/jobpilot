@@ -28,7 +28,8 @@ export function useSearchKeys() {
       setTyped((before) => ({ ...before, [provider]: value }));
     },
     isShown: (provider: SearchProvider) => shown[provider] === true,
-    toggleShown: (provider: SearchProvider) => setShown((before) => ({ ...before, [provider]: before[provider] !== true })),
+    toggleShown: (provider: SearchProvider) =>
+      setShown((before) => ({ ...before, [provider]: before[provider] !== true })),
     /** Why the last change failed (cleared by the next one). */
     error: missing ?? change.error?.message,
     busy: change.busy,

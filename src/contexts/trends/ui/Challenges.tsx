@@ -40,7 +40,12 @@ export function Challenges({
               >
                 Open page
               </Button>
-              <Button id={`trends-continue-${i}`} size="compact" disabled={busy} onClick={() => onContinue(wait.period)}>
+              <Button
+                id={`trends-continue-${i}`}
+                size="compact"
+                disabled={busy}
+                onClick={() => onContinue(wait.period)}
+              >
                 Continue
               </Button>
               <Button id={`trends-without-${i}`} size="compact" disabled={busy} onClick={() => onWithout(wait.period)}>

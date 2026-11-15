@@ -21,7 +21,9 @@ import {
 describe("the search summary", () => {
   it("reads as a sentence", () => {
     expect(summaryLine({ saved: 3, waiting: 0, failed: 0 })).toBe("Found 3 new leads");
-    expect(summaryLine({ saved: 1, waiting: 1, failed: 2 })).toBe("Found 1 new lead, 1 source waiting for you, 2 sources failed");
+    expect(summaryLine({ saved: 1, waiting: 1, failed: 2 })).toBe(
+      "Found 1 new lead, 1 source waiting for you, 2 sources failed",
+    );
     expect(summaryLine({ saved: 0, waiting: 0, failed: 0 })).toBe("Found 0 new leads");
   });
 
@@ -40,7 +42,9 @@ describe("the dismiss note", () => {
     expect(note(1, 0)).toBe("Lead dismissed, and 1 more job from the same company.");
     expect(note(3, 0)).toBe("Lead dismissed, and 3 more jobs from the same company.");
     expect(note(0, 1)).toBe("Lead dismissed. 1 more job from that company was kept: the CV is being prepared.");
-    expect(dismissedNote({ also: 0, kept: 0, notExcluded: "disk full" })).toBe("Lead dismissed, but the company could not be excluded: disk full");
+    expect(dismissedNote({ also: 0, kept: 0, notExcluded: "disk full" })).toBe(
+      "Lead dismissed, but the company could not be excluded: disk full",
+    );
     expect(note(2, 2)).toBe(
       "Lead dismissed, and 2 more jobs from the same company. 2 more jobs from that company were kept: the CV is being prepared.",
     );
@@ -95,7 +99,9 @@ describe("sources on Today", () => {
     expect(sourceStatus(source("a", "paused for today: repeated challenges", true), now)).toBe(
       "paused for today: repeated challenges, 1 h ago",
     );
-    expect(sourceStatus(source("a", "failed_to_fetch", false), now), "underscores read as spaces").toBe("failed to fetch");
+    expect(sourceStatus(source("a", "failed_to_fetch", false), now), "underscores read as spaces").toBe(
+      "failed to fetch",
+    );
     expect(sourceNeedsAttention(source("a", "needs_human", false))).toBe(true);
     expect(sourceNeedsAttention(source("a", "failed: boom", true))).toBe(true);
     expect(sourceNeedsAttention(source("a", "ok", true))).toBe(false);
@@ -106,7 +112,9 @@ describe("sources on Today", () => {
 describe("links and meta lines", () => {
   it("only http(s) links are opened", () => {
     expect(isWebLink("https://a.test/jobs/1") && isWebLink(" HTTP://a.test")).toBe(true);
-    expect(isWebLink("file:///etc/passwd") || isWebLink("javascript:alert(1)") || isWebLink("manual:abc") || isWebLink("")).toBe(false);
+    expect(
+      isWebLink("file:///etc/passwd") || isWebLink("javascript:alert(1)") || isWebLink("manual:abc") || isWebLink(""),
+    ).toBe(false);
   });
 
   it("the line under a lead's name says where", () => {
@@ -118,9 +126,12 @@ describe("links and meta lines", () => {
 
   it("names a lead and lists its reasons", () => {
     expect(leadTitle("Acme", "Engineer")).toBe("Acme — Engineer");
-    expect(reasonsLine([{ criterion: "skills", score: 90, text: "Rust matches" }, { criterion: "location", score: 100, text: "remote" }])).toBe(
-      "skills 90: Rust matches · location 100: remote",
-    );
+    expect(
+      reasonsLine([
+        { criterion: "skills", score: 90, text: "Rust matches" },
+        { criterion: "location", score: 100, text: "remote" },
+      ]),
+    ).toBe("skills 90: Rust matches · location 100: remote");
     expect(reasonsLine([])).toBe("");
   });
 });

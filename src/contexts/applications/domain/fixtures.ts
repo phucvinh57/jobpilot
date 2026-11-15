@@ -2,22 +2,20 @@
 
 import type { Problem } from "@/shared";
 
-import type {
-  Apply,
-  ApplicationHeader,
-  Board,
-  BoardCard,
-  Cv,
-  Jd,
-  Primary,
-  ReviewRow,
-  Timeline,
-} from "./types";
+import type { Apply, ApplicationHeader, Board, BoardCard, Cv, Jd, Primary, ReviewRow, Timeline } from "./types";
 
 export const OTHER: Problem = { kind: "other", challenge: null, advice: null, settingsSection: null, retryable: false };
 
 export function primary(over: Partial<Primary> = {}): Primary {
-  return { action: "approveCv", label: "Approve CV", enabled: true, loading: false, hint: null, settings: null, ...over };
+  return {
+    action: "approveCv",
+    label: "Approve CV",
+    enabled: true,
+    loading: false,
+    hint: null,
+    settings: null,
+    ...over,
+  };
 }
 
 export function header(over: Partial<ApplicationHeader> = {}): ApplicationHeader {
@@ -66,13 +64,31 @@ export function board(): Board {
       {
         key: "cv",
         label: "CVs",
-        cards: [card(), card({ id: 2, title: "SRE", subtitle: "Globex", status: "CV ready", next: { label: "Review & submit", tone: "accent" }, age: "2 d" })],
+        cards: [
+          card(),
+          card({
+            id: 2,
+            title: "SRE",
+            subtitle: "Globex",
+            status: "CV ready",
+            next: { label: "Review & submit", tone: "accent" },
+            age: "2 d",
+          }),
+        ],
       },
       {
         key: "applied",
         label: "Applied",
         cards: [
-          card({ id: 3, title: "Platform Engineer", subtitle: "Initech", status: "Applied", next: { label: "No reply yet", tone: "neutral" }, age: "5 d", stage: "applied" }),
+          card({
+            id: 3,
+            title: "Platform Engineer",
+            subtitle: "Initech",
+            status: "Applied",
+            next: { label: "No reply yet", tone: "neutral" },
+            age: "5 d",
+            stage: "applied",
+          }),
         ],
       },
       {
@@ -95,7 +111,16 @@ export function board(): Board {
         key: "done",
         label: "Done",
         cards: [
-          card({ id: 5, title: "SRE", subtitle: "Hooli", status: "Offer", next: { label: "Offer", tone: "ok" }, age: "9 d", outcome: "success", stage: "done" }),
+          card({
+            id: 5,
+            title: "SRE",
+            subtitle: "Hooli",
+            status: "Offer",
+            next: { label: "Offer", tone: "ok" },
+            age: "9 d",
+            outcome: "success",
+            stage: "done",
+          }),
           card({
             id: 6,
             title: "Go Developer",

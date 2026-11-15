@@ -12,8 +12,8 @@ function SignedOut({ gmail, card }: { gmail: Gmail; card: GmailCard }) {
   return (
     <div className="flex flex-col gap-3 pt-2">
       <Caption>
-        Create an OAuth client of type &quot;Desktop app&quot; in the Google Cloud Console, enable the Gmail API, then paste its client ID and secret. The
-        secret is kept in the OS keyring.
+        Create an OAuth client of type &quot;Desktop app&quot; in the Google Cloud Console, enable the Gmail API, then
+        paste its client ID and secret. The secret is kept in the OS keyring.
       </Caption>
       <Field label="Client ID">
         <TextInput
@@ -65,14 +65,22 @@ function SignedIn({ gmail, account, card }: { gmail: Gmail; account: string; car
       </div>
       <div className="flex flex-col gap-1 text-small">
         <p className="text-muted">{lastSyncLine(gmail.lastSync)}</p>
-        {result.text !== "" && <p className={result.ok ? "selectable text-muted" : "selectable text-danger"}>{result.text}</p>}
+        {result.text !== "" && (
+          <p className={result.ok ? "selectable text-muted" : "selectable text-danger"}>{result.text}</p>
+        )}
         <p className="text-muted">{pollLine(gmail.pollMinutes)}</p>
       </div>
       <div className="flex gap-2">
         <Button id="gmail-sync" busy={runner.busy === "syncing"} disabled={!idle} onClick={card.syncNow}>
           Sync now
         </Button>
-        <Button id="gmail-disconnect" variant="danger" busy={runner.busy === "disconnecting"} disabled={!idle} onClick={card.disconnect}>
+        <Button
+          id="gmail-disconnect"
+          variant="danger"
+          busy={runner.busy === "disconnecting"}
+          disabled={!idle}
+          onClick={card.disconnect}
+        >
           {disconnectLabel(card.confirmDisconnect)}
         </Button>
       </div>
@@ -95,10 +103,25 @@ export function GmailSection() {
       hint={HINT}
       actions={gmail && <Tag tone={connected ? "ok" : "neutral"}>{connected ? "Connected" : "Not connected"}</Tag>}
     >
-      {card.query.error && !gmail && <ErrorBanner error={card.query.error} title="Could not read the Gmail settings" onRetry={card.query.reload} />}
-      {gmail && (account !== null ? <SignedIn gmail={gmail} account={account} card={card} /> : <SignedOut gmail={gmail} card={card} />)}
+      {card.query.error && !gmail && (
+        <ErrorBanner error={card.query.error} title="Could not read the Gmail settings" onRetry={card.query.reload} />
+      )}
+      {gmail &&
+        (account !== null ? (
+          <SignedIn gmail={gmail} account={account} card={card} />
+        ) : (
+          <SignedOut gmail={gmail} card={card} />
+        ))}
       {runner.notice && <Notice text={runner.notice} />}
-      {runner.error && <ErrorBanner id="gmail-error" error={runner.error} title={runner.errorTitle} onRetry={runner.retry} onDismiss={runner.reset} />}
+      {runner.error && (
+        <ErrorBanner
+          id="gmail-error"
+          error={runner.error}
+          title={runner.errorTitle}
+          onRetry={runner.retry}
+          onDismiss={runner.reset}
+        />
+      )}
     </Section>
   );
 }

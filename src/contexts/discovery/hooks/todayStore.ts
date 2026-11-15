@@ -7,7 +7,15 @@
 
 import { create } from "zustand";
 
-import { CommandError, needsRecheck, toCommandError, useNav, useShell, type DrawerTarget, type GraphProgress } from "@/shared";
+import {
+  CommandError,
+  needsRecheck,
+  toCommandError,
+  useNav,
+  useShell,
+  type DrawerTarget,
+  type GraphProgress,
+} from "@/shared";
 
 import * as api from "../api/discoveryApi";
 import {
@@ -251,7 +259,13 @@ export async function submitLink(raw: string): Promise<boolean> {
     input = await api.parseInput(raw);
   } catch (thrown) {
     const error = toCommandError(thrown);
-    set({ addFailures: pushFailure(get().addFailures, { message: error.message, input: undefined, problem: error.problem }, sameInput) });
+    set({
+      addFailures: pushFailure(
+        get().addFailures,
+        { message: error.message, input: undefined, problem: error.problem },
+        sameInput,
+      ),
+    });
     return false;
   }
   return input !== null && addInput(input);
@@ -312,7 +326,13 @@ function startAdd(input: LeadInput): void {
     (thrown: unknown) => {
       const error = toCommandError(thrown);
       recheck(error);
-      set({ addFailures: pushFailure(get().addFailures, { message: error.message, input, problem: error.problem }, sameInput) });
+      set({
+        addFailures: pushFailure(
+          get().addFailures,
+          { message: error.message, input, problem: error.problem },
+          sameInput,
+        ),
+      });
       readNext();
     },
   );
@@ -333,7 +353,13 @@ export async function addDropped(path: string): Promise<void> {
     addInput(await api.fileInput(path));
   } catch (thrown) {
     const error = toCommandError(thrown);
-    set({ addFailures: pushFailure(get().addFailures, { message: error.message, input: undefined, problem: error.problem }, sameInput) });
+    set({
+      addFailures: pushFailure(
+        get().addFailures,
+        { message: error.message, input: undefined, problem: error.problem },
+        sameInput,
+      ),
+    });
   }
 }
 
@@ -429,7 +455,10 @@ export function applyPrepared(outcome: PrepareOutcome): void {
   if (outcome.error === null && outcome.applicationId !== null) {
     set({
       jobs,
-      prepared: [...state.prepared, { applicationId: outcome.applicationId, label: outcome.label ?? `Application ${outcome.applicationId}` }],
+      prepared: [
+        ...state.prepared,
+        { applicationId: outcome.applicationId, label: outcome.label ?? `Application ${outcome.applicationId}` },
+      ],
     });
   } else {
     const error = outcome.error ?? new CommandError(STOPPED);

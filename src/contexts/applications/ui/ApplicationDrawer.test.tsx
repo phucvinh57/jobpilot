@@ -54,8 +54,18 @@ async function open(over: Partial<ApplicationHeader> = {}) {
 }
 
 beforeEach(() => {
-  useNav.setState({ screen: "jobs", stage: "cv", drawer: undefined, applicationId: undefined, settingsFocus: undefined });
-  Object.defineProperty(URL, "createObjectURL", { value: vi.fn(() => "blob:page"), configurable: true, writable: true });
+  useNav.setState({
+    screen: "jobs",
+    stage: "cv",
+    drawer: undefined,
+    applicationId: undefined,
+    settingsFocus: undefined,
+  });
+  Object.defineProperty(URL, "createObjectURL", {
+    value: vi.fn(() => "blob:page"),
+    configurable: true,
+    writable: true,
+  });
   Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true, writable: true });
   mocked.onProgress.mockReturnValue(() => undefined);
   mocked.onApplyProgress.mockReturnValue(() => undefined);
@@ -87,7 +97,9 @@ describe("the application drawer", () => {
     const drawer = await open();
     expect(within(drawer).getByText("Draft")).toBeTruthy();
     expect(within(drawer).getByText("Acme · Berlin")).toBeTruthy();
-    expect(within(drawer).getByRole("listitem", { name: "Step 2: CV review" }).getAttribute("aria-current")).toBe("step");
+    expect(within(drawer).getByRole("listitem", { name: "Step 2: CV review" }).getAttribute("aria-current")).toBe(
+      "step",
+    );
     expect(await within(drawer).findByText("moved to Applied")).toBeTruthy();
     const approve = within(drawer).getByRole("button", { name: "Approve CV" });
     expect(approve.id).toBe("primary-action");
@@ -131,9 +143,18 @@ describe("the application drawer", () => {
     const drawer = await open(INTERVIEW);
     expect(primaryButtons()).toEqual([]);
     const picker = within(drawer).getByRole("region", { name: "Interview round" });
-    const chips = within(picker).getAllByRole("button", { pressed: false }).concat(within(picker).getAllByRole("button", { pressed: true }));
-    expect(chips.map((c) => c.textContent).sort()).toEqual(["Final interview", "HR screen", "System design", "Technical interview"]);
-    expect(within(picker).getByRole("button", { name: "Technical interview" }).getAttribute("aria-pressed")).toBe("true");
+    const chips = within(picker)
+      .getAllByRole("button", { pressed: false })
+      .concat(within(picker).getAllByRole("button", { pressed: true }));
+    expect(chips.map((c) => c.textContent).sort()).toEqual([
+      "Final interview",
+      "HR screen",
+      "System design",
+      "Technical interview",
+    ]);
+    expect(within(picker).getByRole("button", { name: "Technical interview" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
 
     await user.click(within(picker).getByRole("button", { name: "System design" }));
     expect(mocked.setRound).toHaveBeenCalledWith(7, "System design");

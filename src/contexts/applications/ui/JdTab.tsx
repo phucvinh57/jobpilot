@@ -1,7 +1,20 @@
 // The JD tab: where the posting came from, the company brief (or the key requirements when there is
 // none), and the posting text. The text is untrusted: it is shown as plain text, never as markup.
 
-import { Caption, Card, ErrorBanner, Heading, LinkButton, NOT_FOUND, openUrl, SectionLabel, Tag, CompanyBlock, InterviewBlock, type Insight } from "@/shared";
+import {
+  Caption,
+  Card,
+  ErrorBanner,
+  Heading,
+  LinkButton,
+  NOT_FOUND,
+  openUrl,
+  SectionLabel,
+  Tag,
+  CompanyBlock,
+  InterviewBlock,
+  type Insight,
+} from "@/shared";
 
 import { useJd } from "../hooks/useTabs";
 
@@ -31,7 +44,9 @@ function Brief({ insight }: { insight: Insight }) {
         <SectionLabel>Skills</SectionLabel>
         {none && <Caption>{NOT_FOUND}</Caption>}
         {insight.requiredSkills.length > 0 && <TagRow label="Required" items={insight.requiredSkills} must />}
-        {insight.preferredSkills.length > 0 && <TagRow label="Preferred" items={insight.preferredSkills} must={false} />}
+        {insight.preferredSkills.length > 0 && (
+          <TagRow label="Preferred" items={insight.preferredSkills} must={false} />
+        )}
       </div>
       <InterviewBlock insight={insight} />
     </Card>
@@ -69,7 +84,10 @@ export function JdTab({ id }: { id: number }) {
         {data.text === null ? (
           <p className="text-body text-muted">No JD text yet.</p>
         ) : (
-          <p id="jd-text" className="selectable max-h-[480px] overflow-y-auto whitespace-pre-wrap break-words text-body text-ink">
+          <p
+            id="jd-text"
+            className="selectable max-h-[480px] overflow-y-auto whitespace-pre-wrap break-words text-body text-ink"
+          >
             {data.text}
           </p>
         )}

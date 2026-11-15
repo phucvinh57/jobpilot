@@ -17,7 +17,11 @@ vi.mock("@/shared/bridge", () => ({
 
 const mocked = vi.mocked(api);
 
-const REVIEW = { id: "m1", title: "Rejection (60% sure): Your application", body: "From hr@acme.test - sounds like a no" };
+const REVIEW = {
+  id: "m1",
+  title: "Rejection (60% sure): Your application",
+  body: "From hr@acme.test - sounds like a no",
+};
 
 beforeEach(() => {
   mocked.readTimeline.mockResolvedValue(timeline());
@@ -39,11 +43,23 @@ describe("the Timeline tab", () => {
 
   it("carries the whole text of a cut event as its tooltip", async () => {
     mocked.readTimeline.mockResolvedValue(
-      timeline({ events: [{ id: 5, tone: "danger", text: "the form could not be filled...", full: "the form could not be filled\nfield: email", when: "2026-11-03 10:00" }] }),
+      timeline({
+        events: [
+          {
+            id: 5,
+            tone: "danger",
+            text: "the form could not be filled...",
+            full: "the form could not be filled\nfield: email",
+            when: "2026-11-03 10:00",
+          },
+        ],
+      }),
     );
     render(<TimelineTab id={7} />);
     await screen.findByText("the form could not be filled...");
-    expect(document.getElementById("event-5")?.getAttribute("title")).toBe("the form could not be filled\nfield: email");
+    expect(document.getElementById("event-5")?.getAttribute("title")).toBe(
+      "the form could not be filled\nfield: email",
+    );
   });
 
   it("says when nothing has happened", async () => {
@@ -60,7 +76,9 @@ describe("the Timeline tab", () => {
     expect(within(banner).getByText(REVIEW.body)).toBeTruthy();
     await user.click(within(banner).getByRole("button", { name: "Accept" }));
     expect(mocked.resolveEmail).toHaveBeenCalledWith("m1", true);
-    await waitFor(() => expect(within(banner).getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(false));
+    await waitFor(() =>
+      expect(within(banner).getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(false),
+    );
     await user.click(within(banner).getByRole("button", { name: "Dismiss" }));
     expect(mocked.resolveEmail).toHaveBeenLastCalledWith("m1", false);
   });

@@ -39,9 +39,18 @@ function SourceRow({
   const { line, outcome } = statusLine(source, now);
   const tag = sourceTag(outcome, waiting);
   return (
-    <li id={`source-${id}`} aria-label={`${name}: ${line}`} className="flex flex-col gap-2 border border-border bg-surface-alt p-3">
+    <li
+      id={`source-${id}`}
+      aria-label={`${name}: ${line}`}
+      className="flex flex-col gap-2 border border-border bg-surface-alt p-3"
+    >
       <div className="flex items-center gap-3">
-        <Switch id={`source-${id}-enabled`} ariaLabel={`Search ${name}`} checked={source.enabled} onChange={onEnabled} />
+        <Switch
+          id={`source-${id}-enabled`}
+          ariaLabel={`Search ${name}`}
+          checked={source.enabled}
+          onChange={onEnabled}
+        />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="truncate font-semibold text-ink">{name}</span>
           <span className="truncate text-small text-muted">{rowAddress(source, kinds)}</span>
@@ -54,11 +63,20 @@ function SourceRow({
       <Caption className="selectable">{line}</Caption>
       <div role="group" aria-label="Browser session" className="flex flex-wrap items-center gap-1.5">
         <Caption>Browser session:</Caption>
-        <FilterChip id={`source-${id}-session-none`} selected={source.sessionId === null} onClick={() => onSession(null)}>
+        <FilterChip
+          id={`source-${id}-session-none`}
+          selected={source.sessionId === null}
+          onClick={() => onSession(null)}
+        >
           No session
         </FilterChip>
         {sessions.map((session) => (
-          <FilterChip key={session.id} id={`source-${id}-session-${session.id}`} selected={source.sessionId === session.id} onClick={() => onSession(session.id)}>
+          <FilterChip
+            key={session.id}
+            id={`source-${id}-session-${session.id}`}
+            selected={source.sessionId === session.id}
+            onClick={() => onSession(session.id)}
+          >
             {session.name}
           </FilterChip>
         ))}
@@ -89,14 +107,24 @@ function AddForm({
         <span className="text-small font-medium text-muted">Kind</span>
         <div role="group" aria-label="Kind" className="flex flex-wrap gap-1.5">
           {kinds.map((k) => (
-            <FilterChip key={k.kind} id={`new-source-kind-${k.kind}`} selected={k.kind === kind} onClick={() => setKind(k.kind)}>
+            <FilterChip
+              key={k.kind}
+              id={`new-source-kind-${k.kind}`}
+              selected={k.kind === kind}
+              onClick={() => setKind(k.kind)}
+            >
               {k.label}
             </FilterChip>
           ))}
         </div>
       </div>
       <Field label="Name">
-        <TextInput id="new-source-name" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
+        <TextInput
+          id="new-source-name"
+          placeholder="Name (optional)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
       </Field>
       <Field label="Board name or address">
         <TextInput
@@ -170,7 +198,12 @@ export function JobSourcesSection() {
       }
     >
       <div className="flex flex-col gap-1">
-        <Switch id="search-daily" label="Search daily while JobPilot is open" checked={v.daily} onChange={change(v.setDaily)} />
+        <Switch
+          id="search-daily"
+          label="Search daily while JobPilot is open"
+          checked={v.daily}
+          onChange={change(v.setDaily)}
+        />
         <Caption>Looks again when the last search is a day old. Never while one is running.</Caption>
       </div>
       <ul role="list" aria-label="Sources" className="flex flex-col gap-2">
@@ -211,7 +244,14 @@ export function JobSourcesSection() {
         />
       )}
       {v.loadError && <ErrorBanner error={v.loadError} title="The job sources could not be read" />}
-      {v.changeError && <ErrorBanner id="sources-error" error={v.changeError} title="The change was not saved" onDismiss={v.clearChangeError} />}
+      {v.changeError && (
+        <ErrorBanner
+          id="sources-error"
+          error={v.changeError}
+          title="The change was not saved"
+          onDismiss={v.clearChangeError}
+        />
+      )}
     </Section>
   );
 }

@@ -8,7 +8,15 @@ import { Row } from "./Row";
 
 /** A list of the preferences as a tag field: chips with a remove button, a small "Add" box, and
  *  suggestion chips. Adding and removing go through the shell, which cleans and compares entries. */
-export function TagField({ field, onAdd, onRemove }: { field: ListField; onAdd: (text: string) => void; onRemove: (item: string) => void }) {
+export function TagField({
+  field,
+  onAdd,
+  onRemove,
+}: {
+  field: ListField;
+  onAdd: (text: string) => void;
+  onRemove: (item: string) => void;
+}) {
   const [typed, setTyped] = useState("");
   const { key, label } = field;
 

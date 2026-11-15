@@ -98,7 +98,9 @@ describe("the Trends screen", () => {
     expect(screen.getAllByRole("button", { name: "Source 1" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: `Open source: ${GLOBEX}` })).toHaveLength(2);
     expect(screen.getByText("Every point links to the stored items it came from.")).toBeTruthy();
-    expect(screen.getByText("1 point(s) were left out: no valid source, or a quote that is not in the source.")).toBeTruthy();
+    expect(
+      screen.getByText("1 point(s) were left out: no valid source, or a quote that is not in the source."),
+    ).toBeTruthy();
 
     // The skill chart: three rows, the one in the preferences marked, the legend.
     const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
@@ -109,7 +111,9 @@ describe("the Trends screen", () => {
 
     // Sources and report search.
     expect(screen.getByRole("switch", { name: "Collect from Hacker News" }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByRole("switch", { name: "Collect from Example engineering blog" }).getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen.getByRole("switch", { name: "Collect from Example engineering blog" }).getAttribute("aria-checked"),
+    ).toBe("false");
     expect(screen.getByText("Report search is on.")).toBeTruthy();
   });
 
@@ -118,16 +122,21 @@ describe("the Trends screen", () => {
     expect(collect().hasAttribute("disabled")).toBe(false);
     // Exactly one primary button on the screen (the kit's primary fill is the only one with `text-on-fill`),
     // also with the form of a source open.
-    const primaries = () => Array.from(document.querySelectorAll("button")).filter((b) => b.className.includes("text-on-fill"));
+    const primaries = () =>
+      Array.from(document.querySelectorAll("button")).filter((b) => b.className.includes("text-on-fill"));
     expect(primaries()).toEqual([collect()]);
     await user.click(screen.getByRole("button", { name: "Web page" }));
     expect(primaries()).toEqual([collect()]);
     await user.click(screen.getByRole("button", { name: "Web page" }));
-    expect(screen.getByText(/^2026-W46: collects from your sources, then your AI provider writes the digest/)).toBeTruthy();
+    expect(
+      screen.getByText(/^2026-W46: collects from your sources, then your AI provider writes the digest/),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Digest period: Weekly" }).getAttribute("aria-pressed")).toBe("true");
 
     mocks.api.overview.mockImplementation((_selected: number | undefined, cadence: string) =>
-      Promise.resolve(overviewFixture(cadence === "quarterly" ? { period: { label: "2026-Q4", title: "Q4 2026" } } : {})),
+      Promise.resolve(
+        overviewFixture(cadence === "quarterly" ? { period: { label: "2026-Q4", title: "Q4 2026" } } : {}),
+      ),
     );
     await user.click(screen.getByRole("button", { name: "Digest period: Quarterly" }));
     expect(await screen.findByText(/^2026-Q4: collects from your sources/)).toBeTruthy();
@@ -253,9 +262,16 @@ describe("the Trends screen", () => {
     expect(within(banner).getByText(/Open the page, deal with it yourself, then continue/)).toBeTruthy();
 
     await user.click(within(banner).getByRole("button", { name: "Open page" }));
-    expect(mocks.invoke).toHaveBeenCalledWith("shared_open_url", { url: "https://reports.example.com/annual-2026.html" });
+    expect(mocks.invoke).toHaveBeenCalledWith("shared_open_url", {
+      url: "https://reports.example.com/annual-2026.html",
+    });
 
-    mocks.api.runJob.mockResolvedValue({ status: "waiting", reportId: null, headline: "A source needs you before the digest can be built: see the banner below.", details: [] });
+    mocks.api.runJob.mockResolvedValue({
+      status: "waiting",
+      reportId: null,
+      headline: "A source needs you before the digest can be built: see the banner below.",
+      details: [],
+    });
     await user.click(within(banner).getByRole("button", { name: "Continue" }));
     expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "resume", period: "2026-W46" });
     expect(await screen.findByText(/A source needs you before the digest can be built/)).toBeTruthy();
@@ -265,7 +281,11 @@ describe("the Trends screen", () => {
   });
 
   it("does not offer a page that is not a web address", async () => {
-    mocks.api.overview.mockResolvedValue(overviewFixture({ challenges: [challengeFixture({ kind: "blocked", what: "blocks automated access", url: null })] }));
+    mocks.api.overview.mockResolvedValue(
+      overviewFixture({
+        challenges: [challengeFixture({ kind: "blocked", what: "blocks automated access", url: null })],
+      }),
+    );
     await shown();
     const banner = screen.getByRole("group", { name: "Example annual report blocks automated access (2026-W46)" });
     expect(within(banner).getByRole("button", { name: "Open page" }).hasAttribute("disabled")).toBe(true);
@@ -295,7 +315,9 @@ describe("the Trends screen", () => {
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
 
     const history = within(screen.getByRole("region", { name: "Earlier digests" }));
-    expect(history.getByRole("button", { name: "Weekly digest 2026-W46, 2026-11-14 09:12" }).getAttribute("aria-current")).toBe("true");
+    expect(
+      history.getByRole("button", { name: "Weekly digest 2026-W46, 2026-11-14 09:12" }).getAttribute("aria-current"),
+    ).toBe("true");
     await user.click(history.getByRole("button", { name: "Weekly digest 2026-W45, 2026-11-07 09:00" }));
     expect(mocks.api.overview).toHaveBeenLastCalledWith(2, "weekly");
   });
@@ -331,7 +353,13 @@ describe("the Trends screen", () => {
     mocks.api.overview.mockResolvedValue(
       overviewFixture({
         chart: null,
-        digest: { reportId: 1, title: "Old digest", when: "2026-01-02 10:00", itemsRead: null, body: { kind: "plain", lines: ["# Old digest", "- a point"] } },
+        digest: {
+          reportId: 1,
+          title: "Old digest",
+          when: "2026-01-02 10:00",
+          itemsRead: null,
+          body: { kind: "plain", lines: ["# Old digest", "- a point"] },
+        },
       }),
     );
     render(<TrendsScreen />);

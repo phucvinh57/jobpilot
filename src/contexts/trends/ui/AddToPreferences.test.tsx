@@ -44,7 +44,9 @@ describe("Add to preferences", () => {
     await shown();
     // Rust is not in the preferences: the point and the chart row both offer it.
     expect(screen.getAllByRole("button", { name: "Add Rust to preferences" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Add Rust to preferences" }).every((b) => !b.hasAttribute("disabled"))).toBe(true);
+    expect(
+      screen.getAllByRole("button", { name: "Add Rust to preferences" }).every((b) => !b.hasAttribute("disabled")),
+    ).toBe(true);
     // Kubernetes is in the preferences already.
     const added = screen.getAllByRole("button", { name: "Kubernetes is in your preferences" });
     expect(added).toHaveLength(2);
@@ -55,7 +57,9 @@ describe("Add to preferences", () => {
     expect(avoided.hasAttribute("disabled")).toBe(true);
     expect(avoided.getAttribute("title")).toBe("In your avoid list");
     // Only the skills and domains of a point can be added: the hiring signal has no button.
-    const hiring = screen.getByText("Remote Rust roles are posted in the monthly hiring thread.").closest("li") as HTMLElement;
+    const hiring = screen
+      .getByText("Remote Rust roles are posted in the monthly hiring thread.")
+      .closest("li") as HTMLElement;
     expect(within(hiring).queryByRole("button", { name: /preferences/ })).toBeNull();
   });
 
@@ -105,7 +109,10 @@ describe("Add to preferences", () => {
   });
 
   it("says why a topic was not added", async () => {
-    mocks.api.addToPreferences.mockResolvedValue({ presence: "avoided", message: '"Rust" is in your avoid list, so it was not added.' });
+    mocks.api.addToPreferences.mockResolvedValue({
+      presence: "avoided",
+      message: '"Rust" is in your avoid list, so it was not added.',
+    });
     const user = await shown();
     await user.click(screen.getAllByRole("button", { name: "Add Rust to preferences" })[0] as HTMLElement);
     const notice = within(await screen.findByRole("group", { name: "Result" }));

@@ -39,7 +39,9 @@ export function suggestionText(hint: Pick<BoardHint, "label" | "input">): string
 
 /** The suggestions to show: at most [`MAX_SUGGESTIONS`], each with ids that stay unique when two boards
  *  have the same kind: banner `board-suggestion-<kind>-<n>`, button `suggest-board-<kind>-<n>`. */
-export function shownSuggestions(hints: readonly BoardHint[]): { hint: BoardHint; bannerId: string; buttonId: string }[] {
+export function shownSuggestions(
+  hints: readonly BoardHint[],
+): { hint: BoardHint; bannerId: string; buttonId: string }[] {
   return hints.slice(0, MAX_SUGGESTIONS).map((hint, n) => {
     const kind = hint.kind.replace(/[^a-z0-9_-]/gi, "");
     return { hint, bannerId: `board-suggestion-${kind}-${n}`, buttonId: `suggest-board-${kind}-${n}` };

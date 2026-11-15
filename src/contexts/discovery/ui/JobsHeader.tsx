@@ -26,7 +26,9 @@ export function LeadsHeaderLine() {
           {t.searchingLabel}
         </span>
       ) : (
-        <span className="text-body text-muted">{t.queue?.lastRun ? lastSearchLine(t.queue.lastRun, now) : "No search yet."}</span>
+        <span className="text-body text-muted">
+          {t.queue?.lastRun ? lastSearchLine(t.queue.lastRun, now) : "No search yet."}
+        </span>
       )}
     </div>
   );
@@ -65,7 +67,12 @@ export function SourcesLine() {
   return (
     <div className="flex flex-col gap-1">
       {t.sources.length > 0 && (
-        <ul id="queue-sources" role="list" aria-label="Job sources" className="flex flex-wrap gap-x-4 gap-y-0.5 text-small">
+        <ul
+          id="queue-sources"
+          role="list"
+          aria-label="Job sources"
+          className="flex flex-wrap gap-x-4 gap-y-0.5 text-small"
+        >
           {t.sources.map((s) => (
             <li key={s.id} id={`source-${s.id}`} className={sourceNeedsAttention(s) ? "text-warn-fg" : "text-subtle"}>
               {`${sourceName(s)}: ${sourceStatus(s, now)}${s.enabled ? "" : " (off)"}`}
@@ -75,7 +82,10 @@ export function SourcesLine() {
       )}
       {t.note && (
         <div className="flex flex-col gap-1">
-          <p id="queue-note" className={t.note.ok ? "selectable text-body text-muted" : "selectable text-body text-danger-fg"}>
+          <p
+            id="queue-note"
+            className={t.note.ok ? "selectable text-body text-muted" : "selectable text-body text-danger-fg"}
+          >
             {t.note.text}
           </p>
           {!t.note.ok && t.note.problem && <ProblemHelp problem={t.note.problem} />}

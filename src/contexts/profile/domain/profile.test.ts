@@ -8,7 +8,13 @@ function profile(patch: Partial<Profile> = {}): Profile {
     jobType: "any",
     fields: [
       { key: "locations", label: "Work locations", placeholder: "Add a city or country", items: [], suggestions: [] },
-      { key: "domains", label: "Interested domains", placeholder: "Add a domain, e.g. fintech", items: [], suggestions: [] },
+      {
+        key: "domains",
+        label: "Interested domains",
+        placeholder: "Add a domain, e.g. fintech",
+        items: [],
+        suggestions: [],
+      },
       { key: "skills", label: "Skills", placeholder: "Add a skill", items: ["Rust"], suggestions: [] },
     ],
     notes: "",

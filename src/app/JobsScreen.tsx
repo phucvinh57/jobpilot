@@ -32,12 +32,26 @@ export function JobsScreen() {
 
   return (
     <div className={clsx("h-full", drawerPad(drawer))}>
-      <Page label="Jobs" title="Jobs" subtitle={<LeadsHeaderLine />} actions={<SearchNowButton otherDrawerOpen={appOpen} />}>
+      <Page
+        label="Jobs"
+        title="Jobs"
+        subtitle={<LeadsHeaderLine />}
+        actions={<SearchNowButton otherDrawerOpen={appOpen} />}
+      >
         <LinkBox />
         <SourcesLine />
         <NeedsYou />
-        <StageBar<Stage> label="Stages" stages={stageItems(summary.newLeads, appStages(board.data))} value={stage} onChange={showStage} />
-        {stage === "leads" ? <LeadsStage otherDrawerOpen={appOpen} /> : <ApplicationsStage stage={stage} board={board} />}
+        <StageBar<Stage>
+          label="Stages"
+          stages={stageItems(summary.newLeads, appStages(board.data))}
+          value={stage}
+          onChange={showStage}
+        />
+        {stage === "leads" ? (
+          <LeadsStage otherDrawerOpen={appOpen} />
+        ) : (
+          <ApplicationsStage stage={stage} board={board} />
+        )}
       </Page>
       <LeadDrawer />
       <ApplicationDrawer />

@@ -75,7 +75,11 @@ export function useToday(): TodayView {
     searching: searchingLabel !== undefined,
     sources: sources.filter((s) => s.enabled).length,
   };
-  const primary = queuePrimaryFor({ ...facts, targets: targets.length, idleTargets: targets.filter((id) => jobs[id] === undefined).length });
+  const primary = queuePrimaryFor({
+    ...facts,
+    targets: targets.length,
+    idleTargets: targets.filter((id) => jobs[id] === undefined).length,
+  });
   const openPrimary = queuePrimaryFor({
     ...facts,
     targets: open === undefined ? 0 : 1,
@@ -93,7 +97,12 @@ export function useToday(): TodayView {
     primary,
     openPrimary,
     placeFor: (otherDrawerOpen) =>
-      primaryPlace({ drawerOpen: open !== undefined, otherDrawerOpen: otherDrawerOpen || appDrawerOpen, checked: checked.length, empty: items.length === 0 }),
+      primaryPlace({
+        drawerOpen: open !== undefined,
+        otherDrawerOpen: otherDrawerOpen || appDrawerOpen,
+        checked: checked.length,
+        empty: items.length === 0,
+      }),
     appDrawerOpen,
     searchingLabel,
     waitingSources: queue?.waiting ?? NO_WAITING,

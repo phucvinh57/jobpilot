@@ -48,7 +48,14 @@ function headerOf(id: number): ApplicationHeader {
 
 beforeEach(() => {
   resetToday();
-  useNav.setState({ screen: "jobs", stage: "leads", drawer: undefined, applicationId: undefined, needsYou: 0, droppedFile: undefined });
+  useNav.setState({
+    screen: "jobs",
+    stage: "leads",
+    drawer: undefined,
+    applicationId: undefined,
+    needsYou: 0,
+    droppedFile: undefined,
+  });
   leadsApi.readQueue.mockResolvedValue(queue());
   leadsApi.readProfileSkills.mockResolvedValue([]);
   leadsApi.onChanged.mockReturnValue(() => undefined);
@@ -78,7 +85,9 @@ describe("the Jobs page", () => {
     render(<JobsScreen />);
     expect(screen.getByRole("heading", { name: "Jobs", level: 1 })).toBeTruthy();
     await screen.findByRole("table", { name: "Leads" });
-    await waitFor(() => expect(stageNames()).toEqual(["Leads, 3", "CVs, 2", "Applied, 1", "In progress, 1", "Done, 2"]));
+    await waitFor(() =>
+      expect(stageNames()).toEqual(["Leads, 3", "CVs, 2", "Applied, 1", "In progress, 1", "Done, 2"]),
+    );
     expect(screen.getByRole("tab", { name: "Leads, 3" }).getAttribute("aria-selected")).toBe("true");
   });
 
@@ -138,7 +147,9 @@ describe("the Jobs page", () => {
     await user.click(await screen.findByRole("row", { name: /^Umbrella, Data Engineer/ }));
     const drawer = await screen.findByRole("dialog", { name: "Umbrella: Data Engineer" });
     const rounds = within(drawer).getByRole("group", { name: "Rounds" });
-    expect(within(rounds).getByRole("button", { name: "Technical interview" }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(rounds).getByRole("button", { name: "Technical interview" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     await user.click(within(rounds).getByRole("button", { name: "System design" }));
     expect(appsApi.setRound).toHaveBeenCalledWith(4, "System design");
     expect(primaryButtons()).toEqual([]);

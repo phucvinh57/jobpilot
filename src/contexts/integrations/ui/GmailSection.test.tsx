@@ -9,7 +9,14 @@ import { GmailSection } from "./GmailSection";
 
 vi.mock("../api/gmailApi");
 
-const SIGNED_OUT: Gmail = { clientId: "", hasClientSecret: false, account: null, lastSync: null, lastReport: null, pollMinutes: 10 };
+const SIGNED_OUT: Gmail = {
+  clientId: "",
+  hasClientSecret: false,
+  account: null,
+  lastSync: null,
+  lastReport: null,
+  pollMinutes: 10,
+};
 const SIGNED_IN: Gmail = {
   clientId: "abc.apps.googleusercontent.com",
   hasClientSecret: true,
@@ -40,7 +47,11 @@ describe("GmailSection", () => {
   });
 
   it("fills the saved client id and says a client secret is saved, without showing it", async () => {
-    vi.mocked(api.loadGmail).mockResolvedValue({ ...SIGNED_OUT, clientId: "abc.apps.googleusercontent.com", hasClientSecret: true });
+    vi.mocked(api.loadGmail).mockResolvedValue({
+      ...SIGNED_OUT,
+      clientId: "abc.apps.googleusercontent.com",
+      hasClientSecret: true,
+    });
     render(<GmailSection />);
     const id = (await screen.findByRole("textbox", { name: "Client ID" })) as HTMLInputElement;
     await waitFor(() => expect(id.value).toBe("abc.apps.googleusercontent.com"));
@@ -58,7 +69,9 @@ describe("GmailSection", () => {
   it("connects with the typed client, empties the secret box and says who is connected", async () => {
     vi.mocked(api.connect).mockResolvedValue("me@example.com");
     render(<GmailSection />);
-    fireEvent.change(await screen.findByRole("textbox", { name: "Client ID" }), { target: { value: " cid.apps.googleusercontent.com " } });
+    fireEvent.change(await screen.findByRole("textbox", { name: "Client ID" }), {
+      target: { value: " cid.apps.googleusercontent.com " },
+    });
     const secret = screen.getByLabelText("Client secret") as HTMLInputElement;
     fireEvent.change(secret, { target: { value: "GOCSPX-secret" } });
     vi.mocked(api.loadGmail).mockResolvedValue(SIGNED_IN);
@@ -102,7 +115,11 @@ describe("GmailSection", () => {
   });
 
   it("shows a sync problem in the danger colour", async () => {
-    vi.mocked(api.loadGmail).mockResolvedValue({ ...SIGNED_IN, lastSync: null, lastReport: { fetched: 0, updated: 0, needsReview: 0, error: "Gmail is not connected" } });
+    vi.mocked(api.loadGmail).mockResolvedValue({
+      ...SIGNED_IN,
+      lastSync: null,
+      lastReport: { fetched: 0, updated: 0, needsReview: 0, error: "Gmail is not connected" },
+    });
     render(<GmailSection />);
     const line = await screen.findByText("Sync problem: Gmail is not connected");
     expect(line.className).toContain("text-danger");
@@ -139,7 +156,10 @@ describe("GmailSection", () => {
     vi.mocked(api.loadGmail).mockResolvedValue(SIGNED_IN);
     render(<GmailSection />);
     await screen.findByText("Last sync: 2026-11-14 09:05");
-    vi.mocked(api.loadGmail).mockResolvedValue({ ...SIGNED_IN, lastSync: new Date(2026, 10, 14, 10, 30).toISOString() });
+    vi.mocked(api.loadGmail).mockResolvedValue({
+      ...SIGNED_IN,
+      lastSync: new Date(2026, 10, 14, 10, 30).toISOString(),
+    });
     changed();
     expect(await screen.findByText("Last sync: 2026-11-14 10:30")).toBeTruthy();
   });

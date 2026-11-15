@@ -143,7 +143,11 @@ export function useProfile(): ProfileCard {
   /** Run a change; its answer is the card. `label` is the "Saved" label (a change that is not
    *  worth one, like a CV, passes none). */
   const edit = useCallback(
-    async <T>(call: () => Promise<T>, toProfile: (result: T) => Profile, label: string | undefined): Promise<T | undefined> => {
+    async <T>(
+      call: () => Promise<T>,
+      toProfile: (result: T) => Profile,
+      label: string | undefined,
+    ): Promise<T | undefined> => {
       const mine = ++seq.current;
       if (label !== undefined) {
         setSaving((n) => n + 1);
@@ -169,7 +173,11 @@ export function useProfile(): ProfileCard {
 
   const addItem = useCallback(
     (field: FieldKey, text: string) => {
-      void edit(() => api.addItem(field, text), (r) => r.profile, "Saved").then((result) => {
+      void edit(
+        () => api.addItem(field, text),
+        (r) => r.profile,
+        "Saved",
+      ).then((result) => {
         // A topic in a list the form does not show (nice or avoided skills), a full list: say so.
         if (result?.message && alive.current) {
           setError(new CommandError(result.message));
@@ -180,11 +188,24 @@ export function useProfile(): ProfileCard {
   );
 
   const removeItem = useCallback(
-    (field: FieldKey, item: string) => void edit(() => api.removeItem(field, item), (p) => p, "Saved"),
+    (field: FieldKey, item: string) =>
+      void edit(
+        () => api.removeItem(field, item),
+        (p) => p,
+        "Saved",
+      ),
     [edit],
   );
 
-  const setJobType = useCallback((jobType: JobType) => void edit(() => api.setJobType(jobType), (p) => p, "Saved"), [edit]);
+  const setJobType = useCallback(
+    (jobType: JobType) =>
+      void edit(
+        () => api.setJobType(jobType),
+        (p) => p,
+        "Saved",
+      ),
+    [edit],
+  );
 
   /** The model reads `text` once, so it can fill what the form hides. Reads and edits queue in the shell. */
   const readNotes = useCallback(
@@ -230,7 +251,13 @@ export function useProfile(): ProfileCard {
     void (async () => {
       if (plan === "saveAndRead") {
         synced.current = text;
-        if ((await edit(() => api.saveNotes(text), (p) => p, "Saved")) === undefined) {
+        if (
+          (await edit(
+            () => api.saveNotes(text),
+            (p) => p,
+            "Saved",
+          )) === undefined
+        ) {
           return;
         }
       }
@@ -249,7 +276,11 @@ export function useProfile(): ProfileCard {
     // A reading that is still going no longer says anything about what is shown.
     notesSeq.current += 1;
     setStatus(NOTES_IDLE);
-    void edit(() => api.undo(), (p) => p, "Undone");
+    void edit(
+      () => api.undo(),
+      (p) => p,
+      "Undone",
+    );
   }, [edit, setStatus]);
 
   /** A CV or profile-file change: runs with `busy` on, answers with the card. */
@@ -317,7 +348,8 @@ export function useProfile(): ProfileCard {
 
   const canSaveNotes =
     profile !== undefined &&
-    savePlan(cleanNotes(notesText, profile.limits.maxNotesChars), profile.notes, notesStatus.kind === "failed") !== "nothing";
+    savePlan(cleanNotes(notesText, profile.limits.maxNotesChars), profile.notes, notesStatus.kind === "failed") !==
+      "nothing";
 
   return {
     profile,
