@@ -20,7 +20,7 @@ export function saveAppearance(appearance: Appearance): Promise<void> {
 }
 
 /** Open an http(s) link in the system browser (the webview itself never navigates). */
-export function openUrl(url: string): Promise<void> {
+function openUrl(url: string): Promise<void> {
   return invoke<void>("shared_open_url", { url });
 }
 

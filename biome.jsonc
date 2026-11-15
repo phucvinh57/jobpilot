@@ -86,7 +86,7 @@
                 "patterns": [
                   { "group": ["@tauri-apps/**"], "message": "Call Tauri through the functions in @/api." },
                   {
-                    "group": ["**/api/bridge", "./bridge", "../bridge"],
+                    "group": ["**/api/bridge", "**/api/bridge.*"],
                     "message": "Use a typed function from @/api/<feature>.ts, or @/api/events for subscriptions."
                   }
                 ]
@@ -107,7 +107,7 @@
                 "patterns": [
                   { "group": ["@tauri-apps/**"], "message": "Call Tauri through the functions in @/api." },
                   {
-                    "group": ["**/api/bridge", "./bridge", "../bridge"],
+                    "group": ["**/api/bridge", "**/api/bridge.*"],
                     "message": "Use a typed function from @/api/<feature>.ts, or @/api/events for subscriptions."
                   },
                   {

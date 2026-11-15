@@ -68,7 +68,7 @@ src/                   React + Vite + TypeScript + Tailwind; feature folders (ap
                        appearance), `today` (the Leads queue)
   api/                 `bridge.ts` (the only Tauri imports: invoke / listen / file picker; imported only inside `api/`), `events.ts`
                        (what the rest may subscribe to: data changed, graph progress, file drop), `shell.ts` (`shared_*`: status,
-                       appearance, `openUrl` / `openLink`), one file of typed command calls per feature
+                       appearance, `openLink`), one file of typed command calls per feature
   lib/                 pure helpers + vitest: `problem`, `theme`/`tokens` (light/dark as `--jp-*` CSS variables; `styles.css` maps them to
                        the only Tailwind colours), `display`, `utils` (`cn`), `<feature>/`
   types/               types mirroring the shell's DTOs (one file per feature, `shell.ts`)
