@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deleteLabel, draftOf, inputOf, keyLabel, modelsLine, providersStatus, switchKind } from "./providers";
+import { deleteLabel, draftOf, inputOf, keyLabel, modelsHint, providersStatus, switchKind } from "./providers";
 import type { KindDefaults, Provider } from "@/types/integrations";
 
 const KINDS: KindDefaults[] = [
@@ -118,7 +118,10 @@ describe("the card", () => {
     expect(providersStatus([])).toEqual({ tone: "warn", text: "No provider" });
   });
 
-  it("counts the models", () => {
-    expect(modelsLine(12)).toBe("12 model(s) available; pick one from the list.");
+  it("says whether the models are listed, how many, or to type the id", () => {
+    expect(modelsHint(true, 0)).toBe("Listing the models of this provider…");
+    expect(modelsHint(false, 0)).toBe("Type the model id.");
+    expect(modelsHint(false, 1)).toBe("1 model available: pick one or type an id.");
+    expect(modelsHint(false, 12)).toBe("12 models available: pick one or type an id.");
   });
 });

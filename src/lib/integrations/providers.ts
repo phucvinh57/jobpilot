@@ -119,7 +119,13 @@ export function providersStatus(providers: readonly Provider[]): { tone: Tone; t
   return { tone: "warn", text: providers.length === 0 ? "No provider" : "No default" };
 }
 
-/** The line after "Load models". */
-export function modelsLine(count: number): string {
-  return `${count} model(s) available; pick one from the list.`;
+/** The hint under the model box: the models are listed on their own while the dialog is open. */
+export function modelsHint(loading: boolean, count: number): string {
+  if (loading) {
+    return "Listing the models of this provider…";
+  }
+  if (count === 0) {
+    return "Type the model id.";
+  }
+  return `${count} ${count === 1 ? "model" : "models"} available: pick one or type an id.`;
 }
