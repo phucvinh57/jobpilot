@@ -4,7 +4,7 @@ import { ago, scoreLabel, scoreTone } from "@/lib/display";
 
 import {
   capitalize,
-  dismissedNote,
+  dismissedDetail,
   isWebLink,
   lastSearchLine,
   leadTitle,
@@ -35,18 +35,15 @@ describe("the search summary", () => {
   });
 });
 
-describe("the dismiss note", () => {
+describe("the dismiss toast", () => {
   it("says what else went and what was kept", () => {
-    const note = (also: number, kept: number) => dismissedNote({ also, kept, notExcluded: null });
-    expect(note(0, 0)).toBe("Lead dismissed.");
-    expect(note(1, 0)).toBe("Lead dismissed, and 1 more job from the same company.");
-    expect(note(3, 0)).toBe("Lead dismissed, and 3 more jobs from the same company.");
-    expect(note(0, 1)).toBe("Lead dismissed. 1 more job from that company was kept: the CV is being prepared.");
-    expect(dismissedNote({ also: 0, kept: 0, notExcluded: "disk full" })).toBe(
-      "Lead dismissed, but the company could not be excluded: disk full",
-    );
-    expect(note(2, 2)).toBe(
-      "Lead dismissed, and 2 more jobs from the same company. 2 more jobs from that company were kept: the CV is being prepared.",
+    const detail = (also: number, kept: number) => dismissedDetail({ also, kept });
+    expect(detail(0, 0), "only the lead went").toBeUndefined();
+    expect(detail(1, 0)).toBe("1 more job from the same company went too.");
+    expect(detail(3, 0)).toBe("3 more jobs from the same company went too.");
+    expect(detail(0, 1)).toBe("1 more job from that company was kept: the CV is being prepared.");
+    expect(detail(2, 2)).toBe(
+      "2 more jobs from the same company went too. 2 more jobs from that company were kept: the CV is being prepared.",
     );
   });
 });

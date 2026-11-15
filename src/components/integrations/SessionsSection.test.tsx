@@ -1,7 +1,8 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
+import { renderWithToasts as render } from "@/test/render";
 
 import * as api from "@/api/sessions";
 import type { Download, Session, Sessions } from "@/types/integrations";
@@ -112,30 +113,58 @@ describe("SessionsSection", () => {
     await waitFor(() => expect(api.finishLogin).toHaveBeenCalledWith(1));
   });
 
-  it("adds a session from a suggestion and opens the browser to log in", async () => {
+  it("adds a session in a dialog from a suggestion, closes it when the browser opens and says what to do", async () => {
     vi.mocked(api.createSession).mockResolvedValue(3);
     render(<SessionsSection />);
-    fireEvent.click(await screen.findByRole("button", { name: "New session" }));
-    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("LinkedIn");
-    expect((screen.getByRole("textbox", { name: "Login address" }) as HTMLInputElement).value).toBe(
+    expect(await screen.findByRole("button", { name: "New session" })).toBeTruthy();
+    expect(screen.queryByRole("dialog"), "the dialog opens on a click").toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    const dialog = await screen.findByRole("dialog", { name: "New session" });
+    expect((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("LinkedIn");
+    expect((within(dialog).getByRole("textbox", { name: "Login address" }) as HTMLInputElement).value).toBe(
       "https://www.linkedin.com/login",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Indeed" }));
-    expect((screen.getByRole("textbox", { name: "Login address" }) as HTMLInputElement).value).toBe(
+    fireEvent.click(within(dialog).getByRole("button", { name: "Indeed" }));
+    expect((within(dialog).getByRole("textbox", { name: "Login address" }) as HTMLInputElement).value).toBe(
       "https://secure.indeed.com/account/login",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Open browser to log in" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Open browser to log in" }));
     await waitFor(() =>
       expect(api.createSession).toHaveBeenCalledWith("Indeed", "https://secure.indeed.com/account/login"),
     );
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Open browser to log in" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByRole("status", { name: "Log in in the browser window" })).toBeTruthy();
   });
 
-  it("cancels the new session form", async () => {
+  it("submits the new session with Enter", async () => {
+    vi.mocked(api.createSession).mockResolvedValue(3);
     render(<SessionsSection />);
     fireEvent.click(await screen.findByRole("button", { name: "New session" }));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const dialog = await screen.findByRole("dialog", { name: "New session" });
+    fireEvent.submit(within(dialog).getByRole("textbox", { name: "Name" }));
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledWith("LinkedIn", "https://www.linkedin.com/login"));
+  });
+
+  it("keeps the dialog open with the reason when the session cannot be created", async () => {
+    vi.mocked(api.createSession).mockRejectedValue(new CommandError("not a valid URL"));
+    render(<SessionsSection />);
+    fireEvent.click(await screen.findByRole("button", { name: "New session" }));
+    const dialog = await screen.findByRole("dialog", { name: "New session" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Login address" }), { target: { value: "nope" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Open browser to log in" }));
+    expect(await within(dialog).findByText("Could not create the session: not a valid URL")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "New session" })).toBeTruthy();
+    expect(screen.queryByRole("alert", { name: "Could not create the session" }), "not a toast").toBeNull();
+  });
+
+  it("cancels the new session dialog", async () => {
+    render(<SessionsSection />);
+    fireEvent.click(await screen.findByRole("button", { name: "New session" }));
+    const dialog = await screen.findByRole("dialog", { name: "New session" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(api.createSession).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "New session" })).toBeTruthy();
   });
 
@@ -162,10 +191,32 @@ describe("SessionsSection", () => {
     expect(await screen.findByText("Downloading browser... 10%")).toBeTruthy();
   });
 
-  it("shows why an operation failed", async () => {
+  it("reports a failed row action as a toast", async () => {
     vi.mocked(api.checkSession).mockRejectedValue(new CommandError("Chrome not found"));
     render(<SessionsSection />);
     fireEvent.click(await screen.findByRole("button", { name: "Check LinkedIn" }));
-    expect(await screen.findByText("Chrome not found")).toBeTruthy();
+    const toast = await screen.findByRole("alert", { name: "The check failed" });
+    expect(within(toast).getByText("Chrome not found")).toBeTruthy();
+    expect(document.getElementById("sessions-error"), "no banner in the card").toBeNull();
+  });
+
+  it("reports a failed download as a toast", async () => {
+    vi.mocked(api.loadSessions).mockResolvedValue(sessions({ chrome: null }));
+    vi.mocked(api.downloadBrowser).mockRejectedValue(new CommandError("offline"));
+    render(<SessionsSection />);
+    fireEvent.click(await screen.findByRole("button", { name: "Download browser" }));
+    const toast = await screen.findByRole("alert", { name: "Could not download the browser" });
+    expect(within(toast).getByText("offline")).toBeTruthy();
+  });
+
+  it("says when the sessions could not be read, with a retry", async () => {
+    vi.mocked(api.loadSessions).mockRejectedValue(new CommandError("database is locked"));
+    render(<SessionsSection />);
+    const toast = await screen.findByRole("alert", { name: "Could not read the sessions" });
+    expect(within(toast).getByText("database is locked")).toBeTruthy();
+    expect(screen.getByText("Could not read the sessions.")).toBeTruthy();
+    vi.mocked(api.loadSessions).mockResolvedValue(sessions());
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Browser: /usr/bin/chromium (system)")).toBeTruthy();
   });
 });

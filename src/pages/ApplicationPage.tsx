@@ -6,13 +6,14 @@
 import { Inbox, Settings } from "lucide-react";
 
 import { Button, Caption, EmptyState, Page, Spinner, Stepper, Tabs, Tag } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
 import { useNav, type SettingsSection } from "@/stores/nav";
 import { useShell } from "@/stores/shell";
 
 import { crumbFor } from "@/lib/applications/crumb";
 import { TABS, type Tab } from "@/lib/applications/tabs";
 import { useApplicationScreen } from "@/hooks/applications/useApplicationScreen";
+import { useJobFailureToast } from "@/hooks/applications/useFailureToast";
 import { ApplyTab } from "@/components/applications/ApplyTab";
 import { CvTab } from "@/components/applications/CvTab";
 import { JdTab } from "@/components/applications/JdTab";
@@ -61,12 +62,13 @@ function OpenApplication({ id }: { id: number }) {
   const openSettings = useNav((s) => s.openSettings);
   const { head, apply, tab } = model;
   const header = head.header;
+  useJobFailureToast(id, head);
 
   if (header === undefined) {
     return (
       <Page label="Application" title="Application">
         {head.loadError ? (
-          <ErrorBanner error={head.loadError} title="The application could not be read" />
+          <LoadError error={head.loadError} title="The application could not be read" onRetry={head.reload} />
         ) : (
           <Caption>Loading...</Caption>
         )}
@@ -131,15 +133,6 @@ function OpenApplication({ id }: { id: number }) {
       }
     >
       {primary?.hint != null && <p className="text-right text-small text-muted">{primary.hint}</p>}
-      {head.error !== null && (
-        <ErrorBanner
-          id="job-error"
-          error={head.error}
-          title="The last job failed"
-          onRetry={head.retry}
-          onDismiss={head.dismiss}
-        />
-      )}
       <Stepper steps={header.steps} current={header.stepIndex} />
       <Tabs<Tab> label="Application sections" tabs={TABS} value={tab} onChange={model.setTab} />
       {tab === "jd" && <JdTab id={id} />}

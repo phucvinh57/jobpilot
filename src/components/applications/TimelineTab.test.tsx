@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
+import { renderWithToasts } from "@/test/render";
 
 import * as api from "@/api/applications";
 import { timeline } from "@/test/fixtures/applications";
@@ -83,12 +84,34 @@ describe("the Timeline tab", () => {
     expect(mocked.resolveEmail).toHaveBeenLastCalledWith("m1", false);
   });
 
-  it("shows why an email could not be handled", async () => {
+  it("reports an email that could not be handled in a toast, each time", async () => {
     const user = userEvent.setup();
     mocked.readTimeline.mockResolvedValue(timeline({ reviews: [REVIEW] }));
-    mocked.resolveEmail.mockRejectedValue(new CommandError("the email is gone"));
-    render(<TimelineTab id={7} />);
+    mocked.resolveEmail.mockImplementation(async () => {
+      throw new CommandError("the email is gone");
+    });
+    renderWithToasts(<TimelineTab id={7} />);
     await user.click(await screen.findByRole("button", { name: "Accept" }));
-    expect(await screen.findByText("the email is gone")).toBeTruthy();
+    const toast = await screen.findByRole("alert", { name: "That email could not be handled" });
+    expect(within(toast).getByText("the email is gone")).toBeTruthy();
+    expect(within(document.getElementById("timeline") as HTMLElement).queryByText("the email is gone")).toBeNull();
+
+    // Reported and forgotten: the same failure again is reported again.
+    await user.click(within(toast).getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(screen.queryByRole("alert", { name: "That email could not be handled" })).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Accept" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "Accept" }));
+    expect(await screen.findByRole("alert", { name: "That email could not be handled" })).toBeTruthy();
+  });
+
+  it("reports a timeline that could not be read in a toast, with Retry in its place", async () => {
+    const user = userEvent.setup();
+    mocked.readTimeline.mockRejectedValueOnce(new CommandError("database is locked"));
+    mocked.readTimeline.mockResolvedValue(timeline());
+    renderWithToasts(<TimelineTab id={7} />);
+    const toast = await screen.findByRole("alert", { name: "The timeline could not be read" });
+    expect(within(toast).getByText("database is locked")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("History")).toBeTruthy();
   });
 });

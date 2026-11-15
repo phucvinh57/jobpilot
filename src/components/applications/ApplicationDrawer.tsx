@@ -1,13 +1,14 @@
 // The drawer of an application on the Jobs page: status and round, the ONE primary action (the same
 // as the full view's), the steps, the interview round and what the company answered, the timeline,
-// and the job description folded away. "Open full view" opens the Application screen.
+// and the job description in a dialog. "Open full view" opens the Application screen.
 
-import { Inbox, Maximize2, Settings } from "lucide-react";
+import { FileText, Inbox, Maximize2, Settings } from "lucide-react";
 import { useState } from "react";
 
 import {
   Button,
   Caption,
+  Dialog,
   Drawer,
   FilterChip,
   SectionLabel,
@@ -16,7 +17,8 @@ import {
   Tag,
   TextInput,
 } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { useNav, type SettingsSection } from "@/stores/nav";
 import type { Action } from "@/hooks/useAsync";
 
@@ -27,6 +29,7 @@ import {
   type ApplicationDrawerModel,
   type ApplicationMarks,
 } from "@/hooks/applications/useApplicationDrawer";
+import { useJobFailureToast } from "@/hooks/applications/useFailureToast";
 import { JdTab } from "./JdTab";
 import { TimelineTab } from "./TimelineTab";
 
@@ -39,6 +42,7 @@ function RoundPicker({
   setRound: Action<[round: string | null], ApplicationHeader>;
 }) {
   const [other, setOther] = useState("");
+  useErrorToast(setRound.error, { title: "The round could not be saved", clear: setRound.clearError });
   const options =
     header.round !== null && !header.roundOptions.includes(header.round)
       ? [...header.roundOptions, header.round]
@@ -96,9 +100,6 @@ function RoundPicker({
           Save
         </Button>
       </form>
-      {setRound.error && (
-        <ErrorBanner error={setRound.error} title="The round could not be saved" onDismiss={setRound.clearError} />
-      )}
     </section>
   );
 }
@@ -109,6 +110,7 @@ function RoundPicker({
 function Marks({ header, mark }: { header: ApplicationHeader; mark: ApplicationMarks["mark"] }) {
   const [asking, setAsking] = useState<MarkKey>();
   const pending = header.marks.find((m) => m.key === asking);
+  useErrorToast(mark.error, { title: "The answer could not be saved", clear: mark.clearError });
   return (
     <section aria-label="The company answered" className="flex flex-col gap-2">
       <SectionLabel>The company answered</SectionLabel>
@@ -160,27 +162,34 @@ function Marks({ header, mark }: { header: ApplicationHeader; mark: ApplicationM
           </div>
         </div>
       )}
-      {mark.error && (
-        <ErrorBanner error={mark.error} title="The answer could not be saved" onDismiss={mark.clearError} />
-      )}
     </section>
   );
 }
 
-/** The job description, folded away; read only once unfolded. */
+/** The job description in a dialog; read only once opened. */
 function JobDescription({ id }: { id: number }) {
   const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
   return (
-    <details id="drawer-jd" onToggle={(e) => setOpen(e.currentTarget.open)} className="border border-border">
-      <summary className="cursor-pointer px-3 py-2 text-body font-semibold text-ink hover:bg-track">
+    <div className="flex">
+      <Button id="drawer-jd" icon={FileText} aria-haspopup="dialog" onClick={() => setOpen(true)}>
         Job description
-      </summary>
-      {open && (
-        <div className="border-t border-border p-3">
-          <JdTab id={id} />
-        </div>
-      )}
-    </details>
+      </Button>
+      <Dialog
+        id="drawer-jd-dialog"
+        open={open}
+        width="lg"
+        title="Job description"
+        onClose={close}
+        footer={
+          <Button id="drawer-jd-done" variant="ghost" onClick={close}>
+            Close
+          </Button>
+        }
+      >
+        {open && <JdTab id={id} />}
+      </Dialog>
+    </div>
   );
 }
 
@@ -190,6 +199,7 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
   const { head } = model;
   const primary = head.primary;
   const showNextJob = header.showNextJob && primary === null;
+  useJobFailureToast(id, head);
   return (
     <>
       <div className="flex flex-col gap-1.5">
@@ -237,15 +247,6 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
           {primary?.hint != null && <Caption>{primary.hint}</Caption>}
         </div>
       )}
-      {head.error !== null && (
-        <ErrorBanner
-          id="job-error"
-          error={head.error}
-          title="The last job failed"
-          onRetry={head.retry}
-          onDismiss={head.dismiss}
-        />
-      )}
       <Stepper steps={header.steps} current={header.stepIndex} />
       {header.status.key === "interview" && <RoundPicker header={header} setRound={marks.setRound} />}
       {header.marks.length > 0 && <Marks header={header} mark={marks.mark} />}
@@ -264,7 +265,7 @@ function Content({ id, model }: { id: number; model: ApplicationDrawerModel }) {
   const header = model.header;
   if (header === undefined) {
     return model.head.loadError ? (
-      <ErrorBanner error={model.head.loadError} title="The application could not be read" />
+      <LoadError error={model.head.loadError} title="The application could not be read" onRetry={model.head.reload} />
     ) : (
       <Caption>Loading...</Caption>
     );

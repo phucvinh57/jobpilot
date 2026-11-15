@@ -17,6 +17,8 @@ export interface Draft {
   isDefault: boolean;
   /** A key is saved in the keyring for this provider. */
   hasKey: boolean;
+  /** The address saved with the provider: its saved key goes to this one only. */
+  savedBaseUrl: string;
   /** Models loaded from the provider, for the picker. */
   models: string[];
   /** The first click on Delete arms it; the second deletes. */
@@ -40,6 +42,7 @@ export function draftOf(provider: Provider | undefined, kinds: readonly KindDefa
       jsonObject: provider.jsonObject,
       isDefault: provider.isDefault,
       hasKey,
+      savedBaseUrl: provider.baseUrl,
       models: [],
       confirmDelete: false,
     };
@@ -55,6 +58,7 @@ export function draftOf(provider: Provider | undefined, kinds: readonly KindDefa
     jsonObject: false,
     isDefault: false,
     hasKey: false,
+    savedBaseUrl: "",
     models: [],
     confirmDelete: false,
   };
@@ -97,6 +101,20 @@ export function inputOf(draft: Draft): ProviderInput {
   };
 }
 
+/** The form as the shell takes it to list the models. A saved key is sent only to the address it
+ *  was saved with: once the address is edited, the listing goes without it (as for a new provider)
+ *  unless a key is typed. */
+export function modelsInputOf(draft: Draft): ProviderInput {
+  const input = inputOf(draft);
+  const moved = input.baseUrl !== draft.savedBaseUrl.trim();
+  return draft.id !== 0 && moved && input.apiKey === null ? { ...input, id: 0 } : input;
+}
+
+/** What the model list depends on: it is listed again only when this changes. */
+export function modelsSignature(input: ProviderInput): string {
+  return JSON.stringify([input.id, input.kind, input.baseUrl, input.apiKey]);
+}
+
 /** The label of the delete button: "Discard" for a form never saved, then a two-step delete. */
 export function deleteLabel(draft: Pick<Draft, "id" | "confirmDelete">): string {
   if (draft.id === 0) {
@@ -119,7 +137,13 @@ export function providersStatus(providers: readonly Provider[]): { tone: Tone; t
   return { tone: "warn", text: providers.length === 0 ? "No provider" : "No default" };
 }
 
-/** The line after "Load models". */
-export function modelsLine(count: number): string {
-  return `${count} model(s) available; pick one from the list.`;
+/** The hint under the model box: the models are listed on their own while the dialog is open. */
+export function modelsHint(loading: boolean, count: number): string {
+  if (loading) {
+    return "Listing the models of this provider…";
+  }
+  if (count === 0) {
+    return "Type the model id.";
+  }
+  return `${count} ${count === 1 ? "model" : "models"} available: pick one or type an id.`;
 }

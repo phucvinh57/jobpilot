@@ -1,16 +1,17 @@
 import { Button, Caption, Field, HealthDot, Section, Tag, TextInput } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { FormError, LoadError } from "@/components/ProblemHelp";
 
 import { disconnectLabel, lastSyncLine, pollLine, secretLabel, syncResult } from "@/lib/integrations/gmail";
 import type { Gmail } from "@/types/integrations";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { useGmail, type GmailCard } from "@/hooks/integrations/useGmail";
-import { Notice } from "./Notice";
 
 const HINT = "Read-only access to spot confirmations, interviews and rejections for your applications.";
 
-/** Not connected: the OAuth client of the user's own Google Cloud project, then Connect. */
+/** Not connected: the OAuth client of the user's own Google Cloud project, then Connect. Why
+ *  Connect failed shows under the fields. */
 function SignedOut({ gmail, card }: { gmail: Gmail; card: GmailCard }) {
-  const { runner } = card;
+  const { connection } = card;
   return (
     <div className="flex flex-col gap-3 pt-2">
       <Caption>
@@ -37,8 +38,14 @@ function SignedOut({ gmail, card }: { gmail: Gmail; card: GmailCard }) {
           onChange={(e) => card.setClientSecret(e.target.value)}
         />
       </Field>
+      {connection.error && <FormError id="gmail-error" error={connection.error} title={connection.errorTitle} />}
       <div className="flex items-center gap-2">
-        <Button id="gmail-connect" busy={card.connecting} disabled={runner.busy !== undefined} onClick={card.connect}>
+        <Button
+          id="gmail-connect"
+          busy={card.connecting}
+          disabled={connection.busy !== undefined}
+          onClick={card.connect}
+        >
           Connect Gmail
         </Button>
         {card.connecting && (
@@ -54,10 +61,11 @@ function SignedOut({ gmail, card }: { gmail: Gmail; card: GmailCard }) {
   );
 }
 
-/** Connected: the account, the last sync, Sync now and a two-step Disconnect. */
+/** Connected: the account, the last sync (a problem of the last sync is state, tagged, not an
+ *  error message), Sync now and a two-step Disconnect. */
 function SignedIn({ gmail, account, card }: { gmail: Gmail; account: string; card: GmailCard }) {
-  const { runner } = card;
-  const idle = runner.busy === undefined;
+  const { actions } = card;
+  const idle = actions.busy === undefined;
   const result = syncResult(gmail.lastReport);
   return (
     <div className="flex flex-col gap-3 pt-2">
@@ -67,19 +75,23 @@ function SignedIn({ gmail, account, card }: { gmail: Gmail; account: string; car
       </div>
       <div className="flex flex-col gap-1 text-small">
         <p className="text-muted">{lastSyncLine(gmail.lastSync)}</p>
-        {result.text !== "" && (
-          <p className={result.ok ? "selectable text-muted" : "selectable text-danger"}>{result.text}</p>
+        {result.text !== "" && result.ok && <p className="selectable text-muted">{result.text}</p>}
+        {!result.ok && (
+          <div id="gmail-sync-problem" className="flex flex-wrap items-center gap-2">
+            <Tag tone="warn">Sync problem</Tag>
+            <p className="selectable text-muted">{result.text}</p>
+          </div>
         )}
         <p className="text-muted">{pollLine(gmail.pollMinutes)}</p>
       </div>
       <div className="flex gap-2">
-        <Button id="gmail-sync" busy={runner.busy === "syncing"} disabled={!idle} onClick={card.syncNow}>
+        <Button id="gmail-sync" busy={actions.busy === "syncing"} disabled={!idle} onClick={card.syncNow}>
           Sync now
         </Button>
         <Button
           id="gmail-disconnect"
           variant="danger"
-          busy={runner.busy === "disconnecting"}
+          busy={actions.busy === "disconnecting"}
           disabled={!idle}
           onClick={card.disconnect}
         >
@@ -94,9 +106,10 @@ function SignedIn({ gmail, account, card }: { gmail: Gmail; account: string; car
 export function GmailSection() {
   const card = useGmail();
   const gmail = card.query.data;
-  const { runner } = card;
+  const { actions } = card;
   const account = gmail?.account ?? null;
   const connected = account !== null;
+  useErrorToast(actions.error, { title: actions.errorTitle, onRetry: actions.retry, clear: actions.reset });
 
   return (
     <Section
@@ -105,8 +118,8 @@ export function GmailSection() {
       hint={HINT}
       actions={gmail && <Tag tone={connected ? "ok" : "neutral"}>{connected ? "Connected" : "Not connected"}</Tag>}
     >
-      {card.query.error && !gmail && (
-        <ErrorBanner error={card.query.error} title="Could not read the Gmail settings" onRetry={card.query.reload} />
+      {!gmail && (
+        <LoadError error={card.query.error} title="Could not read the Gmail settings" onRetry={card.query.reload} />
       )}
       {gmail &&
         (account !== null ? (
@@ -114,16 +127,6 @@ export function GmailSection() {
         ) : (
           <SignedOut gmail={gmail} card={card} />
         ))}
-      {runner.notice && <Notice text={runner.notice} />}
-      {runner.error && (
-        <ErrorBanner
-          id="gmail-error"
-          error={runner.error}
-          title={runner.errorTitle}
-          onRetry={runner.retry}
-          onDismiss={runner.reset}
-        />
-      )}
     </Section>
   );
 }

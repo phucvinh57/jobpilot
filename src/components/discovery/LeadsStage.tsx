@@ -5,7 +5,7 @@
 import { Inbox, X } from "lucide-react";
 
 import { Button, Caption, EmptyState } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
 
 import { prepareManyLabel } from "@/lib/discovery/queue";
 import { clearChecked, prepare, reload } from "@/stores/today";
@@ -55,14 +55,7 @@ export function LeadsStage({ otherDrawerOpen = false }: { otherDrawerOpen?: bool
 
   return (
     <div id="queue" className="flex flex-1 flex-col gap-3">
-      {t.loadError && (
-        <ErrorBanner
-          id="queue-load-error"
-          error={t.loadError}
-          title="The job list could not be read"
-          onRetry={reload}
-        />
-      )}
+      <LoadError id="queue-load-error" error={t.loadError} title="The job list could not be read" onRetry={reload} />
       {total === 0 ? (
         <div
           id="queue-empty"

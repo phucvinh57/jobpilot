@@ -13,11 +13,15 @@ import type { GraphProgress } from "@/api/events";
 import * as api from "@/api/trends";
 import { isTrendsGraph, retryOf, stepLabel, STARTING, type Job } from "@/lib/trends/jobs";
 
-/** The line under the controls. */
+/** How the last run ended: a line under the controls, or a failure the screen shows as a toast
+ *  once and then clears (`clearFailure`). */
 export type Notice =
-  | { kind: "info"; text: string; details: string[] }
+  | InfoNotice
   /** A run that did not finish; `retry` carries on where it stopped. */
   | { kind: "error"; error: CommandError; retry: Job };
+
+/** The line under the controls. */
+export type InfoNotice = { kind: "info"; text: string; details: string[] };
 
 export interface RunEnd {
   /** The report the run saved, if any. */
@@ -35,6 +39,8 @@ interface RunsState {
   /** A step of a graph run moved. */
   follow: (progress: GraphProgress) => void;
   say: (text: string) => void;
+  /** Forget a failed run once it was reported (a line that is not a failure stays). */
+  clearFailure: () => void;
 }
 
 export const useRuns = create<RunsState>((set, get) => ({
@@ -69,4 +75,10 @@ export const useRuns = create<RunsState>((set, get) => ({
   },
 
   say: (text) => set({ notice: { kind: "info", text, details: [] } }),
+
+  clearFailure: () => {
+    if (get().notice?.kind === "error") {
+      set({ notice: undefined });
+    }
+  },
 }));

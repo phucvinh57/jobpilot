@@ -12,9 +12,9 @@ import { AboutYouSection } from "@/components/profile/AboutYouSection";
 import { ProfileSection } from "@/components/profile/ProfileSection";
 import { APPEARANCES, type Appearance } from "@/lib/theme";
 import { Caption, Heading, Page, Section, Segmented } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
 import { sectionId, useNav, type SettingsSection } from "@/stores/nav";
 import { useAction } from "@/hooks/useAsync";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { useShell } from "@/stores/shell";
 
 function Slot({ section, children }: { section: SettingsSection; children: ReactNode }) {
@@ -30,6 +30,7 @@ function AppearanceSection() {
   const appearance = useShell((s) => s.appearance);
   const setAppearance = useShell((s) => s.setAppearance);
   const save = useAction((value: Appearance) => setAppearance(value));
+  useErrorToast(save.error, { title: "The appearance was not saved", clear: save.clearError });
   return (
     <Section title="Appearance" hint="Light, dark, or follow your desktop.">
       <Segmented
@@ -38,9 +39,6 @@ function AppearanceSection() {
         value={appearance}
         onChange={(value) => void save.run(value)}
       />
-      {save.error && (
-        <ErrorBanner error={save.error} title="The appearance was not saved" onDismiss={save.clearError} />
-      )}
     </Section>
   );
 }

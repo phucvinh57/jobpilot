@@ -2,22 +2,21 @@
 // Email subjects and senders are untrusted text: shown as text only.
 
 import { ActivityRow, Banner, Button, Caption, Card, Heading } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
+import { useErrorToast } from "@/hooks/useErrorToast";
 
 import { useTimeline } from "@/hooks/applications/useTabs";
 
 export function TimelineTab({ id }: { id: number }) {
   const { query, resolve } = useTimeline(id);
   const data = query.data;
+  useErrorToast(resolve.error, { title: "That email could not be handled", clear: resolve.clearError });
 
   if (data === undefined) {
-    return query.error ? <ErrorBanner error={query.error} title="The timeline could not be read" /> : null;
+    return <LoadError error={query.error} title="The timeline could not be read" onRetry={query.reload} />;
   }
   return (
     <div id="timeline" className="flex flex-col gap-3">
-      {resolve.error && (
-        <ErrorBanner error={resolve.error} title="That email could not be handled" onDismiss={resolve.clearError} />
-      )}
       {data.reviews.map((review) => (
         <div key={review.id} id={`review-${review.id}`}>
           <Banner

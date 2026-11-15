@@ -24,7 +24,7 @@ describe("the Gmail card", () => {
       "fetched 4, updated 1, 3 need review",
     );
     expect(syncResult({ fetched: 0, updated: 0, needsReview: 0, error: "Gmail is not connected" })).toEqual({
-      text: "Sync problem: Gmail is not connected",
+      text: "Gmail is not connected",
       ok: false,
     });
   });

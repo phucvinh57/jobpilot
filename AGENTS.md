@@ -64,19 +64,20 @@ src/                   React + Vite + TypeScript + Tailwind; feature folders (ap
   pages/               JobsPage (header, stage bar Leads | CVs | Applied | In progress | Done, the stage's list, right-side drawer for the
                        open lead or application), ApplicationPage (the drawer's "Open full view"), TrendsPage, SettingsPage
   components/          `ui/kit.tsx` (design kit: Page, Card, Section, Banner, Button, Chip, Tag, Segmented, Tabs, StageBar, DataTable,
-                       Drawer, ScoreBadge, Stepper, ...), `ui/primitives/` (shadcn/ui, square: no rounded corners; only the kit imports
-                       them, Biome enforces it), `layout/` (Sidebar, SetupBanner), ProblemHelp (ErrorBanner), InsightBrief,
+                       Drawer, Dialog, Combobox, FormMessage, ToastCard, ScoreBadge, Stepper, ...), `ui/primitives/` (shadcn/ui, square:
+                       no rounded corners; only the kit imports them, Biome enforces it), `layout/` (Sidebar, SetupBanner, Toaster),
+                       ProblemHelp (LoadError, FormError, ProblemActions), InsightBrief,
                        `<feature>/` (drawers, tabs, stages, settings sections)
-  hooks/               `useAsync` (`useQuery`, `useAction`), `useGraphProgress`, `<feature>/` (screen state, loading, Problem)
+  hooks/               `useAsync` (`useQuery`, `useAction`), `useGraphProgress`, `useErrorToast`, `<feature>/` (screen state, loading, Problem)
   stores/              zustand: `nav` (screen, Jobs stage, drawer `{ kind: "lead" | "app", id }`, Jobs badge), `shell` (health line, banner,
-                       appearance), `today` (the Leads queue)
+                       appearance), `today` (the Leads queue), `toast` (`toast.ok` / `toast.error`)
   api/                 `bridge.ts` (the only Tauri imports: invoke / listen / file picker; imported only inside `api/`), `events.ts`
                        (what the rest may subscribe to: data changed, graph progress, file drop), `shell.ts` (`shared_*`: status,
                        appearance, `openLink`), one file of typed command calls per feature
   lib/                 pure helpers + vitest: `problem`, `theme`/`tokens` (light/dark as `--jp-*` CSS variables; `styles.css` maps them to
                        the only Tailwind colours), `display`, `utils` (`cn`), `<feature>/`
   types/               types mirroring the shell's DTOs (one file per feature, `shell.ts`)
-  test/fixtures/       sample data for the tests
+  test/                `setup.ts` (vitest: clears the toasts), `render.tsx` (`renderWithToasts`), `fixtures/` (sample data)
 ```
 
 ## Commands
@@ -147,6 +148,10 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 - Failures the user can act on become a `health::Problem` (no provider, no Chrome, no typst, network) and are shown with a call to action; network errors get a Retry.
 - Log key steps at `info!` with ids/counts only (no page, JD, email or CV text); failures at `warn!`/`error!`.
 - Views use the design kit (`src/components/ui/kit.tsx`) and the theme classes (`bg-surface`, `text-ink`, ...) for colours and widgets: no hard-coded colours (Tailwind's stock palette is removed), no local copies of kit components.
+- Add/edit flows open a kit `Dialog` (Save closes it and says so in a toast), not a form that expands inside a card.
+  A modal dialog is its own screen: its main button is its one primary (the screen behind is inert while it is open).
+- Errors outside a form are toasts: `useErrorToast` for a failed action, `LoadError` for a failed read. Red text is only a
+  form's own error under its fields (`FormError` / `FormMessage`, also inside a dialog).
 - Exactly one primary button at a time (`applications/rules.rs::primary_for`, unit-tested; the web app renders what the DTO says); it is disabled while work runs. Secondary actions are plain buttons.
 - Outgoing HTTP to a URL that is not the user's own (job boards, feeds, postings, search results) goes through `net::http`; discovery browsers go through `browser::guard`. Both refuse machine-local and private hosts. `allow_private_hosts` exists for tests only.
 - Discovery browsers never disguise automation (no hidden webdriver flag, no user-agent change), and a login, captcha or block page is never solved, evaded or waited out: the source pauses and the user deals with it in the visible browser.

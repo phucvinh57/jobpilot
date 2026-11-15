@@ -1,6 +1,6 @@
 import { Eye, EyeOff } from "lucide-react";
 
-import { Button, Field, Section, TextInput } from "@/components/ui/kit";
+import { Button, Field, FormMessage, Section, TextInput } from "@/components/ui/kit";
 
 import type { SearchKey } from "@/types/trends";
 import { useSearchKeys } from "@/hooks/trends/useSearchKeys";
@@ -59,11 +59,8 @@ export function SearchSection({ keys }: { keys: readonly SearchKey[] }) {
           </div>
         );
       })}
-      {editing.error && (
-        <p role="alert" className="selectable min-w-0 text-body text-danger">
-          {editing.error}
-        </p>
-      )}
+      {/* The key rows are a form that is always there: its error stays under it. */}
+      {editing.error && <FormMessage id="trends-key-error">{editing.error}</FormMessage>}
     </Section>
   );
 }

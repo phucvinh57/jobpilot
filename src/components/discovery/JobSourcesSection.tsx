@@ -5,8 +5,21 @@
 
 import { useState } from "react";
 
-import { Banner, Button, Caption, Field, FilterChip, Section, Switch, Tag, TextInput } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import {
+  Banner,
+  Button,
+  Caption,
+  Dialog,
+  Field,
+  FilterChip,
+  Section,
+  Switch,
+  Tag,
+  TextInput,
+} from "@/components/ui/kit";
+import { FormError, LoadError } from "@/components/ProblemHelp";
+import { useErrorToast } from "@/hooks/useErrorToast";
+import type { CommandError } from "@/lib/problem";
 
 import { shownSuggestions, suggestionText } from "@/lib/discovery/boards";
 import { rowAddress, rowName, sourceTag, statusLine } from "@/lib/discovery/sources";
@@ -86,16 +99,24 @@ function SourceRow({
   );
 }
 
-function AddForm({
+/** The dialog that adds a source: its kind, an optional name and the board's name or address. A
+ *  careers page that lists its jobs on a known board offers that board instead (a plain button). The
+ *  reason a source was refused stays in the dialog. Mounted again for every opening, so it starts
+ *  empty. */
+function AddSourceDialog({
+  open,
   kinds,
   adding,
+  error,
   onAdd,
-  onCancel,
+  onClose,
 }: {
+  open: boolean;
   kinds: readonly SourceKind[];
   adding: boolean;
+  error: CommandError | undefined;
   onAdd: (kind: string, name: string, url: string) => void;
-  onCancel: () => void;
+  onClose: () => void;
 }) {
   const [kind, setKind] = useState(kinds[0]?.kind ?? "");
   const [name, setName] = useState("");
@@ -103,7 +124,24 @@ function AddForm({
   const hint = kinds.find((k) => k.kind === kind)?.hint ?? "";
   const suggestion = useBoardSuggestion(kind, url);
   return (
-    <div className="flex flex-col gap-3 border border-border bg-surface-alt p-3">
+    <Dialog
+      id="source-dialog"
+      open={open}
+      busy={adding}
+      title="Add source"
+      onClose={onClose}
+      onSubmit={() => !adding && onAdd(kind, name, url)}
+      footer={
+        <>
+          <Button id="cancel-source" variant="ghost" disabled={adding} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button id="save-source" type="submit" variant="primary" busy={adding} disabled={adding}>
+            Add
+          </Button>
+        </>
+      }
+    >
       <div className="flex flex-col gap-1">
         <span className="text-small font-medium text-muted">Kind</span>
         <div role="group" aria-label="Kind" className="flex flex-wrap gap-1.5">
@@ -151,21 +189,16 @@ function AddForm({
           }
         />
       ))}
-      <div className="flex gap-2">
-        <Button id="save-source" busy={adding} disabled={adding} onClick={() => onAdd(kind, name, url)}>
-          Add
-        </Button>
-        <Button id="cancel-source" variant="ghost" disabled={adding} onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </div>
+      {error && <FormError id="sources-error" error={error} title="Not added" />}
+    </Dialog>
   );
 }
 
 export function JobSourcesSection() {
   const v = useJobSources();
   const [formOpen, setFormOpen] = useState(false);
+  /** How many times the add dialog was opened: each opening starts with an empty form. */
+  const [openings, setOpenings] = useState(0);
   /** First click on Remove asks for confirmation; the second one removes. */
   const [confirmRemove, setConfirmRemove] = useState<number>();
   const now = new Date();
@@ -180,9 +213,17 @@ export function JobSourcesSection() {
     };
   };
 
+  useErrorToast(v.changeError, { title: "The change was not saved", clear: v.clearChangeError });
+
   const openForm = () => {
-    v.clearChangeError();
+    v.clearAddError();
+    setOpenings((n) => n + 1);
     setFormOpen(true);
+  };
+
+  const closeForm = () => {
+    v.clearAddError();
+    setFormOpen(false);
   };
 
   return (
@@ -191,11 +232,9 @@ export function JobSourcesSection() {
       title="Job sources"
       hint="Where to look for jobs. Public boards and Hacker News need no login; for a site that wants one, pick a browser session you logged in to."
       actions={
-        formOpen ? undefined : (
-          <Button id="add-source" disabled={data === undefined} onClick={openForm}>
-            Add source
-          </Button>
-        )
+        <Button id="add-source" disabled={data === undefined} onClick={openForm}>
+          Add source
+        </Button>
       }
     >
       <div className="flex flex-col gap-1">
@@ -230,29 +269,19 @@ export function JobSourcesSection() {
           />
         ))}
       </ul>
-      {v.loaded && data?.sources.length === 0 && !formOpen && (
+      {v.loaded && data?.sources.length === 0 && (
         <p className="text-body text-muted">No sources yet. Add a company board, a careers page or Hacker News.</p>
       )}
-      {formOpen && (
-        <AddForm
-          kinds={kinds}
-          adding={v.adding}
-          onAdd={(kind, name, url) => void v.add(kind, name, url).then((added) => added && setFormOpen(false))}
-          onCancel={() => {
-            v.clearChangeError();
-            setFormOpen(false);
-          }}
-        />
-      )}
-      {v.loadError && <ErrorBanner error={v.loadError} title="The job sources could not be read" />}
-      {v.changeError && (
-        <ErrorBanner
-          id="sources-error"
-          error={v.changeError}
-          title="The change was not saved"
-          onDismiss={v.clearChangeError}
-        />
-      )}
+      <LoadError error={v.loadError} title="The job sources could not be read" onRetry={v.reload} />
+      <AddSourceDialog
+        key={openings}
+        open={formOpen}
+        kinds={kinds}
+        adding={v.adding}
+        error={v.addError}
+        onAdd={(kind, name, url) => void v.add(kind, name, url).then((added) => added && setFormOpen(false))}
+        onClose={closeForm}
+      />
     </Section>
   );
 }

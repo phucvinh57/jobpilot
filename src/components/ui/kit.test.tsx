@@ -4,7 +4,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { cn } from "@/lib/utils";
-import { Button, Checkbox, DataTable, Drawer, StageBar, Switch } from "./kit";
+import { Button, Checkbox, Combobox, DataTable, Dialog, Drawer, matchesOption, StageBar, Switch } from "./kit";
 
 afterEach(cleanup);
 
@@ -226,5 +226,79 @@ describe("StageBar", () => {
     draft.focus();
     await user.keyboard("{ArrowRight}");
     expect(onChange).toHaveBeenLastCalledWith("applied");
+  });
+});
+
+describe("Dialog", () => {
+  function Form({ onSubmit, onClose }: { onSubmit: () => void; onClose: () => void }) {
+    return (
+      <Dialog open title="Add source" onClose={onClose} onSubmit={onSubmit} footer={<Button type="submit">Add</Button>}>
+        <input aria-label="Name" />
+      </Dialog>
+    );
+  }
+
+  it("is a named modal dialog whose form submits on Enter", async () => {
+    const onSubmit = vi.fn();
+    render(<Form onSubmit={onSubmit} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Add source" });
+    expect(dialog).toBeTruthy();
+    await userEvent.type(screen.getByRole("textbox", { name: "Name" }), "HN{Enter}");
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes on Esc and on its ✕", async () => {
+    const onClose = vi.fn();
+    render(<Form onSubmit={vi.fn()} onClose={onClose} />);
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Combobox", () => {
+  function Model({ options }: { options: string[] }) {
+    const [value, setValue] = useState("gpt-4o");
+    return <Combobox label="Model" value={value} onChange={setValue} options={options} />;
+  }
+
+  it("matches an option by a case-insensitive part", () => {
+    expect(matchesOption("GPT-4o-mini", " mini ")).toBe(true);
+    expect(matchesOption("llama3", "gpt")).toBe(false);
+  });
+
+  it("shows every option on a click, then the ones that match what is typed", async () => {
+    render(<Model options={["gpt-4o", "gpt-4o-mini", "o3"]} />);
+    const box = screen.getByRole("combobox", { name: "Model" });
+    await userEvent.click(box);
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+    expect(screen.getByRole("option", { name: "gpt-4o" }).getAttribute("aria-selected")).toBe("true");
+
+    await userEvent.type(box, "-mini");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("picks with the arrow keys and Enter, and Esc closes only the list", async () => {
+    render(<Model options={["gpt-4o", "o3"]} />);
+    const box = screen.getByRole("combobox", { name: "Model" }) as HTMLInputElement;
+    box.focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{Enter}");
+    expect(box.value).toBe("o3");
+    expect(screen.queryByRole("listbox")).toBeNull();
+
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("listbox")).toBeTruthy();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("is a plain text box without options", async () => {
+    render(<Model options={[]} />);
+    const box = screen.getByRole("combobox", { name: "Model" }) as HTMLInputElement;
+    await userEvent.clear(box);
+    await userEvent.type(box, "my-model");
+    expect(box.value).toBe("my-model");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show all: Model" })).toBeNull();
   });
 });

@@ -5,7 +5,7 @@
 import clsx from "clsx";
 
 import { Banner, Button, Checkbox, FilterChip, Section, Tag, TextArea, TextInput } from "@/components/ui/kit";
-import { ErrorBanner, ProblemHelp } from "@/components/ProblemHelp";
+import { FormError, ProblemHelp } from "@/components/ProblemHelp";
 
 import {
   canRemember,
@@ -142,7 +142,8 @@ export function ReviewPanel({
       {review.notice !== null && (
         <Banner id="review-notice" tone={review.notice.tone} title={review.notice.title} body={review.notice.body} />
       )}
-      {error !== null && <ErrorBanner id="apply-error" error={error} title="The application step failed" />}
+      {/* The review is the form the Submit button sends: why that failed stays with its answers. */}
+      {error !== null && <FormError id="apply-error" error={error} title="The application step failed" />}
       {review.notes.map((note, i) => (
         <div key={`${i}-${note.text}`} className="flex flex-col gap-1">
           <p className="selectable text-body text-warn-fg">{note.text}</p>

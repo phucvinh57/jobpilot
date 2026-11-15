@@ -184,7 +184,7 @@ describe("editing", () => {
     expect(screen.queryByRole("group", { name: "Every fact traced to your profile" })).toBeNull();
   });
 
-  it("says when the CV does not compile, with what to do about it", async () => {
+  it("says under the editor when the CV does not compile, with what to do about it", async () => {
     mocked.saveCv.mockRejectedValue(
       new CommandError("typst: command not found", {
         kind: "noTypst",
@@ -196,9 +196,14 @@ describe("editing", () => {
     );
     show();
     await edit("a: 1\n");
-    const banner = await screen.findByRole("group", { name: "The CV does not compile" });
-    expect(within(banner).getByText("typst: command not found")).toBeTruthy();
-    expect(within(banner).getByRole("button", { name: "Check again" })).toBeTruthy();
+    // The editor's own error (the CV YAML is a form): red text next to it, not a banner or a toast.
+    const problem = await screen.findByRole("alert");
+    expect(problem.id).toBe("cv-problem");
+    expect(within(problem).getByText("The CV does not compile: typst: command not found")).toBeTruthy();
+    expect(within(problem).getByText("Install Typst.")).toBeTruthy();
+    expect(within(problem).getByRole("button", { name: "Check again" })).toBeTruthy();
+    expect(document.getElementById("cv-yaml")?.contains(problem), "with the editor").toBe(true);
+    expect(screen.queryByRole("group", { name: "The CV does not compile" }), "no banner").toBeNull();
     expect(screen.queryByRole("group", { name: "Every fact traced to your profile" })).toBeNull();
   });
 

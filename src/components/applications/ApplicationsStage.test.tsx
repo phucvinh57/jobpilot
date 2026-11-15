@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError, type Problem } from "@/lib/problem";
 import { useNav } from "@/stores/nav";
+import { renderWithToasts } from "@/test/render";
 
 import * as api from "@/api/applications";
 import { board } from "@/test/fixtures/applications";
@@ -149,14 +150,17 @@ describe("an application stage", () => {
     expect(within(list).getAllByRole("button")).toHaveLength(8);
   });
 
-  it("says when the applications could not be read, with Retry", async () => {
+  it("reports applications that could not be read in a toast, with Retry in their place", async () => {
     const user = userEvent.setup();
     const problem: Problem = { kind: "network", challenge: null, advice: null, settingsSection: null, retryable: true };
     mocked.readBoard.mockRejectedValueOnce(new CommandError("database is locked", problem));
-    render(<ApplicationsStage stage="cv" />);
-    const banner = await screen.findByRole("group", { name: "The applications could not be read" });
-    expect(within(banner).getByText("database is locked")).toBeTruthy();
-    await user.click(within(banner).getByRole("button", { name: "Retry" }));
+    renderWithToasts(<ApplicationsStage stage="cv" />);
+    const toast = await screen.findByRole("alert", { name: "The applications could not be read" });
+    expect(within(toast).getByText("database is locked")).toBeTruthy();
+    const place = document.getElementById("board-error");
+    expect(place?.textContent).toContain("The applications could not be read.");
+    expect(place?.textContent, "the message is in the toast only").not.toContain("database is locked");
+    await user.click(within(place as HTMLElement).getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("table", { name: "CVs" })).toBeTruthy();
     await waitFor(() => expect(mocked.readBoard).toHaveBeenCalledTimes(2));
   });

@@ -1,21 +1,27 @@
-// The use-cases of Settings > AI providers: the list, the form (add, edit, test, load models, make
-// default, delete). A key typed here lives in this component's state until the shell has taken it to
-// the keyring, and is never read back.
+// The use-cases of Settings > AI providers: the list, the dialog that adds or edits one (save, test,
+// delete), and making one the default. The models of the provider are listed on their own (see
+// `useModels`), so the model box can suggest them. A key typed here lives in this
+// component's state until the shell has taken it to the keyring, and is never read back.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useQuery, type Query } from "@/hooks/useAsync";
+import { useAction, useQuery, type Action, type Query } from "@/hooks/useAsync";
 
 import * as api from "@/api/providers";
-import { draftOf, inputOf, modelsLine, switchKind, type Draft } from "@/lib/integrations/providers";
+import { draftOf, inputOf, modelsInputOf, modelsSignature, switchKind, type Draft } from "@/lib/integrations/providers";
+import { toast } from "@/stores/toast";
 import type { KindDefaults, Provider, ProviderKind, Providers } from "@/types/integrations";
 import { useRunner, type Runner } from "./useRunner";
 
 export interface ProvidersCard {
   query: Query<Providers>;
   kinds: KindDefaults[];
-  /** The provider being edited. */
+  /** The provider in the dialog; `undefined` while it is closed. */
   draft: Draft | undefined;
+  /** The models of the provider in the dialog are being listed. */
+  modelsLoading: boolean;
+  /** List the models again if the address, key or kind changed (on leaving their box). */
+  listModels: () => void;
   runner: Runner;
   open: (provider: Provider | undefined) => void;
   close: () => void;
@@ -23,10 +29,63 @@ export interface ProvidersCard {
   setKind: (kind: ProviderKind) => void;
   save: () => void;
   test: () => void;
-  loadModels: () => void;
-  makeDefault: () => void;
   /** Two steps: the first click arms the button, the second deletes. */
   remove: () => void;
+  /** Make a listed provider the one generation uses. */
+  makeDefault: Action<[Provider], boolean>;
+}
+
+/** The models of the provider in the dialog. They are listed when the dialog opens, when the kind
+ *  changes and when the user leaves the address or key box (`list`), never while typing, so nothing
+ *  goes to a half-typed address; and only when what they depend on changed. A failure only leaves
+ *  the list empty: the model id can always be typed. */
+function useModels(
+  draft: Draft | undefined,
+  setModels: (models: string[]) => void,
+): { loading: boolean; list: () => void } {
+  const [loading, setLoading] = useState(false);
+  const [asked, setAsked] = useState(0);
+  const reads = useRef(0);
+  const listed = useRef<string | undefined>(undefined);
+  const latest = useRef(draft);
+  latest.current = draft;
+  const open = draft !== undefined;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `asked` is the request to list again (the form is read through `latest`)
+  useEffect(() => {
+    const form = latest.current;
+    if (!open || !form) {
+      reads.current += 1;
+      listed.current = undefined;
+      setLoading(false);
+      return;
+    }
+    const input = modelsInputOf(form);
+    const signature = modelsSignature(input);
+    if (input.baseUrl === "" || signature === listed.current) {
+      return;
+    }
+    listed.current = signature;
+    const read = ++reads.current;
+    setLoading(true);
+    api
+      .listModels(input)
+      .then(
+        (models) => read === reads.current && setModels(models),
+        () => read === reads.current && setModels([]),
+      )
+      .finally(() => read === reads.current && setLoading(false));
+  }, [open, asked, setModels]);
+
+  // Answers after the dialog is gone are dropped.
+  useEffect(
+    () => () => {
+      reads.current += 1;
+    },
+    [],
+  );
+  const list = useCallback(() => setAsked((n) => n + 1), []);
+  return { loading, list };
 }
 
 export function useProviders(): ProvidersCard {
@@ -38,6 +97,8 @@ export function useProviders(): ProvidersCard {
   const { reset, run, setNotice } = runner;
 
   const edit = useCallback((patch: Partial<Draft>) => setDraft((d) => d && { ...d, ...patch }), []);
+  const setModels = useCallback((models: string[]) => edit({ models }), [edit]);
+  const { loading: modelsLoading, list: listModels } = useModels(draft, setModels);
 
   const open = useCallback(
     (provider: Provider | undefined) => {
@@ -63,8 +124,9 @@ export function useProviders(): ProvidersCard {
     (kind: ProviderKind) => {
       reset();
       setDraft((d) => d && switchKind(d, kind, kinds));
+      listModels();
     },
-    [kinds, reset],
+    [kinds, reset, listModels],
   );
 
   /** Run `call` with a form that is not armed for deletion any more. */
@@ -80,28 +142,16 @@ export function useProviders(): ProvidersCard {
   );
 
   const save = useCallback(() => {
-    void withDraft("saving", "Could not save", (form) =>
-      api.saveProvider(inputOf(form)).then((saved) => ({ saved, form })),
-    ).then((done) => {
-      if (!done) {
+    void withDraft("saving", "Could not save", (form) => api.saveProvider(inputOf(form))).then((saved) => {
+      if (!saved) {
         return;
       }
-      const { saved, form } = done;
-      // The key box is emptied: what was typed is in the keyring now.
-      setDraft(
-        (d) =>
-          d && {
-            ...d,
-            id: saved.id,
-            isDefault: saved.isDefault,
-            apiKey: "",
-            hasKey: d.hasKey || form.apiKey.trim() !== "",
-          },
-      );
-      setNotice("Saved.");
+      // The dialog closes: what was typed as a key is in the keyring now.
+      close();
+      toast.ok("Provider saved", saved.name);
       reload();
     });
-  }, [withDraft, setNotice, reload]);
+  }, [withDraft, close, reload]);
 
   const test = useCallback(() => {
     void withDraft("testing", "The test failed", (form) => api.testProvider(inputOf(form)).then(() => true)).then(
@@ -112,30 +162,6 @@ export function useProviders(): ProvidersCard {
       },
     );
   }, [withDraft, setNotice]);
-
-  const loadModels = useCallback(() => {
-    void withDraft("models", "Could not load models", (form) => api.listModels(inputOf(form))).then((models) => {
-      if (models) {
-        edit({ models });
-        setNotice(modelsLine(models.length));
-      }
-    });
-  }, [withDraft, edit, setNotice]);
-
-  const makeDefault = useCallback(() => {
-    if (!draft || draft.id === 0) {
-      return;
-    }
-    void withDraft("saving", "Could not make it the default", (form) => api.makeDefault(form.id).then(() => true)).then(
-      (ok) => {
-        if (ok) {
-          edit({ isDefault: true });
-          setNotice("This is now the default provider.");
-          reload();
-        }
-      },
-    );
-  }, [draft, withDraft, edit, setNotice, reload]);
 
   const remove = useCallback(() => {
     if (!draft) {
@@ -151,11 +177,34 @@ export function useProviders(): ProvidersCard {
     }
     void run("saving", "Could not delete", () => api.removeProvider(draft.id).then(() => true)).then((ok) => {
       if (ok) {
-        setDraft(undefined);
+        close();
+        toast.ok("Provider deleted", draft.name);
         reload();
       }
     });
   }, [draft, close, edit, run, reload]);
 
-  return { query, kinds, draft, runner, open, close, edit, setKind, save, test, loadModels, makeDefault, remove };
+  const makeDefault = useAction(async (provider: Provider) => {
+    await api.makeDefault(provider.id);
+    toast.ok("Default provider", `${provider.name} is used for generation now.`);
+    reload();
+    return true;
+  });
+
+  return {
+    query,
+    kinds,
+    draft,
+    modelsLoading,
+    listModels,
+    runner,
+    open,
+    close,
+    edit,
+    setKind,
+    save,
+    test,
+    remove,
+    makeDefault,
+  };
 }

@@ -1,5 +1,5 @@
-import { Button, Caption, Field, FilterChip, Section, Tag, TextInput } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { Button, Caption, Dialog, Field, FilterChip, Section, Tag, TextInput } from "@/components/ui/kit";
+import { FormError, LoadError } from "@/components/ProblemHelp";
 
 import {
   browserLine,
@@ -11,6 +11,7 @@ import {
   SUGGESTIONS,
 } from "@/lib/integrations/sessions";
 import type { Session } from "@/types/integrations";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { useSessions, type SessionsCard } from "@/hooks/integrations/useSessions";
 
 /** What a row offers: Check / Open / Sign out / Delete, or the label of what is running, or the
@@ -76,11 +77,30 @@ function SessionRow({ session, card, now }: { session: Session; card: SessionsCa
   );
 }
 
-/** The form that adds a session: a name, the login address, quick starts. */
-function NewSession({ card }: { card: SessionsCard }) {
-  const creating = card.busy[NEW_KEY];
+/** The dialog that adds a session: a name, the login address, quick starts. It closes once the
+ *  login browser is open; the new row then waits for Done. */
+function NewSessionDialog({ card }: { card: SessionsCard }) {
+  const creating = card.busy[NEW_KEY] !== undefined;
   return (
-    <div className="flex flex-col gap-3 border border-border bg-surface-alt p-3">
+    <Dialog
+      id="session-dialog"
+      open={card.formOpen}
+      busy={creating}
+      title="New session"
+      description="A browser opens on the login address; log in there, then press Done."
+      onClose={card.closeForm}
+      onSubmit={card.createAndLogin}
+      footer={
+        <>
+          <Button id="cancel-session" variant="ghost" disabled={creating} onClick={card.closeForm}>
+            Cancel
+          </Button>
+          <Button id="create-session" type="submit" variant="primary" busy={creating} disabled={creating}>
+            Open browser to log in
+          </Button>
+        </>
+      }
+    >
       <Field label="Name">
         <TextInput
           id="session-name"
@@ -105,23 +125,17 @@ function NewSession({ card }: { card: SessionsCard }) {
           <FilterChip
             key={suggestion.name}
             id={`suggestion-${index}`}
-            selected={false}
+            selected={card.name === suggestion.name && card.url === suggestion.url}
             onClick={() => card.fill(suggestion.name, suggestion.url)}
           >
             {suggestion.name}
           </FilterChip>
         ))}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button id="create-session" busy={creating !== undefined} onClick={card.createAndLogin}>
-          Open browser to log in
-        </Button>
-        <Button id="cancel-session" variant="ghost" disabled={creating !== undefined} onClick={card.closeForm}>
-          Cancel
-        </Button>
-        {creating !== undefined && <span className="text-small text-muted">{creating}</span>}
-      </div>
-    </div>
+      {card.createError && (
+        <FormError id="session-create-error" error={card.createError} title="Could not create the session" />
+      )}
+    </Dialog>
   );
 }
 
@@ -132,6 +146,7 @@ export function SessionsSection() {
   const now = new Date();
   const chrome = data?.chrome ?? null;
   const tag = data ? browserTag(chrome, card.download) : undefined;
+  useErrorToast(card.error, { title: card.errorTitle, clear: card.clearError });
 
   return (
     <Section
@@ -140,9 +155,7 @@ export function SessionsSection() {
       hint="Logins kept in a managed browser profile, separate from your own browser."
       actions={tag && <Tag tone={tag.tone}>{tag.text}</Tag>}
     >
-      {card.query.error && !data && (
-        <ErrorBanner error={card.query.error} title="Could not read the sessions" onRetry={card.query.reload} />
-      )}
+      {!data && <LoadError error={card.query.error} title="Could not read the sessions" onRetry={card.query.reload} />}
       {data && (
         <>
           <div className="flex flex-wrap items-center gap-3">
@@ -165,21 +178,15 @@ export function SessionsSection() {
               ))}
             </ul>
           )}
-          {data.sessions.length === 0 && !card.formOpen && <Caption>No sessions yet</Caption>}
-          {card.formOpen ? (
-            <NewSession card={card} />
-          ) : (
-            <div>
-              <Button id="new-session" onClick={card.openForm}>
-                New session
-              </Button>
-            </div>
-          )}
+          {data.sessions.length === 0 && <Caption>No sessions yet</Caption>}
+          <div>
+            <Button id="new-session" onClick={card.openForm}>
+              New session
+            </Button>
+          </div>
         </>
       )}
-      {card.error && (
-        <ErrorBanner id="sessions-error" error={card.error} title="Something went wrong" onDismiss={card.clearError} />
-      )}
+      <NewSessionDialog card={card} />
     </Section>
   );
 }

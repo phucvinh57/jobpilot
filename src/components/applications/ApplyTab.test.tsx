@@ -1,8 +1,9 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
+import { renderWithToasts } from "@/test/render";
 
 import * as api from "@/api/applications";
 import { idleApply, primary, reviewApply, row } from "@/test/fixtures/applications";
@@ -33,7 +34,7 @@ function Harness() {
 
 function show(apply: Apply) {
   mocked.readApply.mockResolvedValue(apply);
-  render(<Harness />);
+  renderWithToasts(<Harness />);
 }
 
 const ROWS = [
@@ -173,10 +174,23 @@ describe("before a form is open", () => {
     expect(mocked.readShot).toHaveBeenCalledWith(7, "proof", 0);
   });
 
-  it("shows a failure that cannot be fixed by trying again without a Retry button", async () => {
+  it("reports a failure that cannot be fixed by trying again in a toast without a Retry button", async () => {
     show(idleApply({ error: new CommandError("could not start Chrome"), canRetry: true }));
-    expect(await screen.findByText("could not start Chrome")).toBeTruthy();
+    const toast = await screen.findByRole("alert", { name: "The application step failed" });
+    expect(within(toast).getByText("could not start Chrome")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(document.getElementById("apply-error"), "no banner in the tab").toBeNull();
+  });
+
+  it("reports a failure once, not again with every read that still carries it", async () => {
+    show(idleApply({ error: new CommandError("could not start Chrome") }));
+    const toast = await screen.findByRole("alert", { name: "The application step failed" });
+    act(() => within(toast).getByRole("button", { name: "Dismiss" }).click());
+    await waitFor(() => expect(screen.queryByRole("alert", { name: "The application step failed" })).toBeNull());
+    mocked.readApply.mockResolvedValue(idleApply({ error: new CommandError("could not start Chrome") }));
+    act(() => changed.forEach((handler) => handler("applications")));
+    await waitFor(() => expect(mocked.readApply).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alert", { name: "The application step failed" })).toBeNull();
   });
 
   it("offers Retry for a retryable failure", async () => {
@@ -189,7 +203,9 @@ describe("before a form is open", () => {
       retryable: true,
     });
     show(idleApply({ error: network, canRetry: true }));
-    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    const toast = await screen.findByRole("alert", { name: "The application step failed" });
+    expect(within(toast).getByText("The connection failed.")).toBeTruthy();
+    await user.click(within(toast).getByRole("button", { name: "Retry" }));
     expect(mocked.prepareApply).toHaveBeenCalledWith(7);
   });
 });
@@ -209,6 +225,14 @@ describe("while the form is being filled", () => {
 });
 
 describe("the review", () => {
+  it("keeps a failed submit with the answers, as the form's own error, not a toast", async () => {
+    show(reviewApply(ROWS, { error: new CommandError("the site rejected the email address") }));
+    const error = await screen.findByRole("alert");
+    expect(error.id).toBe("apply-error");
+    expect(error.textContent).toContain("The application step failed: the site rejected the email address");
+    expect(screen.queryByRole("alert", { name: "The application step failed" }), "no toast").toBeNull();
+  });
+
   it("shows every field with where its answer came from, and highlights what needs a look", async () => {
     show(reviewApply(ROWS));
     expect(await screen.findByRole("region", { name: "Greenhouse - boards.example.com" })).toBeTruthy();
