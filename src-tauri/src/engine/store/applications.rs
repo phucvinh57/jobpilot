@@ -4,10 +4,10 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension, Row};
 
-use super::{events, now, Status, Store};
+use super::{events, now, status::change_status_in, Status, Store};
 
-const COLS: &str =
-    "id, slug, company, role, source, apply_url, status, dir, analysis_json, gaps_json, created_at, updated_at, insight_json, interview_round";
+const COLS: &str = "id, slug, company, role, source, apply_url, status, dir, analysis_json, gaps_json, created_at, \
+                    updated_at, insight_json, interview_round, dismissed_from, dismiss_reason, dismissed_at";
 
 #[derive(Clone, Debug)]
 pub struct Application {
@@ -32,6 +32,12 @@ pub struct Application {
     pub insight_json: Option<String>,
     /// The interview round the user marked while the status is `Interview` (`Technical interview`).
     pub interview_round: Option<String>,
+    /// While `Dismissed`: the status Restore goes back to.
+    pub dismissed_from: Option<Status>,
+    /// While `Dismissed`: why (may be empty).
+    pub dismiss_reason: Option<String>,
+    /// While `Dismissed`: when.
+    pub dismissed_at: Option<DateTime<Utc>>,
 }
 
 impl Application {
@@ -51,6 +57,9 @@ impl Application {
             updated_at: r.get(11)?,
             insight_json: r.get(12)?,
             interview_round: r.get(13)?,
+            dismissed_from: r.get(14)?,
+            dismiss_reason: r.get(15)?,
+            dismissed_at: r.get(16)?,
         })
     }
 
@@ -201,6 +210,65 @@ impl Store {
         })
     }
 
+    /// "Dismiss" a job whose CV was prepared: the application moves to `Dismissed` (a `status`
+    /// event, with `reason` when there is one) and keeps the status it had, the reason and the
+    /// time, in one transaction. Only from `Draft`, `CvReady` or `Failed` (see
+    /// [`Status::can_advance_to`]); the row and its files stay, so discovery never adds the job again.
+    pub fn dismiss_application(&self, id: i64, reason: &str) -> Result<()> {
+        let reason = reason.trim();
+        self.with_tx(|tx| {
+            let from: Status = tx
+                .query_row("SELECT status FROM applications WHERE id = ?1", [id], |r| r.get(0))
+                .optional()?
+                .with_context(|| format!("application {id} not found"))?;
+            anyhow::ensure!(
+                from.can_advance_to(Status::Dismissed),
+                "only a job in CVs can be dismissed (application {id} is {})",
+                from.label()
+            );
+            change_status_in(tx, id, Status::Dismissed, reason, false)?;
+            tx.execute(
+                "UPDATE applications SET dismissed_from = ?1, dismiss_reason = ?2, dismissed_at = ?3 WHERE id = ?4",
+                params![from, reason, now(), id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// "Restore" a dismissed application: back to the status it had (`Draft` when that is not
+    /// known), through the manual override (a `status` event), and the dismissal is forgotten.
+    /// Returns the status it is back at.
+    pub fn restore_application(&self, id: i64) -> Result<Status> {
+        self.with_tx(|tx| {
+            let (status, from): (Status, Option<Status>) = tx
+                .query_row("SELECT status, dismissed_from FROM applications WHERE id = ?1", [id], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .optional()?
+                .with_context(|| format!("application {id} not found"))?;
+            anyhow::ensure!(status == Status::Dismissed, "application {id} is not dismissed");
+            let to = from.filter(|s| *s != Status::Dismissed).unwrap_or(Status::Draft);
+            change_status_in(tx, id, to, "restored", true)?;
+            tx.execute(
+                "UPDATE applications SET dismissed_from = NULL, dismiss_reason = NULL, dismissed_at = NULL WHERE id = ?1",
+                [id],
+            )?;
+            Ok(to)
+        })
+    }
+
+    /// The dismissed applications, most recently dismissed first.
+    pub fn list_dismissed_applications(&self) -> Result<Vec<Application>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(&format!(
+                "SELECT {COLS} FROM applications WHERE status = ?1
+                 ORDER BY COALESCE(dismissed_at, updated_at) DESC, id DESC"
+            ))?;
+            let rows = stmt.query_map([Status::Dismissed], Application::from_row)?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
     /// Deletes the row and its events (files on disk are the caller's job).
     pub fn delete_application(&self, id: i64) -> Result<()> {
         self.with_conn(|c| {
@@ -239,6 +307,49 @@ mod tests {
             })
             .unwrap();
         (dir, store, app.id)
+    }
+
+    #[test]
+    fn a_dismissed_application_is_restored_to_the_status_it_had() {
+        let (_dir, store, id) = store_with_app();
+        store.set_status(id, Status::CvReady, "approved").unwrap();
+        store.dismiss_application(id, "  too far away ").unwrap();
+        let app = store.get_application(id).unwrap().unwrap();
+        assert_eq!(app.status, Status::Dismissed);
+        assert_eq!(app.dismissed_from, Some(Status::CvReady));
+        assert_eq!(app.dismiss_reason.as_deref(), Some("too far away"));
+        assert!(app.dismissed_at.is_some());
+        let last = store.list_events(id).unwrap().pop().unwrap();
+        assert_eq!((last.kind.as_str(), last.message.as_str()), ("status", "cv_ready -> dismissed: too far away"));
+        assert_eq!(store.list_dismissed_applications().unwrap().iter().map(|a| a.id).collect::<Vec<_>>(), [id]);
+
+        // Nothing moves it on by the forward-only rule, and it cannot be dismissed twice.
+        assert!(store.set_status(id, Status::Submitting, "").is_err());
+        assert!(store.dismiss_application(id, "again").is_err());
+
+        assert_eq!(store.restore_application(id).unwrap(), Status::CvReady);
+        let app = store.get_application(id).unwrap().unwrap();
+        assert_eq!(app.status, Status::CvReady);
+        assert_eq!((app.dismissed_from, app.dismiss_reason, app.dismissed_at), (None, None, None));
+        assert_eq!(store.list_events(id).unwrap().pop().unwrap().message, "dismissed -> cv_ready: restored");
+        assert!(store.list_dismissed_applications().unwrap().is_empty());
+        assert!(store.restore_application(id).is_err(), "only a dismissed application is restored");
+    }
+
+    #[test]
+    fn only_a_job_in_cvs_can_be_dismissed() {
+        let (_dir, store, id) = store_with_app();
+        store.dismiss_application(id, "").unwrap();
+        assert_eq!(store.get_application(id).unwrap().unwrap().dismissed_from, Some(Status::Draft));
+        assert_eq!(store.restore_application(id).unwrap(), Status::Draft);
+
+        store.set_status(id, Status::Submitting, "").unwrap();
+        let err = store.dismiss_application(id, "").unwrap_err();
+        assert!(format!("{err:#}").contains("Submitting"), "{err:#}");
+        store.set_status(id, Status::Applied, "").unwrap();
+        assert!(store.dismiss_application(id, "").is_err());
+        assert!(store.dismiss_application(999, "").is_err());
+        assert_eq!(store.get_application(id).unwrap().unwrap().status, Status::Applied);
     }
 
     #[test]

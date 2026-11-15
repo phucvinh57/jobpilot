@@ -4,12 +4,19 @@
 import type { Problem } from "@/lib/problem";
 
 import { leadTitle } from "./text";
-import type { FailedPrepare, Job, Lead, Queue } from "@/types/discovery";
+import type { DismissedJob, FailedPrepare, Job, Lead, Queue } from "@/types/discovery";
 
 // ------------------------------------------------------------ filters
 
-/** What the list is narrowed to. The default shows everything. */
+/** Which jobs the Leads stage lists: the open leads, or every dismissed job. */
+export type QueueShow = "open" | "dismissed";
+
+/** What the list is narrowed to. The default shows every open lead. */
 export interface QueueFilter {
+  /** The open leads, or the dismissed jobs (the other filters apply to the open ones only). */
+  show: QueueShow;
+  /** Dismissed jobs whose company or role contains this text (ignoring case). */
+  search: string;
   /** Only leads found by this source. */
   sourceId: number | null;
   /** Only leads scored at least this (an unscored lead has no score to compare). */
@@ -18,7 +25,7 @@ export interface QueueFilter {
   location: string;
 }
 
-export const NO_FILTER: QueueFilter = { sourceId: null, minScore: null, location: "" };
+export const NO_FILTER: QueueFilter = { show: "open", search: "", sourceId: null, minScore: null, location: "" };
 
 /** Minimum scores the filter offers. */
 export const MIN_SCORES: readonly number[] = [50, 70, 85];
@@ -37,6 +44,15 @@ export function filterMatches(filter: QueueFilter, lead: Pick<Lead, "sourceId" |
 /** The leads that pass `filter`, in their order. */
 export function filterItems(items: readonly Lead[], filter: QueueFilter): Lead[] {
   return items.filter((lead) => filterMatches(filter, lead));
+}
+
+/** The dismissed jobs whose company or role contains `search` (ignoring case), in their order. */
+export function filterDismissed(items: readonly DismissedJob[], search: string): DismissedJob[] {
+  const wanted = search.trim().toLowerCase();
+  if (wanted === "") {
+    return [...items];
+  }
+  return items.filter((job) => job.company.toLowerCase().includes(wanted) || job.role.toLowerCase().includes(wanted));
 }
 
 // ------------------------------------------------------------ selection

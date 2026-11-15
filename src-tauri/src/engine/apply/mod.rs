@@ -270,6 +270,9 @@ mod tests {
             updated_at: Utc::now(),
             insight_json: None,
             interview_round: None,
+            dismissed_from: None,
+            dismiss_reason: None,
+            dismissed_at: None,
         };
         assert_eq!(resolve_apply_url(&app), None);
         app.analysis_json = Some(r#"{"apply_url": "https://jobs.lever.co/acme/1"}"#.into());

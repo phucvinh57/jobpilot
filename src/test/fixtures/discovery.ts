@@ -83,6 +83,7 @@ export function queue(extra: Partial<Queue> = {}): Queue {
     waiting: [],
     lastRun: { finishedAt: new Date(Date.now() - 5 * 60_000).toISOString(), saved: 3, waiting: 0, failed: 0 },
     searching: false,
+    dismissed: 0,
     ...extra,
   };
 }

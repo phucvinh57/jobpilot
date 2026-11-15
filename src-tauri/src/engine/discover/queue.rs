@@ -143,6 +143,8 @@ pub struct QueueSnapshot {
     /// Sources paused at a login, captcha or block page.
     pub waiting: Vec<WaitingSource>,
     pub last_run: Option<RunSummary>,
+    /// How many jobs are dismissed (see [`Core::dismissed_jobs`]).
+    pub dismissed: usize,
 }
 
 impl Core {
@@ -156,6 +158,7 @@ impl Core {
             sources: self.store.list_sources(SourcePurpose::Jobs)?,
             waiting: self.discover_waiting()?,
             last_run: self.discover_last_run()?,
+            dismissed: self.dismissed_count()?,
         })
     }
 

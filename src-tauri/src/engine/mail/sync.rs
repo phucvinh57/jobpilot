@@ -252,7 +252,7 @@ fn push_error(report: &mut SyncReport, message: String) {
 
 // ---------------------------------------------------------------- matching + applying
 
-/// Applications an email can belong to: submitted or later (not drafts, not failed).
+/// Applications an email can belong to: submitted or later (not drafts, not failed, not dismissed).
 fn in_pool(status: Status) -> bool {
     status.rank() >= Status::Submitting.rank()
 }
@@ -687,6 +687,7 @@ mod tests {
     #[test]
     fn pool_statuses() {
         assert!(!in_pool(Status::Draft) && !in_pool(Status::CvReady) && !in_pool(Status::Failed));
+        assert!(!in_pool(Status::Dismissed), "a dismissed job gets no mail");
         assert!(in_pool(Status::Submitting) && in_pool(Status::Applied) && in_pool(Status::Offer));
         assert!(in_pool(Status::Interview) && in_pool(Status::Rejected));
     }

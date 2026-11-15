@@ -1,9 +1,11 @@
 // The Application screen (the drawer's "Open full view"): a breadcrumb back to the Jobs page, the
 // role, company and status, the ONE primary action (Generate -> Approve CV -> Review & Submit ->
-// Submit), the steps, and the tabs JD / CV / Apply / Timeline. The shell decides the primary
-// action; this view only shows it.
+// Submit) with a plain "Dismiss" while the job is in CVs, the steps, and the tabs JD / CV / Apply /
+// Timeline. The shell decides the primary action; this view only shows it. A dismissed job shows why,
+// with a plain "Restore", and no primary.
 
 import { Inbox, Settings } from "lucide-react";
+import { useState } from "react";
 
 import { Button, Caption, EmptyState, Page, Spinner, Stepper, Tabs, Tag } from "@/components/ui/kit";
 import { ErrorBanner } from "@/components/ProblemHelp";
@@ -13,8 +15,11 @@ import { useShell } from "@/stores/shell";
 import { crumbFor } from "@/lib/applications/crumb";
 import { TABS, type Tab } from "@/lib/applications/tabs";
 import { useApplicationScreen } from "@/hooks/applications/useApplicationScreen";
+import { useDismissJob } from "@/hooks/applications/useDismissJob";
+import { jobDismissedNote } from "@/lib/applications/dismiss";
 import { ApplyTab } from "@/components/applications/ApplyTab";
 import { CvTab } from "@/components/applications/CvTab";
+import { DismissedNotice, DismissJobForm } from "@/components/applications/DismissJob";
 import { JdTab } from "@/components/applications/JdTab";
 import { TimelineTab } from "@/components/applications/TimelineTab";
 
@@ -59,6 +64,9 @@ function Breadcrumb({ company }: { company: string }) {
 function OpenApplication({ id }: { id: number }) {
   const model = useApplicationScreen(id);
   const openSection = useNav((s) => s.openSection);
+  const dismissJob = useDismissJob(id);
+  const [dismissing, setDismissing] = useState(false);
+  const [dismissNote, setDismissNote] = useState<string>();
   const { head, apply, tab } = model;
   const header = head.header;
 
@@ -79,6 +87,7 @@ function OpenApplication({ id }: { id: number }) {
 
   const primary = head.primary;
   const showNextJob = header.showNextJob && primary === null;
+  const canDismiss = header.dismissible && header.dismissed === null;
   return (
     <Page
       label="Application"
@@ -107,6 +116,11 @@ function OpenApplication({ id }: { id: number }) {
               Next job
             </Button>
           )}
+          {canDismiss && (
+            <Button id="app-dismiss-open" disabled={dismissing} onClick={() => setDismissing(true)}>
+              Dismiss
+            </Button>
+          )}
           {primary?.settings != null && (
             <Button id="primary-settings" icon={Settings} onClick={() => openSection(primary.settings ?? "")}>
               Open {sectionPlace(primary.settings)} &gt; {primary.settings}
@@ -127,6 +141,23 @@ function OpenApplication({ id }: { id: number }) {
       }
     >
       {primary?.hint != null && <p className="text-right text-small text-muted">{primary.hint}</p>}
+      {dismissing && canDismiss && (
+        <DismissJobForm
+          header={header}
+          dismiss={dismissJob.dismiss}
+          onCancel={() => setDismissing(false)}
+          onDone={(out) => {
+            setDismissing(false);
+            setDismissNote(jobDismissedNote(out));
+          }}
+        />
+      )}
+      {header.dismissed !== null && <DismissedNotice dismissal={header.dismissed} restore={dismissJob.restore} />}
+      {dismissNote !== undefined && header.dismissed !== null && (
+        <p role="status" className="text-body text-muted">
+          {dismissNote}
+        </p>
+      )}
       {head.error !== null && (
         <ErrorBanner
           id="job-error"

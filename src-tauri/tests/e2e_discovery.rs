@@ -1,5 +1,5 @@
 //! End to end, with no real service: a job source -> leads with score and insight -> the queue ->
-//! "Prepare CV" -> "Approve CV" -> (Chrome) a dry-run apply on a local form.
+//! "Prepare CV" -> "Approve CV" -> dismiss and restore the job -> (Chrome) a dry-run apply on a local form.
 //!
 //! Everything runs against loopback servers started here:
 //! - a fake OpenAI-compatible provider (`/v1/chat/completions`) that answers by the shape of the
@@ -25,7 +25,7 @@ use tokio::net::TcpListener;
 
 use jobpilot_lib::engine::apply::{self, ApplyOptions, Prepared, Submitted};
 use jobpilot_lib::engine::discover::source::{Greenhouse, JobSource, NetHttp};
-use jobpilot_lib::engine::discover::{DiscoverDeps, RunSummary};
+use jobpilot_lib::engine::discover::{DiscoverDeps, DismissedKind, RunSummary};
 use jobpilot_lib::engine::net::http::{Http, HttpLimits};
 use jobpilot_lib::engine::pipeline::cv::Cv;
 use jobpilot_lib::engine::pipeline::insight::Insight;
@@ -457,6 +457,26 @@ async fn flow(with_apply: bool) {
     let events: Vec<String> = core.store.list_events(app.id).expect("events").into_iter().map(|e| e.message).collect();
     assert!(events.iter().any(|m| m.contains("CV approved")), "{events:?}");
     assert!(core.store.set_status(app.id, Status::Draft, "back").is_err(), "statuses only move forward");
+
+    // 4b. "Dismiss" the job from CVs: it is kept, listed with the filtered posting, never found
+    //     again by discovery, and Restore puts it back at the status it had.
+    let out = core.dismiss_application(app.id, "salary too low", false).await.expect("dismiss the application");
+    assert_eq!((out.also, out.kept, out.not_excluded), (0, 0, None));
+    assert_eq!(core.store.get_application(app.id).expect("app").expect("row").status, Status::Dismissed);
+    let jobs = core.dismissed_jobs().expect("dismissed jobs");
+    assert_eq!(jobs.len(), 2, "{jobs:?}");
+    assert_eq!((jobs[0].kind, jobs[0].id, jobs[0].reason.as_deref()), (DismissedKind::Application, app.id, Some("salary too low")), "newest first");
+    assert_eq!(jobs[1].kind, DismissedKind::Lead, "the posting the preferences filtered out");
+    assert_eq!(core.queue_snapshot().expect("queue").dismissed, 2);
+    assert_eq!(core.queue_snapshot().expect("queue").items.len(), 1, "a dismissed job is not a lead again");
+    let calls = asked.all().len();
+    let third = core.discover_now_with(deps(&core, board)).await.expect("third run");
+    assert_eq!((third.saved, third.dismissed), (0, 0), "a dismissed job is never added again: {third:?}");
+    assert_eq!(asked.all().len(), calls);
+    assert_eq!(core.store.list_applications().expect("applications").len(), 1);
+    core.restore_dismissed(DismissedKind::Application, app.id).expect("restore");
+    assert_eq!(core.store.get_application(app.id).expect("app").expect("row").status, Status::CvReady, "back at the status it had");
+    assert_eq!(core.dismissed_jobs().expect("dismissed jobs").len(), 1);
 
     // 5. "Dismiss, never this company" on the other lead empties the queue.
     let done = core.dismiss_lead_with_reason(other.lead.id, "Java, not what I want", true).await.expect("dismiss");

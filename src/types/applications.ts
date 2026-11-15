@@ -103,6 +103,28 @@ export interface ApplicationHeader {
   /** The stage of the Jobs page the application is in. */
   stage: StageKey;
   outcome: Outcome | null;
+  /** A plain "Dismiss" is offered: the job is in CVs and nothing runs for it. */
+  dismissible: boolean;
+  /** The job was dismissed (a plain "Restore" brings it back); `null` otherwise. */
+  dismissed: Dismissal | null;
+}
+
+/** Why and when a job was dismissed. */
+export interface Dismissal {
+  /** What the user typed; `null` without a reason. */
+  reason: string | null;
+  /** RFC 3339; `null` when unknown. */
+  at: string | null;
+}
+
+/** What "Dismiss" on a job in CVs did (as for a lead). */
+export interface DismissOutcome {
+  /** Leads of the company dismissed with it ("Don't show {company} again"). */
+  also: number;
+  /** Leads of the company kept because their CV is queued or being written. */
+  kept: number;
+  /** "Don't show {company} again" was asked for but could not be saved (why). */
+  notExcluded: string | null;
 }
 
 export type MarkKey = "interview" | "offer" | "rejected";

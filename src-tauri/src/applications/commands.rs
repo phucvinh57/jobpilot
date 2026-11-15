@@ -21,10 +21,10 @@ use tauri::{AppHandle, State};
 use super::dto::{
     application_dto, apply_dto, apply_image_path, board_dto, cv_dto, jd_dto, primary_of,
     require_application, timeline_dto, ApplicationDto, ApplyDto, ApplyProgressDto, BoardDto, CvDto,
-    JdDto, PrimaryDto, ProgressDto, RenderedDto, TimelineDto, ACTIVITY_ROWS,
+    DismissedDto, JdDto, PrimaryDto, ProgressDto, RenderedDto, TimelineDto, ACTIVITY_ROWS,
 };
 use super::files::{self, generate_plan, GeneratePlan};
-use super::rules::{marks_for, ApplyUi, Mark};
+use super::rules::{dismissible, marks_for, ApplyUi, Mark};
 use super::state::{Applications, Confirm, Job, Phase};
 use crate::shared::events::{data_changed, emit, Scope};
 use crate::shared::{run, run_sync, CommandError, CommandResult};
@@ -153,6 +153,62 @@ pub async fn applications_mark(
     })
     .await?;
     data_changed(&app, Scope::Applications);
+    Ok(dto)
+}
+
+/// "Dismiss" a job in the CVs stage, with an optional reason; `exclude_company` also keeps the company
+/// out of later searches (and dismisses its leads in the queue). Refused while a job runs for it or its
+/// form is being filled or reviewed (`rules::dismissible`). The application is kept as `Dismissed`:
+/// the Leads stage's "Dismissed" list shows it, and Restore brings it back.
+#[tauri::command]
+pub async fn applications_dismiss(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    state: State<'_, Applications>,
+    id: i64,
+    reason: String,
+    exclude_company: bool,
+) -> CommandResult<DismissedDto> {
+    let (core, state) = handles(&core, &state);
+    let out = run(async move {
+        let current = require_application(&core, id)?.status;
+        let job_running = state.job_view(id).label.is_some();
+        let apply_ui = state.with_apply(id, |v| v.ui(&|| live_ui(&core, id)));
+        if !dismissible(current, job_running, &apply_ui) {
+            if job_running {
+                bail!("the CV is still being written: wait for it to finish");
+            }
+            if !current.can_advance_to(Status::Dismissed) {
+                bail!("an application in {} cannot be dismissed", current.label());
+            }
+            bail!("its application form is open: close it first");
+        }
+        Ok(DismissedDto::from(
+            core.dismiss_application(id, &reason, exclude_company).await?,
+        ))
+    })
+    .await?;
+    data_changed(&app, Scope::Applications);
+    data_changed(&app, Scope::Leads);
+    Ok(out)
+}
+
+/// "Restore" a dismissed job from its drawer: back at the status it had before. Returns the header.
+#[tauri::command]
+pub async fn applications_restore(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    state: State<'_, Applications>,
+    id: i64,
+) -> CommandResult<ApplicationDto> {
+    let (core, state) = handles(&core, &state);
+    let dto = run_sync(move || {
+        core.restore_application(id)?;
+        header(&core, &state, id)
+    })
+    .await?;
+    data_changed(&app, Scope::Applications);
+    data_changed(&app, Scope::Leads);
     Ok(dto)
 }
 
@@ -661,6 +717,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         applications_get,
         applications_set_round,
         applications_mark,
+        applications_dismiss,
+        applications_restore,
         applications_generate,
         applications_revise,
         applications_retry,

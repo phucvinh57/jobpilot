@@ -228,6 +228,14 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE leads ADD COLUMN filtered_reason TEXT;
     ",
+    // 7: dismissed jobs can be listed and restored: when a lead was dismissed (older rows fall back
+    // to `found_at`), and for a dismissed application the status it had, why and when
+    "
+    ALTER TABLE leads ADD COLUMN dismissed_at TEXT;
+    ALTER TABLE applications ADD COLUMN dismissed_from TEXT;
+    ALTER TABLE applications ADD COLUMN dismiss_reason TEXT;
+    ALTER TABLE applications ADD COLUMN dismissed_at TEXT;
+    ",
 ];
 
 #[derive(Clone)]

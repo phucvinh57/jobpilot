@@ -10,10 +10,13 @@ import type {
   AddedLead,
   BoardHint,
   Dismissed,
+  DismissedJob,
+  DismissedKind,
   JobSources,
   LeadInput,
   PrepareOutcome,
   Queue,
+  Restored,
   RunSummary,
   SearchFinished,
   Source,
@@ -81,6 +84,19 @@ export async function forgetFailure(leadId: number): Promise<void> {
 export async function dismissLead(leadId: number, reason: string, excludeCompany: boolean): Promise<Dismissed> {
   const out = await invoke<Dismissed>("discovery_dismiss_lead", { leadId, reason, excludeCompany });
   notifyChanged("leads");
+  return out;
+}
+
+/** Every dismissed job (leads dismissed or filtered out, jobs dismissed from CVs), newest first. */
+export function readDismissed(): Promise<DismissedJob[]> {
+  return invoke<DismissedJob[]>("discovery_dismissed");
+}
+
+/** "Restore": a lead goes back to the list (hidden while the preferences filter it out), a job
+ *  dismissed from CVs back to the status it had. */
+export async function restore(kind: DismissedKind, id: number): Promise<Restored> {
+  const out = await invoke<Restored>("discovery_restore", { kind, id });
+  notifyChanged("leads", "applications");
   return out;
 }
 

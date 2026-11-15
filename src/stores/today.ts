@@ -30,10 +30,20 @@ import {
   openLeadId,
   STOPPED,
   type QueueFilter,
+  type QueueShow,
   type SessionFailure,
 } from "@/lib/discovery/queue";
-import { dismissedNote, summaryLine } from "@/lib/discovery/text";
-import type { Dismissed, Job, Lead, LeadInput, PrepareOutcome, Queue, SearchFinished } from "@/types/discovery";
+import { dismissedNote, restoredNote, summaryLine } from "@/lib/discovery/text";
+import type {
+  Dismissed,
+  DismissedJob,
+  Job,
+  Lead,
+  LeadInput,
+  PrepareOutcome,
+  Queue,
+  SearchFinished,
+} from "@/types/discovery";
 
 /** A CV that was written: the way into the application. */
 export interface Prepared {
@@ -80,6 +90,11 @@ export interface TodayState {
   opening: string[];
   /** Why "Open browser" failed, by thread (cleared by the next try, Continue or Skip). */
   openErrors: Record<string, CommandError>;
+  /** The dismissed jobs as last read (read while "Show: Dismissed" is picked); `undefined` until then. */
+  dismissed: DismissedJob[] | undefined;
+  dismissedError: CommandError | undefined;
+  /** Dismissed jobs being restored, by `dismissedKey`. */
+  restoring: string[];
 }
 
 const INITIAL: TodayState = {
@@ -100,6 +115,9 @@ const INITIAL: TodayState = {
   continuing: [],
   opening: [],
   openErrors: {},
+  dismissed: undefined,
+  dismissedError: undefined,
+  restoring: [],
 };
 
 export const useTodayStore = create<TodayState>(() => INITIAL);
@@ -107,6 +125,7 @@ export const useTodayStore = create<TodayState>(() => INITIAL);
 /** Back to the start (tests). */
 export function resetToday(): void {
   reads = 0;
+  dismissedReads = 0;
   latestRead = Promise.resolve();
   jobBatch.clear();
   useTodayStore.setState(INITIAL, true);
@@ -186,7 +205,35 @@ function load(): Promise<void> {
     },
   );
   latestRead = done;
+  // The dismissed list changes with the queue (a dismiss, a restore, a search that filtered some out).
+  if (get().filter.show === "dismissed") {
+    loadDismissed();
+  }
   return done;
+}
+
+let dismissedReads = 0;
+
+/** Read the dismissed jobs (off the UI thread). Only the latest answer is kept. */
+function loadDismissed(): Promise<void> {
+  const read = ++dismissedReads;
+  return api.readDismissed().then(
+    (dismissed) => {
+      if (read === dismissedReads) {
+        set({ dismissed, dismissedError: undefined });
+      }
+    },
+    (thrown: unknown) => {
+      if (read === dismissedReads) {
+        set({ dismissedError: toCommandError(thrown) });
+      }
+    },
+  );
+}
+
+/** Read the dismissed jobs again (a failed read has a Retry). */
+export function reloadDismissed(): void {
+  void loadDismissed();
 }
 
 /** The profile changes only when the user reads their documents again, so its skills are read when
@@ -214,6 +261,46 @@ export function enter(): void {
 
 export function setFilter(patch: Partial<QueueFilter>): void {
   set({ filter: { ...get().filter, ...patch } });
+}
+
+/** "Show: Open | Dismissed". The dismissed jobs are read each time they are picked; the open lead's
+ *  drawer closes (it is not in that list). */
+export function setShow(show: QueueShow): void {
+  if (show === get().filter.show) {
+    return;
+  }
+  setFilter({ show });
+  if (show === "dismissed") {
+    if (useNav.getState().drawer?.kind === "lead") {
+      useNav.getState().closeDrawer();
+    }
+    void loadDismissed();
+  }
+}
+
+/** The key of a dismissed job in `restoring` (and of its Restore button). */
+export function dismissedKey(job: Pick<DismissedJob, "kind" | "id">): string {
+  return `${job.kind}-${job.id}`;
+}
+
+/** "Restore" a dismissed job: a lead goes back to the list, a job from CVs back to the status it had.
+ *  The note says where it went. */
+export async function restoreJob(job: DismissedJob): Promise<void> {
+  const key = dismissedKey(job);
+  if (get().restoring.includes(key)) {
+    return;
+  }
+  set({ restoring: [...get().restoring, key] });
+  try {
+    const out = await api.restore(job.kind, job.id);
+    set({ note: { ok: out.hidden === null, text: restoredNote(job, out) } });
+  } catch (thrown) {
+    const error = toCommandError(thrown);
+    set({ note: { ok: false, text: error.message, problem: error.problem } });
+  } finally {
+    set({ restoring: without(get().restoring, key) });
+    load();
+  }
 }
 
 export function setChecked(id: number, on: boolean): void {
@@ -299,7 +386,7 @@ function startAdd(input: LeadInput): void {
         // moves the page to its stage).
         useNav.getState().openAppDrawer(added.applicationId);
       } else if (added.state === "dismissed") {
-        set({ note: { ok: false, text: "You dismissed this job before, so it is not in the list." } });
+        set({ note: { ok: false, text: "You dismissed this job before: find it under Show: Dismissed." } });
       } else {
         // Show the new lead, whatever the filters were, once the list holds it (the drawer closes
         // on a lead that is not listed).

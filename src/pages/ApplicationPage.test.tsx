@@ -203,6 +203,37 @@ describe("the primary action", () => {
   });
 });
 
+describe("dismissing the job", () => {
+  it("offers a plain Dismiss while the job is in CVs, and says where it went", async () => {
+    const user = userEvent.setup();
+    mocked.dismissApplication.mockResolvedValue({ also: 0, kept: 0, notExcluded: null });
+    open();
+    await screen.findByRole("heading", { name: "Backend Engineer", level: 1 });
+    expect(primaryButtons()).toHaveLength(1);
+    await user.click(document.getElementById("app-dismiss-open") as HTMLElement);
+    const form = screen.getByRole("group", { name: "Dismiss this job" });
+    await user.click(within(form).getByRole("button", { name: "Dismiss job" }));
+    expect(mocked.dismissApplication).toHaveBeenCalledWith(7, "", false);
+  });
+
+  it("shows a dismissed job with a plain Restore and no primary", async () => {
+    const user = userEvent.setup();
+    mocked.restoreApplication.mockResolvedValue(header());
+    open({
+      status: { key: "dismissed", label: "Dismissed", tone: "neutral" },
+      primary: null,
+      dismissible: false,
+      dismissed: { reason: null, at: null },
+    });
+    const notice = await screen.findByRole("group", { name: "You dismissed this job" });
+    expect(within(notice).getByText("Dismissed, no reason given.")).toBeTruthy();
+    expect(primaryButtons()).toHaveLength(0);
+    expect(document.getElementById("app-dismiss-open")).toBeNull();
+    await user.click(within(notice).getByRole("button", { name: "Restore" }));
+    expect(mocked.restoreApplication).toHaveBeenCalledWith(7);
+  });
+});
+
 describe("the failure of a job", () => {
   it("shows it with Retry and Dismiss", async () => {
     const user = userEvent.setup();

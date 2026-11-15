@@ -38,7 +38,8 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
              `Core::profile` / `require_profile` (NoProfile) is the one way to read it
   discover   `source/` (ATS APIs: greenhouse, lever, ashby, smartrecruiters, recruitee, personio, workday; hn_hiring, yc, career_page with
              JSON-LD, sitemap and board detection), `run` (graphs `discovery`, `source_run`), `score`, `dedup`, `handoff`, `sources`,
-             `queue`, `promote` (graph `prepare_cv`, dismiss), `manual` (`Core::add_lead`: pasted link/file -> scored lead)
+             `queue`, `promote` (graph `prepare_cv`, dismiss), `dismissed` (dismiss a CV, list dismissed jobs, Restore),
+             `manual` (`Core::add_lead`: pasted link/file -> scored lead)
   trends     collection (hackernews, yc, rss, page, `report_search` with a keyring key; graph `trends` -> `trend_items`),
              `frame` (MarketFrame: background + place, never wishes; decides what is collected and counted),
              `digest/` (extract, count, synthesize, cite: every point cites stored items)

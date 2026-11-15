@@ -285,3 +285,74 @@ describe("the application drawer", () => {
     expect(mocked.readJd).toHaveBeenCalledWith(7);
   });
 });
+
+describe("dismissing a job in CVs", () => {
+  const DISMISSED: Partial<ApplicationHeader> = {
+    status: { key: "dismissed", label: "Dismissed", tone: "neutral" },
+    primary: null,
+    dismissible: false,
+    dismissed: { reason: "salary too low", at: new Date(Date.now() - 3 * 3_600_000).toISOString() },
+  };
+
+  it("offers a plain Dismiss beside the primary, and dismisses with a reason and the company", async () => {
+    const user = userEvent.setup();
+    mocked.dismissApplication.mockResolvedValue({ also: 0, kept: 0, notExcluded: null });
+    const drawer = await open();
+    const dismiss = within(drawer).getByRole("button", { name: "Dismiss" });
+    expect(dismiss.classList.contains("bg-accent")).toBe(false);
+    expect(primaryButtons()).toHaveLength(1);
+    await user.click(dismiss);
+    const form = within(drawer).getByRole("group", { name: "Dismiss this job" });
+    await user.type(within(form).getByRole("textbox", { name: "Why dismiss this job" }), "salary too low");
+    await user.click(within(form).getByRole("checkbox", { name: "Don't show Acme again" }));
+    await user.click(within(form).getByRole("button", { name: "Dismiss job" }));
+    expect(mocked.dismissApplication).toHaveBeenCalledWith(7, "salary too low", true);
+    // The job left CVs: the drawer closes.
+    await waitFor(() => expect(useNav.getState().drawer).toBeUndefined());
+  });
+
+  it("cancels the form, and says why a dismissal failed", async () => {
+    const user = userEvent.setup();
+    mocked.dismissApplication.mockRejectedValue(new CommandError("its application form is open: close it first"));
+    const drawer = await open();
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss job" }));
+    expect((await within(drawer).findByRole("alert")).textContent).toContain("its application form is open");
+    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
+    await user.click(within(drawer).getByRole("button", { name: "Cancel" }));
+    expect(within(drawer).queryByRole("group", { name: "Dismiss this job" })).toBeNull();
+  });
+
+  it("keeps the drawer open when the company could not be excluded", async () => {
+    const user = userEvent.setup();
+    mocked.dismissApplication.mockResolvedValue({ also: 0, kept: 0, notExcluded: "disk full" });
+    const drawer = await open();
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss job" }));
+    expect(await within(drawer).findByText(/could not be excluded: disk full/)).toBeTruthy();
+    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
+  });
+
+  it("offers no Dismiss when the job is not dismissible", async () => {
+    const drawer = await open({ dismissible: false });
+    expect(within(drawer).queryByRole("button", { name: "Dismiss" })).toBeNull();
+  });
+
+  it("shows a dismissed job with its reason and a plain Restore, and no primary", async () => {
+    const user = userEvent.setup();
+    useNav.setState({ stage: "leads" });
+    mocked.restoreApplication.mockResolvedValue(header());
+    mocked.readApplication.mockResolvedValue(header(DISMISSED));
+    useNav.setState({ screen: "jobs", stage: "leads", drawer: { kind: "app", id: 7 } });
+    render(<ApplicationDrawer />);
+    const drawer = await screen.findByRole("dialog", { name: "Acme: Backend Engineer" });
+    const notice = await within(drawer).findByRole("group", { name: "You dismissed this job" });
+    expect(within(notice).getByText("Dismissed 3 h ago: salary too low")).toBeTruthy();
+    expect(primaryButtons()).toHaveLength(0);
+    expect(within(drawer).queryByRole("button", { name: "Dismiss" })).toBeNull();
+    // A dismissed job is on no stage: the page stays on Leads.
+    expect(useNav.getState().stage).toBe("leads");
+    await user.click(within(notice).getByRole("button", { name: "Restore" }));
+    expect(mocked.restoreApplication).toHaveBeenCalledWith(7);
+  });
+});

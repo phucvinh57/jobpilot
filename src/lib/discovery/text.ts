@@ -2,7 +2,7 @@
 
 import { ago } from "@/lib/display";
 
-import type { Dismissed, RunSummary, Source } from "@/types/discovery";
+import type { Dismissed, DismissedJob, Restored, RunSummary, Source } from "@/types/discovery";
 
 /** A link the system browser may open: http(s) only. */
 export function isWebLink(url: string): boolean {
@@ -82,6 +82,34 @@ export function dismissedNote(out: Dismissed): string {
     text += ` ${more(out.kept)} from that company ${verb} kept: the CV is being prepared.`;
   }
   return text;
+}
+
+/** A dismissal reason the preferences gave ("excluded company: Acme"): Restore leaves the exclusion. */
+export function isExclusion(reason: string | null): boolean {
+  return reason?.trim().toLowerCase().startsWith("excluded company") ?? false;
+}
+
+/** What to tell the user after "Restore": where the job is now; that the preferences still hide it
+ *  (`out.hidden`: it shows once they let it pass); or that an excluded company stays excluded
+ *  (later searches still leave it out until the preferences change). */
+export function restoredNote(
+  job: Pick<DismissedJob, "kind" | "company" | "role" | "reason">,
+  out: Restored = { hidden: null },
+): string {
+  const title = leadTitle(job.company, job.role);
+  if (out.hidden !== null) {
+    return `${title} is restored, but your preferences hide it (${out.hidden}). It shows in Leads once they let it pass.`;
+  }
+  const back = `${title} is back in ${job.kind === "lead" ? "Leads" : "CVs"}.`;
+  return isExclusion(job.reason)
+    ? `${back} The company is still excluded in your preferences, so new searches leave it out.`
+    : back;
+}
+
+/** When a job was dismissed, for the Dismissed list: `5 min ago`, or `earlier` when unknown. */
+export function dismissedWhen(at: string, now: Date): string {
+  const then = new Date(at);
+  return Number.isNaN(then.getTime()) ? "earlier" : ago(now, then);
 }
 
 // ------------------------------------------------------------ sources

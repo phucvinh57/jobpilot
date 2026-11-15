@@ -600,6 +600,9 @@ pub(crate) async fn prepare_with(
 ) -> Result<Prepared> {
     let _busy = Busy::acquire(core, app_id)?;
     let app = core.store.get_application(app_id)?.with_context(|| format!("application {app_id} not found"))?;
+    if app.status == Status::Dismissed {
+        bail!("this job was dismissed: restore it first");
+    }
     discard_run(core, app_id).await;
 
     let info = apply_info(core, &app);

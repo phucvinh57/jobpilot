@@ -40,7 +40,8 @@ export function useApplicationMarks(id: number): ApplicationMarks {
 
 /** The drawer of application `id` on the Jobs page. While it shows `id`, the page shows the stage
  *  the application is in: whoever opened it need not know the stage, and a mark that moves it
- *  (Applied -> In progress) moves the page with it. */
+ *  (Applied -> In progress) moves the page with it. A dismissed job leaves the page where it is; once
+ *  restored, the page follows it to its stage. */
 export function useApplicationDrawer(id: number): ApplicationDrawerModel {
   const openApplication = useNav((s) => s.openApplication);
   const openLead = useNav((s) => s.openLead);
@@ -49,7 +50,8 @@ export function useApplicationDrawer(id: number): ApplicationDrawerModel {
   const head = useApplicationHeader(id);
   const header = head.header === null ? null : head.header?.id === id ? head.header : undefined;
 
-  const stage = header?.stage;
+  // A dismissed job is on no stage: the page stays where it is (Leads > Dismissed lists it).
+  const stage = header?.dismissed == null ? header?.stage : undefined;
   useEffect(() => {
     if (shown && stage !== undefined && stage !== useNav.getState().stage) {
       // The stage only: the drawer stays open (`showStage` would close it).

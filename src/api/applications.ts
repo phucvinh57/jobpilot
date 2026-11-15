@@ -11,6 +11,7 @@ import type {
   ApplicationHeader,
   Board,
   Cv,
+  DismissOutcome,
   Jd,
   JobProgress,
   MarkKey,
@@ -108,6 +109,25 @@ export async function mark(id: number, mark: MarkKey): Promise<ApplicationHeader
     return header(await invoke<HeaderDto>("applications_mark", { id, mark }));
   } finally {
     notifyChanged("applications");
+  }
+}
+
+/** "Dismiss" a job in CVs, with an optional reason; `excludeCompany` keeps the company out of later
+ *  searches (and dismisses its leads). The job is kept: Leads > Dismissed lists it, Restore brings it back. */
+export async function dismissApplication(id: number, reason: string, excludeCompany: boolean): Promise<DismissOutcome> {
+  try {
+    return await invoke<DismissOutcome>("applications_dismiss", { id, reason, excludeCompany });
+  } finally {
+    notifyChanged("applications", "leads");
+  }
+}
+
+/** "Restore" a dismissed job: back at the status it had. Resolves to the header. */
+export async function restoreApplication(id: number): Promise<ApplicationHeader> {
+  try {
+    return header(await invoke<HeaderDto>("applications_restore", { id }));
+  } finally {
+    notifyChanged("applications", "leads");
   }
 }
 

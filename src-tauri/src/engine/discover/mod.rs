@@ -28,6 +28,8 @@
 //! - [`handoff`]: the login / captcha / block page hand-off: [`Core::discover_open_browser`] opens the
 //!   page visibly for the user (the app never solves a challenge), the default [`text_probe`], and
 //!   [`needs_human`] (a paused run's reason as the `Problem` to show).
+//! - [`dismissed`]: dismiss a job in the CVs stage ([`Core::dismiss_application`]), list every
+//!   dismissed job ([`Core::dismissed_jobs`]) and restore one.
 //! - [`manual`]: [`Core::add_lead`], a job the user pasted (link, file or text) added to the Job list as a lead.
 //! - [`schedule`]: the optional daily run (`discover_daily_enabled`, `set_discover_daily`, `discover_due`).
 //! - [`sources`]: add, enable, bind a session to and remove job sources (`Core::job_sources`, ...).
@@ -39,6 +41,7 @@
 
 pub mod dedup;
 pub mod deps;
+pub mod dismissed;
 mod fetch;
 pub mod handoff;
 pub mod limits;
@@ -59,6 +62,7 @@ mod tests;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 
+pub use dismissed::{DismissedJob, DismissedKind, Restored};
 pub use deps::{
     ChallengeCheck, ChallengeProbe, CheckStage, DiscoverDeps, FetchRequest, InsightHook, InsightRequest, Notifier,
     PostingFetcher, SourceFactory,
