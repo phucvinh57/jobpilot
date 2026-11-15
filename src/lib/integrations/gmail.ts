@@ -1,24 +1,6 @@
-// Gmail settings and sync status as the shell reads them. The client secret and the refresh token
-// stay in the OS keyring: only whether a client secret is saved comes back.
+// What the Gmail card says about the connection and the last sync.
 
-export interface SyncReport {
-  fetched: number;
-  updated: number;
-  needsReview: number;
-  error: string | null;
-}
-
-export interface Gmail {
-  clientId: string;
-  hasClientSecret: boolean;
-  /** The connected account's address. */
-  account: string | null;
-  /** RFC 3339. */
-  lastSync: string | null;
-  lastReport: SyncReport | null;
-  /** Minutes between polls while the app is open. */
-  pollMinutes: number;
-}
+import type { SyncReport } from "@/types/integrations";
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");

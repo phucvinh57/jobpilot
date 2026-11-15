@@ -9,8 +9,8 @@ import {
   sessionLine,
   statusTone,
   SUGGESTIONS,
-  type Session,
 } from "@/lib/integrations/sessions";
+import type { Session } from "@/types/integrations";
 import { useSessions, type SessionsCard } from "@/hooks/integrations/useSessions";
 
 /** What a row offers: Check / Open / Sign out / Delete, or the label of what is running, or the

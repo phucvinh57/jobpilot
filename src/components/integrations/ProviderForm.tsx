@@ -1,7 +1,8 @@
 import { Button, Checkbox, Field, Segmented, TextInput } from "@/components/ui/kit";
 import { ErrorBanner } from "@/components/ProblemHelp";
 
-import { deleteLabel, keyLabel, type KindDefaults } from "@/lib/integrations/providers";
+import { deleteLabel, keyLabel } from "@/lib/integrations/providers";
+import type { KindDefaults } from "@/types/integrations";
 import type { ProvidersCard } from "@/hooks/integrations/useProviders";
 import { Notice } from "./Notice";
 

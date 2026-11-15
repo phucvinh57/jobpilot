@@ -3,7 +3,7 @@
 
 import { useCallback, useState } from "react";
 
-import { useGraphProgress } from "@/stores/shell";
+import { useGraphProgress } from "@/hooks/useGraphProgress";
 import { useQuery } from "@/hooks/useAsync";
 
 import * as api from "@/api/trends";

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { useAction, useQuery } from "@/hooks/useAsync";
-import { useGraphProgress } from "@/stores/shell";
+import { useGraphProgress } from "@/hooks/useGraphProgress";
 import type { CommandError } from "@/lib/problem";
 
 import { approveCv, dismissError, generate, onProgress, readApplication, retry, revise } from "@/api/applications";

@@ -7,17 +7,8 @@ import { useCallback, useMemo, useState } from "react";
 import { useQuery, type Query } from "@/hooks/useAsync";
 
 import * as api from "@/api/providers";
-import {
-  draftOf,
-  inputOf,
-  modelsLine,
-  switchKind,
-  type Draft,
-  type KindDefaults,
-  type Provider,
-  type ProviderKind,
-  type Providers,
-} from "@/lib/integrations/providers";
+import { draftOf, inputOf, modelsLine, switchKind, type Draft } from "@/lib/integrations/providers";
+import type { KindDefaults, Provider, ProviderKind, Providers } from "@/types/integrations";
 import { useRunner, type Runner } from "./useRunner";
 
 export interface ProvidersCard {

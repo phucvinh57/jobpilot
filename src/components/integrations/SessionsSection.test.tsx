@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandError } from "@/lib/problem";
 
 import * as api from "@/api/sessions";
-import type { Download, Session, Sessions } from "@/lib/integrations/sessions";
+import type { Download, Session, Sessions } from "@/types/integrations";
 import { SessionsSection } from "./SessionsSection";
 
 vi.mock("@/api/sessions");

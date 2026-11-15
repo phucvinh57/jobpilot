@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandError } from "@/lib/problem";
 
 import * as api from "@/api/profile";
-import type { Profile } from "@/lib/profile";
+import type { Profile } from "@/types/profile";
 import { ProfileSection } from "./ProfileSection";
 
 vi.mock("@/api/profile");

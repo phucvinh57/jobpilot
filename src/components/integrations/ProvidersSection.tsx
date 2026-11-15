@@ -3,7 +3,8 @@ import clsx from "clsx";
 import { Button, Caption, Section, Tag } from "@/components/ui/kit";
 import { ErrorBanner } from "@/components/ProblemHelp";
 
-import { providersStatus, type Provider } from "@/lib/integrations/providers";
+import { providersStatus } from "@/lib/integrations/providers";
+import type { Provider } from "@/types/integrations";
 import { useProviders } from "@/hooks/integrations/useProviders";
 import { ProviderForm } from "./ProviderForm";
 

@@ -11,17 +11,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CommandError, toCommandError } from "@/lib/problem";
 
 import * as api from "@/api/profile";
-import {
-  changed,
-  cleanNotes,
-  followNotes,
-  NOTES_IDLE,
-  savePlan,
-  type FieldKey,
-  type JobType,
-  type NotesStatus,
-  type Profile,
-} from "@/lib/profile";
+import { changed, cleanNotes, followNotes, NOTES_IDLE, savePlan, type NotesStatus } from "@/lib/profile";
+import type { FieldKey, JobType, Profile } from "@/types/profile";
 
 export interface ProfileCard {
   /** `undefined` until the first read answered. */

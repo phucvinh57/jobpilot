@@ -4,7 +4,7 @@
 import { Caption, Card, Heading, LinkButton, SectionLabel, Tag } from "@/components/ui/kit";
 import { ErrorBanner } from "@/components/ProblemHelp";
 import { NOT_FOUND, CompanyBlock, InterviewBlock, type Insight } from "@/components/InsightBrief";
-import { openUrl } from "@/stores/shell";
+import { openUrl } from "@/api/shell";
 
 import { useJd } from "@/hooks/applications/useTabs";
 

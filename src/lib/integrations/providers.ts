@@ -1,47 +1,8 @@
-// AI providers as the shell reads them, and the rules of the provider form. An API key is never
-// part of what is read: a key is typed into the form, goes to the shell and the OS keyring, and
-// only "a key is saved" comes back.
+// The rules of the provider form. A key is typed into the form, goes to the shell and the OS
+// keyring, and only "a key is saved" comes back.
 
 import type { Tone } from "@/lib/tokens";
-
-export type ProviderKind = "openai" | "anthropic";
-
-export interface Provider {
-  id: number;
-  name: string;
-  kind: ProviderKind;
-  kindLabel: string;
-  baseUrl: string;
-  model: string;
-  /** The endpoint lacks `json_schema` support: ask for a JSON object instead. */
-  jsonObject: boolean;
-  isDefault: boolean;
-}
-
-/** What a kind of provider starts with in the form. */
-export interface KindDefaults {
-  kind: ProviderKind;
-  label: string;
-  name: string;
-  baseUrl: string;
-  model: string;
-}
-
-export interface Providers {
-  providers: Provider[];
-  kinds: KindDefaults[];
-}
-
-/** The form, sent to save, test or list models. `apiKey` is typed text: empty keeps the saved key. */
-export interface ProviderInput {
-  id: number;
-  kind: ProviderKind;
-  name: string;
-  baseUrl: string;
-  model: string;
-  jsonObject: boolean;
-  apiKey: string | null;
-}
+import type { ProviderKind, Provider, KindDefaults, ProviderInput } from "@/types/integrations";
 
 /** The provider being edited (`id == 0`: not saved yet). */
 export interface Draft {

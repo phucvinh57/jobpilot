@@ -4,7 +4,7 @@
 
 import { invoke, notifyChanged, pickFile } from "./bridge";
 
-import type { AddResult, FieldKey, JobType, NotesReadResult, Profile } from "@/lib/profile";
+import type { AddResult, FieldKey, JobType, NotesReadResult, Profile } from "@/types/profile";
 
 /** The card: preferences, suggestions, the attached CV, whether there is a change to undo. */
 export function readProfile(): Promise<Profile> {

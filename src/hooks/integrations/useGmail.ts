@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useQuery, type Query } from "@/hooks/useAsync";
 
 import * as api from "@/api/gmail";
-import type { Gmail } from "@/lib/integrations/gmail";
+import type { Gmail } from "@/types/integrations";
 import { useRunner, type Runner } from "./useRunner";
 
 export interface GmailCard {

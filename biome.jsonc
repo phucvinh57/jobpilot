@@ -1,5 +1,7 @@
-// Lint + format of the web app, and its two import rules:
-//   - only `src/api/` talks to Tauri (`@tauri-apps/*`); everything else calls the typed functions there
+// Lint + format of the web app, and its import rules:
+//   - only `src/api/` talks to Tauri: `@tauri-apps/*` and the bridge's raw calls (`invoke`, `listen`,
+//     `pickFile`, `notifyChanged`) are imported there only; everything else calls the typed
+//     functions in `src/api/<feature>.ts` (events and types from `@/api/bridge` are fine)
 //   - only the design kit (`src/components/ui/kit.tsx`) imports the shadcn/ui primitives
 //     (`src/components/ui/primitives`)
 // Each file matches exactly one override below (Biome does not merge rule options across
@@ -63,7 +65,7 @@
               "options": {
                 "patterns": [
                   {
-                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "group": ["**/primitives", "**/primitives/**", "./primitives", "./primitives/**"],
                     "message": "Use the design kit (@/components/ui/kit); only it builds on the primitives."
                   }
                 ]
@@ -74,13 +76,19 @@
       }
     },
     {
-      "includes": ["src/components/ui/**"],
+      "includes": ["src/components/ui/kit.tsx", "src/components/ui/primitives/**"],
       "linter": {
         "rules": {
           "style": {
             "noRestrictedImports": {
               "level": "error",
               "options": {
+                "paths": {
+                  "@/api/bridge": {
+                    "importNames": ["invoke", "listen", "pickFile", "notifyChanged"],
+                    "message": "Call the shell through a typed function in @/api/<feature>.ts."
+                  }
+                },
                 "patterns": [{ "group": ["@tauri-apps/**"], "message": "Call Tauri through the functions in @/api." }]
               }
             }
@@ -89,17 +97,23 @@
       }
     },
     {
-      "includes": ["src/**", "!src/api/**", "!src/components/ui/**"],
+      "includes": ["src/**", "!src/api/**", "!src/components/ui/kit.tsx", "!src/components/ui/primitives/**"],
       "linter": {
         "rules": {
           "style": {
             "noRestrictedImports": {
               "level": "error",
               "options": {
+                "paths": {
+                  "@/api/bridge": {
+                    "importNames": ["invoke", "listen", "pickFile", "notifyChanged"],
+                    "message": "Call the shell through a typed function in @/api/<feature>.ts."
+                  }
+                },
                 "patterns": [
                   { "group": ["@tauri-apps/**"], "message": "Call Tauri through the functions in @/api." },
                   {
-                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "group": ["**/primitives", "**/primitives/**", "./primitives", "./primitives/**"],
                     "message": "Use the design kit (@/components/ui/kit); only it builds on the primitives."
                   }
                 ]

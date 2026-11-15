@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { changed, cleanNotes, fade, followNotes, saveShortcut, savePlan, type Profile } from "./profile";
+import { changed, cleanNotes, fade, followNotes, saveShortcut, savePlan } from "./profile";
+import type { Profile } from "@/types/profile";
 
 function profile(patch: Partial<Profile> = {}): Profile {
   return {

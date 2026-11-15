@@ -8,7 +8,8 @@ import { toCommandError, type CommandError } from "@/lib/problem";
 import { useQuery, type Query } from "@/hooks/useAsync";
 
 import * as api from "@/api/sessions";
-import { FIRST_SUGGESTION, NEW_KEY, type Destructive, type Download, type Sessions } from "@/lib/integrations/sessions";
+import { FIRST_SUGGESTION, NEW_KEY, type Destructive } from "@/lib/integrations/sessions";
+import type { Download, Sessions } from "@/types/integrations";
 
 export interface SessionsCard {
   query: Query<Sessions>;

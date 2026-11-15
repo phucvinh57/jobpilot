@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 
 import { Button, Caption, Checkbox, Drawer, LinkButton, TextInput } from "@/components/ui/kit";
 import { CompanyBlock, InterviewBlock } from "@/components/InsightBrief";
-import { openUrl } from "@/stores/shell";
+import { openUrl } from "@/api/shell";
 import { scoreLabel, scoreTone } from "@/lib/display";
 import { TONE_CLASS } from "@/lib/tokens";
 import { useNav } from "@/stores/nav";

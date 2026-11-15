@@ -2,7 +2,7 @@ import { FileText } from "lucide-react";
 
 import { Button } from "@/components/ui/kit";
 
-import type { Cv } from "@/lib/profile";
+import type { Cv } from "@/types/profile";
 import { Row } from "./Row";
 
 /** The CV attached for suggestions. It is context only: it is never copied into a CV. */

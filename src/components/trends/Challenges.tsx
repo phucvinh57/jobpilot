@@ -3,7 +3,7 @@ import { ExternalLink } from "lucide-react";
 import { Banner, Button } from "@/components/ui/kit";
 
 import type { Challenge } from "@/types/trends";
-import { open } from "./links";
+import { openLink } from "@/api/shell";
 
 /** One banner per collection that waits at a login, captcha or block page. The app never solves
  *  it: the user opens the page, deals with it, then continues (or builds the digest without it). */
@@ -36,7 +36,7 @@ export function Challenges({
                 size="compact"
                 icon={ExternalLink}
                 disabled={wait.url === null}
-                onClick={() => wait.url && open(wait.url)}
+                onClick={() => wait.url && openLink(wait.url)}
               >
                 Open page
               </Button>

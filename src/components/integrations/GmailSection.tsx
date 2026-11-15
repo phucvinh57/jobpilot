@@ -1,7 +1,8 @@
 import { Button, Caption, Field, HealthDot, Section, Tag, TextInput } from "@/components/ui/kit";
 import { ErrorBanner } from "@/components/ProblemHelp";
 
-import { disconnectLabel, lastSyncLine, pollLine, secretLabel, syncResult, type Gmail } from "@/lib/integrations/gmail";
+import { disconnectLabel, lastSyncLine, pollLine, secretLabel, syncResult } from "@/lib/integrations/gmail";
+import type { Gmail } from "@/types/integrations";
 import { useGmail, type GmailCard } from "@/hooks/integrations/useGmail";
 import { Notice } from "./Notice";
 

@@ -3,7 +3,7 @@ import { useState } from "react";
 
 import { Button, FilterChip, TextInput } from "@/components/ui/kit";
 
-import type { ListField } from "@/lib/profile";
+import type { ListField } from "@/types/profile";
 import { Row } from "./Row";
 
 /** A list of the preferences as a tag field: chips with a remove button, a small "Add" box, and

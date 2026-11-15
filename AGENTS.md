@@ -63,13 +63,14 @@ src/                   React + Vite + TypeScript + Tailwind; feature folders (ap
                        Drawer, ScoreBadge, Stepper, ...), `ui/primitives/` (shadcn/ui, square: no rounded corners; only the kit imports
                        them, Biome enforces it), `layout/` (Sidebar, SetupBanner), ProblemHelp (ErrorBanner), InsightBrief,
                        `<feature>/` (drawers, tabs, stages, settings sections)
-  hooks/               `useAsync` (`useQuery`, `useAction`), `<feature>/` (screen state, loading, Problem)
+  hooks/               `useAsync` (`useQuery`, `useAction`), `useGraphProgress`, `<feature>/` (screen state, loading, Problem)
   stores/              zustand: `nav` (screen, Jobs stage, drawer `{ kind: "lead" | "app", id }`, Jobs badge), `shell` (health line, banner,
-                       appearance, `openUrl`), `today` (the Leads queue)
-  api/                 `bridge.ts` (the only Tauri imports: invoke / listen / file picker), one file of typed command calls per feature
+                       appearance), `today` (the Leads queue)
+  api/                 `bridge.ts` (the only Tauri imports: invoke / listen / file picker; events), `shell.ts` (`shared_*`: status,
+                       appearance, `openUrl`), one file of typed command calls per feature; Biome keeps raw `invoke` / `listen` here
   lib/                 pure helpers + vitest: `problem`, `theme`/`tokens` (light/dark as `--jp-*` CSS variables; `styles.css` maps them to
                        the only Tailwind colours), `display`, `utils` (`cn`), `<feature>/`
-  types/               types mirroring the shell's DTOs
+  types/               types mirroring the shell's DTOs (one file per feature, `shell.ts`)
   test/fixtures/       sample data for the tests
 ```
 
@@ -152,7 +153,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 
 Engine (`src-tauri/src/engine`): each sub-plan edits only its own modules: `llm/` P1; `pipeline/` P2; `browser/` P4; `apply/` P5; `mail/` P6; `health`, `logging`, `redact`, packaging and docs P7. Add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
 
-Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and the web app's `<feature>/` folders of that name: discovery (P10 sources, P12 queue), applications (P2/P3/P5 screens), profile (P9), integrations (P1 providers, P4 sessions, P6 Gmail), trends (P13). The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`) and the web app's shared files (`src/components/ui`, `src/stores`, `src/api/bridge.ts`, `src/App.tsx`) change only for something every context needs.
+Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and that feature's web files: its `<feature>/` folders and `<feature>.ts` files under `src/`, plus its page and store (applications: `pages/ApplicationPage.tsx`; discovery: `stores/today.ts`; trends: `pages/TrendsPage.tsx`). Features: discovery (P10 sources, P12 queue), applications (P2/P3/P5 screens), profile (P9), integrations (P1 providers, P4 sessions, P6 Gmail), trends (P13). The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`) and the web app's shared files (`src/components/ui`, `src/components/layout`, `src/stores/{nav,shell}.ts`, `src/api/{bridge,shell}.ts`, `src/App.tsx`, `src/pages/{Jobs,Settings}Page.tsx`) change only for something every context needs.
 
 The product plans (`docs/plans/`, status table in `docs/plans/README.md`):
 

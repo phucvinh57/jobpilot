@@ -3,7 +3,7 @@
 
 import { invoke, notifyChanged } from "./bridge";
 
-import type { Provider, ProviderInput, Providers } from "@/lib/integrations/providers";
+import type { Provider, ProviderInput, Providers } from "@/types/integrations";
 
 /** The saved providers and what each kind starts with. */
 export function loadProviders(): Promise<Providers> {

@@ -2,7 +2,7 @@
 
 import { invoke, listen, notifyChanged } from "./bridge";
 
-import type { Download, Sessions } from "@/lib/integrations/sessions";
+import type { Download, Sessions } from "@/types/integrations";
 
 /** The sessions, the browser they run on and the state of a browser download. */
 export function loadSessions(): Promise<Sessions> {

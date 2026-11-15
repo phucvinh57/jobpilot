@@ -1,16 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  deleteLabel,
-  draftOf,
-  inputOf,
-  keyLabel,
-  modelsLine,
-  providersStatus,
-  switchKind,
-  type KindDefaults,
-  type Provider,
-} from "./providers";
+import { deleteLabel, draftOf, inputOf, keyLabel, modelsLine, providersStatus, switchKind } from "./providers";
+import type { KindDefaults, Provider } from "@/types/integrations";
 
 const KINDS: KindDefaults[] = [
   { kind: "openai", label: "OpenAI-compatible", name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "" },

@@ -1,41 +1,8 @@
-// Browser sessions as the shell reads them, and what the card says about them.
+// What the browser sessions card says about each session and the managed browser.
 
 import { ago } from "@/lib/display";
 import type { Tone } from "@/lib/tokens";
-
-export type SessionStatus = "new" | "ok" | "expired";
-
-/** A managed browser profile. */
-export interface Session {
-  id: number;
-  name: string;
-  host: string;
-  status: SessionStatus;
-  /** RFC 3339, `null` when it was never checked. */
-  verifiedAt: string | null;
-  /** A login window is open and waits for the user to press Done. */
-  loginInProgress: boolean;
-}
-
-/** The browser sessions run on. */
-export interface Chrome {
-  path: string;
-  /** `JOBPILOT_CHROME` / `managed` / `system`. */
-  source: string;
-}
-
-/** Where the browser download stands (also the payload of `integrations:browser-download`). */
-export interface Download {
-  active: boolean;
-  /** Percent done, when the size is known. */
-  percent: number | null;
-}
-
-export interface Sessions {
-  sessions: Session[];
-  chrome: Chrome | null;
-  download: Download;
-}
+import type { SessionStatus, Session, Chrome, Download } from "@/types/integrations";
 
 /** Quick starts for the "New session" form: (name, login URL). */
 export const SUGGESTIONS: readonly { name: string; url: string }[] = [

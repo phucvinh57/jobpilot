@@ -6,7 +6,7 @@ import { digestHint, termsLine } from "@/lib/trends/format";
 import { addAccessibleName, addLabel, addTooltip, canAdd } from "@/lib/trends/preferences";
 import type { Citation, Digest, Gap, Point, Wishes } from "@/types/trends";
 import type { PreferenceAdds } from "@/hooks/trends/usePreferenceAdds";
-import { open } from "./links";
+import { openLink } from "@/api/shell";
 
 /** The latest digest: numbered points, each with the stored items it rests on. */
 export function DigestCard({ digest, adds }: { digest: Digest | null; adds: PreferenceAdds }) {
@@ -204,11 +204,11 @@ function Cite({ id, citation }: { id: string; citation: Citation }) {
   const { url } = citation;
   return (
     <div id={id} className="flex max-w-[320px] items-center gap-1.5">
-      <CiteChip number={citation.number} onClick={url === null ? undefined : () => open(url)} />
+      <CiteChip number={citation.number} onClick={url === null ? undefined : () => openLink(url)} />
       {url === null ? (
         <span className="selectable min-w-0 truncate text-small text-muted">{citation.title}</span>
       ) : (
-        <LinkButton aria-label={`Open source: ${citation.title}`} onClick={() => open(url)}>
+        <LinkButton aria-label={`Open source: ${citation.title}`} onClick={() => openLink(url)}>
           {citation.title}
         </LinkButton>
       )}

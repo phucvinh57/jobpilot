@@ -6,7 +6,7 @@ import { useCallback, useState } from "react";
 
 import { toCommandError, type CommandError } from "@/lib/problem";
 import { useAction, useQuery } from "@/hooks/useAsync";
-import { useGraphProgress } from "@/stores/shell";
+import { useGraphProgress } from "@/hooks/useGraphProgress";
 
 import * as api from "@/api/discovery";
 import { movesTheQueue } from "@/lib/discovery/progress";

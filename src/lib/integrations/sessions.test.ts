@@ -8,8 +8,8 @@ import {
   sessionLine,
   statusTone,
   SUGGESTIONS,
-  type Chrome,
 } from "./sessions";
+import type { Chrome } from "@/types/integrations";
 
 const CHROME: Chrome = { path: "/usr/bin/chromium", source: "system" };
 

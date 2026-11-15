@@ -1,33 +1,11 @@
-// The app's own state: setup (health line, banner), navigation badges, appearance, and
-// the one way a link leaves the app.
+// The app's own state: setup (health line, banner), navigation badges and appearance.
 
 import { create } from "zustand";
 
-import { invoke, onDataChanged, onGraphProgress, type GraphProgress } from "@/api/bridge";
-import type { Problem } from "@/lib/problem";
+import { onDataChanged } from "@/api/bridge";
+import { savedAppearance, saveAppearance, shellStatus } from "@/api/shell";
 import { applyTheme, cachedAppearance, parseAppearance, watchSystem, type Appearance } from "@/lib/theme";
-import { useEffect, useRef } from "react";
-
-export interface HealthLine {
-  ok: boolean;
-  text: string;
-  /** The Settings section that helps with the first problem. */
-  focus: string | null;
-}
-
-export interface Blocker {
-  id: string;
-  title: string;
-  problem: Problem;
-}
-
-export interface ShellStatus {
-  health: HealthLine;
-  blockers: Blocker[];
-  prefsSaved: boolean;
-  newLeads: number;
-  applications: number;
-}
+import type { ShellStatus } from "@/types/shell";
 
 interface ShellState {
   /** `undefined` until the first check finished: nothing is claimed before it. */
@@ -45,7 +23,7 @@ export const useShell = create<ShellState>((set, get) => ({
   appearance: cachedAppearance(),
   refresh: () => {
     const read = ++reads;
-    invoke<ShellStatus>("shared_status").then(
+    shellStatus().then(
       (status) => {
         if (read === reads) {
           set({ status });
@@ -59,7 +37,7 @@ export const useShell = create<ShellState>((set, get) => ({
     set({ appearance });
     applyTheme(appearance);
     try {
-      await invoke<void>("shared_set_appearance", { appearance });
+      await saveAppearance(appearance);
     } catch (e) {
       set({ appearance: before });
       applyTheme(before);
@@ -72,7 +50,7 @@ export const useShell = create<ShellState>((set, get) => ({
  *  Returns the teardown. */
 export function startShell(): () => void {
   applyTheme(useShell.getState().appearance);
-  invoke<string>("shared_appearance").then(
+  savedAppearance().then(
     (saved) => {
       const appearance = parseAppearance(saved);
       useShell.setState({ appearance });
@@ -89,17 +67,3 @@ export function startShell(): () => void {
     stopData();
   };
 }
-
-/** Open an http(s) link in the system browser (the webview itself never navigates). */
-export function openUrl(url: string): Promise<void> {
-  return invoke<void>("shared_open_url", { url });
-}
-
-/** Call `handler` for every step of every graph run (discovery, trends, prepare-CV, chat). */
-export function useGraphProgress(handler: (progress: GraphProgress) => void): void {
-  const ref = useRef(handler);
-  ref.current = handler;
-  useEffect(() => onGraphProgress((p) => ref.current(p)), []);
-}
-
-export type { GraphProgress };

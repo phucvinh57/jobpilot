@@ -3,7 +3,7 @@
 
 import { invoke, listen, notifyChanged } from "./bridge";
 
-import type { Gmail } from "@/lib/integrations/gmail";
+import type { Gmail } from "@/types/integrations";
 
 /** Gmail settings and sync status (never a secret). */
 export function loadGmail(): Promise<Gmail> {

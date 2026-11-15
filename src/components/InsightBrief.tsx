@@ -2,7 +2,7 @@
 // does, the facts, the pages it comes from) and "Interview process" (the stages in order, then
 // notes). The lead drawer shows it under a Lead, the Application screen's JD tab under the posting.
 
-import { openUrl } from "@/stores/shell";
+import { openUrl } from "@/api/shell";
 import { Caption, LinkButton, SectionLabel, Tag } from "@/components/ui/kit";
 
 /** The stored brief of a job (`InsightDto` in `shared/insight.rs`). */

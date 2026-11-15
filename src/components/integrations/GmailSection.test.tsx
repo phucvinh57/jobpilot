@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandError } from "@/lib/problem";
 
 import * as api from "@/api/gmail";
-import type { Gmail } from "@/lib/integrations/gmail";
+import type { Gmail } from "@/types/integrations";
 import { GmailSection } from "./GmailSection";
 
 vi.mock("@/api/gmail");
