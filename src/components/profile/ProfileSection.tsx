@@ -1,11 +1,12 @@
 import { Undo2 } from "lucide-react";
 
 import { Button, Caption, Section, Segmented } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
 
 import { JOB_TYPES } from "@/lib/profile";
 import { useFade } from "@/hooks/profile/useFade";
 import { useProfile } from "@/hooks/profile/useProfile";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { NotesField } from "./NotesField";
 import { Row } from "./Row";
 import { TagField } from "./TagField";
@@ -21,6 +22,9 @@ export function ProfileSection() {
   const card = useProfile();
   const { profile } = card;
   const opacity = useFade(card.flash?.n);
+  // A failed change: the section saves every field on its own (chips, job type, Undo, the
+  // background reading of the notes), so there is no one form to show it under.
+  useErrorToast(card.error, { title: "Not saved", clear: card.clearError });
 
   const actions = (
     <div className="flex items-center gap-2">
@@ -52,7 +56,7 @@ export function ProfileSection() {
     return (
       <Section id="settings-profile" title={TITLE} hint={HINT} actions={actions}>
         {card.loadError ? (
-          <ErrorBanner
+          <LoadError
             id="profile-error"
             error={card.loadError}
             title="Could not read your preferences"
@@ -88,9 +92,6 @@ export function ProfileSection() {
           canSave={card.canSaveNotes}
           status={card.notesStatus}
         />
-        {card.error && (
-          <ErrorBanner id="profile-error" error={card.error} title="Not saved" onDismiss={card.clearError} />
-        )}
       </div>
     </Section>
   );

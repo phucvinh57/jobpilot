@@ -1,10 +1,11 @@
 import { FileText, PenLine, RefreshCw, StickyNote, Upload, X } from "lucide-react";
 
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { FormError, LoadError } from "@/components/ProblemHelp";
 import {
   Button,
   Caption,
   Chip,
+  Dialog,
   EmptyState,
   Field,
   Section,
@@ -14,6 +15,7 @@ import {
   TextInput,
 } from "@/components/ui/kit";
 import { useAbout, type AboutCard } from "@/hooks/profile/useAbout";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { educationLine, roleLine, sourceLine, statusLine, truncatedNote } from "@/lib/profile/about";
 import type { About, Source, Summary } from "@/types/profile";
 import { Row } from "./Row";
@@ -55,17 +57,34 @@ function SourceRow({ source, about, card }: { source: Source; about: About; card
   );
 }
 
-/** The "Add text" form: a title, the note, Save. */
-function NoteForm({ card }: { card: AboutCard }) {
+/** The "Add a note" dialog: a title, the note, Save. A failed save stays in the dialog. */
+function NoteDialog({ card }: { card: AboutCard }) {
   const blocked = card.noteBody.trim() === "" ? null : card.noteBlocked;
   return (
-    <form
-      aria-label="Add a note"
-      className="flex flex-col gap-3 border border-border bg-surface-alt p-3"
-      onSubmit={(e) => {
-        e.preventDefault();
-        card.saveNote();
-      }}
+    <Dialog
+      id="about-text-dialog"
+      open={card.noteOpen}
+      title="Add a note"
+      description="Facts only: they may appear on a CV."
+      onClose={card.closeNote}
+      onSubmit={card.saveNote}
+      footer={
+        <>
+          <Button id="about-text-cancel" variant="ghost" disabled={card.savingNote} onClick={card.closeNote}>
+            Cancel
+          </Button>
+          <Button
+            id="about-text-save"
+            type="submit"
+            variant="primary"
+            busy={card.savingNote}
+            disabled={card.noteBlocked !== null}
+            title={card.noteBlocked ?? undefined}
+          >
+            Save
+          </Button>
+        </>
+      }
     >
       <Field label="Title">
         <TextInput
@@ -79,32 +98,14 @@ function NoteForm({ card }: { card: AboutCard }) {
         <TextArea
           id="about-text-body"
           className="min-h-28"
-          placeholder="What you did, where and when, with which tools. Facts only: they may appear on a CV."
+          placeholder="What you did, where and when, with which tools."
           value={card.noteBody}
           onChange={(e) => card.setNoteBody(e.target.value)}
         />
       </Field>
       {blocked && <p className="text-small text-warn">{blocked}</p>}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          id="about-text-save"
-          type="submit"
-          busy={card.savingNote}
-          disabled={card.noteBlocked !== null}
-          title={card.noteBlocked ?? undefined}
-        >
-          Save
-        </Button>
-        <Button
-          id="about-text-cancel"
-          variant="ghost"
-          disabled={card.savingNote}
-          onClick={() => card.setNoteOpen(false)}
-        >
-          Cancel
-        </Button>
-      </div>
-    </form>
+      {card.noteError && <FormError id="about-text-error" error={card.noteError} title="Not added" />}
+    </Dialog>
   );
 }
 
@@ -190,12 +191,13 @@ function LeftOut({ items }: { items: string[] }) {
 export function AboutYouSection() {
   const card = useAbout();
   const { about } = card;
+  useErrorToast(card.failure?.error, { title: card.failure?.title, clear: card.clearFailure });
 
   if (!about) {
     return (
       <Section id="about-you" title={TITLE} hint={INTRO}>
         {card.loadError ? (
-          <ErrorBanner
+          <LoadError
             id="about-error"
             error={card.loadError}
             title="Could not read your documents"
@@ -232,16 +234,11 @@ export function AboutYouSection() {
           <Button id="about-add-file" icon={Upload} busy={card.adding} onClick={card.addFile}>
             Add file
           </Button>
-          <Button
-            id="about-add-text"
-            icon={PenLine}
-            aria-expanded={card.noteOpen}
-            onClick={() => card.setNoteOpen(!card.noteOpen)}
-          >
+          <Button id="about-add-text" icon={PenLine} aria-haspopup="dialog" onClick={card.openNote}>
             Add text
           </Button>
         </div>
-        {card.noteOpen && <NoteForm card={card} />}
+        <NoteDialog card={card} />
 
         {hasSources && (
           <div className="flex flex-wrap items-center gap-3">
@@ -260,15 +257,6 @@ export function AboutYouSection() {
               </Button>
             )}
           </div>
-        )}
-
-        {card.failure && (
-          <ErrorBanner
-            id="about-failure"
-            error={card.failure.error}
-            title={card.failure.title}
-            onDismiss={card.clearFailure}
-          />
         )}
 
         {about.summary && <SummaryView summary={about.summary} />}

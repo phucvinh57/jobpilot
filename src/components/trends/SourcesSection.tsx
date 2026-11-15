@@ -1,8 +1,9 @@
 import { Plus } from "lucide-react";
 
-import { Button, Caption, Field, FilterChip, Section, Switch, Tag, TextInput } from "@/components/ui/kit";
+import { Button, Caption, Dialog, Field, FormMessage, Section, Switch, Tag, TextInput } from "@/components/ui/kit";
 
 import type { Source, SourceKind, SourceKindInfo } from "@/types/trends";
+import { useErrorToast } from "@/hooks/useErrorToast";
 import { useSourceEditing } from "@/hooks/trends/useSourceEditing";
 
 const ADD_ID: Record<SourceKind, string> = {
@@ -12,10 +13,12 @@ const ADD_ID: Record<SourceKind, string> = {
   page: "trends-add-page",
 };
 
-/** Where the digest looks: the sources (enable, remove) and the buttons that add one. */
+/** Where the digest looks: the sources (enable, remove) and the buttons that add one (a feed or a
+ *  page in a dialog that asks for its address). */
 export function SourcesSection({ sources, kinds }: { sources: readonly Source[]; kinds: readonly SourceKindInfo[] }) {
   const editing = useSourceEditing();
   const open = kinds.find((k) => k.kind === editing.adding);
+  useErrorToast(editing.listError, { title: editing.listErrorTitle, clear: editing.clearListError });
   return (
     <Section
       id="trends-sources"
@@ -55,69 +58,56 @@ export function SourcesSection({ sources, kinds }: { sources: readonly Source[];
         ))}
       </ul>
       <div className="flex flex-wrap gap-2">
-        {kinds.map((kind) =>
-          kind.needsUrl ? (
-            <FilterChip
-              key={kind.kind}
-              id={ADD_ID[kind.kind]}
-              selected={editing.adding === kind.kind}
-              onClick={() => void editing.choose(kind)}
-            >
-              <Plus aria-hidden className="size-4" />
-              {kind.label}
-            </FilterChip>
-          ) : (
-            <Button
-              key={kind.kind}
-              id={ADD_ID[kind.kind]}
-              size="compact"
-              icon={Plus}
-              disabled={kind.added || editing.busy}
-              onClick={() => void editing.choose(kind)}
-            >
-              {kind.label}
-            </Button>
-          ),
-        )}
+        {kinds.map((kind) => (
+          <Button
+            key={kind.kind}
+            id={ADD_ID[kind.kind]}
+            size="compact"
+            icon={Plus}
+            aria-haspopup={kind.needsUrl ? "dialog" : undefined}
+            disabled={!kind.needsUrl && (kind.added || editing.busy)}
+            onClick={() => void editing.choose(kind)}
+          >
+            {kind.label}
+          </Button>
+        ))}
       </div>
-      {open && (
-        <form
-          className="flex flex-col gap-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void editing.submit(open);
-          }}
-        >
-          <Field label="Name (optional)">
-            <TextInput
-              placeholder="Name (optional)"
-              value={editing.name}
-              onChange={(e) => editing.setName(e.target.value)}
-            />
-          </Field>
-          <Field label="Address">
-            <TextInput
-              placeholder="https://example.com/feed.xml"
-              inputMode="url"
-              value={editing.url}
-              onChange={(e) => editing.setUrl(e.target.value)}
-            />
-          </Field>
-          <div className="flex flex-wrap gap-2">
-            <Button id="trends-add-source" type="submit" busy={editing.busy}>
-              Add {open.label}
-            </Button>
+      <Dialog
+        id="trends-source-dialog"
+        open={open !== undefined}
+        title={open ? `Add ${open.label}` : "Add a source"}
+        onClose={editing.cancel}
+        onSubmit={() => open && !editing.busy && void editing.submit(open)}
+        footer={
+          <>
             <Button id="trends-add-cancel" variant="ghost" onClick={editing.cancel}>
               Cancel
             </Button>
-          </div>
-        </form>
-      )}
-      {editing.error && (
-        <p role="alert" className="selectable min-w-0 text-body text-danger">
-          {editing.error}
-        </p>
-      )}
+            <Button id="trends-add-source" type="submit" variant="primary" busy={editing.busy}>
+              Add
+            </Button>
+          </>
+        }
+      >
+        <Field label="Name (optional)">
+          <TextInput
+            id="trends-source-name"
+            placeholder="Name (optional)"
+            value={editing.name}
+            onChange={(e) => editing.setName(e.target.value)}
+          />
+        </Field>
+        <Field label="Address">
+          <TextInput
+            id="trends-source-url"
+            placeholder="https://example.com/feed.xml"
+            inputMode="url"
+            value={editing.url}
+            onChange={(e) => editing.setUrl(e.target.value)}
+          />
+        </Field>
+        {editing.formError && <FormMessage id="trends-source-error">{editing.formError}</FormMessage>}
+      </Dialog>
     </Section>
   );
 }
