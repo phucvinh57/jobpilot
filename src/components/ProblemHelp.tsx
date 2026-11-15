@@ -1,11 +1,11 @@
-// Shared "something is missing or failed" pieces: what to do about it, and the buttons that do
-// it. Every screen points the user to the same fixes.
+// Shared "something is missing or failed" pieces: what to do about it, the buttons that do it,
+// and how a failure is shown (a toast, or under a form). Every screen points the user to the same fixes.
 
 import { ExternalLink, Settings } from "lucide-react";
 
 import { useNav, type SettingsSection } from "@/stores/nav";
 import { useShell } from "@/stores/shell";
-import { Banner, Button, Caption, FormMessage } from "@/components/ui/kit";
+import { Button, Caption, FormMessage } from "@/components/ui/kit";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { problemActions, type CommandError, type Problem } from "@/lib/problem";
 
@@ -79,48 +79,6 @@ export function ProblemHelp(props: ActionsProps) {
         <ProblemActions {...props} />
       </div>
     </div>
-  );
-}
-
-/** A failed command as a banner: what happened, what to do, and the buttons that do it. */
-export function ErrorBanner({
-  error,
-  title = "Something went wrong",
-  onRetry,
-  onOpenBrowser,
-  onDismiss,
-  id,
-}: {
-  error: CommandError;
-  title?: string;
-  onRetry?: () => void;
-  onOpenBrowser?: () => void;
-  onDismiss?: () => void;
-  id?: string;
-}) {
-  const { problem } = error;
-  return (
-    <Banner
-      id={id}
-      tone={problem.kind === "needsHuman" ? "warn" : "danger"}
-      title={title}
-      body={
-        <>
-          <p>{error.message}</p>
-          {problem.advice && <p>{problem.advice}</p>}
-        </>
-      }
-      actions={
-        <>
-          <ProblemActions problem={problem} onRetry={onRetry} onOpenBrowser={onOpenBrowser} />
-          {onDismiss && (
-            <Button size="compact" variant="ghost" onClick={onDismiss}>
-              Dismiss
-            </Button>
-          )}
-        </>
-      }
-    />
   );
 }
 
