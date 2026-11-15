@@ -412,8 +412,7 @@ pub fn render_markdown(period: &Period, data: &DigestData) -> String {
 
 
 
-/// The parts of `body_md` computed for the user, from the counts alone (reports saved before they
-/// existed have none of them, and render as before).
+/// The parts of `body_md` computed for the user, from the counts alone (older reports have none).
 fn render_lens(md: &mut String, counts: &SkillCounts) {
     if !counts.gap.is_empty() {
         let scope = match counts.gap_scope {

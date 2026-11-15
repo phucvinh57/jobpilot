@@ -30,8 +30,8 @@ pub const NO_SANDBOX_ENV: &str = "JOBPILOT_NO_SANDBOX";
 /// How long page navigation may take in [`BrowserHandle::new_page`].
 pub(crate) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Fixed launch flags of every managed browser (no sync, no extensions, no password manager, no
-/// "controlled by automated software" banner / webdriver flag).
+/// Fixed launch flags of every managed browser (no sync, no extensions, no password manager).
+/// None of them hides that the browser is automated.
 const LAUNCH_ARGS: &[&str] = &[
     "--no-first-run",
     "--no-default-browser-check",

@@ -24,10 +24,10 @@ pub const PREPARED: &str = "discovery:prepared";
 /// The daily search ended: payload `SearchFinishedDto`.
 pub const SEARCH_FINISHED: &str = "discovery:search-finished";
 
-// ------------------------------------------------------------------ Today: reading
+// ------------------------------------------------------------------ Leads: reading
 
-/// Everything Today shows: the leads best match first, failed CVs, the sources, the ones paused
-/// for the user and the last search.
+/// Everything the Leads stage shows: the leads best match first, failed CVs, the sources, the ones
+/// paused for the user and the last search.
 #[tauri::command]
 pub async fn discovery_queue(core: State<'_, Arc<Core>>) -> CommandResult<QueueDto> {
     let core = core.inner().clone();
@@ -38,16 +38,15 @@ pub async fn discovery_queue(core: State<'_, Arc<Core>>) -> CommandResult<QueueD
     .await
 }
 
-/// The skill names of the master profile, to tell the skills a posting asks for that the profile
-/// has from those it lacks (empty when the profile cannot be read). The profile is a file the user
-/// edits outside the app, so Today reads it when it is shown.
+/// The skill names of the profile, to tell the skills a posting asks for that the profile has from
+/// those it lacks (empty when there is none or it cannot be read).
 #[tauri::command]
 pub async fn discovery_profile_skills(core: State<'_, Arc<Core>>) -> CommandResult<Vec<String>> {
     let core = core.inner().clone();
     run_sync(move || Ok(core.profile_skills())).await
 }
 
-// ------------------------------------------------------------------ Today: the link box
+// ------------------------------------------------------------------ Leads: the link box
 
 /// What a pasted link, path or text is. `None` for a blank box.
 #[tauri::command]
@@ -78,7 +77,7 @@ pub async fn discovery_add_lead(
     .await
 }
 
-// ------------------------------------------------------------------ Today: acting on leads
+// ------------------------------------------------------------------ Leads: acting on them
 
 /// "Prepare CV" on `lead_ids`, one after the other (the core queues across calls too). Each lead's
 /// outcome goes out as the `discovery:prepared` event as soon as it is known; the command returns
@@ -135,7 +134,7 @@ pub async fn discovery_dismiss_lead(
     .await
 }
 
-// ------------------------------------------------------------------ Today: searching
+// ------------------------------------------------------------------ Leads: searching
 
 /// "Search now": every enabled job source. Returns when each source is done, paused for the user or
 /// failed.
@@ -279,7 +278,7 @@ pub async fn discovery_set_daily(core: State<'_, Arc<Core>>, on: bool) -> Comman
     run_sync(move || core.set_discover_daily(on)).await
 }
 
-/// This context's commands; `main.rs` routes every `discovery_*` call here.
+/// This context's commands; `lib.rs` routes every `discovery_*` call here.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         discovery_queue,

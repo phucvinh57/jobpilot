@@ -175,7 +175,7 @@ pub async fn trends_add_to_preferences(
     .await
 }
 
-/// This context's commands; `main.rs` routes every `trends_*` call here.
+/// This context's commands; `lib.rs` routes every `trends_*` call here.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         trends_overview,

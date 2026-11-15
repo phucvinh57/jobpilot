@@ -84,7 +84,7 @@ pub struct Row {
 }
 
 impl Row {
-    /// Can this answer be saved to the profile's `application:` section?
+    /// Can this answer be remembered (`Store::save_answer`)?
     pub fn rememberable(&self) -> bool {
         self.editable
             && !matches!(self.kind, FieldKind::File)
@@ -93,7 +93,7 @@ impl Row {
             && !is_cover_text(self)
     }
 
-    /// The question text used as the `application:` key.
+    /// The question text a remembered answer is saved under.
     pub fn memory_key(&self) -> String {
         self.label.trim().to_string()
     }
@@ -172,7 +172,7 @@ pub enum Submitted {
 pub struct Edit {
     pub id: String,
     pub value: String,
-    /// Save this answer to the profile's `application:` section.
+    /// Remember this answer for the same question on later forms.
     pub remember: bool,
 }
 

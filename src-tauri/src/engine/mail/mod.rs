@@ -24,7 +24,7 @@ pub mod gmail;
 pub mod oauth;
 pub mod sync;
 
-/// Desktop notifications moved to [`crate::engine::notify`]; kept here for existing callers.
+/// Desktop notifications, re-exported from [`crate::engine::notify`].
 pub use crate::engine::notify;
 pub use account::{
     GmailState, KV_ACCOUNT, KV_CLIENT_ID, KV_HISTORY_ID, KV_LAST_REPORT, KV_LAST_SYNC, KV_POLL_MINUTES,

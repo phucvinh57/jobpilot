@@ -321,7 +321,7 @@ pub async fn integrations_gmail_disconnect(core: CoreState<'_>) -> CommandResult
     run(async move { core.gmail_disconnect().await }).await
 }
 
-/// This context's commands; `main.rs` routes every `integrations_*` call here.
+/// This context's commands; `lib.rs` routes every `integrations_*` call here.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         integrations_providers,

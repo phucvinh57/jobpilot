@@ -251,8 +251,8 @@ pub fn pipeline_note(pipeline: &ScopeCounts) -> String {
     format!("Your own leads, for comparison: {documents} over the window{named}. They are not counted in the market above.")
 }
 
-/// The heading of a section. A report saved before the market scan wrote its `for_you` points about the
-/// user's wishes, not the gap: it keeps the old title.
+/// The heading of a section. A report saved before the market scan wrote its `for_you` points about
+/// the user's wishes, not the gap: it keeps the old title.
 pub fn section_title(section: Section, knows: bool) -> &'static str {
     match section {
         Section::ForYou if !knows => "What it means for you",
@@ -801,7 +801,7 @@ mod tests {
             skills: vec![skill(&[1, 2])],
             ..SkillCounts::default()
         };
-        assert!(!knows_background(&counts), "a report saved before P15");
+        assert!(!knows_background(&counts), "a report saved before the market scan");
         let thin = SkillCounts {
             version: MARKET_SCAN_VERSION,
             ..SkillCounts::default()

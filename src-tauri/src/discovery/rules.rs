@@ -1,6 +1,6 @@
 //! Pure rules of this context, unit-tested here: what the link box holds, and which dropped files
 //! are job descriptions. Rules that need no file system (ordering, labels, the primary action,
-//! skills matching, the add queue) live in the web app's `domain/` with their vitest tests.
+//! skills matching, the add queue) live in the web app's `lib/discovery/` with their vitest tests.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

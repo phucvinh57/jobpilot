@@ -45,7 +45,7 @@ pub use session::{BrowserHandle, SessionManager, SessionStatus};
 use crate::engine::Core;
 
 /// One manager per data dir, so live browsers / login windows are tracked in one place however many
-/// times `core.sessions()` is called (`Core` itself is owned by the foundation and has no field for it).
+/// times `core.sessions()` is called (`Core` has no field for it).
 static MANAGERS: OnceLock<Mutex<HashMap<PathBuf, SessionManager>>> = OnceLock::new();
 
 impl Core {

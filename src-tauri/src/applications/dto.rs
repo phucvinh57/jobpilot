@@ -277,7 +277,7 @@ fn blocker_of(core: &Core, app: &Application) -> Option<Blocker> {
     })
 }
 
-/// The primary action of `app`, from the live state (the same inputs as the legacy detail pane).
+/// The primary action of `app`, from its status and the live state.
 pub fn primary_of(
     core: &Core,
     app: &Application,

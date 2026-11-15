@@ -297,7 +297,7 @@ fn build(core: Arc<Core>, llm: LlmSource) -> GraphDef<ChatState> {
 /// The calls the UI makes on the preference chat. Every method is `async` and meant for the app's
 /// runtime (`runtime::spawn`); each runs the graph until it pauses again and says where it stands.
 ///
-/// ```ignore
+/// ```text
 /// let chat = PrefsChat::new(core.clone());
 /// let status = chat.open().await?;          // the model's first turn, when nothing was said yet
 /// let status = chat.send("Remote, Rust").await?;

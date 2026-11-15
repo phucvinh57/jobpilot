@@ -1,5 +1,5 @@
-//! Pure rules of this context, unit-tested here: how a list entry is cleaned and compared, when a
-//! topic may be added, what the line under the notes says (ported from the GPUI card), and what
+//! Pure rules of this context, unit-tested here: when a topic may be added to a preference list
+//! (entry cleaning is in `shared::topics`), what the line under the notes says, and what
 //! Settings > About you shows about the user's documents and the profile read from them.
 //!
 //! The rules that only the screen needs (whether Save is on, when a "Saved" label shows and how it

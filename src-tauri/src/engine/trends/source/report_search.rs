@@ -54,14 +54,11 @@ pub struct Found {
 /// Locations and role phrases of the frame that get queries.
 const MAX_SUBJECTS: usize = 2;
 
-/// Search queries for annual and quarterly reports on the user's market: where they want to work
-/// and what their background makes them. Per location "<location> technology job market report
-/// <year>" and "<location> <first role> salary survey <year>" ("<location> tech salary survey
-/// <year>" without a role); per role phrase of the profile "<role> hiring trends <year> report" and
-/// "<role> skills demand <year> <quarter>". At most two locations and two roles. Without either,
-/// general technology queries. Wished skills, wished domains and target roles are not in the frame,
-/// so they never steer what is searched. Deduplicated (ignoring case), at most `max`, interleaved
-/// so that every subject gets its first query before any gets a second.
+/// Search queries for annual and quarterly reports on the user's market: two per location and two
+/// per role phrase of the profile (at most two of each), general technology queries without
+/// either. Wishes are not in the frame, so they never steer what is searched. Deduplicated
+/// (ignoring case), at most `max`, interleaved so every subject gets its first query before any
+/// gets a second.
 pub fn build_queries(frame: &MarketFrame, period: &Period, max: usize) -> Vec<String> {
     let (year, quarter) = (period.year(), period.quarter_label());
     let subjects = |list: &[String]| -> Vec<String> { list.iter().map(|s| subject(s)).filter(|s| !s.is_empty()).take(MAX_SUBJECTS).collect() };
