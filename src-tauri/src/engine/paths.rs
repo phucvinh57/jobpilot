@@ -2,15 +2,12 @@
 //!
 //! Everything lives under `$XDG_DATA_HOME/jobpilot` (override with `JOBPILOT_DATA_DIR`).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
 /// Env var that overrides the data directory (used by tests).
 pub const DATA_DIR_ENV: &str = "JOBPILOT_DATA_DIR";
-
-/// File name of the master profile.
-pub const PROFILE_FILE: &str = "profile.yaml";
 
 #[derive(Clone, Debug)]
 pub struct Paths {
@@ -71,17 +68,4 @@ impl Paths {
     pub fn session_dir(&self, id: i64) -> PathBuf {
         self.sessions_dir.join(id.to_string())
     }
-
-    /// Nearest `profile.yaml` walking up from the current directory,
-    /// else `<data_dir>/profile.yaml`.
-    pub fn default_profile_path(&self) -> PathBuf {
-        std::env::current_dir()
-            .ok()
-            .and_then(|cwd| find_upwards(&cwd, PROFILE_FILE))
-            .unwrap_or_else(|| self.data_dir.join(PROFILE_FILE))
-    }
-}
-
-fn find_upwards(start: &Path, file: &str) -> Option<PathBuf> {
-    start.ancestors().map(|dir| dir.join(file)).find(|p| p.is_file())
 }

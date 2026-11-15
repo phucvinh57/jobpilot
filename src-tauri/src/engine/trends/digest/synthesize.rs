@@ -76,7 +76,7 @@ pub(super) async fn synthesize(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<T
         tracing::warn!("the saved preferences could not be read; the digest is written without a place");
         Preferences::default()
     });
-    let frame = MarketFrame::load(env.config.profile.as_deref(), &prefs);
+    let frame = MarketFrame::new(env.config.profile.as_ref(), &prefs);
     let counts = s.digest.counts.clone().unwrap_or_default();
     let (user, shown) =
         build_prompt(&s.period, &frame, &counts, &items, &s.digest.extractions, env.config.limits.evidence_chars);

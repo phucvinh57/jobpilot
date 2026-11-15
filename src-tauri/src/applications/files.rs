@@ -147,23 +147,6 @@ pub fn guard_clean(core: &Core, yaml: Option<&str>) -> bool {
     yaml.is_some_and(|yaml| core.cv_is_traced(yaml))
 }
 
-/// `xdg-open <path>` (`open` on macOS): hand the file to the user's default editor.
-pub fn open_path(path: &Path) -> Result<()> {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    std::process::Command::new(opener)
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .with_context(|| format!("could not run {opener} on {}", path.display()))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::engine::store::NewApplication;
@@ -274,8 +257,7 @@ mod tests {
     #[test]
     fn saving_renders_the_edit_and_reports_problems() {
         let (_dir, core) = fresh_core();
-        core.set_profile_path(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../profile.yaml"))
-            .expect("the profile path");
+        crate::engine::profile::set_test_profile(&core, crate::engine::profile::TEST_PROFILE);
         let id = app(&core, None).id;
 
         // A valid CV: written, rendered, previews counted.

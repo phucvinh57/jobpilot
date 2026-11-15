@@ -8,6 +8,7 @@
 //! - `trends` — P13 (collection; the digest follows in part B)
 //! - `discover` — P10
 //! - `net` — the shared safe HTTP client (moved out of `trends`)
+//! - `profile` — the user's documents and the profile read from them (replaces `profile.yaml`)
 //!
 //! Extend [`Core`] from your own module with `impl Core { ... }` instead of editing `facade.rs`.
 
@@ -25,6 +26,7 @@ pub mod notify;
 pub mod paths;
 pub mod pipeline;
 pub mod prefs;
+pub mod profile;
 pub mod redact;
 pub mod runtime;
 pub mod secrets;

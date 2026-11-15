@@ -1,12 +1,13 @@
-// Typed calls over `profile_*` commands. A call that changes the
-// stored preferences, the attached CV or the profile file tells every screen (`profile`), so the
-// setup banner ("Tell JobPilot what job you are looking for") goes away once preferences are saved.
+// Typed calls over `profile_*` commands. A call that changes the stored preferences or the documents
+// tells every screen (`profile`), so the setup banner ("Tell JobPilot about your work", "... what job
+// you are looking for") follows.
 
 import { invoke, notifyChanged, pickFile } from "./bridge";
 
-import type { AddResult, FieldKey, JobType, NotesReadResult, Profile } from "@/types/profile";
+import { DOCUMENT_EXTENSIONS } from "@/lib/profile/about";
+import type { About, AddResult, FieldKey, JobType, NotesReadResult, Profile } from "@/types/profile";
 
-/** The card: preferences, suggestions, the attached CV, whether there is a change to undo. */
+/** The card: preferences, suggestions, whether there is a change to undo. */
 export function readProfile(): Promise<Profile> {
   return invoke<Profile>("profile_get");
 }
@@ -47,25 +48,36 @@ export function undo(): Promise<Profile> {
   return changes(invoke<Profile>("profile_undo"));
 }
 
-/** The native file picker for the CV: the chosen path, or `null` when cancelled. */
-export function pickCv(): Promise<string | null> {
-  return pickFile("Choose your CV (.pdf, .md or .txt)", [{ name: "CV", extensions: ["pdf", "md", "txt"] }]);
+// ------------------------------------------------------------------ About you
+
+/** Settings > About you: the documents, where the reading stands, what was understood. */
+export function readAbout(): Promise<About> {
+  return invoke<About>("profile_about");
 }
 
-export function importCv(path: string): Promise<Profile> {
-  return changes(invoke<Profile>("profile_import_cv", { path }));
+/** The native file picker for a document: the chosen path, or `null` when cancelled. */
+export function pickDocument(): Promise<string | null> {
+  return pickFile("Choose your CV or another document (.pdf, .md or .txt)", [
+    { name: "Document", extensions: [...DOCUMENT_EXTENSIONS] },
+  ]);
 }
 
-export function removeCv(): Promise<Profile> {
-  return changes(invoke<Profile>("profile_remove_cv"));
+/** Keep the file at `path` as a document (it is not read into the profile yet). */
+export function addFile(path: string): Promise<About> {
+  return changes(invoke<About>("profile_add_file", { path }));
 }
 
-/** The native file picker for the master profile: the chosen path, or `null` when cancelled. */
-export function pickProfileFile(): Promise<string | null> {
-  return pickFile("Choose your profile (.yaml)", [{ name: "Profile", extensions: ["yaml", "yml"] }]);
+/** Keep a typed note as a document (it is not read into the profile yet). */
+export function addText(name: string, text: string): Promise<About> {
+  return changes(invoke<About>("profile_add_text", { name, text }));
 }
 
-/** Use another file as the master profile. */
-export function setProfilePath(path: string): Promise<Profile> {
-  return changes(invoke<Profile>("profile_set_path", { path }));
+/** Forget a document; the last one takes the profile with it. */
+export function removeSource(id: number): Promise<About> {
+  return changes(invoke<About>("profile_remove_source", { id }));
+}
+
+/** Read the documents into the profile (one model call, up to a minute). */
+export function readDocuments(): Promise<About> {
+  return changes(invoke<About>("profile_read"));
 }

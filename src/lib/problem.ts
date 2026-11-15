@@ -1,7 +1,7 @@
 // Why something failed, in terms the user can act on. The classification is done by the shell
 // (`engine::health`); the web app only shows it.
 
-export type ProblemKind = "noProvider" | "noTypst" | "noChrome" | "network" | "needsHuman" | "other";
+export type ProblemKind = "noProvider" | "noProfile" | "noTypst" | "noChrome" | "network" | "needsHuman" | "other";
 
 export interface Problem {
   kind: ProblemKind;
@@ -48,7 +48,12 @@ export function toCommandError(thrown: unknown): CommandError {
 
 /** A prerequisite is missing: the setup state should be read again. */
 export function needsRecheck(problem: Problem): boolean {
-  return problem.kind === "noProvider" || problem.kind === "noTypst" || problem.kind === "noChrome";
+  return (
+    problem.kind === "noProvider" ||
+    problem.kind === "noProfile" ||
+    problem.kind === "noTypst" ||
+    problem.kind === "noChrome"
+  );
 }
 
 /** The buttons a problem offers, in order. */

@@ -1,11 +1,10 @@
 //! The market frame: what decides which part of the market a trend run looks at. It comes from the
-//! user's background (the master profile: positions, headline, skills) and place (the preferred
+//! user's background (the stored profile: positions, headline, skills) and place (the preferred
 //! locations and work mode), never from their wishes (wanted or avoided skills, wanted domains,
 //! target roles). Wishes are checked against the market at the end of the digest, so they cannot
 //! shape what is collected or counted (design: `docs/plans/P15-market-scan.md`).
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use crate::engine::discover::score::compact_profile;
 use crate::engine::discover::source::{mentions_lowered, title_fits_roles, words, ROLE_NOISE};
@@ -43,8 +42,8 @@ pub struct MarketFrame {
 }
 
 impl MarketFrame {
-    /// The frame from a parsed profile (`None` when it cannot be read) and the preferences. Reads
-    /// only `locations` and `remote` of the preferences.
+    /// The frame from the profile (`None` when there is none, or it cannot be read) and the
+    /// preferences. Reads only `locations` and `remote` of the preferences.
     pub fn new(cv: Option<&Cv>, prefs: &Preferences) -> Self {
         let mut roles: Vec<String> = Vec::new();
         let mut seen = HashSet::new();
@@ -75,19 +74,6 @@ impl MarketFrame {
             .unwrap_or_default();
         let background = cv.map(compact_profile).unwrap_or_default();
         Self { roles, role_words, locations, remote_ok: prefs.remote != Remote::Onsite, skills, background }
-    }
-
-    /// The frame from the profile at `profile` (logged and left without background when it cannot
-    /// be read) and the preferences.
-    pub fn load(profile: Option<&Path>, prefs: &Preferences) -> Self {
-        let cv = profile.and_then(|path| match std::fs::read_to_string(path).map_err(anyhow::Error::from).and_then(|t| Cv::parse(&t)) {
-            Ok(cv) => Some(cv),
-            Err(e) => {
-                tracing::warn!("the market frame has no background: the profile cannot be read: {e:#}");
-                None
-            }
-        });
-        Self::new(cv.as_ref(), prefs)
     }
 
     /// Does a posting (lower case) belong to the user's place: it names a preferred location, or

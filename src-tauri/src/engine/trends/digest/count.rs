@@ -652,7 +652,7 @@ pub(super) async fn count(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendR
         tracing::warn!("the saved preferences could not be read; the digest has no place and no wishes");
         Preferences::default()
     });
-    let frame = MarketFrame::load(env.config.profile.as_deref(), &prefs);
+    let frame = MarketFrame::new(env.config.profile.as_ref(), &prefs);
     let counts = market_counts(&frame, &prefs, &postings, &leads, &s.digest.extractions, &months);
     let sum = |docs: &[u32]| docs.iter().sum::<u32>();
     tracing::info!(

@@ -656,8 +656,7 @@ fn lens_points(user: &str) -> Value {
 async fn wishes_never_change_the_market_numbers_or_the_gap() {
     let (dir, core) = core();
     store_market(&core.store, dir.path());
-    let profile = dir.path().join("profile.yaml");
-    std::fs::write(&profile, PROFILE).unwrap();
+    let profile = crate::engine::pipeline::cv::Cv::parse(PROFILE).unwrap();
     let place = Preferences { locations: vec!["Singapore".into()], remote: crate::engine::prefs::Remote::Onsite, ..Preferences::default() };
     let first = Preferences {
         roles: vec!["Product Manager".into()],

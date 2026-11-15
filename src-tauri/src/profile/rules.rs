@@ -1,17 +1,26 @@
 //! Pure rules of this context, unit-tested here: how a list entry is cleaned and compared, when a
-//! topic may be added, what the line under the notes says. Ported from the GPUI card.
+//! topic may be added, what the line under the notes says (ported from the GPUI card), and what
+//! Settings > About you shows about the user's documents and the profile read from them.
 //!
 //! The rules that only the screen needs (whether Save is on, when a "Saved" label shows and how it
 //! fades) live in the web app's `src/lib/profile.ts`.
 
-use std::path::Path;
+use std::collections::HashSet;
 
 use crate::shared::topics::{self, presence_in};
 pub use crate::shared::topics::{item_text, with_item, Presence, MAX_ITEM_CHARS};
 use crate::engine::health::{classify, Problem};
 use crate::engine::prefs::chat::MAX_LIST_ITEMS;
 
+use crate::engine::pipeline::cv::Cv;
 use crate::engine::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
+use crate::engine::profile::sources::{MAX_CHARS, MAX_TOTAL_CHARS};
+use crate::engine::profile::Profile;
+use crate::engine::store::ProfileSource;
+
+use super::dto::{
+    AboutDto, AboutEducationDto, AboutLimitsDto, AboutRoleDto, AboutSourceDto, AboutSummaryDto,
+};
 
 /// Suggestion chips shown under a field.
 pub const SUGGESTION_CHIPS: usize = 8;
@@ -247,28 +256,164 @@ pub fn notes_status(read: NotesRead) -> NotesStatus {
     }
 }
 
-// ------------------------------------------------------------------ profile file
+// ------------------------------------------------------------------ About you
 
-/// A profile is a YAML file.
-pub fn is_profile_file_name(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    ext == "yaml" || ext == "yml"
+/// What Settings > About you says about the documents and the profile read from them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AboutStatus {
+    /// No documents.
+    Empty,
+    /// Documents, but no profile read from them yet.
+    Unread,
+    /// The documents changed since the profile was read.
+    Stale,
+    Ready,
+}
+
+impl AboutStatus {
+    pub fn of(has_sources: bool, profile: Option<&Profile>) -> Self {
+        match (has_sources, profile) {
+            (false, _) => AboutStatus::Empty,
+            (true, None) => AboutStatus::Unread,
+            (true, Some(p)) if p.stale => AboutStatus::Stale,
+            (true, Some(_)) => AboutStatus::Ready,
+        }
+    }
+
+    /// The name the web app reads.
+    pub fn key(self) -> &'static str {
+        match self {
+            AboutStatus::Empty => "empty",
+            AboutStatus::Unread => "unread",
+            AboutStatus::Stale => "stale",
+            AboutStatus::Ready => "ready",
+        }
+    }
+}
+
+/// `start – end` as a CV shows it: one side when the other is missing or the same, nothing when
+/// both are. Never adds a "present": the documents did not say so.
+pub fn dates(start: &str, end: &str) -> String {
+    let (start, end) = (start.trim(), end.trim());
+    match (start.is_empty(), end.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => start.to_string(),
+        (true, false) => end.to_string(),
+        (false, false) if start == end => start.to_string(),
+        (false, false) => format!("{start} – {end}"),
+    }
+}
+
+/// Every visible skill once, in profile order, keeping the first spelling (case-insensitive).
+pub fn flat_skills(cv: &Cv) -> Vec<String> {
+    let mut seen = HashSet::new();
+    cv.skills
+        .iter()
+        .filter(|group| !group.hidden)
+        .flat_map(|group| group.items.iter())
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty() && seen.insert(item.to_lowercase()))
+        .map(str::to_string)
+        .collect()
+}
+
+/// `text` without surrounding blanks, or `None` when nothing is left.
+fn filled(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// The read-only summary of a profile: who, roles, education, skills, languages, projects and
+/// certifications. Hidden entries are left out, as the CV leaves them out.
+pub fn about_summary(cv: &Cv) -> AboutSummaryDto {
+    AboutSummaryDto {
+        name: cv.basics.name.trim().to_string(),
+        headline: cv.basics.headline.trim().to_string(),
+        roles: cv
+            .experience
+            .iter()
+            .filter(|e| !e.hidden && !(e.position.trim().is_empty() && e.company.trim().is_empty()))
+            .map(|e| AboutRoleDto {
+                position: e.position.trim().to_string(),
+                company: e.company.trim().to_string(),
+                dates: dates(&e.start, &e.end),
+            })
+            .collect(),
+        education: cv
+            .education
+            .iter()
+            .filter(|e| !e.hidden && !(e.degree.trim().is_empty() && e.institution.trim().is_empty()))
+            .map(|e| AboutEducationDto {
+                degree: e.degree.trim().to_string(),
+                institution: e.institution.trim().to_string(),
+                dates: dates(&e.start, &e.end),
+            })
+            .collect(),
+        skills: flat_skills(cv),
+        languages: cv
+            .languages
+            .iter()
+            .filter(|l| !l.hidden)
+            .filter_map(|l| {
+                let language = filled(&l.language)?;
+                Some(match filled(&l.fluency) {
+                    Some(fluency) => format!("{language} ({fluency})"),
+                    None => language,
+                })
+            })
+            .collect(),
+        projects: cv.projects.iter().filter(|p| !p.hidden).filter_map(|p| filled(&p.name)).collect(),
+        certifications: cv
+            .certifications
+            .iter()
+            .filter(|c| !c.hidden)
+            .filter_map(|c| filled(&c.name))
+            .collect(),
+    }
+}
+
+/// Settings > About you: the documents (never their text), where the reading stands, and what
+/// was understood.
+pub fn about(sources: &[ProfileSource], profile: Option<&Profile>) -> AboutDto {
+    let status = AboutStatus::of(!sources.is_empty(), profile);
+    // No documents: nothing was understood, whatever is still stored.
+    let profile = profile.filter(|_| status != AboutStatus::Empty);
+    AboutDto {
+        sources: sources
+            .iter()
+            .map(|s| AboutSourceDto {
+                id: s.id,
+                name: s.name.clone(),
+                kind: s.kind.clone(),
+                chars: s.chars,
+                truncated: s.truncated,
+            })
+            .collect(),
+        status: status.key(),
+        summary: profile.map(|p| about_summary(&p.cv)),
+        left_out: profile.map(|p| p.left_out.clone()).unwrap_or_default(),
+        built_at: profile.map(|p| p.built_at.to_rfc3339()),
+        limits: AboutLimitsDto {
+            max_chars: MAX_CHARS,
+            max_total_chars: MAX_TOTAL_CHARS,
+        },
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::shared::topics::item_key;
-    use std::path::Path;
 
+    use chrono::Utc;
+
+    use crate::engine::pipeline::cv::Cv;
     use crate::engine::prefs::chat::MAX_LIST_ITEMS;
     use crate::engine::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
+    use crate::engine::profile::Profile;
+    use crate::engine::store::ProfileSource;
 
     use super::{
-        add_check, already_there_message, is_profile_file_name, job_type_key, notes_status,
+        about, add_check, already_there_message, dates, flat_skills, job_type_key, notes_status,
         parse_job_type, unread_notes_message, visible_suggestions, with_item, without_item,
         AddCheck, Field, NotesStatus, Presence, MAX_ITEM_CHARS, PARTLY_READ, SUGGESTION_CHIPS,
     };
@@ -578,10 +723,108 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_is_a_yaml_file() {
-        assert!(is_profile_file_name(Path::new("/home/me/profile.yaml")));
-        assert!(is_profile_file_name(Path::new("profile.YML")));
-        assert!(!is_profile_file_name(Path::new("profile.json")));
-        assert!(!is_profile_file_name(Path::new("profile")));
+    fn dates_join_what_the_documents_say_and_nothing_more() {
+        assert_eq!(dates("2020", "2023"), "2020 – 2023");
+        assert_eq!(dates(" 2021 ", ""), "2021", "no invented present");
+        assert_eq!(dates("", "2019"), "2019");
+        assert_eq!(dates("2019", "2019"), "2019");
+        assert_eq!(dates(" ", ""), "");
+    }
+
+    #[test]
+    fn skills_are_flattened_deduped_and_hidden_groups_skipped() {
+        let cv = Cv::parse(
+            "skills:
+  - {category: Languages, items: [Rust, ' Go ', rust]}
+  - {category: Old, items: [Perl], hidden: true}
+  - {category: Data, items: [PostgreSQL, GO, '']}
+",
+        )
+        .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(flat_skills(&cv), ["Rust", "Go", "PostgreSQL"]);
+    }
+
+    fn source(id: i64, name: &str) -> ProfileSource {
+        ProfileSource {
+            id,
+            name: name.into(),
+            kind: "text".into(),
+            text: "secret text".into(),
+            chars: 11,
+            truncated: false,
+            created_at: Utc::now(),
+        }
+    }
+
+    const ANN: &str = "basics: {name: ' Ann Lee ', headline: Backend engineer}
+experience:
+  - {company: Acme, position: Engineer, start: '2021', end: '2024'}
+  - {company: Old, position: Intern, hidden: true}
+education:
+  - {institution: HCMUT, degree: BSc Computer Science, start: '2015', end: '2019'}
+skills:
+  - {category: Core, items: [Rust]}
+languages:
+  - {language: English, fluency: Fluent}
+  - {language: Vietnamese}
+projects:
+  - {name: jobpilot}
+certifications:
+  - {name: CKA}
+";
+
+    fn profile(stale: bool) -> Profile {
+        Profile {
+            cv: Cv::parse(ANN).unwrap_or_else(|e| panic!("{e:#}")),
+            yaml: ANN.into(),
+            built_at: Utc::now(),
+            stale,
+            left_out: vec!["AWS certification".into()],
+        }
+    }
+
+    #[test]
+    fn the_status_follows_the_documents_and_the_profile() {
+        let ready = profile(false);
+        let stale = profile(true);
+        let one = [source(1, "Note")];
+        assert_eq!(about(&[], None).status, "empty");
+        assert_eq!(about(&[], Some(&ready)).status, "empty");
+        assert!(about(&[], Some(&ready)).summary.is_none());
+        assert_eq!(about(&one, None).status, "unread");
+        assert_eq!(about(&one, Some(&stale)).status, "stale");
+        assert_eq!(about(&one, Some(&ready)).status, "ready");
+    }
+
+    #[test]
+    fn about_lists_the_documents_without_their_text_and_summarises_the_profile() {
+        let dto = about(&[source(3, "cv.pdf")], Some(&profile(false)));
+        let json = serde_json::to_value(&dto).unwrap_or_default();
+        assert!(!json.to_string().contains("secret text"), "never the document text");
+        assert_eq!(json["sources"][0]["id"], 3);
+        assert_eq!(json["sources"][0]["name"], "cv.pdf");
+        assert_eq!(json["leftOut"][0], "AWS certification");
+        assert!(json["builtAt"].is_string());
+        assert!(json["limits"]["maxTotalChars"].as_u64().is_some_and(|n| n > 0));
+
+        let summary = dto.summary.unwrap_or_else(|| panic!("a summary"));
+        assert_eq!(
+            (summary.name.as_str(), summary.headline.as_str()),
+            ("Ann Lee", "Backend engineer")
+        );
+        assert_eq!(summary.roles.len(), 1, "hidden roles are left out");
+        let role = &summary.roles[0];
+        assert_eq!(
+            (role.position.as_str(), role.company.as_str(), role.dates.as_str()),
+            ("Engineer", "Acme", "2021 – 2024")
+        );
+        assert_eq!(summary.education[0].dates, "2015 – 2019");
+        assert_eq!(summary.skills, ["Rust"]);
+        assert_eq!(summary.languages, ["English (Fluent)", "Vietnamese"]);
+        assert_eq!(summary.projects, ["jobpilot"]);
+        assert_eq!(summary.certifications, ["CKA"]);
+
+        let unread = about(&[source(1, "Note")], None);
+        assert!(unread.summary.is_none() && unread.left_out.is_empty() && unread.built_at.is_none());
     }
 }

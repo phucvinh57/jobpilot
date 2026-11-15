@@ -1,4 +1,4 @@
-//! Fact guard: a deterministic check that a tailored CV only states facts the master profile has.
+//! Fact guard: a deterministic check that a tailored CV only states facts the stored profile has.
 //!
 //! The model writes the CV; this is the safety net. It checks identity (name, contact, links),
 //! structure (every employer + title + dates, project, school, certification and language exists
@@ -67,19 +67,19 @@ pub fn format_violations(violations: &[Violation]) -> String {
 // ---------------------------------------------------------------- normalisation
 
 /// Case and whitespace-insensitive form.
-fn norm(s: &str) -> String {
+pub(crate) fn norm(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
 /// A link without scheme, `www.` or trailing slash.
-fn norm_url(s: &str) -> String {
+pub(crate) fn norm_url(s: &str) -> String {
     let s = norm(s);
     let s = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")).unwrap_or(&s);
     let s = s.strip_prefix("www.").unwrap_or(s);
     s.trim_end_matches('/').to_string()
 }
 
-fn norm_phone(s: &str) -> String {
+pub(crate) fn norm_phone(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_digit() || *c == '+').collect()
 }
 
@@ -243,7 +243,7 @@ fn check_numbers(profile_corpus: &str, cv: &Cv, out: &mut Vec<Violation>) {
 // ---------------------------------------------------------------- skills
 
 /// Occurrence of `needle` in `hay` not touching other letters/digits (for 1-2 letter terms like `Go`).
-fn contains_word(hay: &str, needle: &str) -> bool {
+pub(crate) fn contains_word(hay: &str, needle: &str) -> bool {
     hay.match_indices(needle).any(|(i, _)| {
         let before = hay[..i].chars().next_back();
         let after = hay[i + needle.len()..].chars().next();
@@ -251,7 +251,7 @@ fn contains_word(hay: &str, needle: &str) -> bool {
     })
 }
 
-fn term_in_corpus(corpus: &str, term: &str) -> bool {
+pub(crate) fn term_in_corpus(corpus: &str, term: &str) -> bool {
     let term = norm(term);
     if term.is_empty() {
         return true;
@@ -279,13 +279,13 @@ fn check_skills(profile_corpus: &str, cv: &Cv, out: &mut Vec<Violation>) {
 }
 
 impl Core {
-    /// Does `cv_yaml` pass the fact guard against `profile.yaml`? `false` when it cannot be told
-    /// (an unreadable or invalid profile, a CV that does not parse). Blocking file read.
+    /// Does `cv_yaml` pass the fact guard against the stored profile? `false` when it cannot be
+    /// told (no profile or an unreadable one, a CV that does not parse). Blocking DB read.
     pub fn cv_is_traced(&self, cv_yaml: &str) -> bool {
-        let Ok(profile_text) = std::fs::read_to_string(self.profile_path()) else { return false };
-        match (Cv::parse(&profile_text), Cv::parse(cv_yaml)) {
-            (Ok(profile), Ok(cv)) => guard(&profile, &cv).is_empty(),
-            _ => false,
+        let Ok(Some(profile)) = self.profile() else { return false };
+        match Cv::parse(cv_yaml) {
+            Ok(cv) => guard(&profile.cv, &cv).is_empty(),
+            Err(_) => false,
         }
     }
 }
@@ -294,7 +294,7 @@ impl Core {
 mod tests {
     use super::*;
 
-    const PROFILE: &str = include_str!("../../../../profile.yaml");
+    use crate::engine::profile::TEST_PROFILE as PROFILE;
     const EXAMPLE: &str = include_str!("../../../../assets/prompts/example-cv.yaml");
 
     fn profile() -> Cv {

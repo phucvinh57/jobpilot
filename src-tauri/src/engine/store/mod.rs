@@ -4,10 +4,12 @@
 //! their table without touching others: `applications`/`events`/`status` (P2/P3),
 //! `providers` (P1), `sessions` (P4), `emails` (P6), `kv` (shared settings); P8 adds `preferences`,
 //! `chat` (preference chat), `sources`, `leads` (discovery), `trends` (trend items + reports) and
-//! `graph` (graph runtime checkpoints).
+//! `graph` (graph runtime checkpoints); `profile` (the user's documents and the profile read from
+//! them) and `answers` (remembered application answers).
 //!
 //! Schema changes: append a new entry to [`MIGRATIONS`] (never edit an existing one).
 
+mod answers;
 mod applications;
 mod chat;
 mod emails;
@@ -16,6 +18,7 @@ mod graph;
 mod kv;
 mod leads;
 mod preferences;
+mod profile;
 mod providers;
 mod sessions;
 mod sources;
@@ -33,6 +36,7 @@ pub use chat::ChatMessage;
 pub use emails::Email;
 pub use events::Event;
 pub use leads::{Lead, LeadState, NewLead};
+pub use profile::{sources_hash, NewProfileSource, ProfileSource, StoredProfile};
 pub use graph::{
     GraphCheckpointRow, GraphThread, GRAPH_DONE, GRAPH_FAILED, GRAPH_RUNNING, GRAPH_WAITING,
 };
@@ -193,6 +197,33 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE applications ADD COLUMN interview_round TEXT;
     ",
+    // 5: the profile comes from the user's documents (`profile_sources`), read into one stored
+    // profile (`profile.id = 1`); remembered application answers move out of `profile.yaml`
+    "
+    CREATE TABLE profile_sources (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL,
+        kind       TEXT NOT NULL CHECK (kind IN ('file', 'text')),
+        text       TEXT NOT NULL,
+        chars      INTEGER NOT NULL,
+        truncated  INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE profile (
+        id             INTEGER PRIMARY KEY CHECK (id = 1),
+        yaml           TEXT NOT NULL,
+        sources_hash   TEXT NOT NULL,
+        left_out_json  TEXT NOT NULL DEFAULT '[]',
+        built_at       TEXT NOT NULL
+    );
+    CREATE TABLE application_answers (
+        key        TEXT PRIMARY KEY,
+        question   TEXT NOT NULL,
+        answer     TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    DELETE FROM kv WHERE key IN ('profile_path', 'prefs_cv_name');
+    ",
 ];
 
 #[derive(Clone)]
@@ -330,7 +361,8 @@ mod tests {
         let app = store.get_application_by_slug("old-app").unwrap().unwrap();
         assert_eq!((app.company.as_str(), app.status, app.insight_json.as_deref()), ("Acme", Status::Applied, None));
         assert_eq!(app.interview_round, None);
-        assert_eq!(store.kv_get("profile_path").unwrap().as_deref(), Some("/x/profile.yaml"));
+        // The profile is no longer a file: its old path setting is forgotten.
+        assert_eq!(store.kv_get("profile_path").unwrap(), None);
 
         // The new column and tables are usable.
         store.set_insight_json(app.id, Some(r#"{"domain": "payments"}"#)).unwrap();
@@ -340,6 +372,9 @@ mod tests {
         store.add_source(&NewSource { kind: "lever".into(), ..Default::default() }).unwrap();
         store.add_lead(&NewLead { url: "https://a.test/1".into(), ..Default::default() }).unwrap();
         store.add_report(&NewReport { kind: "weekly".into(), ..Default::default() }).unwrap();
+        store.add_profile_source(&NewProfileSource::text("Note", "I build APIs."), usize::MAX).unwrap();
+        store.save_profile("basics: {name: A}\n", "hash", &[]).unwrap();
+        store.save_answer("why", "Why us?", "Because.").unwrap();
 
         // Reopening applies nothing twice.
         drop(store);
@@ -367,15 +402,15 @@ mod tests {
     #[test]
     fn kv_and_reopen_keep_data() {
         let (dir, store) = store();
-        assert_eq!(store.kv_get("profile_path").unwrap(), None);
-        store.kv_set("profile_path", "/x/profile.yaml").unwrap();
-        store.kv_set("profile_path", "/y/profile.yaml").unwrap();
-        assert_eq!(store.kv_get("profile_path").unwrap().as_deref(), Some("/y/profile.yaml"));
+        assert_eq!(store.kv_get("some_setting").unwrap(), None);
+        store.kv_set("some_setting", "/x").unwrap();
+        store.kv_set("some_setting", "/y").unwrap();
+        assert_eq!(store.kv_get("some_setting").unwrap().as_deref(), Some("/y"));
         drop(store);
         let again = Store::open(&dir.path().join("t.db")).unwrap();
-        assert_eq!(again.kv_get("profile_path").unwrap().as_deref(), Some("/y/profile.yaml"));
-        again.kv_delete("profile_path").unwrap();
-        assert_eq!(again.kv_get("profile_path").unwrap(), None);
+        assert_eq!(again.kv_get("some_setting").unwrap().as_deref(), Some("/y"));
+        again.kv_delete("some_setting").unwrap();
+        assert_eq!(again.kv_get("some_setting").unwrap(), None);
     }
 
     #[test]

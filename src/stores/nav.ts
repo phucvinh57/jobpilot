@@ -16,6 +16,7 @@ export type DrawerTarget = { kind: "lead"; id: number | "best" } | { kind: "app"
 
 /** The Settings sections, by the title the shell's `Problem.settingsSection` uses. */
 export type SettingsSection =
+  | "About you"
   | "Profile & preferences"
   | "AI providers"
   | "Browser sessions"
@@ -25,6 +26,7 @@ export type SettingsSection =
 
 /** The Settings sections in display order. */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  "About you",
   "Profile & preferences",
   "AI providers",
   "Gmail",

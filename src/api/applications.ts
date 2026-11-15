@@ -134,11 +134,6 @@ export async function readCvPage(id: number, page: number): Promise<Blob> {
   return png(await invoke<ArrayBuffer>("applications_cv_page", { id, page }));
 }
 
-/** Open `profile.yaml` in the user's editor. */
-export function openProfile(): Promise<void> {
-  return invoke<void>("applications_open_profile");
-}
-
 // ------------------------------------------------------------------ Timeline tab
 
 export function readTimeline(id: number): Promise<Timeline> {

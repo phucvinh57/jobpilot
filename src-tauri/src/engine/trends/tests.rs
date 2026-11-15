@@ -180,9 +180,10 @@ async fn report_search_runs_with_a_key_and_the_key_stays_in_the_keyring() {
     core.set_search_key(SearchProvider::Brave, key).unwrap();
     // The queries come from the profile's roles and the preferred locations; the wishes (domains,
     // target roles, skills) are saved too and must not show up.
-    let profile = dir.path().join("profile.yaml");
-    std::fs::write(&profile, "basics:\n  name: Test\n  headline: Backend Engineer\nexperience:\n  - company: Acme\n    position: Platform Engineer\n").unwrap();
-    core.set_profile_path(&profile).unwrap();
+    crate::engine::profile::set_test_profile(
+        &core,
+        "basics:\n  name: Test\n  headline: Backend Engineer\nexperience:\n  - company: Acme\n    position: Platform Engineer\n",
+    );
     core.save_preferences(Preferences {
         locations: vec!["Singapore".into()],
         domains: vec!["fintech".into()],

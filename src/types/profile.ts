@@ -14,13 +14,6 @@ export interface ListField {
   suggestions: string[];
 }
 
-/** The CV attached for suggestions (context only: never copied into a CV). */
-export interface Cv {
-  name: string;
-  chars: number;
-  truncated: boolean;
-}
-
 export interface Limits {
   maxListItems: number;
   maxItemChars: number;
@@ -29,13 +22,10 @@ export interface Limits {
 
 /** Everything the card shows, read in one go. */
 export interface Profile {
-  /** The master profile (`profile.yaml`) the CVs are written from. */
-  profilePath: string;
   jobType: JobType;
   fields: ListField[];
   /** The user's own words, as saved. */
   notes: string;
-  cv: Cv | null;
   canUndo: boolean;
   limits: Limits;
 }
@@ -51,4 +41,59 @@ export interface AddResult {
 export interface NotesReadResult {
   profile: Profile;
   line: string | null;
+}
+
+// What Settings > About you shows (the shell's `AboutDto`).
+
+/** One document. Never its text. */
+export interface Source {
+  id: number;
+  /** File name or the note's title. */
+  name: string;
+  kind: "file" | "text";
+  /** Characters kept. */
+  chars: number;
+  /** The file had more text than was kept. */
+  truncated: boolean;
+}
+
+export interface Role {
+  position: string;
+  company: string;
+  /** `start – end`, one side, or empty. */
+  dates: string;
+}
+
+export interface Education {
+  degree: string;
+  institution: string;
+  dates: string;
+}
+
+/** What was understood from the documents. */
+export interface Summary {
+  name: string;
+  headline: string;
+  roles: Role[];
+  education: Education[];
+  skills: string[];
+  /** `Language (fluency)`. */
+  languages: string[];
+  projects: string[];
+  certifications: string[];
+}
+
+/** `empty`: no documents; `unread`: documents, no profile yet; `stale`: the documents changed
+ *  since the read; `ready`. */
+export type AboutStatus = "empty" | "unread" | "stale" | "ready";
+
+export interface About {
+  sources: Source[];
+  status: AboutStatus;
+  summary: Summary | null;
+  /** Facts found in the documents that could not be traced, so left out. */
+  leftOut: string[];
+  /** When the profile was read (RFC 3339). */
+  builtAt: string | null;
+  limits: { maxChars: number; maxTotalChars: number };
 }

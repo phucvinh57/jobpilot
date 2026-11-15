@@ -47,7 +47,7 @@ changed=$({
 } | sort -u)
 
 # Keep in step with docs/REVIEW.md.
-high_paths='^(profile\.yaml$|assets/cv\.typ$|assets/prompts/|scripts/|(\.config/)?\.?lefthook(-local)?\.(ya?ml|jsonc?|toml)$|\.githooks/|\.github/|\.claude/|\.agents/|AGENTS\.md$|CLAUDE\.md$|docs/REVIEW\.md$)'
+high_paths='^(src-tauri/src/engine/profile/|src-tauri/tests/fixtures/profile\.yaml$|assets/cv\.typ$|assets/prompts/|scripts/|(\.config/)?\.?lefthook(-local)?\.(ya?ml|jsonc?|toml)$|\.githooks/|\.github/|\.claude/|\.agents/|AGENTS\.md$|CLAUDE\.md$|docs/REVIEW\.md$)'
 low_paths='^(README\.md$|docs/)'
 
 rank() { case "$1" in low) echo 1 ;; medium) echo 2 ;; high) echo 3 ;; *) echo 0 ;; esac }

@@ -355,9 +355,10 @@ mod tests {
         fn new(replies: impl IntoIterator<Item = Value>) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
-            let profile = dir.path().join("profile.yaml");
-            std::fs::write(&profile, "basics: {name: Ada, headline: Rust engineer}\nskills:\n  - {category: Languages, items: [Rust, Go]}\n").unwrap();
-            core.set_profile_path(&profile).unwrap();
+            crate::engine::profile::set_test_profile(
+                &core,
+                "basics: {name: Ada, headline: Rust engineer}\nskills:\n  - {category: Languages, items: [Rust, Go]}\n",
+            );
             let llm = Arc::new(FakeLlm::with_replies(replies));
             let asked: Arc<Mutex<Vec<InsightRequest>>> = Arc::default();
             let brief: Arc<Mutex<Result<Option<String>, String>>> = Arc::new(Mutex::new(Ok(Some(BRIEF.to_string()))));
@@ -572,9 +573,9 @@ mod tests {
         assert_eq!(crate::engine::health::classify(&format!("{err:#}")), crate::engine::health::Problem::NoProvider, "{err:#}");
 
         // No profile: nothing is fetched or asked.
-        h.core.set_profile_path(&h._dir.path().join("missing.yaml")).unwrap();
+        h.core.store.clear_profile().unwrap();
         let err = h.add(JdInput::Text(JOB_TEXT.into())).await.unwrap_err();
-        assert!(format!("{err:#}").contains("cannot read the profile"), "{err:#}");
+        assert_eq!(crate::engine::health::classify(&format!("{err:#}")), crate::engine::health::Problem::NoProfile, "{err:#}");
         assert!(h.llm.calls().is_empty());
 
         // Bad input is refused before the profile or the network.

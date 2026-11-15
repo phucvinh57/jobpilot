@@ -4,8 +4,8 @@ For human reviewers and the `/pre-pr` skill. When a bug slips through, add a lin
 
 ## Failures
 
-- **A CV states a fact that is not in `profile.yaml`:** an employer, title, date, number, technology or achievement. Important.
-- **`profile.yaml` changed without a source from the user.** Add or change a fact only when the user gave it.
+- **A CV states a fact that is not in the user's documents** (the profile read from them): an employer, title, date, number, technology or achievement. Important.
+- **The profile gets a fact no document states:** the reader (`engine/profile`) or its trace check lets an invented fact through, or code writes one. Important.
 - **Contact details or links changed** (email, phone, location, GitHub, LinkedIn, website).
 - **Typst markup is unescaped or renders wrong:** a literal `~ # $ @ * _ < >` without a backslash, `//` outside a URL, a broken link, text cut off or overflowing.
 - **A CV is over 2 pages.** The target is 1.
@@ -16,7 +16,7 @@ For human reviewers and the `/pre-pr` skill. When a bug slips through, add a lin
 
 Set by the paths touched. The highest wins. Each PR gets exactly one label: `risk: low`, `risk: medium` or `risk: high`. Low and Medium PRs are merged by `/pre-pr` once `scripts/check.sh` passes on the PR's final commit. High PRs wait for a human. There is no CI: `scripts/risk.sh --label <tier>` checks the label against the High paths, and `/pre-pr` runs it before merging. Change the list there along with this one.
 
-- **High** (a human reads the diff): `profile.yaml`, `assets/cv.typ`, `assets/prompts/`, `scripts/`, `lefthook.yml`, `.github/`, `.claude/`, `.agents/`, `AGENTS.md`, `CLAUDE.md`, `docs/REVIEW.md`.
+- **High** (a human reads the diff): `src-tauri/src/engine/profile/`, `src-tauri/tests/fixtures/profile.yaml`, `assets/cv.typ`, `assets/prompts/`, `scripts/`, `lefthook.yml`, `.github/`, `.claude/`, `.agents/`, `AGENTS.md`, `CLAUDE.md`, `docs/REVIEW.md`.
 - **Low:** `README.md`, other docs.
 - **No PR:** a change that touches only `docs/` (except this file) is pushed directly to `main`.
 - **Medium:** everything else (`src-tauri/`, `src/`, the web config at the root, `Cargo.*`).

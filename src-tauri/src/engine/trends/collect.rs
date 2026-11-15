@@ -62,6 +62,7 @@ use super::source::{hackernews, page, rss, yc, Ctx, Item, SearchProvider, Source
 use super::text::truncate;
 use crate::engine::graph::nodes::{self, Challenge, ChallengeKind, Challenged};
 use crate::engine::graph::{GraphDef, END, START};
+use crate::engine::pipeline::cv::Cv;
 use crate::engine::redact::redact;
 use crate::engine::store::{NewTrendItem, Source, SourcePurpose};
 use crate::engine::{Paths, Secrets, Store};
@@ -208,9 +209,9 @@ struct Env {
     paths: Paths,
     config: Arc<TrendConfig>,
     http: Http,
-    /// The master profile the market frame reads the background from (`DigestConfig::profile`);
+    /// The profile the market frame reads the background from (`DigestConfig::profile`);
     /// `None`: no background, the queries come from the place alone.
-    profile: Option<PathBuf>,
+    profile: Option<Cv>,
 }
 
 impl Env {
@@ -284,7 +285,7 @@ async fn plan(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
                 Default::default()
             });
             // Background and place only: the frame reads no wish from the preferences.
-            let frame = MarketFrame::load(env.profile.as_deref(), &prefs);
+            let frame = MarketFrame::new(env.profile.as_ref(), &prefs);
             let queries = build_queries(&frame, &s.period, env.config.limits.max_queries);
             plan.search = Some(SearchPlan { provider, queries });
         }

@@ -1,4 +1,4 @@
-//! Ideas for the preferences screen: skills from the master profile, and the locations and business
+//! Ideas for the preferences screen: skills from the stored profile, and the locations and business
 //! domains of the jobs found so far. Each list is something the user could add to their preferences
 //! with one click, so it never repeats what the saved preferences already say.
 //!
@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 
 use super::Preferences;
-use crate::engine::pipeline::cv::Cv;
 use crate::engine::pipeline::Insight;
 use crate::engine::store::{Lead, LeadState};
 use crate::engine::Core;
@@ -24,7 +23,7 @@ pub const MAX_SUGGESTIONS: usize = 12;
 /// What the preferences screen can offer, none of it already in the saved preferences.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PrefSuggestions {
-    /// Skills in the master profile (visible groups only), in profile order.
+    /// Skills in the stored profile (visible groups only), in profile order.
     pub skills: Vec<String>,
     /// Locations of the leads, the most common first, plus "Remote".
     pub locations: Vec<String>,
@@ -33,11 +32,11 @@ pub struct PrefSuggestions {
 }
 
 impl Core {
-    /// Suggestions for the preferences screen: skills from `profile.yaml`, locations and domains
+    /// Suggestions for the preferences screen: skills from the stored profile, locations and domains
     /// from the leads that are in the queue or were prepared (dismissed leads say what the user
     /// does not want). Each list has no repeats (ignoring case), at most [`MAX_SUGGESTIONS`]
-    /// entries, and leaves out what the saved preferences already name. A profile that cannot be
-    /// read only means no skills.
+    /// entries, and leaves out what the saved preferences already name. No profile (or one that
+    /// cannot be read) only means no skills.
     pub fn preference_suggestions(&self) -> Result<PrefSuggestions> {
         let prefs = self.store.preferences()?;
         let mut leads = self.store.list_leads(LeadState::New)?;
@@ -47,18 +46,18 @@ impl Core {
 }
 
 impl Core {
-    /// The visible skill names in `profile.yaml` (hidden groups left out); empty when the profile
-    /// cannot be read (logged).
+    /// The visible skill names in the stored profile (hidden groups left out); empty when there is
+    /// no profile yet, or it cannot be read (logged).
     pub fn profile_skills(&self) -> Vec<String> {
         profile_skills(self)
     }
 }
 
-/// The skills of the visible groups of the master profile.
+/// The skills of the visible groups of the stored profile.
 fn profile_skills(core: &Core) -> Vec<String> {
-    let path = core.profile_path();
-    let cv = match std::fs::read_to_string(&path).map_err(anyhow::Error::from).and_then(|text| Cv::parse(&text)) {
-        Ok(cv) => cv,
+    let cv = match core.profile() {
+        Ok(Some(profile)) => profile.cv,
+        Ok(None) => return Vec::new(),
         Err(e) => {
             tracing::warn!("no skill suggestions: the profile cannot be read: {e:#}");
             return Vec::new();
@@ -140,16 +139,9 @@ mod tests {
     use crate::engine::{Paths, Secrets};
 
     fn core() -> (tempfile::TempDir, Core) {
-        let dir = tempfile::tempdir().unwrap();
-        let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
-        let profile = dir.path().join("profile.yaml");
-        std::fs::write(
-            &profile,
+        crate::engine::profile::test_core_with_profile(
             "basics: {name: Ada}\nskills:\n  - {category: Languages, items: [Rust, Go, rust]}\n  - {category: Cloud, items: [AWS]}\n  - {category: Old, items: [COBOL], hidden: true}\n",
         )
-        .unwrap();
-        core.set_profile_path(&profile).unwrap();
-        (dir, core)
     }
 
     fn lead(core: &Core, n: u32, location: &str, domain: Option<&str>) -> Lead {
@@ -243,13 +235,13 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_broken_profile_only_means_no_skills() {
-        let (dir, core) = core();
-        core.set_profile_path(&dir.path().join("missing.yaml")).unwrap();
+    fn no_profile_or_a_broken_one_only_means_no_skills() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
         assert!(core.preference_suggestions().unwrap().skills.is_empty());
-        let broken = dir.path().join("broken.yaml");
-        std::fs::write(&broken, "skills: [unclosed").unwrap();
-        core.set_profile_path(&broken).unwrap();
+        assert!(core.profile_skills().is_empty());
+        let hash = core.store.profile_sources_hash().unwrap();
+        core.store.save_profile("skills: [unclosed", &hash, &[]).unwrap();
         let s = core.preference_suggestions().unwrap();
         assert!(s.skills.is_empty());
         assert_eq!(s.locations, ["Remote"]);

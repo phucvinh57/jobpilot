@@ -3,7 +3,7 @@
 # uncommitted). The checks come in independent groups, each run only when its paths changed:
 #   web     the web app: typecheck, Biome (lint + format), vitest, vite build
 #   rust    the workspace: clippy, cargo test
-#   render  the CV: a Typst render of profile.yaml
+#   render  the CV template: a Typst render of the example CV
 # A change to the web app alone never builds Rust, and a Rust change never needs bun: the desktop
 # crate embeds `dist/` at compile time, so a placeholder is written when there is no web build.
 #
@@ -64,8 +64,8 @@ fi
 self='scripts/check\.sh$'
 declare -A paths=(
   [web]="^(src/|assets/fonts/|(package|tsconfig)\.json$|bun\.lock$|index\.html$|vite\.config\.ts$|biome\.jsonc?$|$self)"
-  [rust]="^(Cargo\.(toml|lock)$|src-tauri/|assets/|profile\.yaml$|$self)"
-  [render]="^(profile\.yaml$|assets/|$self)"
+  [rust]="^(Cargo\.(toml|lock)$|src-tauri/|assets/|$self)"
+  [render]="^(assets/|$self)"
 )
 groups=(web rust render)
 
@@ -103,10 +103,10 @@ ensure_dist() {
     printf '%s\n' '<!doctype html><title>JobPilot</title><p>Placeholder from scripts/check.sh: run <code>bun run build</code>.</p>' >dist/index.html
 }
 
-render_profile() {
+render_example_cv() {
   local pdf rc
   pdf=$(mktemp --suffix=.pdf)
-  typst compile --root . --input data=profile.yaml assets/cv.typ "$pdf"
+  typst compile --root . --input data=assets/prompts/example-cv.yaml assets/cv.typ "$pdf"
   rc=$?
   rm -f "$pdf"
   return $rc
@@ -131,7 +131,7 @@ if wanted rust; then
 fi
 
 if wanted render; then
-  run render render_profile
+  run render render_example_cv
 fi
 
 echo

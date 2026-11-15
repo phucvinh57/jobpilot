@@ -3,7 +3,7 @@ use rusqlite::{params, OptionalExtension};
 
 use super::Store;
 
-/// Key/value settings (e.g. `profile_path`). Never store secrets here.
+/// Key/value settings (e.g. `ui.appearance`). Never store secrets here.
 impl Store {
     pub fn kv_get(&self, key: &str) -> Result<Option<String>> {
         self.with_conn(|c| {

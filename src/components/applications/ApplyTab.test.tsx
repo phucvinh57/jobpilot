@@ -290,7 +290,7 @@ describe("the review", () => {
     show(reviewApply(ROWS));
     await screen.findByRole("textbox", { name: "Full name" });
     // `name` can be remembered; the empty `pitch` and the unrememberable `terms` offer nothing.
-    expect(screen.getAllByRole("checkbox", { name: "Remember this answer in profile.yaml" })).toHaveLength(2);
+    expect(screen.getAllByRole("checkbox", { name: "Remember this answer" })).toHaveLength(2);
     await user.click(document.getElementById("remember-name") as HTMLElement);
     await waitFor(() => {
       const calls = mocked.syncApply.mock.calls;

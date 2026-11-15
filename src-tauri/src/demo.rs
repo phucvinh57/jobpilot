@@ -1,5 +1,6 @@
-//! Sample data for UI work (`JOBPILOT_DEMO=1`): applications, job sources, scored leads, a
-//! company brief and trends. Every address is on `example.com`; nothing is fetched.
+//! Sample data for UI work (`JOBPILOT_DEMO=1`): a profile read from one note, applications, job
+//! sources, scored leads, a company brief and trends. Every address is on `example.com`; nothing
+//! is fetched.
 
 use anyhow::Result;
 use chrono::{Duration, Utc};
@@ -7,6 +8,7 @@ use crate::engine::discover::dedup::dedup_key;
 use crate::engine::discover::lead_dir;
 use crate::engine::discover::score::{Criteria, Criterion, Scored};
 use crate::engine::discover::{RunSummary, LAST_RUN_KEY};
+use crate::engine::pipeline::cv::Cv;
 use crate::engine::pipeline::insight::{CompanyFacts, Interview, Skills};
 use crate::engine::pipeline::Insight;
 use crate::engine::prefs::Weights;
@@ -15,10 +17,77 @@ use crate::engine::Core;
 
 /// Insert a few sample applications when the store is empty (`JOBPILOT_DEMO=1`).
 pub fn seed(core: &Core) -> Result<()> {
+    seed_demo_profile(core)?;
     crate::engine::prefs::seed_demo(core)?;
     crate::trends::demo::seed_demo(core)?;
     seed_demo_applications(core)?;
     seed_demo_queue(core)
+}
+
+/// The note the demo profile is "read" from (Settings > About you).
+const DEMO_NOTE: &str = "Minh Tran, senior backend engineer. Ho Chi Minh City, Vietnam. minh.tran@example.com\n\
+Lotus Pay (2021 to present): senior backend engineer, payment services in Rust and PostgreSQL, Docker and Nginx on Linux, CI/CD on AWS.\n\
+Saigon Market (2018 to 2021): backend engineer, PHP and Python APIs, Go workers.\n\
+BSc Computer Science, Ho Chi Minh City University of Technology, 2014 to 2018.\n\
+Open source: tinyqueue, a Redis-backed job queue in Go.\n\
+English (professional), Vietnamese (native).";
+
+/// The profile the demo shows, as if read from [`DEMO_NOTE`]. Its skills match what the demo
+/// leads and trends assume (`trends::demo::PROFILE`: Rust, Python, PostgreSQL, Go, PHP).
+const DEMO_PROFILE_YAML: &str = r#"
+basics:
+  name: Minh Tran
+  headline: Senior backend engineer
+  location: Ho Chi Minh City, Vietnam
+  email: minh.tran@example.com
+summary:
+  - Backend engineer building payment services in Rust and PostgreSQL.
+skills:
+  - category: Languages
+    items: [Rust, Python, Go, PHP]
+  - category: Data
+    items: [PostgreSQL, Redis]
+  - category: Infrastructure
+    items: [Linux, Docker, Nginx, AWS, CI/CD]
+experience:
+  - company: Lotus Pay
+    position: Senior Backend Engineer
+    location: Ho Chi Minh City
+    start: "2021"
+    end: Present
+    bullets:
+      - Payment services in Rust and PostgreSQL, run with Docker and Nginx on Linux.
+  - company: Saigon Market
+    position: Backend Engineer
+    location: Ho Chi Minh City
+    start: "2018"
+    end: "2021"
+    bullets:
+      - APIs in PHP and Python, background workers in Go.
+projects:
+  - name: tinyqueue
+    intro: A Redis-backed job queue in Go.
+education:
+  - institution: Ho Chi Minh City University of Technology
+    degree: BSc Computer Science
+    start: "2014"
+    end: "2018"
+languages:
+  - language: English
+    fluency: Professional
+  - language: Vietnamese
+    fluency: Native
+"#;
+
+/// A note and the profile read from it, when the user has neither yet. The note comes first:
+/// the profile is stored as read from the documents that exist at that moment.
+fn seed_demo_profile(core: &Core) -> Result<()> {
+    if core.profile()?.is_some() || !core.profile_sources()?.is_empty() {
+        return Ok(());
+    }
+    core.add_profile_text("Demo CV", DEMO_NOTE)?;
+    let left_out = ["Certification “CKA”", "Role “Tech Lead” at “Lotus Pay”"].map(String::from);
+    core.save_profile_cv(&Cv::parse(DEMO_PROFILE_YAML)?, &left_out)
 }
 
 fn seed_demo_applications(core: &Core) -> Result<()> {
@@ -315,5 +384,22 @@ mod tests {
         assert_eq!(status("bar-devops-engineer"), Some((Status::Interview, Some("Technical interview".into()))));
         assert_eq!(status("qux-backend-developer"), Some((Status::Offer, None)));
         assert_eq!(status("zed-platform-engineer"), Some((Status::Rejected, None)));
+    }
+
+    #[test]
+    fn the_demo_profile_is_read_from_its_note_once_and_every_fact_traces_to_it() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).expect("a core");
+        super::seed_demo_profile(&core).expect("the profile");
+        super::seed_demo_profile(&core).expect("seeding again is a no-op");
+        assert_eq!(core.profile_sources().expect("the documents").len(), 1);
+        let profile = core.require_profile().expect("a profile");
+        assert!(!profile.stale, "read from the note that is there");
+        assert_eq!(profile.left_out.len(), 2);
+
+        let cv = crate::engine::pipeline::cv::Cv::parse(super::DEMO_PROFILE_YAML).expect("valid");
+        let (traced, left_out) = crate::engine::profile::trace::trace(cv.clone(), super::DEMO_NOTE);
+        assert!(left_out.is_empty(), "{left_out:#?}");
+        assert_eq!(traced, cv);
     }
 }

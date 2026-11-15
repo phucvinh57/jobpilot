@@ -75,8 +75,8 @@ flowchart TD
 
     choice -- "Prepare CV" --> promote["Promote lead to application"]
     promote --> analyze["Analyze JD"]
-    analyze --> tailor["Tailor CV from profile.yaml"]
-    tailor --> guard{"Only facts from profile.yaml?"}
+    analyze --> tailor["Tailor CV from the profile (read from your documents)"]
+    tailor --> guard{"Only facts from the profile?"}
     guard -- no --> repair["Repair with the violations"]
     repair --> guard
     guard -- yes --> render["Render PDF with Typst"]

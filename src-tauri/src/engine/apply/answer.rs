@@ -1,5 +1,5 @@
 //! Choosing a value for every field: deterministic prefill from the profile first, saved
-//! `application:` answers next, the LLM for the rest. The model only returns values for the field ids
+//! application answers next, the LLM for the rest. The model only returns values for the field ids
 //! it was given; every value is validated against the field (options, type, length) before use.
 
 use std::collections::{HashMap, HashSet};
@@ -11,10 +11,9 @@ use regex::Regex;
 use serde_json::{json, Value};
 
 use super::fields::{Answer, FieldKind, FormField, Source};
-use super::profile::{self, normalize_key};
 use crate::engine::llm::Llm;
 use crate::engine::pipeline::analyze::{truncate_chars, Analysis};
-use crate::engine::pipeline::cv::{Basics, Cv};
+use crate::engine::pipeline::cv::Basics;
 use crate::engine::pipeline::read_jd_text;
 use crate::engine::store::Application;
 use crate::engine::Core;
@@ -26,7 +25,7 @@ const JD_EXCERPT_CHARS: usize = 3_500;
 #[derive(Clone, Debug, Default)]
 pub struct Facts {
     pub basics: Basics,
-    /// `application:` answers of the profile, in file order.
+    /// The answers the user asked to remember (`Store::saved_answers`), oldest first.
     pub saved: Vec<(String, String)>,
     /// The tailored CV as written to `cv.yaml`.
     pub cv_yaml: String,
@@ -38,13 +37,12 @@ pub struct Facts {
 }
 
 impl Facts {
-    /// Read the profile, tailored CV and JD of `app`.
+    /// Read the stored profile, the saved answers, and the tailored CV and JD of `app`.
     pub fn load(core: &Core, app: &Application) -> Result<Facts> {
-        let profile_path = core.profile_path();
-        let profile_text = std::fs::read_to_string(&profile_path)
-            .with_context(|| format!("reading the profile {}", profile_path.display()))?;
-        let basics = Cv::parse(&profile_text)?.basics;
-        let saved = profile::parse_answers(&profile_text)?;
+        let profile = core.require_profile()?;
+        let basics = profile.cv.basics;
+        let profile_text = profile.yaml;
+        let saved = core.store.saved_answers()?;
         let cv_yaml = std::fs::read_to_string(app.cv_yaml_path())
             .with_context(|| format!("no tailored CV at {}: generate it first", app.cv_yaml_path().display()))?;
         let jd_text = read_jd_text(app).unwrap_or_default();
@@ -79,12 +77,27 @@ impl Facts {
         }
         summary.push_str("\nJob description (excerpt):\n");
         summary.push_str(truncate_chars(jd_text, JD_EXCERPT_CHARS));
-        let corpus = format!("{profile_text}\n{cv_yaml}\n{jd_text}").to_lowercase();
+        let answers: String = saved.iter().map(|(q, a)| format!("{q}: {a}\n")).collect();
+        let corpus = format!("{profile_text}\n{answers}{cv_yaml}\n{jd_text}").to_lowercase();
         Facts { basics, saved, cv_yaml, jd_summary: summary, corpus, cv_pdf }
     }
 }
 
 // ---- deterministic prefill ----
+
+/// Lower-case alphanumeric words of a question, for matching saved answers to labels (and the
+/// key a remembered answer is stored under).
+pub fn normalize_key(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase());
+        } else if !out.ends_with(' ') {
+            out.push(' ');
+        }
+    }
+    out.trim().to_string()
+}
 
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).expect("static regex"))
@@ -507,6 +520,12 @@ mod tests {
             Some(PathBuf::from("/tmp/cv.pdf")),
             "basics:\n  name: Vinh\n",
         )
+    }
+
+    #[test]
+    fn normalize_key_ignores_case_and_punctuation() {
+        assert_eq!(normalize_key("  Notice Period? *"), "notice period");
+        assert_eq!(normalize_key("work_authorization"), "work authorization");
     }
 
     #[test]

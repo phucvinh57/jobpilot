@@ -12,7 +12,6 @@ use anyhow::{bail, Context, Result};
 use regex::Regex;
 use tokio::process::Command;
 
-use crate::engine::Core;
 
 /// The Typst renderer (`assets/cv.typ`).
 pub const CV_TEMPLATE: &str = include_str!("../../../../assets/cv.typ");
@@ -103,15 +102,6 @@ pub async fn render(yaml_path: &Path, out_dir: &Path) -> Result<RenderResult> {
         bail!("typst produced no pages");
     }
     Ok(RenderResult { pdf, page_count: pages.len(), pages })
-}
-
-/// Render the full master profile (every non-hidden item) into `<data_dir>/profile/`.
-pub async fn render_profile(core: &Core) -> Result<RenderResult> {
-    let profile = core.profile_path();
-    if !profile.is_file() {
-        bail!("profile not found at {}: set its path in Settings", profile.display());
-    }
-    render(&profile, &core.paths.data_dir.join("profile")).await
 }
 
 async fn typst_compile(bin: &Path, root: &Path, yaml_name: &str, extra: &[&str], output: &Path) -> Result<()> {

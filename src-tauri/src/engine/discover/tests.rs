@@ -124,9 +124,10 @@ impl Harness {
     fn open(&self) -> Core {
         let paths = Paths::new(self.dir.path().join("jp"));
         let core = Core::open_at(paths, Secrets::memory()).unwrap();
-        let profile = self.dir.path().join("profile.yaml");
-        std::fs::write(&profile, "basics: {name: Ada, headline: Rust engineer}\nskills:\n  - {category: Languages, items: [Rust, Go]}\n").unwrap();
-        core.set_profile_path(&profile).unwrap();
+        crate::engine::profile::set_test_profile(
+            &core,
+            "basics: {name: Ada, headline: Rust engineer}\nskills:\n  - {category: Languages, items: [Rust, Go]}\n",
+        );
         core
     }
 
@@ -802,9 +803,8 @@ async fn no_provider_and_no_profile_are_setup_problems_not_crashes() {
 
     let dir = tempfile::tempdir().unwrap();
     let bare = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
-    bare.set_profile_path(&dir.path().join("missing.yaml")).unwrap();
     let err = bare.discover_now_with(h.deps()).await.unwrap_err();
-    assert!(format!("{err:#}").contains("cannot read the profile"), "{err:#}");
+    assert_eq!(crate::engine::health::classify(&format!("{err:#}")), crate::engine::health::Problem::NoProfile, "{err:#}");
 }
 
 #[tokio::test]

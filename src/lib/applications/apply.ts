@@ -38,7 +38,7 @@ export function withValue(edits: ReviewEdits, id: string, value: string): Review
   return { ...edits, values: { ...edits.values, [id]: value } };
 }
 
-/** The "Remember this answer in profile.yaml" box of one row was toggled. */
+/** The "Remember this answer" box of one row was toggled. */
 export function toggleRemember(edits: ReviewEdits, id: string): ReviewEdits {
   const remember = edits.remember.includes(id) ? edits.remember.filter((r) => r !== id) : [...edits.remember, id];
   return { ...edits, remember };

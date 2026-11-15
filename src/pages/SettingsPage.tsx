@@ -1,4 +1,4 @@
-// Settings: one scrolling page of cards, in this order: Profile & preferences, Connections (AI
+// Settings: one scrolling page of cards, in this order: About you, Profile & preferences, Connections (AI
 // providers, Gmail, Browser sessions), Job sources, Appearance. Each card belongs to its context;
 // this file only composes them and scrolls to the one a call to action names.
 
@@ -8,6 +8,7 @@ import { JobSourcesSection } from "@/components/discovery/JobSourcesSection";
 import { GmailSection } from "@/components/integrations/GmailSection";
 import { ProvidersSection } from "@/components/integrations/ProvidersSection";
 import { SessionsSection } from "@/components/integrations/SessionsSection";
+import { AboutYouSection } from "@/components/profile/AboutYouSection";
 import { ProfileSection } from "@/components/profile/ProfileSection";
 import { APPEARANCES, type Appearance } from "@/lib/theme";
 import { Caption, Heading, Page, Section, Segmented } from "@/components/ui/kit";
@@ -62,6 +63,9 @@ export function SettingsPage() {
 
   return (
     <Page label="Settings" title="Settings">
+      <Slot section="About you">
+        <AboutYouSection />
+      </Slot>
       <Slot section="Profile & preferences">
         <ProfileSection />
       </Slot>

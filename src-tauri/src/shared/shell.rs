@@ -99,6 +99,9 @@ pub struct ShellStatus {
     pub blockers: Vec<Blocker>,
     /// Job-search preferences were saved at least once (the banner points to Settings until then).
     pub prefs_saved: bool,
+    /// A profile was read from the user's documents (the banner points to Settings > About you
+    /// until then).
+    pub profile_ready: bool,
     /// New leads on Today (its badge when nothing needs the user).
     pub new_leads: usize,
     /// Applications on the Pipeline (its badge).
@@ -117,6 +120,7 @@ pub async fn shared_status(core: State<'_, Arc<Core>>) -> CommandResult<ShellSta
             health: health_line(&health),
             blockers: blockers(&health),
             prefs_saved: core.store.has_preferences()?,
+            profile_ready: core.store.stored_profile()?.is_some(),
             new_leads: core.new_lead_count()?,
             applications: core.store.list_applications()?.len(),
         })

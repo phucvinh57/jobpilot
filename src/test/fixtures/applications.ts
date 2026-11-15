@@ -172,7 +172,7 @@ export function cv(over: Partial<Cv> = {}): Cv {
     guardClean: true,
     requirements: [
       { text: "Rust", nice: false, note: null, covered: true },
-      { text: "Terraform", nice: true, note: "Nothing in profile.yaml shows it", covered: false },
+      { text: "Terraform", nice: true, note: "Nothing in your documents shows it", covered: false },
     ],
     hasGaps: true,
     ...over,

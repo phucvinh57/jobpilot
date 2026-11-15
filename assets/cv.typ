@@ -2,7 +2,7 @@
 // Usage: typst compile --root <dir> --input data=<file>.yaml cv.typ out.pdf
 #import "@preview/basic-resume:0.2.10": *
 
-#let data = yaml("/" + sys.inputs.at("data", default: "profile.yaml"))
+#let data = yaml("/" + sys.inputs.at("data", default: "cv.yaml"))
 #let b = data.basics
 #let style = data.at("style", default: (:))
 

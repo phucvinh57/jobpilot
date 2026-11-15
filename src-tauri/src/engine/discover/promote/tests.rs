@@ -1,6 +1,5 @@
 //! "Prepare CV" tests: `llm::fake`, a real SQLite file and the real Typst; no network.
 
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -17,7 +16,6 @@ use crate::engine::llm::fake::FakeLlm;
 use crate::engine::pipeline::generate::MAX_PAGES_KEY;
 use crate::engine::prefs::Preferences;
 use crate::engine::store::{NewLead, NewSource, SourcePurpose, Status};
-use crate::engine::{Paths, Secrets};
 
 const EXAMPLE: &str = include_str!("../../../../../assets/prompts/example-cv.yaml");
 const JD: &str = "iCreationsLab is hiring a System Engineer to operate Linux servers, Nginx, MySQL and Cloudflare for hosting products. \
@@ -26,9 +24,7 @@ Requirements: Linux administration, Nginx, DNS, SSL, scripting, English communic
 const INSIGHT: &str = r#"{"domain":"Hosting","business_summary":"Sells hosting.","sources":["https://icreationslab.test/jobs/1"]}"#;
 
 fn core() -> (tempfile::TempDir, Core) {
-    let dir = tempfile::tempdir().unwrap();
-    let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
-    core.set_profile_path(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../profile.yaml")).unwrap();
+    let (dir, core) = crate::engine::profile::test_core_with_profile(crate::engine::profile::TEST_PROFILE);
     // The example CV takes two pages: no trim round.
     core.store.kv_set(MAX_PAGES_KEY, "2").unwrap();
     (dir, core)

@@ -106,7 +106,7 @@ function Row({ row, session }: { row: ReviewRow; session: ApplySession }) {
       {canRemember(row, value) && (
         <Checkbox
           id={`remember-${row.id}`}
-          label="Remember this answer in profile.yaml"
+          label="Remember this answer"
           checked={session.edits.remember.includes(row.id)}
           onChange={() => session.toggleRemember(row.id)}
         />

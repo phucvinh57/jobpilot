@@ -32,18 +32,11 @@ export interface ProfileCard {
   notesStatus: NotesStatus;
   /** Save is on: the notes differ from the saved ones, or the last read of them failed. */
   canSaveNotes: boolean;
-  /** A CV import or removal is running. */
-  cvBusy: boolean;
-  /** A change of the profile file is running. */
-  fileBusy: boolean;
   addItem: (field: FieldKey, text: string) => void;
   removeItem: (field: FieldKey, item: string) => void;
   setJobType: (jobType: JobType) => void;
   saveNotes: () => void;
   undo: () => void;
-  uploadCv: () => void;
-  removeCv: () => void;
-  chooseProfileFile: () => void;
 }
 
 export function useProfile(): ProfileCard {
@@ -54,8 +47,6 @@ export function useProfile(): ProfileCard {
   const [saving, setSaving] = useState(0);
   const [notesText, setNotesTextState] = useState("");
   const [notesStatus, setNotesStatusState] = useState<NotesStatus>(NOTES_IDLE);
-  const [cvBusy, setCvBusy] = useState(false);
-  const [fileBusy, setFileBusy] = useState(false);
 
   /** What is shown, for the "did it change" test and the stale checks. */
   const shown = useRef<Profile | undefined>(undefined);
@@ -131,8 +122,7 @@ export function useProfile(): ProfileCard {
     };
   }, [load]);
 
-  /** Run a change; its answer is the card. `label` is the "Saved" label (a change that is not
-   *  worth one, like a CV, passes none). */
+  /** Run a change; its answer is the card. `label` is the "Saved" label. */
   const edit = useCallback(
     async <T>(
       call: () => Promise<T>,
@@ -274,69 +264,6 @@ export function useProfile(): ProfileCard {
     );
   }, [edit, setStatus]);
 
-  /** A CV or profile-file change: runs with `busy` on, answers with the card. */
-  const withBusy = useCallback(
-    async (setBusy: (busy: boolean) => void, call: () => Promise<Profile | undefined>) => {
-      setBusy(true);
-      setError(undefined);
-      const editSeq = seq.current;
-      try {
-        const next = await call();
-        if (next) {
-          show(next, undefined, editSeq === seq.current);
-        }
-      } catch (thrown) {
-        fail(thrown);
-      } finally {
-        if (alive.current) {
-          setBusy(false);
-        }
-      }
-    },
-    [show, fail],
-  );
-
-  /** The picker is not "busy": only importing the chosen file is. */
-  const pick = useCallback(
-    async (open: () => Promise<string | null>): Promise<string | null> => {
-      try {
-        return await open();
-      } catch (thrown) {
-        fail(new CommandError(`The file dialog did not open: ${toCommandError(thrown).message}`));
-        return null;
-      }
-    },
-    [fail],
-  );
-
-  const uploadCv = useCallback(() => {
-    if (cvBusy) {
-      return;
-    }
-    void pick(api.pickCv).then((path) => {
-      if (path !== null) {
-        void withBusy(setCvBusy, () => api.importCv(path));
-      }
-    });
-  }, [cvBusy, pick, withBusy]);
-
-  const removeCv = useCallback(() => {
-    if (!cvBusy) {
-      void withBusy(setCvBusy, () => api.removeCv());
-    }
-  }, [cvBusy, withBusy]);
-
-  const chooseProfileFile = useCallback(() => {
-    if (fileBusy) {
-      return;
-    }
-    void pick(api.pickProfileFile).then((path) => {
-      if (path !== null) {
-        void withBusy(setFileBusy, () => api.setProfilePath(path));
-      }
-    });
-  }, [fileBusy, pick, withBusy]);
-
   const canSaveNotes =
     profile !== undefined &&
     savePlan(cleanNotes(notesText, profile.limits.maxNotesChars), profile.notes, notesStatus.kind === "failed") !==
@@ -354,15 +281,10 @@ export function useProfile(): ProfileCard {
     setNotesText,
     notesStatus,
     canSaveNotes,
-    cvBusy,
-    fileBusy,
     addItem,
     removeItem,
     setJobType,
     saveNotes,
     undo,
-    uploadCv,
-    removeCv,
-    chooseProfileFile,
   };
 }

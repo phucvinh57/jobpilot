@@ -27,12 +27,15 @@ use jobpilot_lib::engine::apply::{self, ApplyOptions, Prepared, Submitted};
 use jobpilot_lib::engine::discover::source::{Greenhouse, JobSource, NetHttp};
 use jobpilot_lib::engine::discover::{DiscoverDeps, RunSummary};
 use jobpilot_lib::engine::net::http::{Http, HttpLimits};
+use jobpilot_lib::engine::pipeline::cv::Cv;
 use jobpilot_lib::engine::pipeline::insight::Insight;
 use jobpilot_lib::engine::prefs::Preferences;
 use jobpilot_lib::engine::store::{LeadState, Provider, ProviderKind, Status};
 use jobpilot_lib::engine::{runtime, Core, Paths, Secrets};
 
 const EXAMPLE_CV: &str = include_str!("../../assets/prompts/example-cv.yaml");
+/// The user's document: a full, real profile (every fact the tailored CV may state).
+const PROFILE_DOC: &str = include_str!("fixtures/profile.yaml");
 const SECTIONS: &str = "sections: [summary, skills, projects, experience, education, languages]";
 /// The page budget is one page and the full example takes two: without a trim round.
 fn one_page_cv() -> String {
@@ -146,10 +149,35 @@ impl Asked {
 /// Which request this is, from the shape of the schema it asks for.
 fn kind_of(schema: &Value) -> Option<&'static str> {
     let props = &schema["properties"];
-    [("salary", "score"), ("source_pages", "insight"), ("slug", "analysis"), ("yaml", "tailor"), ("answers", "answers"), ("submitted", "confirm")]
+    [
+        ("salary", "score"),
+        ("source_pages", "insight"),
+        ("slug", "analysis"),
+        ("yaml", "tailor"),
+        ("answers", "answers"),
+        ("submitted", "confirm"),
+        ("basics", "profile"),
+    ]
         .into_iter()
         .find(|(key, _)| props.get(key).is_some())
         .map(|(_, kind)| kind)
+}
+
+/// The profile the reader "finds" in the document: the fixture in the reader's schema (no layout
+/// keys, no `hidden` flags: the reader shows every item, and the example CV uses items the
+/// fixture hides).
+fn profile_reply() -> Value {
+    fn unflagged(value: Value) -> Value {
+        match value {
+            Value::Array(items) => Value::Array(items.into_iter().map(unflagged).collect()),
+            Value::Object(map) => Value::Object(map.into_iter().filter(|(k, _)| k != "hidden").map(|(k, v)| (k, unflagged(v))).collect()),
+            other => other,
+        }
+    }
+    let cv = Cv::parse(PROFILE_DOC).expect("the fixture profile");
+    let Value::Object(all) = serde_json::to_value(&cv).expect("as JSON") else { panic!("a CV is an object") };
+    let keys = ["basics", "summary", "skills", "experience", "projects", "education", "certifications", "languages"];
+    unflagged(Value::Object(all.into_iter().filter(|(k, _)| keys.contains(&k.as_str())).collect()))
 }
 
 fn score_reply(posting: &str) -> Value {
@@ -223,6 +251,7 @@ async fn serve_model() -> (SocketAddr, Asked) {
             "analysis" => analysis_reply(),
             "tailor" => json!({"yaml": one_page_cv(), "emphasised": ["Rust services"], "omitted": ["Hardware projects"], "gaps": ["Kubernetes at scale"]}),
             "answers" => answers_reply(user),
+            "profile" => profile_reply(),
             _ => json!({"submitted": true}),
         };
         Resp::json(&json!({"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": reply.to_string()}}]}))
@@ -314,12 +343,8 @@ async fn serve_form(posts: Arc<Mutex<Vec<String>>>) -> SocketAddr {
 
 // ---------------------------------------------------------------- the flow
 
-fn open_core(tmp: &Path, model: SocketAddr) -> Core {
+async fn open_core(tmp: &Path, model: SocketAddr) -> Core {
     let core = Core::open_at(Paths::new(tmp.join("jp-e2e")), Secrets::memory()).expect("open");
-    // A copy: nothing in the test can touch the repository's profile.
-    let profile = tmp.join("profile.yaml");
-    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../profile.yaml"), &profile).expect("copy profile.yaml");
-    core.set_profile_path(&profile).expect("profile path");
     core.save_provider(
         &Provider {
             id: 0,
@@ -333,6 +358,10 @@ fn open_core(tmp: &Path, model: SocketAddr) -> Core {
         None,
     )
     .expect("provider");
+    // The user's profile, read by the (fake) model from one typed document, as Settings does.
+    core.add_profile_text("CV", PROFILE_DOC).expect("document");
+    let profile = core.read_profile_sources().await.expect("read the documents").expect("a profile");
+    assert!(profile.left_out.is_empty(), "every fact is in the document: {:?}", profile.left_out);
     core
 }
 
@@ -357,7 +386,7 @@ async fn flow(with_apply: bool) {
     let (model, asked) = serve_model().await;
     let board_hits = Arc::new(Mutex::new(Vec::new()));
     let board = serve_board(board_hits.clone()).await;
-    let core = open_core(tmp.path(), model);
+    let core = open_core(tmp.path(), model).await;
 
     // Preferences (what the preference chat would have saved) and one job source, as Settings does.
     core.save_preferences(Preferences {
