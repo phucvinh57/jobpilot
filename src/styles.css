@@ -2,7 +2,7 @@
 @import "tailwindcss" source(".");
 @import "tw-animate-css";
 
-/* `dark:` follows the app's appearance (`data-theme` on <html>, set by `shared/theme`), not the
+/* `dark:` follows the app's appearance (`data-theme` on <html>, set by `src/lib/theme.ts`), not the
    desktop's: the user can pick Light on a dark desktop. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
@@ -52,7 +52,7 @@
 }
 
 /* The only colours, radii, fonts and text sizes of the app. The `--jp-*` variables are written
-   by `shared/theme/theme.ts` from `tokens.ts` (light or dark). Tailwind's stock colours are
+   by `src/lib/theme.ts` from `src/lib/tokens.ts` (light or dark). Tailwind's stock colours are
    removed, so a view cannot hard-code one. */
 @theme inline {
   --color-*: initial;
@@ -81,7 +81,7 @@
   --color-track: var(--jp-track);
   --color-bar-grey: var(--jp-bar-grey);
 
-  /* The shadcn/ui names the primitives (`shared/ui/primitives`) use, on the same palette.
+  /* The shadcn/ui names the primitives (`src/components/ui/primitives`) use, on the same palette.
      Two shadcn names keep the app's meaning: `accent` is the brand blue (shadcn's hover fill is
      `track` here) and `muted` is secondary text (shadcn's muted fill is `track` too). */
   --color-background: var(--jp-bg);
