@@ -77,6 +77,8 @@ pub struct PrefsPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locations: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_from: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<Remote>,
     /// `Some(None)`: the model said `null` (clear it).
     #[serde(deserialize_with = "set_or_clear", skip_serializing_if = "Option::is_none")]
@@ -193,6 +195,12 @@ pub fn turn_schema() -> Value {
                     "domains": strings,
                     "avoid_domains": strings,
                     "locations": strings,
+                    "work_from": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": MAX_ITEM_CHARS},
+                        "maxItems": MAX_LIST_ITEMS,
+                        "description": "Countries the user may legally work from (residence or work authorization): a hard limit. Not the same as locations, the places where the user would like the job or office to be."
+                    },
                     "remote": {"type": "string", "enum": ["any", "remote", "hybrid", "onsite"]},
                     "salary_min": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
                     "currency": {"anyOf": [{"type": "string", "maxLength": 8}, {"type": "null"}]},
@@ -262,6 +270,7 @@ pub fn merge_patch(current: &Preferences, patch: &PrefsPatch) -> Result<Preferen
         (&mut out.domains, &patch.domains),
         (&mut out.avoid_domains, &patch.avoid_domains),
         (&mut out.locations, &patch.locations),
+        (&mut out.work_from, &patch.work_from),
         (&mut out.company_size, &patch.company_size),
         (&mut out.company_stage, &patch.company_stage),
         (&mut out.languages, &patch.languages),
@@ -414,6 +423,24 @@ mod tests {
         assert_eq!(merged.currency.as_deref(), Some("USD"), "absent: unchanged");
         assert_eq!(merged.remote, Remote::Hybrid);
         assert_eq!(merged.notes, "prefers small teams");
+    }
+
+    #[test]
+    fn work_from_replaces_the_stored_list_and_leaves_locations_alone() {
+        let current = Preferences {
+            locations: vec!["Singapore".into()],
+            work_from: vec!["Thailand".into()],
+            ..Default::default()
+        };
+        let merged = merge_patch(&current, &patch(json!({"work_from": [" Vietnam ", "vietnam", ""], "remote": "remote"}))).unwrap();
+        assert_eq!(merged.work_from, ["Vietnam"], "replaced, tidied and deduplicated");
+        assert_eq!(merged.locations, ["Singapore"], "a soft preference, untouched");
+        assert_eq!(merged.remote, Remote::Remote);
+        let kept = merge_patch(&merged, &patch(json!({"locations": []}))).unwrap();
+        assert_eq!(kept.work_from, ["Vietnam"], "absent: unchanged");
+        assert!(merge_patch(&merged, &patch(json!({"work_from": []}))).unwrap().work_from.is_empty(), "an empty list clears it");
+        validate_turn(&json!({"reply": "x", "questions": [], "patch": {"work_from": ["Vietnam"]}, "complete": false})).unwrap();
+        assert!(validate_turn(&json!({"reply": "x", "questions": [], "patch": {"work_from": "Vietnam"}, "complete": false})).is_err());
     }
 
     #[test]

@@ -60,10 +60,10 @@ fn busy() -> MutexGuard<'static, BTreeMap<(PathBuf, i64), usize>> {
 }
 
 /// Marks a lead as being prepared until dropped.
-struct Preparing(PathBuf, i64);
+pub(super) struct Preparing(PathBuf, i64);
 
 impl Preparing {
-    fn new(core: &Core, lead_id: i64) -> Self {
+    pub(super) fn new(core: &Core, lead_id: i64) -> Self {
         let key = (core.paths.db.clone(), lead_id);
         *busy().entry(key).or_insert(0) += 1;
         Self(core.paths.db.clone(), lead_id)
@@ -226,6 +226,13 @@ impl Core {
     /// Is "Prepare CV" queued or running for this lead?
     pub fn is_preparing(&self, lead_id: i64) -> bool {
         busy().contains_key(&(self.paths.db.clone(), lead_id))
+    }
+
+    /// Run `f` unless "Prepare CV" is queued or running for this lead (`None` then). The check
+    /// holds while `f` runs, so a "Prepare CV" cannot start in between.
+    pub(super) fn unless_preparing<T>(&self, lead_id: i64, f: impl FnOnce() -> T) -> Option<T> {
+        let busy = busy();
+        (!busy.contains_key(&(self.paths.db.clone(), lead_id))).then(f)
     }
 
     /// A copy of the handles the graph nodes need (`Core` is not `Clone`: its parts are).
@@ -444,7 +451,8 @@ impl Core {
         };
         let mut out = Dismissed::default();
         let busy = busy();
-        for other in self.store.list_queue_leads()? {
+        // Also the leads the preferences hide: the user said never this company.
+        for other in self.store.list_queue_leads_with_hidden()? {
             let Some(why) = excluded_company(&prefs, &other.company) else { continue };
             if busy.contains_key(&(self.paths.db.clone(), other.id)) {
                 out.kept += 1;

@@ -30,7 +30,7 @@ use serde_json::Value;
 use super::dedup::{canonical_url, dedup_key, Known};
 use super::deps::{ChallengeCheck, CheckStage, DiscoverDeps, FetchRequest, InsightRequest};
 use super::limits::{MAX_CHALLENGES_IN_A_ROW, SCAN_FACTOR};
-use super::score::{compact_profile, hard_filter, score};
+use super::score::{compact_profile, hard_filter, ineligible_reason, score};
 use super::source::boards::no_postings_status;
 use super::source::{one_line, Candidate, JobSource, SearchCtx, SNIPPET_CHARS};
 use super::state::{
@@ -454,14 +454,23 @@ async fn insight_node(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState
     Ok(s)
 }
 
-/// `save_lead`: the lead, with its score and insight.
+/// `save_lead`: the lead, with its score and insight. When the model read that the posting hires
+/// only outside `Preferences.work_from` ([`Eligible::No`](super::score::Eligible::No)), the lead
+/// is stored dismissed with that reason (and its score), like one the hard filters dropped.
 async fn save_lead(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     let (score, score_json) = match &s.scored {
         Some(scored) => (scored.total, Some(scored.to_json()?)),
         None => (None, None),
     };
+    let prefs = sh.store.preferences()?;
+    let not_eligible = s.scored.as_ref().and_then(|scored| ineligible_reason(&prefs, scored));
     let insight_json = s.insight.take();
-    match store_lead(&sh, &s, LeadState::New, None, score, score_json, insight_json)? {
+    let (state, reason) = match not_eligible {
+        Some(reason) => (LeadState::Dismissed, Some(reason)),
+        None => (LeadState::New, None),
+    };
+    match store_lead(&sh, &s, state, reason, score, score_json, insight_json)? {
+        Stored::Saved if state == LeadState::Dismissed => s.dismissed += 1,
         Stored::Saved => s.saved += 1,
         Stored::AlreadyKnown => count_skip(&mut s, "duplicate"),
     }

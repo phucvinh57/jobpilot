@@ -38,9 +38,13 @@ impl Core {
     }
 
     /// Save `prefs` after tidying them ([`Preferences::normalized`]); returns what was stored.
+    /// The waiting leads are filtered again with them ([`Core::refilter_leads`]) when a field the
+    /// filters read changed.
     pub fn save_preferences(&self, prefs: Preferences) -> Result<Preferences> {
         let prefs = prefs.normalized();
+        let old = self.store.preferences()?;
         self.store.save_preferences(&prefs)?;
+        self.refilter_after_save(&old, &prefs);
         Ok(prefs)
     }
 }

@@ -17,6 +17,11 @@
 //! - [`run`]: the `discovery` graph (one thread per run) and the `source_run` graph (one thread per
 //!   source, so a paused source never holds back the others).
 //! - [`score`]: hard filters in code, then one model call per lead, then the weighted sum.
+//! - [`region`]: the countries and regions a location or a posting's limit phrases name, against
+//!   `Preferences.work_from`.
+//! - `refilter`: [`Core::refilter_leads`], the hard filters again over the new leads after the
+//!   preferences change: a lead they now filter out is hidden from the queue (not dismissed), and
+//!   shown again when a later change lets it pass.
 //! - [`dedup`]: canonical URL and `slug(company)-slug(role)` against leads and applications.
 //! - [`deps`]: the replaceable pieces of a run. [`DiscoverDeps::live`] wires the text-based challenge
 //!   probe, `pipeline::insight` and the posting fetch with the managed browser as its fallback.
@@ -40,6 +45,8 @@ pub mod limits;
 pub mod manual;
 pub mod promote;
 pub mod queue;
+mod refilter;
+pub mod region;
 mod run;
 pub mod schedule;
 pub mod score;
@@ -59,6 +66,7 @@ pub use deps::{
 pub use handoff::{needs_human, text_probe};
 pub use limits::{DiscoverLimits, MAX_CHALLENGES_IN_A_ROW};
 pub use manual::ManualDeps;
+pub use refilter::Refiltered;
 pub use run::lead_dir;
 pub use source::{Candidate, JobSource, SearchCtx, SearchPage};
 pub use sources::{source_url_hint, JOB_SOURCE_KINDS};

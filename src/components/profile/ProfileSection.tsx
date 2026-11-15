@@ -13,7 +13,8 @@ import { TagField } from "./TagField";
 const TITLE = "Profile & preferences";
 const HINT = "What to look for. Every change is saved at once and used by the next search.";
 
-/** Settings > Profile & preferences: the job type, tag fields for locations, domains and skills,
+/** Settings > Profile & preferences: the job type, tag fields for the countries the user may work
+ *  from (a hard limit), locations, domains and skills,
  *  and free-text notes (what to look for; facts about the user are in Settings > About you). No
  *  primary button: every change is saved at once, and Undo puts back the last one. */
 export function ProfileSection() {

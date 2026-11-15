@@ -28,17 +28,24 @@ pub const SUGGESTION_CHIPS: usize = 8;
 /// A list of the preferences that is edited as a tag field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Field {
+    WorkFrom,
     Locations,
     Domains,
     Skills,
 }
 
 impl Field {
-    pub const ALL: [Field; 3] = [Field::Locations, Field::Domains, Field::Skills];
+    pub const ALL: [Field; 4] = [
+        Field::WorkFrom,
+        Field::Locations,
+        Field::Domains,
+        Field::Skills,
+    ];
 
     /// Used in element ids and as the name the web app sends.
     pub fn key(self) -> &'static str {
         match self {
+            Field::WorkFrom => "work_from",
             Field::Locations => "locations",
             Field::Domains => "domains",
             Field::Skills => "skills",
@@ -52,6 +59,7 @@ impl Field {
 
     pub fn label(self) -> &'static str {
         match self {
+            Field::WorkFrom => "Can work from",
             Field::Locations => "Work locations",
             Field::Domains => "Interested domains",
             Field::Skills => "Skills",
@@ -60,6 +68,7 @@ impl Field {
 
     pub fn placeholder(self) -> &'static str {
         match self {
+            Field::WorkFrom => "Add a country you may legally work from",
             Field::Locations => "Add a city or country",
             Field::Domains => "Add a domain, e.g. fintech",
             Field::Skills => "Add a skill",
@@ -68,6 +77,7 @@ impl Field {
 
     pub fn list(self, prefs: &Preferences) -> &Vec<String> {
         match self {
+            Field::WorkFrom => &prefs.work_from,
             Field::Locations => &prefs.locations,
             Field::Domains => &prefs.domains,
             Field::Skills => &prefs.must_skills,
@@ -76,14 +86,24 @@ impl Field {
 
     pub fn list_mut(self, prefs: &mut Preferences) -> &mut Vec<String> {
         match self {
+            Field::WorkFrom => &mut prefs.work_from,
             Field::Locations => &mut prefs.locations,
             Field::Domains => &mut prefs.domains,
             Field::Skills => &mut prefs.must_skills,
         }
     }
 
+    /// A line under the field that says what it does, for the field that needs one.
+    pub fn hint(self) -> Option<&'static str> {
+        match self {
+            Field::WorkFrom => Some("Hard limit: jobs that only hire elsewhere are hidden."),
+            Field::Locations | Field::Domains | Field::Skills => None,
+        }
+    }
+
     pub fn suggestions(self, all: &PrefSuggestions) -> &Vec<String> {
         match self {
+            Field::WorkFrom => &all.work_from,
             Field::Locations => &all.locations,
             Field::Domains => &all.domains,
             Field::Skills => &all.skills,
@@ -110,6 +130,7 @@ impl Field {
     /// interested and avoided ones.
     pub fn presence(self, prefs: &Preferences, text: &str) -> Presence {
         let (wanted, avoided): (&[&[String]], &[&[String]]) = match self {
+            Field::WorkFrom => (&[&prefs.work_from], &[]),
             Field::Locations => (&[&prefs.locations], &[]),
             Field::Domains => (&[&prefs.domains], &[&prefs.avoid_domains]),
             Field::Skills => (
@@ -569,6 +590,7 @@ mod tests {
         for field in Field::ALL {
             assert!(field.add(&mut prefs, &format!("item {}", field.key())));
         }
+        assert_eq!(prefs.work_from, strings(&["item work_from"]));
         assert_eq!(prefs.locations, strings(&["item locations"]));
         assert_eq!(prefs.domains, strings(&["item domains"]));
         assert_eq!(
@@ -597,6 +619,33 @@ mod tests {
             assert_eq!(Field::parse(field.key()), Some(field));
         }
         assert_eq!(Field::parse("roles"), None);
+    }
+
+    #[test]
+    fn can_work_from_comes_before_work_locations_and_is_the_only_field_with_a_hint() {
+        assert_eq!(Field::ALL[0], Field::WorkFrom);
+        assert_eq!(Field::ALL[1], Field::Locations);
+        assert_eq!(Field::WorkFrom.label(), "Can work from");
+        assert!(Field::WorkFrom.hint().is_some_and(|h| h.starts_with("Hard limit")));
+        for field in &Field::ALL[1..] {
+            assert_eq!(field.hint(), None);
+        }
+        // A country to work from and a place the job could be are separate lists.
+        let mut prefs = Preferences {
+            locations: strings(&["Vietnam"]),
+            ..Default::default()
+        };
+        assert_eq!(Field::WorkFrom.presence(&prefs, "vietnam"), Presence::Absent);
+        assert!(Field::WorkFrom.add(&mut prefs, "Vietnam"));
+        assert_eq!(prefs.work_from, strings(&["Vietnam"]));
+        let all = PrefSuggestions {
+            work_from: strings(&["VIETNAM", "Thailand"]),
+            ..Default::default()
+        };
+        assert_eq!(
+            visible_suggestions(Field::WorkFrom, &prefs, Field::WorkFrom.suggestions(&all)),
+            strings(&["Thailand"])
+        );
     }
 
     #[test]
