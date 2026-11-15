@@ -70,18 +70,18 @@ export function lastSearchLine(run: RunSummary, now: Date): string {
   return `Last search ${when}: ${summaryLine(run)}`;
 }
 
-/** What to tell the user after "Dismiss". */
-export function dismissedNote(out: Dismissed): string {
-  if (out.notExcluded !== null) {
-    return `Lead dismissed, but the company could not be excluded: ${out.notExcluded}`;
-  }
+/** What else "Dismiss" did, under the "Lead dismissed" toast; `undefined` when only the lead went. */
+export function dismissedDetail(out: Pick<Dismissed, "also" | "kept">): string | undefined {
   const more = (n: number) => (n === 1 ? "1 more job" : `${n} more jobs`);
-  let text = out.also === 0 ? "Lead dismissed." : `Lead dismissed, and ${more(out.also)} from the same company.`;
+  const parts: string[] = [];
+  if (out.also > 0) {
+    parts.push(`${more(out.also)} from the same company went too.`);
+  }
   if (out.kept > 0) {
     const verb = out.kept === 1 ? "was" : "were";
-    text += ` ${more(out.kept)} from that company ${verb} kept: the CV is being prepared.`;
+    parts.push(`${more(out.kept)} from that company ${verb} kept: the CV is being prepared.`);
   }
-  return text;
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 // ------------------------------------------------------------ sources

@@ -7,8 +7,9 @@ import clsx from "clsx";
 import { ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { Button, Caption, Checkbox, Drawer, LinkButton, TextInput } from "@/components/ui/kit";
+import { Button, Caption, Checkbox, Dialog, Drawer, LinkButton, TextInput } from "@/components/ui/kit";
 import { CompanyBlock, InterviewBlock } from "@/components/InsightBrief";
+import { FormError } from "@/components/ProblemHelp";
 import { openLink } from "@/api/shell";
 import { scoreLabel, scoreTone } from "@/lib/display";
 import { TONE_CLASS } from "@/lib/tokens";
@@ -62,19 +63,47 @@ function QueueActions({ open, primary, jobs, onDismiss }: ActionProps) {
   );
 }
 
-function DismissForm({ lead, onClose }: { lead: Lead; onClose: () => void }) {
+/** "Dismiss" asks first, in a small dialog: an optional reason and, for a lead with a company,
+ *  "Don't show {company} again". Why a dismissal failed stays in the dialog; a dismissal that went
+ *  through closes it (a toast says what went). */
+function DismissDialog({ lead, open, onClose }: { lead: Lead; open: boolean; onClose: () => void }) {
   const [reason, setReason] = useState("");
   const [exclude, setExclude] = useState(false);
   const dismiss = useDismiss(lead.id);
   const company = lead.company.trim();
+  const { clearError } = dismiss;
+  /** Cancel, Esc or ✕: the next opening starts afresh. */
+  const close = () => {
+    clearError();
+    setReason("");
+    setExclude(false);
+    onClose();
+  };
+  const confirm = () => {
+    if (!dismiss.busy) {
+      void dismiss.run(reason, exclude).then((out) => out !== undefined && onClose());
+    }
+  };
   return (
-    <div
+    <Dialog
       id="queue-dismiss"
-      role="group"
-      aria-label="Dismiss this lead"
-      className="flex flex-col gap-2.5 border border-border bg-surface-alt p-4"
+      open={open}
+      title="Dismiss this lead"
+      description={leadTitle(lead.company, lead.role)}
+      width="sm"
+      onClose={close}
+      onSubmit={confirm}
+      footer={
+        <>
+          <Button id="dismiss-cancel" variant="ghost" onClick={close}>
+            Cancel
+          </Button>
+          <Button id="dismiss-confirm" type="submit" variant="primary" busy={dismiss.busy} disabled={dismiss.busy}>
+            Dismiss lead
+          </Button>
+        </>
+      }
     >
-      <p className="font-semibold text-ink">Dismiss {leadTitle(lead.company, lead.role)}</p>
       <TextInput
         id="queue-reason"
         aria-label="Why dismiss this lead"
@@ -90,25 +119,8 @@ function DismissForm({ lead, onClose }: { lead: Lead; onClose: () => void }) {
           onChange={(e) => setExclude(e.target.checked)}
         />
       )}
-      {dismiss.error && (
-        <p role="alert" className="selectable text-body text-danger-fg">
-          {dismiss.error.message}
-        </p>
-      )}
-      <div className="flex gap-2">
-        <Button
-          id="dismiss-confirm"
-          busy={dismiss.busy}
-          disabled={dismiss.busy}
-          onClick={() => void dismiss.run(reason, exclude).then((out) => out !== undefined && onClose())}
-        >
-          Dismiss lead
-        </Button>
-        <Button id="dismiss-cancel" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-      </div>
-    </div>
+      {dismiss.error && <FormError id="dismiss-error" error={dismiss.error} title="Not dismissed" />}
+    </Dialog>
   );
 }
 
@@ -120,7 +132,7 @@ interface BodyProps {
   profileSkills: readonly string[];
 }
 
-/** What the drawer shows for `lead`. Shown with `key={lead.id}`, so its form closes and it fades in
+/** What the drawer shows for `lead`. Shown with `key={lead.id}`, so its dialog closes and it fades in
  *  whenever another lead is opened. */
 function LeadBody({ lead, source, primary, jobs, profileSkills }: BodyProps) {
   const [dismissing, setDismissing] = useState(false);
@@ -154,7 +166,7 @@ function LeadBody({ lead, source, primary, jobs, profileSkills }: BodyProps) {
         </div>
       </div>
       <QueueActions open={lead} primary={primary} jobs={jobs} onDismiss={() => setDismissing(true)} />
-      {dismissing && <DismissForm lead={lead} onClose={() => setDismissing(false)} />}
+      <DismissDialog lead={lead} open={dismissing} onClose={() => setDismissing(false)} />
       {hasFit && (
         <div className="flex flex-wrap items-start gap-6">
           <Breakdown criteria={lead.criteria} />

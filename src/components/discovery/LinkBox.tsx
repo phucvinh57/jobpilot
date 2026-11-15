@@ -1,11 +1,13 @@
 // The link box with "Add job", and under it what is happening to what was put in: a spinner while
-// the posting is read, or why it failed with what to do about it.
+// the posting is read, or why it failed with what to do about it. The box is a form, so its
+// failures are its own form errors (`FormError`), not toasts.
 
 import { Plus, X } from "lucide-react";
 import { useState } from "react";
 
 import { Button, Spinner, TextInput } from "@/components/ui/kit";
-import { ProblemHelp } from "@/components/ProblemHelp";
+import { FormError } from "@/components/ProblemHelp";
+import { CommandError, problemActions } from "@/lib/problem";
 
 import { waitingLabel } from "@/lib/discovery/text";
 import type { AddFailure } from "@/lib/discovery/addQueue";
@@ -110,8 +112,9 @@ function LinkBoxView({ adding, waiting, failures, note }: Props) {
       {failures.map((failure, n) => {
         const { input, problem } = failure;
         const retry = input ? () => void addInput(input) : undefined;
-        // A plain error has no advice and no Retry: offer to run it again.
-        const plain = input !== undefined && !problem?.advice;
+        const error = new CommandError(failure.message, problem);
+        // An error whose problem offers no Retry: offer to run it again.
+        const plain = input !== undefined && !problemActions(error.problem, true).includes("retry");
         return (
           <div
             key={`${n}-${failure.message}`}
@@ -120,8 +123,7 @@ function LinkBoxView({ adding, waiting, failures, note }: Props) {
             aria-label={`The posting could not be added: ${failure.message}`}
             className="flex flex-col gap-1"
           >
-            <p className="selectable text-body text-danger-fg">{failure.message}</p>
-            {problem && <ProblemHelp problem={problem} onRetry={retry} />}
+            <FormError error={error} onRetry={retry} />
             {plain && (
               <div className="flex">
                 <Button id={`add-lead-again-${n}`} size="compact" onClick={retry}>
