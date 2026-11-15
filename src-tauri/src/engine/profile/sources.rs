@@ -55,7 +55,7 @@ impl Core {
         ensure!(!doc.text.trim().is_empty(), "no text found in {name}: if it is a scanned PDF, paste its text instead");
         let kept = truncate_chars(&doc.text, MAX_CHARS);
         let truncated = kept.len() < doc.text.len();
-        let source = self.store.add_profile_source(&NewProfileSource::file(&name, &kept, truncated), MAX_TOTAL_CHARS)?;
+        let source = self.store.add_profile_source(&NewProfileSource::file(&name, kept, truncated), MAX_TOTAL_CHARS)?;
         tracing::info!(id = source.id, chars = source.chars, truncated, "profile: document added");
         Ok(source)
     }

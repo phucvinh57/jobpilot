@@ -36,5 +36,5 @@ pub use generate::{
 pub use guard::{guard, Violation};
 pub use ingest::{ingest, ingest_html, JdInput, JdText, NeedsBrowser};
 pub use insight::Insight;
-pub use render::{render, render_profile, RenderResult, TypstError};
+pub use render::{render, RenderResult, TypstError};
 pub use tailor::TailorOutput;

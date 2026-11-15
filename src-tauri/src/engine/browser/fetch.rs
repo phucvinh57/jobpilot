@@ -303,16 +303,13 @@ mod tests {
     use crate::engine::llm::fake::FakeLlm;
     use crate::engine::pipeline::ingest::tests::{serve, JOB_HTML};
     use crate::engine::store::Status;
-    use crate::engine::{Paths, Secrets};
+    use crate::engine::Paths;
 
     const EXAMPLE: &str = include_str!("../../../../assets/prompts/example-cv.yaml");
     const SECTIONS: &str = "sections: [summary, skills, projects, experience, education, languages]";
 
     fn core() -> (tempfile::TempDir, Core) {
-        let dir = tempfile::tempdir().unwrap();
-        let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
-        core.set_profile_path(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../profile.yaml")).unwrap();
-        (dir, core)
+        crate::engine::profile::test_core_with_profile(crate::engine::profile::TEST_PROFILE)
     }
 
     fn analysis() -> Value {

@@ -20,12 +20,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use chromiumoxide::Page;
 use serde_json::json;
 
-use super::answer::{answer_step, is_cover_letter, validate_value, Facts};
+use super::answer::{answer_step, is_cover_letter, normalize_key, validate_value, Facts};
 use super::ats::{adapter, form_url, Adapter, Ats};
 use super::detect::{captcha_blocking, judge, Verdict};
 use super::fields::{Answer, FieldKind, FormField, Source};
 use super::form::{self, Button, FillItem, FillResult};
-use super::profile;
 use super::{apply_info, dry_run_forced, ApplyOptions, SessionState};
 use crate::engine::browser::FormBrowser;
 use crate::engine::llm::Llm;
@@ -803,11 +802,33 @@ fn save_remembered(core: &Core, app_id: i64, remember: &[(String, String)]) {
     if remember.is_empty() {
         return;
     }
-    match profile::remember(&core.profile_path(), remember) {
-        Ok(n) if n > 0 => event(core, app_id, &format!("saved {n} answer(s) to the profile's application: section")),
+    match remember_answers(core, remember) {
+        Ok(n) if n > 0 => event(core, app_id, &format!("saved {n} answer(s) for later applications")),
         Ok(_) => {}
-        Err(e) => event(core, app_id, &format!("could not save answers to the profile: {e:#}")),
+        Err(e) => event(core, app_id, &format!("could not save the answers: {e:#}")),
     }
+}
+
+/// Store each `(question, answer)` under the question's loose form ([`normalize_key`]), so the
+/// same question asked again replaces the earlier answer. Returns how many were added or changed.
+fn remember_answers(core: &Core, answers: &[(String, String)]) -> Result<usize> {
+    let known: HashMap<String, String> =
+        core.store.saved_answers()?.into_iter().map(|(q, a)| (normalize_key(&q), a)).collect();
+    let mut changed = 0;
+    for (question, answer) in answers {
+        let (question, answer) = (question.trim(), answer.trim());
+        let key = normalize_key(question);
+        if key.is_empty() || answer.is_empty() {
+            continue;
+        }
+        if known.get(&key).map(String::as_str) == Some(answer) {
+            continue;
+        }
+        core.store.save_answer(&key, question, answer)?;
+        changed += 1;
+    }
+    tracing::info!(changed, "apply: remembered answers saved");
+    Ok(changed)
 }
 
 /// Apply the user's edits and move the form on to its next step(s). Never submits.

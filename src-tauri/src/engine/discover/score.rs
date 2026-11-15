@@ -282,7 +282,7 @@ pub async fn score(llm: &dyn Llm, prefs: &Preferences, profile: &str, candidate:
 
 // ---------------------------------------------------------------- profile
 
-/// What the model needs to judge a fit, from the master profile: headline, summary, skills, roles
+/// What the model needs to judge a fit, from the profile: headline, summary, skills, roles
 /// and degrees. No name, contact details or bullets. Hidden entries are left out.
 pub fn compact_profile(cv: &Cv) -> String {
     let mut out = String::new();

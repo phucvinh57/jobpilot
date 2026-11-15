@@ -68,6 +68,7 @@ use super::collect::TrendRun;
 use super::period::Period;
 use crate::engine::graph::{GraphDef, END, START};
 use crate::engine::llm::{self, Llm};
+use crate::engine::pipeline::cv::Cv;
 use crate::engine::store::TrendItem;
 use crate::engine::{Secrets, Store};
 
@@ -426,9 +427,9 @@ pub struct DigestConfig {
     /// The model. `None`: the default AI provider, looked up when a node needs it (tests pass a fake).
     pub llm: Option<Arc<dyn Llm>>,
     pub limits: DigestLimits,
-    /// The master profile the market frame reads the user's background from (`Core` fills it in
-    /// with `Core::profile_path`). `None`: no background (tests).
-    pub profile: Option<std::path::PathBuf>,
+    /// The profile the market frame reads the user's background from (`Core` fills it in with
+    /// the stored profile). `None`: no background (no profile yet, or tests).
+    pub profile: Option<Cv>,
 }
 
 impl fmt::Debug for DigestConfig {
@@ -436,7 +437,7 @@ impl fmt::Debug for DigestConfig {
         f.debug_struct("DigestConfig")
             .field("llm", &self.llm.as_ref().map(|_| ".."))
             .field("limits", &self.limits)
-            .field("profile", &self.profile)
+            .field("profile", &self.profile.as_ref().map(|_| ".."))
             .finish()
     }
 }

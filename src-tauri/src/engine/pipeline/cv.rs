@@ -1,7 +1,7 @@
-//! Typed mirror of the `profile.yaml` / `cv.yaml` schema.
+//! Typed mirror of the profile / `cv.yaml` schema.
 //!
 //! Every field is lenient (`#[serde(default)]`, scalars may be written as numbers, unknown keys are
-//! ignored) so any CV the renderer accepts also parses here. The same types read the master
+//! ignored) so any CV the renderer accepts also parses here. The same types read the stored
 //! profile and a tailored CV, which is what the fact guard compares.
 
 use std::collections::BTreeMap;

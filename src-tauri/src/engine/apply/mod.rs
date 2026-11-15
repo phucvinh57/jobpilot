@@ -25,7 +25,7 @@
 //!
 //! Modules: [`ats`] detection + per-ATS adapters, [`js`] injected scripts, [`form`] page driving,
 //! [`answer`] deterministic prefill + LLM answers + validation, [`detect`] CAPTCHA / success heuristics,
-//! [`profile`] the `application:` section of `profile.yaml`, [`flow`] the state machine.
+//! [`flow`] the state machine. Answers the user asks to remember are stored (`Store::save_answer`).
 
 pub mod answer;
 pub mod ats;
@@ -34,7 +34,6 @@ pub mod fields;
 pub mod flow;
 pub mod form;
 pub mod js;
-pub mod profile;
 
 #[cfg(test)]
 mod integration;
@@ -48,7 +47,6 @@ pub use flow::{
     advance, close_all, discard, finish_manually, latest_proof, live, open_visible, prepare, submit, Edit, Handoff,
     Live, Prepared, Review, Row, Stage, Submitted,
 };
-pub use profile::{read_answers, remember};
 
 use crate::engine::browser::SessionStatus;
 use crate::engine::pipeline::analyze::{valid_http_url, Analysis};
@@ -203,9 +201,9 @@ impl Core {
         Ok(clean)
     }
 
-    /// Answers saved in the profile's `application:` section.
+    /// The application answers the user asked to remember, oldest first.
     pub fn saved_answers(&self) -> Result<Vec<(String, String)>> {
-        read_answers(&self.profile_path())
+        self.store.saved_answers()
     }
 }
 

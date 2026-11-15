@@ -44,7 +44,6 @@ use crate::engine::graph::{GraphDef, Graphs, Limits, Outcome, END, START};
 use crate::engine::health::{classify, Problem};
 use crate::engine::pipeline::analyze::truncate_chars;
 use crate::engine::pipeline::ingest::NeedsBrowser;
-use crate::engine::pipeline::cv::Cv;
 use crate::engine::redact::redact;
 use crate::engine::store::{LeadState, NewLead, Source, SourcePurpose, Store};
 use crate::engine::{Core, Paths};
@@ -120,13 +119,9 @@ impl Runner {
     }
 }
 
-/// The master profile, compacted for scoring.
+/// The stored profile, compacted for scoring (the `NoProfile` error when there is none).
 pub(super) fn load_profile(core: &Core) -> Result<String> {
-    let path = core.profile_path();
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("cannot read the profile at {}: set its path in Settings", path.display()))?;
-    let cv = Cv::parse(&text).with_context(|| format!("the profile {} is not valid", path.display()))?;
-    Ok(compact_profile(&cv))
+    Ok(compact_profile(&core.require_profile()?.cv))
 }
 
 // ---------------------------------------------------------------- the source graph

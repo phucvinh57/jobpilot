@@ -19,10 +19,7 @@ Requirements: Linux administration, Nginx, DNS, SSL, scripting, English communic
 Apply at https://icreationslab.test/careers/system-engineer";
 
 fn core() -> (tempfile::TempDir, Core) {
-    let dir = tempfile::tempdir().unwrap();
-    let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
-    core.set_profile_path(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../profile.yaml")).unwrap();
-    (dir, core)
+    crate::engine::profile::test_core_with_profile(crate::engine::profile::TEST_PROFILE)
 }
 
 fn analysis() -> Value {
@@ -315,14 +312,14 @@ async fn bad_input_creates_no_draft() {
 }
 
 #[tokio::test]
-async fn the_master_profile_is_never_modified() {
+async fn the_stored_profile_is_unchanged_by_generate() {
     let (_dir, core) = core();
-    let profile = core.profile_path();
-    let before = std::fs::read(&profile).unwrap();
+    let before = core.store.stored_profile().unwrap();
+    assert!(before.is_some());
     core.store.kv_set(MAX_PAGES_KEY, "2").unwrap();
     let llm = FakeLlm::with_replies([analysis(), reply(EXAMPLE, &[])]);
     Pipeline::new(&core, &llm).generate(JdInput::Text(JD.into()), |_| {}).await.unwrap();
-    assert_eq!(std::fs::read(&profile).unwrap(), before);
+    assert_eq!(core.store.stored_profile().unwrap(), before);
 }
 
 /// What the model says about the company in the brief tests.
@@ -433,8 +430,9 @@ async fn a_failed_brief_never_fails_generation_and_regenerate_fills_it_in() {
 
 #[tokio::test]
 async fn a_failing_cv_still_reports_its_own_error() {
-    let (_dir, core) = core();
-    core.set_profile_path(Path::new("/definitely/missing/profile.yaml")).unwrap();
+    // No profile yet: the CV fails with the NoProfile error, not a brief error.
+    let dir = tempfile::tempdir().unwrap();
+    let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
     let llm = FakeLlm::with_replies([analysis()]);
     let brief_llm = Arc::new(FakeLlm::with_replies([brief_reply()]));
     let err = Pipeline::new(&core, &llm)
@@ -442,15 +440,7 @@ async fn a_failing_cv_still_reports_its_own_error() {
         .generate(JdInput::Text(JD.into()), |_| {})
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("cannot read the profile"), "{err:#}");
-}
-
-#[tokio::test]
-async fn render_profile_renders_the_full_profile() {
-    let (_dir, core) = core();
-    let r = crate::engine::pipeline::render_profile(&core).await.unwrap();
-    assert!(r.pdf.starts_with(core.paths.data_dir.canonicalize().unwrap().join("profile")));
-    assert!(r.pdf.is_file() && r.page_count >= 1);
+    assert_eq!(crate::engine::health::classify(&format!("{err:#}")), crate::engine::health::Problem::NoProfile);
 }
 
 /// The UI runs these through `runtime::spawn`, which needs `Send` futures.
@@ -463,7 +453,6 @@ fn public_futures_are_send() {
     send(&regenerate(&core, 1, |_| {}));
     send(&revise(&core, 1, "x", |_| {}));
     send(&rerender(&core, 1));
-    send(&crate::engine::pipeline::render_profile(&core));
     send(&ingest(JdInput::Text(String::new())));
 }
 

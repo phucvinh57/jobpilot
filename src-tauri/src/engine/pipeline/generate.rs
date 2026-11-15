@@ -424,13 +424,10 @@ impl<'a> Pipeline<'a> {
         self.core.store.get_application(app_id)?.with_context(|| format!("application {app_id} no longer exists"))
     }
 
-    /// The master profile as typed data and as raw text. Never modified.
+    /// The stored profile as typed data and as compact YAML (the `NoProfile` error when there is none).
     fn load_profile(&self) -> Result<(Cv, String)> {
-        let path = self.core.profile_path();
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("cannot read the profile at {}: set its path in Settings", path.display()))?;
-        let cv = Cv::parse(&text).with_context(|| format!("the profile {} is not valid", path.display()))?;
-        Ok((cv, text))
+        let p = self.core.require_profile()?;
+        Ok((p.cv, p.yaml))
     }
 
     fn max_pages(&self) -> usize {

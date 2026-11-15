@@ -254,9 +254,7 @@ impl Llm for LabelLlm {
 
 fn setup(tmp: &Path, apply_url: &str) -> (Core, i64) {
     let core = Core::open_at(Paths::new(tmp.join("jp")), Secrets::memory()).unwrap();
-    let profile = tmp.join("profile.yaml");
-    std::fs::write(&profile, PROFILE).unwrap();
-    core.set_profile_path(&profile).unwrap();
+    crate::engine::profile::set_test_profile(&core, PROFILE);
     let dir = core.paths.application_dir("acme-backend-engineer");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("cv.yaml"), "summary:\n  - 4+ years of backend work in Rust and Go\n").unwrap();
@@ -383,11 +381,10 @@ fn apply_greenhouse_like_form_fills_reviews_and_submits() {
         let events: Vec<String> = core.store.list_events(id).unwrap().into_iter().map(|e| e.message).collect();
         assert!(events.iter().any(|m| m.contains("submission confirmed")), "{events:?}");
 
-        // "Remember" wrote the edited answer to the profile copy, and only there.
-        let saved = super::read_answers(&core.profile_path()).unwrap();
+        // "Remember" stored the edited answer; the profile is untouched.
+        let saved = core.saved_answers().unwrap();
         assert_eq!(saved, vec![("Why do you want to work at Acme?".to_string(), "Edited by the user".to_string())]);
-        let profile_text = std::fs::read_to_string(core.profile_path()).unwrap();
-        assert!(profile_text.starts_with(PROFILE), "the rest of the profile is untouched");
+        assert_eq!(core.require_profile().unwrap().cv, crate::engine::pipeline::Cv::parse(PROFILE).unwrap());
     });
 }
 

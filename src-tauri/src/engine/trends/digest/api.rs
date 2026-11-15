@@ -171,10 +171,17 @@ impl Core {
         self.graphs.run(graph, thread, input).await
     }
 
-    /// `digest` with the master profile, so the market frame knows the user's background.
+    /// `digest` with the stored profile, so the market frame knows the user's background (none
+    /// when there is no profile yet, or it cannot be read: logged).
     pub(crate) fn with_profile(&self, mut digest: DigestConfig) -> DigestConfig {
         if digest.profile.is_none() {
-            digest.profile = Some(self.profile_path());
+            digest.profile = match self.profile() {
+                Ok(profile) => profile.map(|p| p.cv),
+                Err(e) => {
+                    tracing::warn!("the market frame has no background: the profile cannot be read: {e:#}");
+                    None
+                }
+            };
         }
         digest
     }
