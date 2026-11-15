@@ -87,11 +87,10 @@ pub fn board(apps: &[Application]) -> Vec<(Stage, Vec<&Application>)> {
 
 /// Can the user dismiss the job ("Dismiss" in the drawer)? Only while it is in the CVs stage and not
 /// sent or being sent (`Draft`, `CvReady`, `Failed`), and nothing runs for it: no generate / revise
-/// job (`job_running`) and no form being filled or open for review.
+/// job (`job_running`) and no apply run (a form being filled, open for review, or handed off to the
+/// user, who may still finish it by hand).
 pub fn dismissible(status: Status, job_running: bool, apply: &ApplyUi) -> bool {
-    status.can_advance_to(Status::Dismissed)
-        && !job_running
-        && !matches!(apply, ApplyUi::Working { .. } | ApplyUi::Review { .. })
+    status.can_advance_to(Status::Dismissed) && !job_running && matches!(apply, ApplyUi::Idle)
 }
 
 /// How a finished application ended: an offer is a success, a rejection a failure.
@@ -1166,7 +1165,8 @@ mod tests {
             false,
             &ApplyUi::Review { complete: true, dry_run: false, missing: 0 }
         ));
-        assert!(dismissible(Status::Failed, false, &ApplyUi::Handoff));
+        assert!(!dismissible(Status::Failed, false, &ApplyUi::Handoff), "a hand-off may still be finished");
+        assert!(!dismissible(Status::Failed, false, &ApplyUi::Done));
     }
 
     #[test]

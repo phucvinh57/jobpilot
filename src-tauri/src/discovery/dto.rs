@@ -3,7 +3,7 @@
 //! Nothing secret travels here: leads, sources, run summaries and session names only. Posting and
 //! brief text is data for the web app to show as text.
 
-use crate::engine::discover::promote::{Dismissed, FailedPrepare};
+use crate::engine::discover::promote::FailedPrepare;
 use crate::engine::discover::queue::{criteria_rows, QueueItem, QueueSnapshot};
 use crate::engine::discover::source::BoardHint;
 use crate::engine::discover::{DismissedJob, RunSummary, WaitingSource};
@@ -301,27 +301,6 @@ impl QueueDto {
 
 // ------------------------------------------------------------------ actions
 
-/// What "Dismiss" did (the web app words it).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DismissedDto {
-    /// Other leads of the company dismissed with it.
-    pub also: usize,
-    /// Other leads of the company kept because their CV is queued or being written.
-    pub kept: usize,
-    /// "Never this company" was asked for but could not be saved (why).
-    pub not_excluded: Option<String>,
-}
-
-impl From<Dismissed> for DismissedDto {
-    fn from(d: Dismissed) -> Self {
-        Self {
-            also: d.also,
-            kept: d.kept,
-            not_excluded: d.not_excluded,
-        }
-    }
-}
 
 /// One row of the Leads stage's "Dismissed" list: a lead the user dismissed or the preferences
 /// filtered out, or a job dismissed from the CVs stage.
@@ -354,15 +333,6 @@ impl From<&DismissedJob> for DismissedJobDto {
             dismissed_at: job.dismissed_at.to_rfc3339(),
         }
     }
-}
-
-/// What "Restore" did.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RestoredDto {
-    /// The restored lead is hidden by the saved preferences (why): back, but not in the list
-    /// until they let it pass.
-    pub hidden: Option<String>,
 }
 
 /// How one lead's "Prepare CV" ended; also the payload of the `discovery:prepared` event.

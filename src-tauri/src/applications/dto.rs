@@ -272,28 +272,6 @@ impl DismissalDto {
     }
 }
 
-/// What "Dismiss" did (the web app words it, as for a lead).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DismissedDto {
-    /// Leads of the company dismissed with it ("Don't show {company} again").
-    pub also: usize,
-    /// Leads of the company kept because their CV is queued or being written.
-    pub kept: usize,
-    /// "Don't show {company} again" was asked for but could not be saved (why).
-    pub not_excluded: Option<String>,
-}
-
-impl From<crate::engine::discover::promote::Dismissed> for DismissedDto {
-    fn from(d: crate::engine::discover::promote::Dismissed) -> Self {
-        Self {
-            also: d.also,
-            kept: d.kept,
-            not_excluded: d.not_excluded,
-        }
-    }
-}
-
 /// A manual marker: `interview` ("Got an interview") / `offer` / `rejected`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

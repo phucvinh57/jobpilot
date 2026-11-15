@@ -218,7 +218,7 @@ describe("dismissing the job", () => {
 
   it("shows a dismissed job with a plain Restore and no primary", async () => {
     const user = userEvent.setup();
-    mocked.restoreApplication.mockResolvedValue(header());
+    mocked.restoreApplication.mockResolvedValue({ hidden: null, excluded: true });
     open({
       status: { key: "dismissed", label: "Dismissed", tone: "neutral" },
       primary: null,

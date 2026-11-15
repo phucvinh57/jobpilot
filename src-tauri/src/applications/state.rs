@@ -276,6 +276,8 @@ struct JobRun {
 #[derive(Default)]
 struct AppRuntime {
     job: Option<JobRun>,
+    /// The job slot is held by a change that must not run beside a job ("Dismiss"): no job starts.
+    held: bool,
     /// Last failure of a job, shown until the next job starts or the user dismisses it.
     error: Option<String>,
     last_job: Option<Job>,
@@ -310,6 +312,20 @@ pub struct JobView {
     pub cv_problem: Option<String>,
 }
 
+/// The job slot of one application, held until dropped ([`Applications::hold_slot`]).
+pub struct HeldSlot {
+    apps: Applications,
+    id: i64,
+}
+
+impl Drop for HeldSlot {
+    fn drop(&mut self) {
+        if let Some(rt) = self.apps.lock().apps.get_mut(&self.id) {
+            rt.held = false;
+        }
+    }
+}
+
 /// Shared handle on the in-memory state; cheap to clone into a task.
 #[derive(Clone, Default)]
 pub struct Applications(Arc<Mutex<Inner>>);
@@ -325,7 +341,7 @@ impl Applications {
     pub fn begin_job(&self, id: i64, job: Job, input: Option<JdInput>) -> bool {
         let mut inner = self.lock();
         let rt = inner.apps.entry(id).or_default();
-        if rt.job.is_some() {
+        if rt.job.is_some() || rt.held {
             return false;
         }
         rt.last_job = Some(job);
@@ -338,6 +354,19 @@ impl Applications {
             rt.input = Some(input);
         }
         true
+    }
+
+    /// Hold the job slot of `id` while a change runs that must not run beside a generate / revise
+    /// job ("Dismiss"): `None` when a job is running or the slot is held already. No job starts
+    /// until the returned guard is dropped.
+    pub fn hold_slot(&self, id: i64) -> Option<HeldSlot> {
+        let mut inner = self.lock();
+        let rt = inner.apps.entry(id).or_default();
+        if rt.job.is_some() || rt.held {
+            return None;
+        }
+        rt.held = true;
+        Some(HeldSlot { apps: self.clone(), id })
     }
 
     /// Applications with a job running.
@@ -517,6 +546,22 @@ mod tests {
         assert!(!apps.busy_ids().contains(&1));
         assert!(apps.begin_job(1, Job::Revise("shorter".into()), None));
         assert_eq!(apps.last_job(1), Some(Job::Revise("shorter".into())));
+    }
+
+    #[test]
+    fn a_held_slot_keeps_jobs_out_until_it_is_dropped() {
+        let apps = Applications::default();
+        assert!(apps.begin_job(1, Job::Generate, None));
+        assert!(apps.hold_slot(1).is_none(), "not while a job runs");
+        apps.finish_job(1, Ok(()));
+
+        let held = apps.hold_slot(1).expect("a free slot");
+        assert!(apps.hold_slot(1).is_none(), "held once");
+        assert!(!apps.begin_job(1, Job::Generate, None), "no job starts while it is held");
+        assert!(apps.begin_job(2, Job::Generate, None), "another application is free");
+        assert!(apps.job_view(1).label.is_none(), "holding is not a job");
+        drop(held);
+        assert!(apps.begin_job(1, Job::Generate, None));
     }
 
     #[test]

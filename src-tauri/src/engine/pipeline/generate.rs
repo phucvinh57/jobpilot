@@ -19,7 +19,7 @@ use super::ingest::{ingest, precheck, JdInput, JdText};
 use super::render::{render, RenderResult, TypstError};
 use super::tailor::{self, JdContext, TailorOutput};
 use crate::engine::llm::Llm;
-use crate::engine::store::{Application, NewApplication};
+use crate::engine::store::{Application, NewApplication, Status};
 use crate::engine::Core;
 
 /// kv key: pages the CV may take (default 1).
@@ -113,6 +113,16 @@ pub async fn generate(core: &Core, input: JdInput, progress: impl Fn(Progress) +
     Pipeline::new(core, &*llm).with_insight(llm.clone()).generate(input, progress).await
 }
 
+/// What a pipeline job on an existing application starts with: the application, unless it was
+/// dismissed (its CV is not written, revised or re-rendered until it is restored).
+pub fn require_open(core: &Core, app_id: i64) -> Result<Application> {
+    let app = core.store.get_application(app_id)?.with_context(|| format!("application {app_id} no longer exists"))?;
+    if app.status == Status::Dismissed {
+        bail!("this job was dismissed: restore it first");
+    }
+    Ok(app)
+}
+
 /// Re-run the pipeline on an existing application with new input, e.g. the rendered HTML of a page
 /// that needed a browser (`JdInput::Html`).
 pub async fn generate_into(
@@ -121,12 +131,14 @@ pub async fn generate_into(
     input: JdInput,
     progress: impl Fn(Progress) + Send + Sync,
 ) -> Result<Application> {
+    require_open(core, app_id)?;
     let llm = shared_llm(core)?;
     Pipeline::new(core, &*llm).with_insight(llm.clone()).generate_into(app_id, input, progress).await
 }
 
 /// New CV from the stored JD and analysis (no fetching).
 pub async fn regenerate(core: &Core, app_id: i64, progress: impl Fn(Progress) + Send + Sync) -> Result<Application> {
+    require_open(core, app_id)?;
     let llm = shared_llm(core)?;
     Pipeline::new(core, &*llm).with_insight(llm.clone()).regenerate(app_id, progress).await
 }
@@ -138,12 +150,14 @@ pub async fn revise(
     instruction: &str,
     progress: impl Fn(Progress) + Send + Sync,
 ) -> Result<Application> {
+    require_open(core, app_id)?;
     let llm = core.default_llm()?;
     Pipeline::new(core, &*llm).revise(app_id, instruction, progress).await
 }
 
 /// After a manual edit of `cv.yaml`: parse, guard (warnings), render. No LLM involved.
 pub async fn rerender(core: &Core, app_id: i64) -> Result<RerenderOutcome> {
+    require_open(core, app_id)?;
     Pipeline::offline(core).rerender(app_id).await
 }
 
@@ -198,7 +212,7 @@ impl<'a> Pipeline<'a> {
         input: JdInput,
         progress: impl Fn(Progress) + Send + Sync,
     ) -> Result<Application> {
-        let app = self.load(app_id)?;
+        let app = require_open(self.core, app_id)?;
         let notify: Notify = &progress;
         self.logged(app_id, self.run_generate(app, input, notify)).await
     }
@@ -206,7 +220,7 @@ impl<'a> Pipeline<'a> {
     pub async fn regenerate(&self, app_id: i64, progress: impl Fn(Progress) + Send + Sync) -> Result<Application> {
         let notify: Notify = &progress;
         self.logged(app_id, async {
-            let app = self.load(app_id)?;
+            let app = require_open(self.core, app_id)?;
             let jd_text = read_jd_text(&app)?;
             let analysis = match stored_analysis(&app) {
                 Some(a) => a,
@@ -235,7 +249,7 @@ impl<'a> Pipeline<'a> {
         }
         let notify: Notify = &progress;
         self.logged(app_id, async {
-            let app = self.load(app_id)?;
+            let app = require_open(self.core, app_id)?;
             let current = std::fs::read_to_string(app.cv_yaml_path()).with_context(|| {
                 format!("there is no CV yet at {}: generate one first", app.cv_yaml_path().display())
             })?;
@@ -251,7 +265,7 @@ impl<'a> Pipeline<'a> {
     }
 
     pub async fn rerender(&self, app_id: i64) -> Result<RerenderOutcome> {
-        let app = self.load(app_id)?;
+        let app = require_open(self.core, app_id)?;
         let yaml = std::fs::read_to_string(app.cv_yaml_path())
             .with_context(|| format!("reading {}", app.cv_yaml_path().display()))?;
         let cv = Cv::parse(&yaml)?;

@@ -45,7 +45,7 @@ pub use ats::{detect_ats, Ats};
 pub use fields::{Answer, FieldKind, FormField, Source};
 pub use flow::{
     advance, close_all, discard, finish_manually, latest_proof, live, open_visible, prepare, submit, Edit, Handoff,
-    Live, Prepared, Review, Row, Stage, Submitted,
+    Live, Prepared, Review, Row, Stage, Submitted, while_no_run,
 };
 
 use crate::engine::browser::SessionStatus;

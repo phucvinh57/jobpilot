@@ -84,24 +84,16 @@ export function dismissedNote(out: Dismissed): string {
   return text;
 }
 
-/** A dismissal reason the preferences gave ("excluded company: Acme"): Restore leaves the exclusion. */
-export function isExclusion(reason: string | null): boolean {
-  return reason?.trim().toLowerCase().startsWith("excluded company") ?? false;
-}
-
 /** What to tell the user after "Restore": where the job is now; that the preferences still hide it
  *  (`out.hidden`: it shows once they let it pass); or that an excluded company stays excluded
  *  (later searches still leave it out until the preferences change). */
-export function restoredNote(
-  job: Pick<DismissedJob, "kind" | "company" | "role" | "reason">,
-  out: Restored = { hidden: null },
-): string {
+export function restoredNote(job: Pick<DismissedJob, "kind" | "company" | "role">, out: Restored): string {
   const title = leadTitle(job.company, job.role);
   if (out.hidden !== null) {
     return `${title} is restored, but your preferences hide it (${out.hidden}). It shows in Leads once they let it pass.`;
   }
   const back = `${title} is back in ${job.kind === "lead" ? "Leads" : "CVs"}.`;
-  return isExclusion(job.reason)
+  return out.excluded
     ? `${back} The company is still excluded in your preferences, so new searches leave it out.`
     : back;
 }

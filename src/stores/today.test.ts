@@ -13,6 +13,7 @@ import {
   continueSource,
   enter,
   forgetFailure,
+  onChanged,
   onProgress,
   onSearchFinished,
   openBrowser,
@@ -610,14 +611,28 @@ describe("the dismissed jobs", () => {
     expect(useTodayStore.getState().filter.show).toBe("dismissed");
     expect(useTodayStore.getState().dismissed).toEqual([job]);
     expect(useNav.getState().drawer).toBeUndefined();
-    // Every read of the queue reads them again while they are shown.
+    // A read of the queue (each step of a search) leaves them alone; a change of leads or
+    // applications reads them again while they are shown.
     reload();
+    await settle();
+    expect(mocked.readDismissed).toHaveBeenCalledTimes(1);
+    onChanged("sources");
+    await settle();
+    expect(mocked.readDismissed).toHaveBeenCalledTimes(1);
+    onChanged("applications");
     await settle();
     expect(mocked.readDismissed).toHaveBeenCalledTimes(2);
     setShow("open");
-    reload();
+    onChanged("leads");
     await settle();
     expect(mocked.readDismissed).toHaveBeenCalledTimes(2);
+  });
+
+  it("drop the ticks, so the bulk bar never holds the primary there", () => {
+    setChecked(1, true);
+    setChecked(2, true);
+    setShow("dismissed");
+    expect(useTodayStore.getState().checked).toEqual([]);
   });
 
   it("keep why they could not be read", async () => {
@@ -634,14 +649,16 @@ describe("the dismissed jobs", () => {
     expect(useTodayStore.getState().restoring).toEqual(["application-31"]);
     await restoreJob(job);
     expect(mocked.restore).toHaveBeenCalledTimes(1);
-    restore.resolve({ hidden: null });
+    restore.resolve({ hidden: null, excluded: false });
     await first;
     expect(useTodayStore.getState().restoring).toEqual([]);
     expect(useTodayStore.getState().note).toEqual({ ok: true, text: "Globex — SRE is back in CVs." });
+    // The shell's data-changed reads the lists again, not the restore itself.
+    expect(mocked.readQueue).not.toHaveBeenCalled();
   });
 
   it("say when a restored lead stays hidden by the preferences", async () => {
-    mocked.restore.mockResolvedValue({ hidden: "location: hires in United States" });
+    mocked.restore.mockResolvedValue({ hidden: "location: hires in United States", excluded: false });
     await restoreJob({ ...job, kind: "lead", id: 9 });
     expect(useTodayStore.getState().note).toEqual({
       ok: false,

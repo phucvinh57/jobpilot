@@ -11,12 +11,13 @@ import type {
   ApplicationHeader,
   Board,
   Cv,
-  DismissOutcome,
+  Dismissed,
   Jd,
   JobProgress,
   MarkKey,
   Primary,
   Rendered,
+  Restored,
   ReviewEdits,
   ShotKind,
   Timeline,
@@ -114,18 +115,19 @@ export async function mark(id: number, mark: MarkKey): Promise<ApplicationHeader
 
 /** "Dismiss" a job in CVs, with an optional reason; `excludeCompany` keeps the company out of later
  *  searches (and dismisses its leads). The job is kept: Leads > Dismissed lists it, Restore brings it back. */
-export async function dismissApplication(id: number, reason: string, excludeCompany: boolean): Promise<DismissOutcome> {
+export async function dismissApplication(id: number, reason: string, excludeCompany: boolean): Promise<Dismissed> {
   try {
-    return await invoke<DismissOutcome>("applications_dismiss", { id, reason, excludeCompany });
+    return await invoke<Dismissed>("applications_dismiss", { id, reason, excludeCompany });
   } finally {
     notifyChanged("applications", "leads");
   }
 }
 
-/** "Restore" a dismissed job: back at the status it had. Resolves to the header. */
-export async function restoreApplication(id: number): Promise<ApplicationHeader> {
+/** "Restore" a dismissed job: back at the status it had (the header is read again). Resolves to
+ *  what it did: whether its company is still excluded. */
+export async function restoreApplication(id: number): Promise<Restored> {
   try {
-    return header(await invoke<HeaderDto>("applications_restore", { id }));
+    return await invoke<Restored>("applications_restore", { id });
   } finally {
     notifyChanged("applications", "leads");
   }

@@ -20,7 +20,8 @@ use chrono::{DateTime, Utc};
 
 use super::promote::Dismissed;
 use super::refilter::filtered_reason;
-use crate::engine::store::{Application, Lead, Status};
+use super::score::excluded_company;
+use crate::engine::store::{Application, Lead};
 use crate::engine::Core;
 
 /// What a dismissed job was when it was dismissed.
@@ -57,6 +58,9 @@ pub struct Restored {
     /// The restored lead is hidden by the saved preferences (why): it is back, but not in the
     /// queue until they let it pass. `None` when it is shown, and for an application.
     pub hidden: Option<String>,
+    /// Its company is still in the preferences' `exclude_companies` (Restore leaves it there):
+    /// later searches keep leaving the company out.
+    pub excluded: bool,
 }
 
 /// One row of the dismissed list.
@@ -112,12 +116,16 @@ impl Core {
     /// as for a lead ([`Core::dismiss_lead_with_reason`]).
     ///
     /// Only an application in `Draft`, `CvReady` or `Failed` can be dismissed; not while its CV is
-    /// queued or being written from its lead (an error), nor while a submit is in flight. A job the
-    /// shell is running for it (generate, revise) is the shell's to check first.
+    /// queued or being written from its lead, nor while its application form is being opened,
+    /// submitted, or is open (errors): both gates hold while the status changes, so none of those
+    /// can start in between. A generate / revise job the shell runs for it is the shell's to hold
+    /// off (its job slot), and the pipeline refuses a dismissed job when one begins.
     pub async fn dismiss_application(&self, app_id: i64, reason: &str, exclude_company: bool) -> Result<Dismissed> {
         let app = self.store.get_application(app_id)?.with_context(|| format!("application {app_id} no longer exists"))?;
         let lead = self.store.lead_of_application(app_id)?.map(|l| l.id);
-        self.refuse_while_preparing(lead, || self.store.dismiss_application(app_id, reason))?;
+        self.refuse_while_preparing(lead, || {
+            crate::engine::apply::while_no_run(self, app_id, || self.store.dismiss_application(app_id, reason))
+        })?;
         let company = app.company.trim();
         let exclusion = exclude_company && !company.is_empty();
         tracing::info!(app = app_id, exclusion, "application dismissed");
@@ -132,54 +140,47 @@ impl Core {
     pub fn dismissed_jobs(&self) -> Result<Vec<DismissedJob>> {
         let leads = self.store.list_dismissed_leads()?;
         let apps = self.store.list_dismissed_applications()?;
-        let mut out: Vec<DismissedJob> = leads
-            .iter()
-            .map(DismissedJob::of_lead)
-            .chain(apps.iter().map(DismissedJob::of_application))
-            .collect();
+        let mut out: Vec<DismissedJob> =
+            leads.iter().map(DismissedJob::of_lead).chain(apps.iter().map(DismissedJob::of_application)).collect();
         // Stable: within the same moment, each list keeps its own order.
         out.sort_by_key(|job| std::cmp::Reverse(job.dismissed_at));
         Ok(out)
     }
 
-    /// How many jobs [`Core::dismissed_jobs`] lists, for the filter's count.
+    /// How many jobs [`Core::dismissed_jobs`] lists, for the filter's count (two counts, no rows).
     pub fn dismissed_count(&self) -> Result<usize> {
-        let leads = self.store.count_dismissed_leads()?;
-        let apps = self.store.list_dismissed_applications()?.len();
-        Ok(leads + apps)
+        Ok(self.store.count_dismissed_leads()? + self.store.count_dismissed_applications()?)
     }
 
-    /// "Restore" a dismissed lead: `new` again, in the queue unless the saved preferences filter
-    /// it out (a lead from a source; then it is hidden, as [`Core::refilter_leads`] does, and
-    /// [`Restored::hidden`] says why). Its company stays excluded if the user excluded it.
+    /// "Restore" a dismissed lead: `new` again, in the queue unless the saved preferences filter it
+    /// out (a lead from a source; then it is hidden, as [`Core::refilter_leads`] does, and
+    /// [`Restored::hidden`] says why), in one write. Its company stays excluded if the user excluded
+    /// it ([`Restored::excluded`]).
     pub fn restore_lead(&self, lead_id: i64) -> Result<Restored> {
-        self.store.restore_lead(lead_id)?;
-        let mut out = Restored::default();
         let lead = self.store.get_lead(lead_id)?.with_context(|| format!("lead {lead_id} no longer exists"))?;
-        if lead.source_id.is_some() {
-            let prefs = self.store.preferences()?;
-            if let Some(reason) = filtered_reason(&prefs, &lead) {
-                self.store.set_lead_filtered(lead_id, Some(&reason))?;
-                out.hidden = Some(reason);
-            }
-        }
-        tracing::info!(lead = lead_id, hidden = out.hidden.is_some(), "lead restored");
-        Ok(out)
+        let prefs = self.store.preferences()?;
+        let hidden = if lead.source_id.is_some() { filtered_reason(&prefs, &lead) } else { None };
+        self.store.restore_lead(lead_id, hidden.as_deref())?;
+        let excluded = excluded_company(&prefs, &lead.company).is_some();
+        tracing::info!(lead = lead_id, hidden = hidden.is_some(), excluded, "lead restored");
+        Ok(Restored { hidden, excluded })
     }
 
     /// "Restore" a dismissed application: back at the status it had before (a timeline event says
-    /// so). Returns that status.
-    pub fn restore_application(&self, app_id: i64) -> Result<Status> {
+    /// so). [`Restored::excluded`] says whether its company is still excluded.
+    pub fn restore_application(&self, app_id: i64) -> Result<Restored> {
         let status = self.store.restore_application(app_id)?;
-        tracing::info!(app = app_id, status = status.as_str(), "application restored");
-        Ok(status)
+        let company = self.store.get_application(app_id)?.map(|a| a.company).unwrap_or_default();
+        let excluded = excluded_company(&self.store.preferences()?, &company).is_some();
+        tracing::info!(app = app_id, status = status.as_str(), excluded, "application restored");
+        Ok(Restored { hidden: None, excluded })
     }
 
     /// "Restore" the dismissed job `id` of `kind`.
     pub fn restore_dismissed(&self, kind: DismissedKind, id: i64) -> Result<Restored> {
         match kind {
             DismissedKind::Lead => self.restore_lead(id),
-            DismissedKind::Application => self.restore_application(id).map(|_| Restored::default()),
+            DismissedKind::Application => self.restore_application(id),
         }
     }
 }
@@ -189,7 +190,7 @@ mod tests {
     use super::*;
     use crate::engine::discover::dedup;
     use crate::engine::runtime::block_on;
-    use crate::engine::store::{LeadState, NewApplication, NewLead, NewSource, SourcePurpose};
+    use crate::engine::store::{LeadState, NewApplication, NewLead, NewSource, SourcePurpose, Status};
     use crate::engine::{Paths, Secrets};
 
     fn core() -> (tempfile::TempDir, Core) {
@@ -254,7 +255,8 @@ mod tests {
         assert!(known.contains(&core.store, "https://elsewhere.test/1", &lead_row.dedup_key).unwrap());
         assert!(core.store.list_queue_leads().unwrap().is_empty());
 
-        core.restore_dismissed(DismissedKind::Application, app.id).unwrap();
+        let out = core.restore_dismissed(DismissedKind::Application, app.id).unwrap();
+        assert_eq!(out, Restored { hidden: None, excluded: false });
         assert_eq!(core.store.get_application(app.id).unwrap().unwrap().status, Status::CvReady);
         assert!(core.dismissed_jobs().unwrap().is_empty());
     }
@@ -281,7 +283,7 @@ mod tests {
 
         // Restore puts the lead back in the queue; the company stays excluded.
         let out = core.restore_dismissed(DismissedKind::Lead, other.id).unwrap();
-        assert_eq!(out, Restored::default(), "a lead the user added is never filtered");
+        assert_eq!(out, Restored { hidden: None, excluded: true }, "a lead the user added is never filtered");
         assert_eq!(core.store.get_lead(other.id).unwrap().unwrap().state, LeadState::New);
         assert!(core.preferences().unwrap().exclude_companies.iter().any(|c| c == "Acme"));
         assert_eq!(core.dismissed_jobs().unwrap().len(), 1);
@@ -315,6 +317,7 @@ mod tests {
 
         let out = core.restore_lead(acme.id).unwrap();
         assert_eq!(out.hidden.as_deref(), Some("excluded company: Acme"));
+        assert!(out.excluded);
         let back = core.store.get_lead(acme.id).unwrap().unwrap();
         assert_eq!((back.state, back.filtered_reason.as_deref()), (LeadState::New, Some("excluded company: Acme")));
         assert!(core.store.list_queue_leads().unwrap().iter().all(|l| l.id != acme.id), "hidden, not in the queue");
@@ -335,6 +338,21 @@ mod tests {
         assert!(dismiss(&core, 999, "", false).is_err());
         assert!(core.dismissed_jobs().unwrap().is_empty());
         assert!(core.restore_lead(999).is_err() && core.restore_application(app.id).is_err());
+    }
+
+    #[test]
+    fn a_dismissed_job_is_never_finished_by_hand_and_its_cv_never_rewritten() {
+        let (_dir, core) = core();
+        let (_, app) = prepared(&core, 1, "Acme");
+        dismiss(&core, app.id, "", false).unwrap();
+        let err = block_on(crate::engine::apply::finish_manually(&core, app.id, true)).unwrap_err();
+        assert!(format!("{err:#}").contains("dismissed"), "{err:#}");
+        assert!(block_on(crate::engine::apply::finish_manually(&core, app.id, false)).is_err());
+        let err = block_on(crate::engine::pipeline::regenerate(&core, app.id, |_| {})).unwrap_err();
+        assert!(format!("{err:#}").contains("dismissed"), "{err:#}");
+        assert!(block_on(crate::engine::pipeline::revise(&core, app.id, "shorter", |_| {})).is_err());
+        assert!(block_on(crate::engine::pipeline::rerender(&core, app.id)).is_err());
+        assert_eq!(core.store.get_application(app.id).unwrap().unwrap().status, Status::Dismissed);
     }
 
     #[test]

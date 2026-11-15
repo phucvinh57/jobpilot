@@ -21,6 +21,9 @@ export interface CvTabInput {
   cvEpoch: number;
   /** A generate / revise job is running for this application. */
   busy: boolean;
+  /** The job was dismissed: its CV is shown as it is (no edit, no render, no "Ask AI") until it is
+   *  restored. */
+  readOnly?: boolean;
   /** Start "Ask AI" with the editor text; the failure is shown in the header. */
   revise: (instruction: string, yaml: string) => Promise<void>;
 }
@@ -54,7 +57,7 @@ export interface CvTabModel {
  * render at a time), the preview pages, and "Ask AI". An edit that is still waiting is saved when the
  * tab is left.
  */
-export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel {
+export function useCvTab({ id, cvEpoch, busy, readOnly = false, revise }: CvTabInput): CvTabModel {
   const query = useQuery(() => readCv(id), [id, cvEpoch]);
   const data = query.data;
   const pageUrls = usePageUrls();
@@ -142,10 +145,10 @@ export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel 
     pending.current = false;
     setDirty(false);
     void loadPages(data.pageCount);
-    if (data.hasCv && data.stale) {
+    if (data.hasCv && data.stale && !readOnly) {
       requestRender();
     }
-  }, [data, debounce, loadPages, requestRender]);
+  }, [data, debounce, loadPages, requestRender, readOnly]);
 
   // Leaving the tab (or another application) must not lose an edit that is still waiting.
   useEffect(() => {
@@ -161,6 +164,9 @@ export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel 
 
   const edit = useCallback(
     (next: string) => {
+      if (readOnly) {
+        return;
+      }
       text.current = next;
       pending.current = true;
       setDirty(true);
@@ -172,7 +178,7 @@ export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel 
         }
       }, EDIT_DEBOUNCE);
     },
-    [debounce, requestRender],
+    [debounce, requestRender, readOnly],
   );
 
   const hasCv = data?.hasCv ?? false;
@@ -182,7 +188,7 @@ export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel 
   const guardClean = last === null ? (data?.guardClean ?? false) : last.problem === null && last.warnings.length === 0;
   const ask = useCallback(
     (instruction: string): boolean => {
-      if (!canAsk({ busy, hasCv, instruction })) {
+      if (readOnly || !canAsk({ busy, hasCv, instruction })) {
         return false;
       }
       clearTimeout(timer.current);
@@ -193,7 +199,7 @@ export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel 
       void revise(instruction.trim(), text.current);
       return true;
     },
-    [busy, hasCv, debounce, revise],
+    [busy, hasCv, debounce, revise, readOnly],
   );
 
   const doc = useMemo(() => (data === undefined ? undefined : { text: data.yaml ?? "" }), [data]);
@@ -206,9 +212,9 @@ export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel 
     problem,
     warnings,
     guardClean,
-    note: editorNote({ busy, hasCv, rendering, dirty }),
+    note: readOnly ? "Dismissed: restore the job to edit its CV." : editorNote({ busy, hasCv, rendering, dirty }),
     rendering,
-    locked: busy && hasCv,
+    locked: (busy && hasCv) || readOnly,
     pages: pageUrls.urls,
     edit,
     ask,

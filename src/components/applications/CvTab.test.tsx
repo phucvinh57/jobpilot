@@ -131,6 +131,18 @@ describe("the CV tab", () => {
     expect(mocked.saveCv).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(mocked.readCvPage).toHaveBeenCalledWith(7, 0));
   });
+
+  it("keeps the CV of a dismissed job as it is: no edit, no render, no Ask AI", async () => {
+    mocked.readCv.mockResolvedValue(cv({ stale: true }));
+    render(<CvTab id={7} cvEpoch={0} busy={false} readOnly revise={revise} />);
+    const box = (await screen.findByRole("textbox", { name: "cv.yaml" })) as HTMLTextAreaElement;
+    expect(box.readOnly).toBe(true);
+    expect(screen.getByText("Dismissed: restore the job to edit its CV.")).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "Ask AI" }) as HTMLInputElement).disabled).toBe(true);
+    await edit("a: 1\n");
+    expect(mocked.saveCv).not.toHaveBeenCalled();
+    expect(revise).not.toHaveBeenCalled();
+  });
 });
 
 describe("editing", () => {

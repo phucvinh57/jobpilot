@@ -110,7 +110,8 @@ export function useToday(): TodayView {
       primaryPlace({
         drawerOpen: open !== undefined,
         otherDrawerOpen: otherDrawerOpen || appDrawerOpen,
-        checked: checked.length,
+        // The Dismissed view has no ticks: the bulk bar is not there.
+        checked: filter.show === "dismissed" ? 0 : checked.length,
         empty: items.length === 0,
       }),
     appDrawerOpen,

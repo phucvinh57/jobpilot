@@ -263,14 +263,15 @@ impl Store {
     }
 
     /// "Restore" a dismissed lead (by the user or a filter): `new` again, its reason and time
-    /// forgotten, and shown (the caller hides it again when the saved preferences still filter it
-    /// out, see [`Store::set_lead_filtered`]). Only a dismissed lead can be restored.
-    pub fn restore_lead(&self, id: i64) -> Result<()> {
+    /// forgotten, and in one write hidden with `filtered_reason` when the saved preferences still
+    /// filter it out (`None`: shown; see [`Lead::filtered_reason`]). Only a dismissed lead can be
+    /// restored.
+    pub fn restore_lead(&self, id: i64, filtered_reason: Option<&str>) -> Result<()> {
         self.with_conn(|c| {
             let n = c.execute(
-                "UPDATE leads SET state = 'new', dismiss_reason = NULL, dismissed_at = NULL, filtered_reason = NULL
+                "UPDATE leads SET state = 'new', dismiss_reason = NULL, dismissed_at = NULL, filtered_reason = ?2
                  WHERE id = ?1 AND state = 'dismissed'",
-                [id],
+                params![id, filtered_reason],
             )?;
             anyhow::ensure!(n == 1, "lead {id} not found or not dismissed");
             Ok(())
@@ -534,18 +535,19 @@ mod tests {
         assert_eq!(ids(store.list_dismissed_leads().unwrap()), [lead.id, filtered.id]);
         assert_eq!(store.count_dismissed_leads().unwrap(), 2);
 
-        store.restore_lead(lead.id).unwrap();
+        store.restore_lead(lead.id, None).unwrap();
         let back = store.get_lead(lead.id).unwrap().unwrap();
         assert_eq!((back.state, back.dismiss_reason, back.dismissed_at), (LeadState::New, None, None));
-        assert_eq!(back.filtered_reason, None, "shown until the caller filters it again");
+        assert_eq!(back.filtered_reason, None, "shown: the preferences let it pass");
         assert_eq!(ids(store.list_queue_leads().unwrap()), [lead.id]);
-        assert!(store.restore_lead(lead.id).is_err(), "only a dismissed lead is restored");
-        assert!(store.restore_lead(999).is_err());
+        assert!(store.restore_lead(lead.id, None).is_err(), "only a dismissed lead is restored");
+        assert!(store.restore_lead(999, None).is_err());
 
-        // A filtered posting can be restored too.
-        store.restore_lead(filtered.id).unwrap();
+        // A filtered posting can be restored too, hidden in the same write when it is filtered still.
+        store.restore_lead(filtered.id, Some("excluded company")).unwrap();
+        assert_eq!(store.get_lead(filtered.id).unwrap().unwrap().filtered_reason.as_deref(), Some("excluded company"));
         assert_eq!(store.count_dismissed_leads().unwrap(), 0);
-        assert_eq!(store.list_queue_leads().unwrap().len(), 2);
+        assert_eq!(store.list_queue_leads().unwrap().len(), 1, "the filtered one is hidden");
     }
 
     #[test]

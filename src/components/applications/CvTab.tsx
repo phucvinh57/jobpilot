@@ -151,7 +151,7 @@ export function CvTab(input: CvTabInput) {
         aria-label="Ask AI"
         placeholder={ASK_PLACEHOLDER}
         value={instruction}
-        disabled={input.busy || !cv.hasCv}
+        disabled={input.busy || !cv.hasCv || input.readOnly === true}
         onChange={(e) => setInstruction(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && cv.ask(instruction)) {

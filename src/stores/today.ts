@@ -205,10 +205,6 @@ function load(): Promise<void> {
     },
   );
   latestRead = done;
-  // The dismissed list changes with the queue (a dismiss, a restore, a search that filtered some out).
-  if (get().filter.show === "dismissed") {
-    loadDismissed();
-  }
   return done;
 }
 
@@ -263,14 +259,16 @@ export function setFilter(patch: Partial<QueueFilter>): void {
   set({ filter: { ...get().filter, ...patch } });
 }
 
-/** "Show: Open | Dismissed". The dismissed jobs are read each time they are picked; the open lead's
- *  drawer closes (it is not in that list). */
+/** "Show: Open | Dismissed". The dismissed jobs are read each time they are picked (and again when
+ *  leads or applications change while they are shown); the open lead's drawer closes and the ticks
+ *  go (neither is in that list, and the bulk bar must not hold the primary button there). */
 export function setShow(show: QueueShow): void {
   if (show === get().filter.show) {
     return;
   }
   setFilter({ show });
   if (show === "dismissed") {
+    set({ checked: [] });
     if (useNav.getState().drawer?.kind === "lead") {
       useNav.getState().closeDrawer();
     }
@@ -292,6 +290,7 @@ export async function restoreJob(job: DismissedJob): Promise<void> {
   }
   set({ restoring: [...get().restoring, key] });
   try {
+    // The shell says leads and applications changed: the queue and this list are read again then.
     const out = await api.restore(job.kind, job.id);
     set({ note: { ok: out.hidden === null, text: restoredNote(job, out) } });
   } catch (thrown) {
@@ -299,7 +298,6 @@ export async function restoreJob(job: DismissedJob): Promise<void> {
     set({ note: { ok: false, text: error.message, problem: error.problem } });
   } finally {
     set({ restoring: without(get().restoring, key) });
-    load();
   }
 }
 
@@ -650,6 +648,19 @@ function syncNeedsYou(): void {
   useNav.getState().setNeedsYou(needsYouCount(s.queue, rows, s.prepared.length));
 }
 
+/** Stored data changed (any screen): what the Leads stage shows is read again. */
+export function onChanged(scope: api.Scope): void {
+  // The sidebar badge follows every change the list has, shown or not.
+  if (scope === "leads" || scope === "sources" || scope === "applications") {
+    load();
+  }
+  // The dismissed jobs only change with leads and applications, and are read only while shown
+  // (not on every queue read, such as each step of a search).
+  if ((scope === "leads" || scope === "applications") && get().filter.show === "dismissed") {
+    void loadDismissed();
+  }
+}
+
 let watching = false;
 
 /** Follow the shell for as long as the app runs, whether or not the Jobs page is shown: the badge, the CVs
@@ -659,12 +670,7 @@ export function startWatching(): void {
     return;
   }
   watching = true;
-  api.onChanged((scope) => {
-    // The sidebar badge follows every change the list has, shown or not.
-    if (scope === "leads" || scope === "sources" || scope === "applications") {
-      load();
-    }
-  });
+  api.onChanged(onChanged);
   api.onProgress(onProgress);
   api.onPrepared(applyPrepared);
   api.onSearchFinished(onSearchFinished);

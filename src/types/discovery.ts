@@ -115,14 +115,7 @@ export interface AddedLead {
   applicationId: number | null;
 }
 
-export interface Dismissed {
-  /** Other leads of the company dismissed with it. */
-  also: number;
-  /** Other leads of the company kept because their CV is queued or being written. */
-  kept: number;
-  /** "Never this company" was asked for but could not be saved (why). */
-  notExcluded: string | null;
-}
+export type { Dismissed, Restored } from "./dismiss";
 
 /** What a dismissed job was: a lead in the queue, or a job in the CVs stage. */
 export type DismissedKind = "lead" | "application";
@@ -141,13 +134,6 @@ export interface DismissedJob {
   reason: string | null;
   /** RFC 3339. */
   dismissedAt: string;
-}
-
-/** What "Restore" did. */
-export interface Restored {
-  /** The restored lead is hidden by the saved preferences (why): back, but not in the list until
-   *  they let it pass. `null` when it is shown, and for a job from CVs. */
-  hidden: string | null;
 }
 
 /** How one lead's "Prepare CV" ended. */

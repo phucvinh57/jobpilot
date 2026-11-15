@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { filterDismissed, NO_FILTER } from "./queue";
-import { dismissedWhen, isExclusion, restoredNote } from "./text";
+import { dismissedWhen, restoredNote } from "./text";
 import type { DismissedJob } from "@/types/discovery";
 
 function job(id: number, extra: Partial<DismissedJob> = {}): DismissedJob {
@@ -44,20 +44,26 @@ describe("the dismissed filter", () => {
 
 describe("the dismissed list's words", () => {
   it("says where a restored job went", () => {
-    expect(restoredNote(job(1))).toBe("Acme — Role 1 is back in Leads.");
-    expect(restoredNote(job(2, { kind: "application", reason: "too far" }))).toBe("Acme — Role 2 is back in CVs.");
+    const shown = { hidden: null, excluded: false };
+    expect(restoredNote(job(1), shown)).toBe("Acme — Role 1 is back in Leads.");
+    expect(restoredNote(job(2, { kind: "application", reason: "too far" }), shown)).toBe(
+      "Acme — Role 2 is back in CVs.",
+    );
   });
 
-  it("says that an excluded company stays excluded", () => {
-    expect(isExclusion("excluded company: Acme")).toBe(true);
-    expect(isExclusion("  Excluded company: Acme")).toBe(true);
-    expect(isExclusion("too junior")).toBe(false);
-    expect(isExclusion(null)).toBe(false);
-    expect(restoredNote(job(1, { reason: "excluded company: Acme" }))).toContain("still excluded in your preferences");
+  it("says that an excluded company stays excluded, as the shell found, whatever the reason says", () => {
+    expect(restoredNote(job(1, { reason: "too junior" }), { hidden: null, excluded: true })).toContain(
+      "still excluded in your preferences",
+    );
+    expect(restoredNote(job(1, { reason: "excluded company: Acme" }), { hidden: null, excluded: false })).toBe(
+      "Acme — Role 1 is back in Leads.",
+    );
   });
 
   it("says that a restored lead the preferences filter stays hidden", () => {
-    expect(restoredNote(job(1, { reason: "excluded company: Acme" }), { hidden: "excluded company: Acme" })).toBe(
+    expect(
+      restoredNote(job(1, { reason: "excluded company: Acme" }), { hidden: "excluded company: Acme", excluded: true }),
+    ).toBe(
       "Acme — Role 1 is restored, but your preferences hide it (excluded company: Acme). It shows in Leads once they let it pass.",
     );
   });

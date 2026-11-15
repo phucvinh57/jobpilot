@@ -113,10 +113,8 @@ fn violation_lines(violations: &[Violation]) -> Vec<String> {
 
 /// Write `cv.yaml`, then `pipeline::rerender` (parse, fact guard, Typst) and count the new previews.
 pub async fn save_and_render(core: &Core, id: i64, yaml: String) -> Result<Rendered> {
-    let app = core
-        .store
-        .get_application(id)?
-        .context("the application no longer exists")?;
+    // A dismissed job's CV is kept as it is until the job is restored.
+    let app = pipeline::require_open(core, id)?;
     tokio::fs::create_dir_all(&app.dir)
         .await
         .with_context(|| format!("creating {}", app.dir.display()))?;
@@ -132,10 +130,8 @@ pub async fn save_and_render(core: &Core, id: i64, yaml: String) -> Result<Rende
 
 /// Write the editor text to `cv.yaml` (the revision starts from the file on disk).
 pub async fn write_cv(core: &Core, id: i64, yaml: String) -> Result<()> {
-    let app = core
-        .store
-        .get_application(id)?
-        .context("the application no longer exists")?;
+    // A dismissed job's CV is kept as it is until the job is restored.
+    let app = pipeline::require_open(core, id)?;
     tokio::fs::write(app.cv_yaml_path(), yaml)
         .await
         .context("saving cv.yaml")

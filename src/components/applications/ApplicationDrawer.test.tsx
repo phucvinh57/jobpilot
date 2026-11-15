@@ -329,8 +329,20 @@ describe("dismissing a job in CVs", () => {
     const drawer = await open();
     await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
     await user.click(within(drawer).getByRole("button", { name: "Dismiss job" }));
+    // The shell says applications changed: the header is read again, dismissed.
+    mocked.readApplication.mockResolvedValue(header(DISMISSED));
+    applicationsChanged();
+    const notice = await within(drawer).findByRole("group", { name: "You dismissed this job" });
     expect(await within(drawer).findByText(/could not be excluded: disk full/)).toBeTruthy();
     expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
+
+    // Once restored, the warning about the dismissal goes, and Restore says the company is excluded.
+    mocked.restoreApplication.mockResolvedValue({ hidden: null, excluded: true });
+    mocked.readApplication.mockResolvedValue(header());
+    await user.click(within(notice).getByRole("button", { name: "Restore" }));
+    applicationsChanged();
+    expect(await within(drawer).findByText(/Its company is still excluded/)).toBeTruthy();
+    expect(within(drawer).queryByText(/could not be excluded: disk full/)).toBeNull();
   });
 
   it("offers no Dismiss when the job is not dismissible", async () => {
@@ -341,7 +353,7 @@ describe("dismissing a job in CVs", () => {
   it("shows a dismissed job with its reason and a plain Restore, and no primary", async () => {
     const user = userEvent.setup();
     useNav.setState({ stage: "leads" });
-    mocked.restoreApplication.mockResolvedValue(header());
+    mocked.restoreApplication.mockResolvedValue({ hidden: null, excluded: false });
     mocked.readApplication.mockResolvedValue(header(DISMISSED));
     useNav.setState({ screen: "jobs", stage: "leads", drawer: { kind: "app", id: 7 } });
     render(<ApplicationDrawer />);

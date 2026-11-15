@@ -4,13 +4,13 @@
 import { useAction, type Action } from "@/hooks/useAsync";
 
 import { dismissApplication, restoreApplication } from "@/api/applications";
-import type { ApplicationHeader, DismissOutcome } from "@/types/applications";
+import type { Dismissed, Restored } from "@/types/applications";
 
 export interface DismissJob {
   /** `run(reason, excludeCompany)` resolves to what went, or `undefined` when it failed. */
-  dismiss: Action<[reason: string, excludeCompany: boolean], DismissOutcome>;
-  /** Resolves to the header as it is now, or `undefined` when it failed. */
-  restore: Action<[], ApplicationHeader>;
+  dismiss: Action<[reason: string, excludeCompany: boolean], Dismissed>;
+  /** Resolves to what it did (the company still excluded), or `undefined` when it failed. */
+  restore: Action<[], Restored>;
 }
 
 /** Used inside content keyed by the application, so a failure never carries over to another one. */

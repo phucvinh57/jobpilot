@@ -10,14 +10,14 @@ import { ErrorBanner } from "@/components/ProblemHelp";
 import type { Action } from "@/hooks/useAsync";
 
 import { dismissalLine } from "@/lib/applications/dismiss";
-import type { ApplicationHeader, Dismissal, DismissOutcome } from "@/types/applications";
+import type { ApplicationHeader, Dismissal, Dismissed, Restored } from "@/types/applications";
 
 interface FormProps {
   header: ApplicationHeader;
-  dismiss: Action<[reason: string, excludeCompany: boolean], DismissOutcome>;
+  dismiss: Action<[reason: string, excludeCompany: boolean], Dismissed>;
   onCancel: () => void;
   /** The job was dismissed (`out` says what else went). */
-  onDone: (out: DismissOutcome) => void;
+  onDone: (out: Dismissed) => void;
 }
 
 /** Reason, "Don't show {company} again", "Dismiss job" (plain: the primary stays the job's own) and Cancel. */
@@ -75,9 +75,12 @@ export function DismissJobForm({ header, dismiss, onCancel, onDone }: FormProps)
 export function DismissedNotice({
   dismissal,
   restore,
+  onRestored,
 }: {
   dismissal: Dismissal;
-  restore: Action<[], ApplicationHeader>;
+  restore: Action<[], Restored>;
+  /** The job was restored (`out` says whether its company is still excluded). */
+  onRestored: (out: Restored) => void;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -92,7 +95,7 @@ export function DismissedNotice({
             size="compact"
             icon={RotateCcw}
             busy={restore.busy}
-            onClick={() => void restore.run()}
+            onClick={() => void restore.run().then((out) => out !== undefined && onRestored(out))}
           >
             Restore
           </Button>

@@ -29,7 +29,7 @@ import {
   type ApplicationMarks,
 } from "@/hooks/applications/useApplicationDrawer";
 import { useDismissJob } from "@/hooks/applications/useDismissJob";
-import { jobDismissedNote } from "@/lib/applications/dismiss";
+import { jobDismissedNote, jobRestoredNote } from "@/lib/applications/dismiss";
 import { DismissedNotice, DismissJobForm } from "./DismissJob";
 import { JdTab } from "./JdTab";
 import { TimelineTab } from "./TimelineTab";
@@ -194,6 +194,7 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
   const dismissJob = useDismissJob(id);
   const [dismissing, setDismissing] = useState(false);
   const [dismissNote, setDismissNote] = useState<string>();
+  const [restoreNote, setRestoreNote] = useState<string>();
   const { head } = model;
   const primary = head.primary;
   const showNextJob = header.showNextJob && primary === null;
@@ -213,10 +214,25 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
           </span>
         )}
       </div>
-      {header.dismissed !== null && <DismissedNotice dismissal={header.dismissed} restore={dismissJob.restore} />}
-      {dismissNote !== undefined && (
+      {header.dismissed !== null && (
+        <DismissedNotice
+          dismissal={header.dismissed}
+          restore={dismissJob.restore}
+          onRestored={(out) => {
+            setDismissNote(undefined);
+            setRestoreNote(jobRestoredNote(out));
+          }}
+        />
+      )}
+      {/* Each note is about the state it was written in: it goes when that state does. */}
+      {dismissNote !== undefined && header.dismissed !== null && (
         <p role="status" className="text-body text-warn-fg">
           {dismissNote}
+        </p>
+      )}
+      {restoreNote !== undefined && header.dismissed === null && (
+        <p role="status" className="text-body text-muted">
+          {restoreNote}
         </p>
       )}
       {(primary !== null || showNextJob || canDismiss) && (
@@ -260,6 +276,7 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
           onDone={(out) => {
             setDismissing(false);
             // The job left CVs: the drawer closes, unless there is something to say about it.
+            setRestoreNote(undefined);
             if (out.notExcluded === null) {
               model.close();
             } else {

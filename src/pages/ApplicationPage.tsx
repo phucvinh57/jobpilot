@@ -16,7 +16,7 @@ import { crumbFor } from "@/lib/applications/crumb";
 import { TABS, type Tab } from "@/lib/applications/tabs";
 import { useApplicationScreen } from "@/hooks/applications/useApplicationScreen";
 import { useDismissJob } from "@/hooks/applications/useDismissJob";
-import { jobDismissedNote } from "@/lib/applications/dismiss";
+import { jobDismissedNote, jobRestoredNote } from "@/lib/applications/dismiss";
 import { ApplyTab } from "@/components/applications/ApplyTab";
 import { CvTab } from "@/components/applications/CvTab";
 import { DismissedNotice, DismissJobForm } from "@/components/applications/DismissJob";
@@ -67,6 +67,7 @@ function OpenApplication({ id }: { id: number }) {
   const dismissJob = useDismissJob(id);
   const [dismissing, setDismissing] = useState(false);
   const [dismissNote, setDismissNote] = useState<string>();
+  const [restoreNote, setRestoreNote] = useState<string>();
   const { head, apply, tab } = model;
   const header = head.header;
 
@@ -148,11 +149,26 @@ function OpenApplication({ id }: { id: number }) {
           onCancel={() => setDismissing(false)}
           onDone={(out) => {
             setDismissing(false);
+            setRestoreNote(undefined);
             setDismissNote(jobDismissedNote(out));
           }}
         />
       )}
-      {header.dismissed !== null && <DismissedNotice dismissal={header.dismissed} restore={dismissJob.restore} />}
+      {header.dismissed !== null && (
+        <DismissedNotice
+          dismissal={header.dismissed}
+          restore={dismissJob.restore}
+          onRestored={(out) => {
+            setDismissNote(undefined);
+            setRestoreNote(jobRestoredNote(out));
+          }}
+        />
+      )}
+      {restoreNote !== undefined && header.dismissed === null && (
+        <p role="status" className="text-body text-muted">
+          {restoreNote}
+        </p>
+      )}
       {dismissNote !== undefined && header.dismissed !== null && (
         <p role="status" className="text-body text-muted">
           {dismissNote}
@@ -170,7 +186,15 @@ function OpenApplication({ id }: { id: number }) {
       <Stepper steps={header.steps} current={header.stepIndex} />
       <Tabs<Tab> label="Application sections" tabs={TABS} value={tab} onChange={model.setTab} />
       {tab === "jd" && <JdTab id={id} />}
-      {tab === "cv" && <CvTab id={id} cvEpoch={head.cvEpoch} busy={head.jobLabel !== null} revise={head.revise} />}
+      {tab === "cv" && (
+        <CvTab
+          id={id}
+          cvEpoch={head.cvEpoch}
+          busy={head.jobLabel !== null}
+          readOnly={header.dismissed !== null}
+          revise={head.revise}
+        />
+      )}
       {tab === "apply" && <ApplyTab id={id} session={apply} />}
       {tab === "timeline" && <TimelineTab id={id} />}
     </Page>

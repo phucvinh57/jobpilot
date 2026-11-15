@@ -14,12 +14,12 @@ use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
 
 use super::dto::{
-    AddedLeadDto, BoardHintDto, DismissedDto, DismissedJobDto, RestoredDto, JobSourcesDto, LeadInput, PrepareOutcomeDto, QueueDto,
+    AddedLeadDto, BoardHintDto, DismissedJobDto, JobSourcesDto, LeadInput, PrepareOutcomeDto, QueueDto,
     RunSummaryDto, SessionOptionDto, SourceDto, SourceKindDto,
 };
 use super::rules;
 use crate::shared::events::Scope;
-use crate::shared::{events, run, run_sync, CommandError, CommandResult};
+use crate::shared::{events, run, run_sync, CommandError, CommandResult, DismissedDto, RestoredDto};
 
 /// One lead's "Prepare CV" ended: payload `PrepareOutcomeDto`.
 pub const PREPARED: &str = "discovery:prepared";
@@ -163,7 +163,7 @@ pub async fn discovery_restore(
     if kind == DismissedKind::Application {
         events::data_changed(&app, Scope::Applications);
     }
-    Ok(RestoredDto { hidden: out.hidden })
+    Ok(RestoredDto::from(out))
 }
 
 // ------------------------------------------------------------------ Leads: searching

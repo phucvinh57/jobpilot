@@ -539,15 +539,30 @@ describe("dismissed jobs", () => {
     expect(screen.getByText("No dismissed job matches the search")).toBeTruthy();
   });
 
-  it("restores a job and reads the list again", async () => {
+  it("restores a job and says where it went", async () => {
     const user = userEvent.setup();
-    mocked.restore.mockResolvedValue({ hidden: null });
+    mocked.restore.mockResolvedValue({ hidden: null, excluded: true });
     await showList();
     await user.click(screen.getByRole("button", { name: "Dismissed 2" }));
     await screen.findByRole("table", { name: "Dismissed jobs" });
     await user.click(screen.getByRole("button", { name: "Restore Initech: Platform Engineer" }));
     expect(mocked.restore).toHaveBeenCalledWith("lead", 9);
-    await waitFor(() => expect(mocked.readDismissed.mock.calls.length).toBeGreaterThan(1));
+    expect(await screen.findByText(/is back in Leads\. The company is still excluded/)).toBeTruthy();
+  });
+
+  it("drops the ticks when Dismissed is picked, and offers them again on Open", async () => {
+    const user = userEvent.setup();
+    await showList();
+    await user.click(screen.getByRole("checkbox", { name: "Select Acme: Backend Engineer 1" }));
+    expect(screen.getByRole("group", { name: "1 selected" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Dismissed 2" }));
+    await screen.findByRole("table", { name: "Dismissed jobs" });
+    expect(screen.queryByRole("group", { name: "1 selected" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    expect(screen.queryByRole("group", { name: "1 selected" })).toBeNull();
+    expect(
+      (screen.getByRole("checkbox", { name: "Select Acme: Backend Engineer 1" }) as HTMLInputElement).checked,
+    ).toBe(false);
   });
 
   it("opens a dismissed CV in the application drawer, on the Leads stage", async () => {

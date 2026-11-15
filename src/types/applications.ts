@@ -117,15 +117,7 @@ export interface Dismissal {
   at: string | null;
 }
 
-/** What "Dismiss" on a job in CVs did (as for a lead). */
-export interface DismissOutcome {
-  /** Leads of the company dismissed with it ("Don't show {company} again"). */
-  also: number;
-  /** Leads of the company kept because their CV is queued or being written. */
-  kept: number;
-  /** "Don't show {company} again" was asked for but could not be saved (why). */
-  notExcluded: string | null;
-}
+export type { Dismissed, Restored } from "./dismiss";
 
 export type MarkKey = "interview" | "offer" | "rejected";
 

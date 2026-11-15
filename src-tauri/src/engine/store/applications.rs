@@ -269,6 +269,15 @@ impl Store {
         })
     }
 
+    /// How many applications are dismissed, without reading them.
+    pub fn count_dismissed_applications(&self) -> Result<usize> {
+        self.with_conn(|c| {
+            let n: i64 =
+                c.query_row("SELECT COUNT(*) FROM applications WHERE status = ?1", [Status::Dismissed], |r| r.get(0))?;
+            Ok(usize::try_from(n).unwrap_or(0))
+        })
+    }
+
     /// Deletes the row and its events (files on disk are the caller's job).
     pub fn delete_application(&self, id: i64) -> Result<()> {
         self.with_conn(|c| {
@@ -322,6 +331,7 @@ mod tests {
         let last = store.list_events(id).unwrap().pop().unwrap();
         assert_eq!((last.kind.as_str(), last.message.as_str()), ("status", "cv_ready -> dismissed: too far away"));
         assert_eq!(store.list_dismissed_applications().unwrap().iter().map(|a| a.id).collect::<Vec<_>>(), [id]);
+        assert_eq!(store.count_dismissed_applications().unwrap(), 1);
 
         // Nothing moves it on by the forward-only rule, and it cannot be dismissed twice.
         assert!(store.set_status(id, Status::Submitting, "").is_err());
@@ -333,6 +343,7 @@ mod tests {
         assert_eq!((app.dismissed_from, app.dismiss_reason, app.dismissed_at), (None, None, None));
         assert_eq!(store.list_events(id).unwrap().pop().unwrap().message, "dismissed -> cv_ready: restored");
         assert!(store.list_dismissed_applications().unwrap().is_empty());
+        assert_eq!(store.count_dismissed_applications().unwrap(), 0);
         assert!(store.restore_application(id).is_err(), "only a dismissed application is restored");
     }
 
