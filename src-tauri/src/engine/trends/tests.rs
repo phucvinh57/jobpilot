@@ -178,8 +178,19 @@ async fn report_search_runs_with_a_key_and_the_key_stays_in_the_keyring() {
     let fx = fixtures().await;
     let key = "BSAtest-brave-key-0123456789";
     core.set_search_key(SearchProvider::Brave, key).unwrap();
-    core.save_preferences(Preferences { domains: vec!["fintech".into()], roles: vec!["Backend Engineer".into()], ..Preferences::default() })
-        .unwrap();
+    // The queries come from the profile's roles and the preferred locations; the wishes (domains,
+    // target roles, skills) are saved too and must not show up.
+    let profile = dir.path().join("profile.yaml");
+    std::fs::write(&profile, "basics:\n  name: Test\n  headline: Backend Engineer\nexperience:\n  - company: Acme\n    position: Platform Engineer\n").unwrap();
+    core.set_profile_path(&profile).unwrap();
+    core.save_preferences(Preferences {
+        locations: vec!["Singapore".into()],
+        domains: vec!["fintech".into()],
+        roles: vec!["Product Manager".into()],
+        must_skills: vec!["Kotlin".into()],
+        ..Preferences::default()
+    })
+    .unwrap();
     let report = "<html><head><title>Fintech report</title></head><body><article><h1>Fintech report</h1>".to_string()
         + &"<p>Payments companies hired more Rust engineers this year while funding rounds shrank.</p>".repeat(6)
         + "</article></body></html>";
@@ -195,8 +206,20 @@ async fn report_search_runs_with_a_key_and_the_key_stays_in_the_keyring() {
 
     let search = state.plan.search.clone().expect("search planned");
     assert_eq!(search.provider, SearchProvider::Brave);
-    assert_eq!(search.queries[0], "fintech industry annual report 2026", "{:?}", search.queries);
-    assert!(search.queries.contains(&"Backend Engineer hiring market trends 2026 report".to_string()));
+    assert_eq!(
+        search.queries,
+        [
+            "Singapore technology job market report 2026",
+            "Platform Engineer hiring trends 2026 report",
+            "Backend Engineer hiring trends 2026 report",
+            "Singapore Platform Engineer salary survey 2026",
+            "Platform Engineer skills demand 2026 Q4",
+            "Backend Engineer skills demand 2026 Q4",
+        ],
+        "background and place, capped at max_queries"
+    );
+    let all = search.queries.join(" ").to_lowercase();
+    assert!(!all.contains("fintech") && !all.contains("product manager") && !all.contains("kotlin"), "{all}");
     let outcome = state.outcomes_of("report_search").next().unwrap();
     assert_eq!((&outcome.status, outcome.items, outcome.source_id), (&SourceStatus::Ok, 1, None));
     let stored = core.store.list_trend_items(None).unwrap();

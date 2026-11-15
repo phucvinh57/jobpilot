@@ -12,7 +12,8 @@ import { SearchSection } from "./SearchSection";
 import { SkillChart } from "./SkillChart";
 import { SourcesSection } from "./SourcesSection";
 
-/** Market trends: where the market is going, from the sources you add. "Collect & build digest"
+/** Market trends: where the market of your place is going (local, then global), your gap against
+ *  your background, then your wishes against the market, from the sources you add. "Collect & build digest"
  *  (the one primary button) collects the period's items, then asks the AI provider for a digest;
  *  every point links to the stored items it rests on. */
 export function TrendsScreen() {
@@ -65,12 +66,12 @@ export function TrendsScreen() {
           <>
             {/* The digest on the left, the skill chart beside it (below it when narrow). */}
             <div className="flex flex-wrap items-start gap-5">
-              <div className="flex min-w-[380px] flex-[1.4_1_440px] flex-col">
+              <div className="flex min-w-[360px] flex-[1.2_1_420px] flex-col">
                 <DigestCard digest={data.digest} adds={t.adds} />
               </div>
               {data.chart && (
-                <div className="flex min-w-[320px] flex-[1_1_340px] flex-col gap-5">
-                  <SkillChart chart={data.chart} adds={t.adds} />
+                <div className="flex min-w-[340px] flex-[1_1_380px] flex-col gap-5">
+                  <SkillChart key={data.digest?.reportId ?? 0} chart={data.chart} adds={t.adds} />
                 </div>
               )}
             </div>

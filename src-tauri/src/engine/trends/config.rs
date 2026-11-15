@@ -42,14 +42,22 @@ pub struct CollectLimits {
     pub max_bytes: usize,
     /// Longest text kept per item (characters); the rest is cut.
     pub max_text_chars: usize,
-    /// New items one source adds per run.
+    /// New items one source adds per run: stories, feed entries, companies, reports. Hacker News
+    /// hiring postings are not counted against it: they have their own cap,
+    /// [`hiring_posts`](Self::hiring_posts) per thread for [`hiring_threads`](Self::hiring_threads)
+    /// threads, so the backfill of the skill window (up to 2,400 postings by default, once) is
+    /// never cut by this cap and the stories of the same source never crowd it out.
     pub max_items: usize,
     /// Front-page stories read per run.
     pub hn_front_page: usize,
     /// Stories of the period read per run (`points >= hn_min_points`).
     pub hn_period_stories: usize,
     pub hn_min_points: u32,
-    /// Postings kept from the newest "Who is hiring" thread.
+    /// "Who is hiring" threads read per run: the newest that started before the period's end, one
+    /// a month. Six fill the digest's six-month skill window on the first run; later runs skip the
+    /// postings already stored, so they read only the new threads' postings.
+    pub hiring_threads: usize,
+    /// New postings kept per "Who is hiring" thread (a monthly thread has some 300 to 500).
     pub hiring_posts: usize,
     /// Newest YC batches read.
     pub yc_batches: usize,
@@ -60,6 +68,8 @@ pub struct CollectLimits {
     /// Results read per query.
     pub results_per_query: usize,
     /// One source (a feed, an API) may take this long; past it the source is left out of the run.
+    /// Hacker News is the slowest: up to 3 + `hiring_threads` requests one `host_delay` apart, and a
+    /// whole hiring thread is a few megabytes.
     pub source_timeout: Duration,
     /// One collector (all its sources together) may take this long.
     pub collector_budget: Duration,
@@ -79,12 +89,13 @@ impl Default for CollectLimits {
             hn_front_page: 30,
             hn_period_stories: 30,
             hn_min_points: 100,
-            hiring_posts: 150,
+            hiring_threads: 6,
+            hiring_posts: 400,
             yc_batches: 2,
             article_fetches: 20,
             max_queries: 6,
             results_per_query: 5,
-            source_timeout: Duration::from_secs(120),
+            source_timeout: Duration::from_secs(180),
             collector_budget: Duration::from_secs(240),
             allow_private_hosts: false,
         }

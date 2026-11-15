@@ -1,25 +1,30 @@
 //! Read models of this context (serde, camelCase). Core types stay free of serde and Tauri.
 //!
 //! The screen reads everything it shows in one call ([`overview`]): the digest with its numbered
-//! points and citations, the skill chart, the history, the collections waiting for the user, the
-//! sources and which search keys are saved (never the keys themselves).
+//! points and citations (and, next to them, the gap and the wishes as the app measured them), the
+//! skill chart per market scope (global, and local to the user's place), the history, the
+//! collections waiting for the user, the sources and which search keys are saved (never the keys
+//! themselves). Every number and label of the market is worked out here, in code.
 
-use anyhow::Result;
-use chrono::Utc;
 use crate::engine::graph::Outcome;
 use crate::engine::prefs::Preferences;
 use crate::engine::store::{Report, Source};
+use crate::engine::trends::digest::{GapScope, ScopeCounts, SkillCounts};
 use crate::engine::trends::{
     Digest, DigestData, Period, Point, SearchProvider, Section, SourceKind, TrendChallenge,
     TrendRun,
 };
 use crate::engine::Core;
+use anyhow::Result;
+use chrono::Utc;
 use serde::Serialize;
 
 use super::rules::{
-    challenge_name, challenge_phrase, describe, describe_source, header_summary, is_web_url,
-    latest_month_is_partial, period_title, status_tag, status_text, summarize, target, when,
-    Cadence, Field,
+    bucket_key, bucket_words, challenge_name, challenge_phrase, describe, describe_source,
+    direction_tag, header_summary, is_web_url, judged_on, knows_background,
+    latest_month_is_partial, month_label, percent, percent_text, period_title, permille,
+    pipeline_note, scope_key, scope_note, section_title, status_tag, status_text, summarize,
+    target, when, wish_kind, wish_signal, Cadence, Field, Tone, BUCKETS,
 };
 use crate::shared::{CommandError, CommandResult};
 
@@ -155,6 +160,8 @@ pub enum DigestBodyDto {
     Data {
         sections: Vec<SectionDto>,
         dropped: u32,
+        /// Frequent extracted topics the skill list does not know (third-party words: text only).
+        uncatalogued: Vec<TermDto>,
     },
     /// A report this version cannot read back: its text as saved (shown as plain lines).
     Plain { lines: Vec<String> },
@@ -163,8 +170,80 @@ pub enum DigestBodyDto {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SectionDto {
+    /// `rising_skills` ... `wishes_check`: the stable part of the element ids.
+    pub key: &'static str,
     pub title: &'static str,
     pub points: Vec<PointDto>,
+    /// The gap as the app sorted it (only in `for_you`, when the report has one).
+    pub gap: Option<GapDto>,
+    /// The wishes as the app measured them (only in `wishes_check`).
+    pub wishes: Option<WishesDto>,
+}
+
+/// The gap: the user's background against the market, sorted in code.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GapDto {
+    /// `local` / `global`: the market it was judged on.
+    pub scope: &'static str,
+    /// `Judged by the app on postings in Ho Chi Minh City, Singapore or remote for backend engineer.`
+    pub hint: String,
+    /// Build on, learn next, at risk: always the three, in that order.
+    pub groups: Vec<GapGroupDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GapGroupDto {
+    /// `build_on` / `learn_next` / `at_risk`.
+    pub bucket: &'static str,
+    pub title: &'static str,
+    /// What the bucket means.
+    pub hint: &'static str,
+    /// What the group says when it holds no skill.
+    pub empty: &'static str,
+    pub skills: Vec<GapSkillDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GapSkillDto {
+    pub skill: String,
+    /// `18%`: its share of the field's postings over the window.
+    pub share: String,
+    pub direction: TagDto,
+}
+
+/// The user's wishes against the market, applied last.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WishesDto {
+    /// Which market they were measured on.
+    pub hint: String,
+    pub wishes: Vec<WishDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WishDto {
+    pub wish: String,
+    /// `skill` / `domain`.
+    pub kind: &'static str,
+    /// The user wants to avoid it rather than have it.
+    pub avoided: bool,
+    /// `rising` / `steady` / `falling` / `unclear` / `no data`.
+    pub signal: TagDto,
+    /// `42 postings` / `no posting names it`.
+    pub detail: String,
+}
+
+/// A term the skill list does not know.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TermDto {
+    pub term: String,
+    /// Items whose topics name it.
+    pub items: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -208,6 +287,15 @@ impl DigestDto {
             Some(data) => DigestBodyDto::Data {
                 sections: sections(data, prefs),
                 dropped: data.dropped,
+                uncatalogued: data
+                    .counts
+                    .uncatalogued
+                    .iter()
+                    .map(|t| TermDto {
+                        term: t.term.clone(),
+                        items: t.items,
+                    })
+                    .collect(),
             },
             None => DigestBodyDto::Plain {
                 lines: digest.report.body_md.lines().map(str::to_string).collect(),
@@ -224,6 +312,8 @@ impl DigestDto {
 }
 
 fn sections(data: &DigestData, prefs: &Preferences) -> Vec<SectionDto> {
+    let counts = &data.counts;
+    let knows = knows_background(counts);
     let mut number = 0;
     let mut out = Vec::new();
     for section in Section::ALL {
@@ -237,14 +327,76 @@ fn sections(data: &DigestData, prefs: &Preferences) -> Vec<SectionDto> {
             number += 1;
             points.push(point_dto(number, index, point, data, prefs));
         }
-        if !points.is_empty() {
+        let gap = (section == Section::ForYou && !counts.gap.is_empty()).then(|| gap_dto(counts));
+        let wishes = (section == Section::WishesCheck && !counts.wishes.is_empty())
+            .then(|| wishes_dto(counts));
+        if !points.is_empty() || gap.is_some() || wishes.is_some() {
             out.push(SectionDto {
-                title: section.title(),
+                key: section.as_str(),
+                title: section_title(section, knows),
                 points,
+                gap,
+                wishes,
             });
         }
     }
     out
+}
+
+fn tag((label, tone): (&'static str, Tone)) -> TagDto {
+    TagDto {
+        label,
+        tone: tone.as_str(),
+    }
+}
+
+fn gap_dto(counts: &SkillCounts) -> GapDto {
+    GapDto {
+        scope: scope_key(counts.gap_scope),
+        hint: judged_on(counts.gap_scope, &counts.place, &counts.field),
+        groups: BUCKETS
+            .into_iter()
+            .map(|bucket| {
+                let (title, hint, empty) = bucket_words(bucket);
+                GapGroupDto {
+                    bucket: bucket_key(bucket),
+                    title,
+                    hint,
+                    empty,
+                    skills: counts
+                        .gap
+                        .iter()
+                        .filter(|g| g.bucket == bucket)
+                        .map(|g| GapSkillDto {
+                            skill: g.skill.clone(),
+                            share: percent_text(g.share_permille),
+                            direction: tag(direction_tag(g.direction)),
+                        })
+                        .collect(),
+                }
+            })
+            .collect(),
+    }
+}
+
+fn wishes_dto(counts: &SkillCounts) -> WishesDto {
+    WishesDto {
+        hint: judged_on(counts.gap_scope, &counts.place, &[]),
+        wishes: counts
+            .wishes
+            .iter()
+            .map(|w| {
+                let (signal, detail) = wish_signal(w);
+                WishDto {
+                    wish: w.wish.clone(),
+                    kind: wish_kind(w.kind),
+                    avoided: w.avoided,
+                    signal: tag(signal),
+                    detail,
+                }
+            })
+            .collect(),
+    }
 }
 
 fn point_dto(
@@ -287,16 +439,53 @@ fn point_dto(
 
 // ------------------------------------------------------------------ chart
 
+/// The skill chart: one view per market scope, the switch between them, and the user's own leads
+/// as a comparison line.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartDto {
-    pub skills: Vec<ChartSkillDto>,
-    /// The count the bars are scaled to (the most frequent skill's).
-    pub max: u32,
-    /// Documents (postings and leads) read over the window.
-    pub documents: u32,
+    /// Local first (when the report has a place), then global: the order of the switch.
+    pub scopes: Vec<ScopeDto>,
+    /// The scope shown first: the one the gap was judged on.
+    pub scope: &'static str,
     pub from_month: String,
     pub to_month: String,
+    /// The report knows the user's background: directions and the profile / wish marks are shown,
+    /// and the bars highlight the profile (a report saved before highlights the preferences).
+    pub marks: bool,
+    /// The user's own leads, for comparison (never counted in the market).
+    pub pipeline: Option<String>,
+}
+
+/// One slice of the market's postings.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeDto {
+    /// `local` / `global`.
+    pub key: &'static str,
+    /// `Local` / `Global`: the switch's choice.
+    pub label: &'static str,
+    /// What the scope covers: `Ho Chi Minh City, Singapore or remote` / `every posting`.
+    pub covers: String,
+    /// Postings read over the window.
+    pub documents: u32,
+    pub months: Vec<MonthDto>,
+    pub skills: Vec<ChartSkillDto>,
+    /// The percent the bars are scaled to (the most named skill's, at least 1).
+    pub max_percent: u32,
+    /// What the scope says about its own data (too little local data, no direction yet).
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthDto {
+    /// `2026-06`.
+    pub month: String,
+    /// `Jun`.
+    pub label: String,
+    /// Postings read that month.
+    pub documents: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -304,40 +493,122 @@ pub struct ChartDto {
 pub struct ChartSkillDto {
     pub name: String,
     pub total: u32,
+    /// Its share of the scope's postings over the window, as a whole percent (the bar).
+    pub percent: u32,
+    /// The same share in words: `18%`, `2.5%`.
+    pub share: String,
     /// The count, the share and its change, in words (the tooltip of the row).
     pub description: String,
     /// `absent` / `added` / `avoided`: where the skill stands in the saved preferences.
     pub presence: &'static str,
+    /// Where its share is going, decided in code (`None` for a report saved before).
+    pub direction: Option<TagDto>,
+    /// In the user's profile.
+    pub in_profile: bool,
+    /// One the user wishes for (wanted, nice to have or avoided).
+    pub wished: bool,
 }
 
 impl ChartDto {
     fn new(digest: &Digest, prefs: &Preferences) -> Option<Self> {
         let counts = &digest.data.as_ref()?.counts;
-        let max = counts.skills.first()?.total.max(1);
-        let documents: u32 = counts.documents.iter().sum();
+        counts.skills.first()?;
         let partial = latest_month_is_partial(
             &counts.months,
             &digest.report.created_at.format("%Y-%m").to_string(),
         );
-        let skills = counts
-            .skills
-            .iter()
-            .take(CHART_ROWS)
-            .map(|skill| ChartSkillDto {
-                name: skill.skill.clone(),
-                total: skill.total,
-                description: describe(skill, &counts.documents, partial),
-                // Any skill of the chart, rising or not: adding it makes no claim about the trend.
-                presence: Field::Skills.presence(prefs, &skill.skill).as_str(),
-            })
-            .collect();
+        let knows = knows_background(counts);
+        let global = ScopeCounts {
+            documents: counts.documents.clone(),
+            skills: counts.skills.clone(),
+        };
+        let mut scopes = Vec::new();
+        if let Some(local) = &counts.local {
+            scopes.push(scope_dto(
+                GapScope::Local,
+                local,
+                counts,
+                partial,
+                knows,
+                prefs,
+            ));
+        }
+        scopes.push(scope_dto(
+            GapScope::Global,
+            &global,
+            counts,
+            partial,
+            knows,
+            prefs,
+        ));
+        let scope = if counts.local.is_some() {
+            scope_key(counts.gap_scope)
+        } else {
+            scope_key(GapScope::Global)
+        };
         Some(Self {
-            skills,
-            max,
-            documents,
+            scopes,
+            scope,
             from_month: counts.months.first().cloned().unwrap_or_default(),
             to_month: counts.months.last().cloned().unwrap_or_default(),
+            marks: knows,
+            pipeline: counts.pipeline.as_ref().map(pipeline_note),
         })
+    }
+}
+
+fn scope_dto(
+    scope: GapScope,
+    data: &ScopeCounts,
+    counts: &SkillCounts,
+    partial: bool,
+    knows: bool,
+    prefs: &Preferences,
+) -> ScopeDto {
+    let documents: u32 = data.documents.iter().sum();
+    let skills: Vec<ChartSkillDto> = data
+        .skills
+        .iter()
+        .take(CHART_ROWS)
+        .map(|skill| {
+            let share = permille(skill.total, documents);
+            ChartSkillDto {
+                name: skill.skill.clone(),
+                total: skill.total,
+                percent: percent(share),
+                share: percent_text(share),
+                description: describe(skill, &data.documents, partial),
+                // Any skill of the chart, rising or not: adding it makes no claim about the trend.
+                presence: Field::Skills.presence(prefs, &skill.skill).as_str(),
+                direction: knows.then(|| tag(direction_tag(skill.direction))),
+                in_profile: skill.in_profile,
+                wished: skill.wished,
+            }
+        })
+        .collect();
+    let (label, covers) = match scope {
+        GapScope::Local if !counts.place.is_empty() => ("Local", counts.place.clone()),
+        GapScope::Local => ("Local", "your place".to_string()),
+        GapScope::Global => ("Global", "every posting".to_string()),
+    };
+    ScopeDto {
+        key: scope_key(scope),
+        label,
+        covers,
+        documents,
+        months: counts
+            .months
+            .iter()
+            .enumerate()
+            .map(|(i, month)| MonthDto {
+                month: month.clone(),
+                label: month_label(month),
+                documents: data.documents.get(i).copied().unwrap_or(0),
+            })
+            .collect(),
+        max_percent: skills.iter().map(|s| s.percent).max().unwrap_or(0).max(1),
+        note: scope_note(scope, data, counts.gap_scope, knows),
+        skills,
     }
 }
 
@@ -511,6 +782,10 @@ pub struct AddedDto {
 mod tests {
     use crate::engine::graph::{Failure, Outcome, WaitReason};
     use crate::engine::health::Problem;
+    use crate::engine::trends::digest::{
+        Direction, GapBucket, GapScope, GapSkill, ScopeCounts, TermCount, WishKind, WishSignal,
+        MARKET_SCAN_VERSION,
+    };
     use crate::engine::trends::{
         CitedItem, Digest, DigestData, Period, Point, Section, SkillCount, SkillCounts, TrendRun,
     };
@@ -519,9 +794,9 @@ mod tests {
     use super::{
         overview, parse_provider, provider_name, run_result, sections, ChartDto, DigestBodyDto,
     };
+    use crate::engine::prefs::Preferences;
     use crate::trends::demo;
     use crate::trends::rules::Cadence;
-    use crate::engine::prefs::Preferences;
 
     fn item(id: i64, url: &str) -> CitedItem {
         CitedItem {
@@ -595,23 +870,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_chart_scales_to_the_top_skill_and_says_where_each_stands() {
-        let skill = |name: &str, by_month: &[u32]| SkillCount {
-            skill: name.into(),
-            by_month: by_month.to_vec(),
-            total: by_month.iter().sum(),
-        };
-        let counts = SkillCounts {
-            months: vec!["2026-10".into(), "2026-11".into()],
-            documents: vec![100, 100],
-            skills: vec![skill("Rust", &[10, 20]), skill("Go", &[5, 5])],
-        };
-        let data = DigestData {
-            counts,
-            ..DigestData::default()
-        };
-        let digest = Digest {
+    fn digest_of(counts: SkillCounts) -> Digest {
+        Digest {
             report: crate::engine::store::Report {
                 id: 1,
                 kind: "weekly".into(),
@@ -621,25 +881,67 @@ mod tests {
                 citations_json: String::new(),
                 created_at: chrono::Utc::now(),
             },
-            data: Some(data),
+            data: Some(DigestData {
+                counts,
+                ..DigestData::default()
+            }),
+        }
+    }
+
+    fn skill(name: &str, by_month: &[u32]) -> SkillCount {
+        SkillCount {
+            skill: name.into(),
+            by_month: by_month.to_vec(),
+            total: by_month.iter().sum(),
+            ..SkillCount::default()
+        }
+    }
+
+    #[test]
+    fn a_chart_shows_shares_and_says_where_each_skill_stands() {
+        let counts = SkillCounts {
+            months: vec!["2026-10".into(), "2026-11".into()],
+            documents: vec![100, 100],
+            skills: vec![skill("Rust", &[10, 20]), skill("Go", &[5, 0])],
+            ..SkillCounts::default()
         };
+        let digest = digest_of(counts);
         let prefs = Preferences {
             nice_skills: vec!["Go".into()],
             ..Preferences::default()
         };
         let chart = ChartDto::new(&digest, &prefs).expect("a chart");
-        assert_eq!((chart.max, chart.documents), (30, 200));
+        // A report saved before P15: one global scope, no marks, no direction, no note.
+        assert!(!chart.marks && chart.pipeline.is_none());
+        assert_eq!(chart.scope, "global");
+        assert_eq!(chart.scopes.len(), 1);
+        let global = &chart.scopes[0];
+        assert_eq!(
+            (global.key, global.label, global.documents),
+            ("global", "Global", 200)
+        );
+        assert_eq!(global.note, None);
+        assert_eq!(
+            global
+                .months
+                .iter()
+                .map(|m| (m.label.as_str(), m.documents))
+                .collect::<Vec<_>>(),
+            [("Oct", 100), ("Nov", 100)]
+        );
+        assert_eq!(global.max_percent, 15);
+        assert_eq!(
+            global
+                .skills
+                .iter()
+                .map(|s| (s.name.as_str(), s.percent, s.share.as_str(), s.presence))
+                .collect::<Vec<_>>(),
+            [("Rust", 15, "15%", "absent"), ("Go", 3, "2.5%", "added")]
+        );
+        assert!(global.skills.iter().all(|s| s.direction.is_none()));
         assert_eq!(
             (chart.from_month.as_str(), chart.to_month.as_str()),
             ("2026-10", "2026-11")
-        );
-        assert_eq!(
-            chart
-                .skills
-                .iter()
-                .map(|s| (s.name.as_str(), s.presence))
-                .collect::<Vec<_>>(),
-            [("Rust", "absent"), ("Go", "added")]
         );
 
         let empty = Digest {
@@ -650,6 +952,206 @@ mod tests {
             ChartDto::new(&empty, &prefs).is_none(),
             "no skills, no chart"
         );
+    }
+
+    #[test]
+    fn a_chart_with_a_place_switches_between_local_and_global_and_starts_on_the_gap_scope() {
+        let mut rust = skill("Rust", &[30, 40]);
+        rust.direction = Direction::Rising;
+        rust.in_profile = true;
+        let mut php = skill("PHP", &[10, 5]);
+        php.direction = Direction::Falling;
+        php.wished = true;
+        let mut local_rust = skill("Rust", &[3, 4]);
+        local_rust.in_profile = true;
+        let counts = SkillCounts {
+            version: MARKET_SCAN_VERSION,
+            months: vec!["2026-10".into(), "2026-11".into()],
+            documents: vec![200, 200],
+            skills: vec![rust, php],
+            local: Some(ScopeCounts {
+                documents: vec![10, 10],
+                skills: vec![local_rust],
+            }),
+            place: "Singapore or remote".into(),
+            pipeline: Some(ScopeCounts {
+                documents: vec![4, 8],
+                skills: vec![skill("Rust", &[3, 6]), skill("Go", &[1, 1])],
+            }),
+            gap_scope: GapScope::Global,
+            ..SkillCounts::default()
+        };
+        let chart =
+            ChartDto::new(&digest_of(counts.clone()), &Preferences::default()).expect("a chart");
+        assert!(chart.marks);
+        assert_eq!(
+            chart.scopes.iter().map(|s| s.key).collect::<Vec<_>>(),
+            ["local", "global"]
+        );
+        assert_eq!(
+            chart.scope, "global",
+            "the local data was too thin for the gap"
+        );
+        let local = &chart.scopes[0];
+        assert_eq!(
+            (local.label, local.covers.as_str(), local.documents),
+            ("Local", "Singapore or remote", 20)
+        );
+        assert!(local
+            .note
+            .as_deref()
+            .is_some_and(|n| n.starts_with("Too little local data")));
+        assert_eq!(local.skills[0].share, "35%");
+        let global = &chart.scopes[1];
+        assert_eq!(global.note, None);
+        let rust = &global.skills[0];
+        assert!(rust.in_profile && !rust.wished);
+        assert_eq!(
+            rust.direction.as_ref().map(|t| (t.label, t.tone)),
+            Some(("rising", "ok"))
+        );
+        let php = &global.skills[1];
+        assert!(php.wished && !php.in_profile);
+        assert_eq!(
+            php.direction.as_ref().map(|t| (t.label, t.tone)),
+            Some(("falling", "warn"))
+        );
+        assert_eq!(
+            chart.pipeline.as_deref(),
+            Some("Your own leads, for comparison: 12 over the window; they name Rust, Go most. They are not counted in the market above.")
+        );
+
+        let local_gap = SkillCounts {
+            gap_scope: GapScope::Local,
+            ..counts
+        };
+        let chart = ChartDto::new(&digest_of(local_gap), &Preferences::default()).expect("a chart");
+        assert_eq!(chart.scope, "local");
+        assert!(
+            chart.scopes[0]
+                .note
+                .as_deref()
+                .is_some_and(|n| n.starts_with("Too few postings")),
+            "no local skill has a direction yet"
+        );
+    }
+
+    #[test]
+    fn the_gap_and_the_wishes_sit_in_their_sections_even_without_a_point() {
+        let gap = |name: &str, bucket, direction, share| GapSkill {
+            skill: name.into(),
+            bucket,
+            direction,
+            share_permille: share,
+        };
+        let data = DigestData {
+            items: vec![item(7, "https://a.test/1")],
+            points: vec![point(Section::WishesCheck, "PHP", &[7])],
+            counts: SkillCounts {
+                version: MARKET_SCAN_VERSION,
+                place: "Singapore".into(),
+                field: vec!["backend".into(), "engineer".into()],
+                gap_scope: GapScope::Local,
+                gap: vec![
+                    gap("Rust", GapBucket::BuildOn, Direction::Rising, 182),
+                    gap("Kubernetes", GapBucket::LearnNext, Direction::Steady, 95),
+                ],
+                uncatalogued: vec![TermCount {
+                    term: "Temporal".into(),
+                    items: 4,
+                }],
+                wishes: vec![
+                    WishSignal {
+                        wish: "PHP".into(),
+                        kind: WishKind::Skill,
+                        avoided: true,
+                        direction: Direction::Falling,
+                        mentions: 12,
+                    },
+                    WishSignal {
+                        wish: "climate tech".into(),
+                        kind: WishKind::Domain,
+                        avoided: false,
+                        direction: Direction::Unclear,
+                        mentions: 0,
+                    },
+                ],
+                ..SkillCounts::default()
+            },
+            ..DigestData::default()
+        };
+        let out = sections(&data, &Preferences::default());
+        assert_eq!(
+            out.iter().map(|s| (s.key, s.title)).collect::<Vec<_>>(),
+            [
+                ("for_you", "Your gap: build on, learn next, at risk"),
+                ("wishes_check", "Your wishes vs the market")
+            ]
+        );
+        let gap = out[0].gap.as_ref().expect("the gap");
+        assert!(out[0].points.is_empty());
+        assert_eq!(gap.scope, "local");
+        assert_eq!(
+            gap.hint,
+            "Judged by the app on postings in Singapore for backend engineer."
+        );
+        assert_eq!(
+            gap.groups
+                .iter()
+                .map(|g| (g.bucket, g.title, g.skills.len()))
+                .collect::<Vec<_>>(),
+            [
+                ("build_on", "Build on", 1),
+                ("learn_next", "Learn next", 1),
+                ("at_risk", "At risk", 0)
+            ]
+        );
+        let rust = &gap.groups[0].skills[0];
+        assert_eq!(
+            (rust.share.as_str(), rust.direction.label),
+            ("18%", "rising")
+        );
+        assert_eq!(gap.groups[1].skills[0].share, "9.5%");
+
+        let wishes = out[1].wishes.as_ref().expect("the wishes");
+        assert_eq!(out[1].points.len(), 1);
+        let read: Vec<_> = wishes
+            .wishes
+            .iter()
+            .map(|w| {
+                (
+                    w.wish.as_str(),
+                    w.kind,
+                    w.avoided,
+                    w.signal.label,
+                    w.detail.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("PHP", "skill", true, "falling", "12 postings"),
+                (
+                    "climate tech",
+                    "domain",
+                    false,
+                    "no data",
+                    "no posting names it"
+                )
+            ]
+        );
+
+        // A report saved before P15: its "for you" points keep their old title, nothing is added.
+        let old = DigestData {
+            items: vec![item(7, "https://a.test/1")],
+            points: vec![point(Section::ForYou, "", &[7])],
+            ..DigestData::default()
+        };
+        let out = sections(&old, &Preferences::default());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].title, "What it means for you");
+        assert!(out[0].gap.is_none() && out[0].wishes.is_none());
     }
 
     #[test]
@@ -736,11 +1238,32 @@ mod tests {
         );
         assert_eq!(seen.history.len(), 1);
         let digest = seen.digest.expect("a digest");
-        let DigestBodyDto::Data { sections, dropped } = digest.body else {
+        let DigestBodyDto::Data {
+            sections,
+            dropped,
+            uncatalogued,
+        } = digest.body
+        else {
             panic!("the demo digest has data")
         };
         assert_eq!(dropped, 1);
-        assert_eq!(sections.len(), 6, "every section has a point");
+        assert_eq!(sections.len(), 7, "every section has a point");
+        assert!(!uncatalogued.is_empty());
+        let gap = sections
+            .iter()
+            .find_map(|s| s.gap.as_ref())
+            .expect("the demo has a gap");
+        assert!(
+            gap.groups.iter().all(|g| !g.skills.is_empty()),
+            "every bucket has a skill"
+        );
+        let wishes = sections
+            .iter()
+            .find_map(|s| s.wishes.as_ref())
+            .expect("the demo has wishes");
+        assert!(wishes.wishes.iter().any(|w| w.avoided));
+        assert!(wishes.wishes.iter().any(|w| w.kind == "domain"));
+        assert!(wishes.wishes.iter().any(|w| w.signal.label == "no data"));
         assert!(
             sections
                 .iter()
@@ -748,7 +1271,18 @@ mod tests {
                 .all(|p| !p.citations.is_empty()),
             "every point cites an item"
         );
-        assert_eq!(seen.chart.map(|c| c.skills.len()), Some(10));
+        let chart = seen.chart.expect("a chart");
+        assert!(chart.marks && chart.pipeline.is_some());
+        assert_eq!(chart.scope, "local");
+        assert_eq!(
+            chart
+                .scopes
+                .iter()
+                .map(|s| (s.key, s.skills.len()))
+                .collect::<Vec<_>>(),
+            [("local", 10), ("global", 10)]
+        );
+        assert!(chart.scopes[0].documents < chart.scopes[1].documents);
 
         // A report that is gone falls back to the newest.
         let missing = overview(&core, Some(9999), Cadence::Quarterly).expect("an overview");

@@ -36,6 +36,7 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
   discover   P10/P12   `source/` (greenhouse, lever, ashby, hn_hiring, yc, career_page), `run` (graphs `discovery` and `source_run`), `score`, `dedup`, `handoff`,
                   `sources`, `queue` (QueueSnapshot), `promote` (graph `prepare_cv`, dismiss), `manual` (`Core::add_lead`: pasted link/file -> scored lead)
   trends     P13a collection: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`;
+                  P15 `frame` (MarketFrame: background + place, never wishes, decides what is collected and counted);
                   P13b `digest/` (extract, count, synthesize, cite: every point must cite stored items)
 src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |

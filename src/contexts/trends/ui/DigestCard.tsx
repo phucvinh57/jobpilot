@@ -1,10 +1,10 @@
 import { ChartPie, Check } from "lucide-react";
 
-import { Button, Caption, CiteChip, EmptyState, Heading, LinkButton, SectionLabel } from "@/shared";
+import { Button, Caption, CiteChip, EmptyState, Heading, LinkButton, SectionLabel, Tag } from "@/shared";
 
-import { digestHint } from "../domain/format";
+import { digestHint, termsLine } from "../domain/format";
 import { addAccessibleName, addLabel, addTooltip, canAdd } from "../domain/preferences";
-import type { Citation, Digest, Point } from "../domain/types";
+import type { Citation, Digest, Gap, Point, Wishes } from "../domain/types";
 import type { PreferenceAdds } from "../hooks";
 import { open } from "./links";
 
@@ -51,22 +51,112 @@ function DigestBody({ digest, adds }: { digest: Digest; adds: PreferenceAdds }) 
   return (
     <div className="flex flex-col gap-5">
       {body.sections.map((section) => (
-        <section key={section.title} aria-label={section.title} className="flex flex-col gap-4">
+        <section
+          key={section.key}
+          id={`trends-section-${section.key}`}
+          aria-label={section.title}
+          className="flex flex-col gap-4"
+        >
           <SectionLabel>{section.title}</SectionLabel>
-          <ul className="flex flex-col gap-4">
-            {section.points.map((point) => (
-              <PointRow key={point.index} point={point} adds={adds} />
-            ))}
-          </ul>
+          {section.gap && <GapView gap={section.gap} />}
+          {section.wishes && <WishesView wishes={section.wishes} />}
+          {section.points.length > 0 && (
+            <ul aria-label={`${section.title}: points`} className="flex flex-col gap-4">
+              {section.points.map((point) => (
+                <PointRow key={point.index} point={point} adds={adds} />
+              ))}
+            </ul>
+          )}
         </section>
       ))}
       {body.sections.length === 0 && (
         <p className="text-body text-muted">No point could be tied to a source this time.</p>
       )}
+      {body.uncatalogued.length > 0 && (
+        <p id="trends-uncatalogued" className="selectable text-small text-muted">
+          <span className="font-semibold text-ink">Terms not in the list: </span>
+          {termsLine(body.uncatalogued)}
+        </p>
+      )}
       <Caption>Every point links to the stored items it came from.</Caption>
       {body.dropped > 0 && (
-        <Caption>{body.dropped} point(s) were left out: no valid source, or a quote that is not in the source.</Caption>
+        <Caption>
+          {body.dropped} point(s) were left out: no valid source, a quote that is not in the source, or a claim against
+          the app's numbers.
+        </Caption>
       )}
+    </div>
+  );
+}
+
+/** The gap as the app sorted it: build on, learn next, at risk. */
+function GapView({ gap }: { gap: Gap }) {
+  return (
+    <div id="trends-gap" className="flex flex-col gap-3">
+      <Caption>{gap.hint}</Caption>
+      {gap.groups.map((group) => (
+        <div
+          key={group.bucket}
+          id={`trends-gap-${group.bucket}`}
+          role="group"
+          aria-label={group.title}
+          className="flex flex-col gap-1.5"
+        >
+          <p className="text-body">
+            <span className="font-semibold text-ink">{group.title}</span>
+            <span className="text-small text-muted"> · {group.hint}</span>
+          </p>
+          {group.skills.length === 0 ? (
+            <p className="text-small text-muted">{group.empty}</p>
+          ) : (
+            <ul className="flex flex-wrap gap-2">
+              {group.skills.map((skill) => (
+                <li
+                  key={skill.skill}
+                  aria-label={`${skill.skill}: ${skill.share} of postings, ${skill.direction.label}`}
+                  className="flex items-center gap-1.5 border border-border bg-surface-alt py-0.5 pr-0.5 pl-2"
+                >
+                  <span className="selectable text-small font-medium text-ink">{skill.skill}</span>
+                  <span className="text-small text-muted tabular-nums">{skill.share}</span>
+                  <Tag tone={skill.direction.tone}>{skill.direction.label}</Tag>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Each wish with what the app measured for it; disagreement is shown, not softened. */
+function WishesView({ wishes }: { wishes: Wishes }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Caption>{wishes.hint}</Caption>
+      <ul
+        id="trends-wishes"
+        aria-label="Your wishes, measured"
+        className="flex flex-col divide-y divide-border border border-border"
+      >
+        {wishes.wishes.map((wish, i) => (
+          <li
+            key={`${wish.kind}-${wish.wish}`}
+            id={`trends-wish-${i}`}
+            aria-label={`${wish.wish} (${wish.kind}${wish.avoided ? ", avoided" : ""}): ${wish.signal.label}, ${wish.detail}`}
+            className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2"
+          >
+            <span className="selectable min-w-0 text-body font-semibold text-ink">{wish.wish}</span>
+            <span className="text-small text-muted">
+              {wish.avoided ? `${wish.kind} you avoid` : `${wish.kind} you want`}
+            </span>
+            <span className="ml-auto flex items-center gap-2">
+              <span className="text-small text-muted tabular-nums">{wish.detail}</span>
+              <Tag tone={wish.signal.tone}>{wish.signal.label}</Tag>
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

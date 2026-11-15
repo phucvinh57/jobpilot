@@ -8,8 +8,9 @@
 //! ```
 //!
 //! - `plan` reads the enabled trend sources, whether a search API key is saved, and builds the
-//!   report queries from the preferences. Only ids, names and queries go into the state, never a
-//!   key.
+//!   report queries from the market frame ([`MarketFrame`]: the profile's roles and the preferred
+//!   locations, never the wished skills, domains or roles). Only ids, names and queries go into the
+//!   state, never a key.
 //! - The collectors run in parallel and each writes only its own part of the state: the lists
 //!   `items` and `outcomes` (append fields) and, for `feeds`, `challenge`. Item text goes to
 //!   `<data_dir>/trends/<hash of the URL>.txt` right away, so a checkpoint carries addresses, not
@@ -50,6 +51,7 @@ use tokio::time::Instant;
 
 use super::config::TrendConfig;
 use super::digest::{self, DigestConfig, DigestEnv, DigestState};
+use super::frame::MarketFrame;
 use super::http::{FetchError, Http};
 use super::period::Period;
 use super::source::report_search::{self, build_queries};
@@ -85,7 +87,7 @@ pub struct Plan {
     pub search_skip: Option<String>,
 }
 
-/// Report search: which API, and the queries built from the preferences. Never the key.
+/// Report search: which API, and the queries built from the market frame. Never the key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchPlan {
     pub provider: SearchProvider,
@@ -182,6 +184,9 @@ struct Env {
     paths: Paths,
     config: Arc<TrendConfig>,
     http: Http,
+    /// The master profile the market frame reads the background from (`DigestConfig::profile`);
+    /// `None`: no background, the queries come from the place alone.
+    profile: Option<PathBuf>,
 }
 
 impl Env {
@@ -200,8 +205,9 @@ pub fn graph(
 ) -> Result<GraphDef<TrendRun>> {
     let http = Http::new(&config.limits.http())?;
     let collector_timeout = config.limits.collector_budget + NODE_MARGIN;
+    let profile = digest.profile.clone();
     let digest_env = Arc::new(DigestEnv { store: store.clone(), secrets: secrets.clone(), config: digest });
-    let env = Arc::new(Env { store, secrets, paths, config: Arc::new(config), http });
+    let env = Arc::new(Env { store, secrets, paths, config: Arc::new(config), http, profile });
     let mut graph = GraphDef::new(GRAPH).append("items").append("outcomes").node("plan", {
         let env = env.clone();
         move |s| plan(env.clone(), s)
@@ -250,10 +256,12 @@ async fn plan(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
     match super::search_provider(&env.secrets) {
         Ok(Some(provider)) => {
             let prefs = env.store.preferences().unwrap_or_else(|_| {
-                tracing::warn!("the saved preferences could not be read; general queries are used");
+                tracing::warn!("the saved preferences could not be read; the queries use no place");
                 Default::default()
             });
-            let queries = build_queries(&prefs, &s.period, env.config.limits.max_queries);
+            // Background and place only: the frame reads no wish from the preferences.
+            let frame = MarketFrame::load(env.profile.as_deref(), &prefs);
+            let queries = build_queries(&frame, &s.period, env.config.limits.max_queries);
             plan.search = Some(SearchPlan { provider, queries });
         }
         Ok(None) => plan.search_skip = Some("no search API key saved".into()),

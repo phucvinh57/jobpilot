@@ -1,14 +1,18 @@
 //! Pure rules of this context, unit-tested here: how a period is named, how a skill's trend is
 //! worded (counted in code, never by the AI), how a source's last run reads, how a finished run is
-//! summarised, and where a topic stands in the saved preferences.
+//! summarised, where a topic stands in the saved preferences, and how the market numbers read
+//! (shares, directions, the gap and the wishes: all decided in code, never by the AI).
 
-use chrono::{Local, NaiveDate};
 use crate::engine::graph::nodes::ChallengeKind;
 use crate::engine::prefs::Preferences;
 use crate::engine::store::{Report, Source};
-use crate::engine::trends::{
-    Digest, Period, Section, SkillCount, SourceKind, SourceStatus, TrendRun,
+use crate::engine::trends::digest::{
+    Direction, GapBucket, GapScope, ScopeCounts, WishKind, WishSignal, MARKET_SCAN_VERSION,
 };
+use crate::engine::trends::{
+    Digest, Period, Section, SkillCount, SkillCounts, SourceKind, SourceStatus, TrendRun,
+};
+use chrono::{Local, NaiveDate};
 
 pub use crate::shared::topics::Presence;
 use crate::shared::topics::{self, presence_in, with_item};
@@ -145,6 +149,189 @@ pub fn describe(skill: &SkillCount, documents: &[u32], latest_partial: bool) -> 
     }
 }
 
+// ------------------------------------------------------------------ market numbers
+
+/// `part` of `whole` in per mille, rounded (0 when there is no whole).
+pub fn permille(part: u32, whole: u32) -> u32 {
+    crate::engine::trends::digest::permille(u64::from(part), u64::from(whole))
+}
+
+/// A per mille as a whole percent, rounded half up: what a bar is drawn and labelled with.
+pub fn percent(permille: u32) -> u32 {
+    permille.saturating_add(5) / 10
+}
+
+/// A per mille in words: `18%`, with one decimal below 10% (`2.5%`), `0%` for none.
+pub fn percent_text(permille: u32) -> String {
+    match permille {
+        0 => "0%".into(),
+        1..=99 => format!("{}.{}%", permille / 10, permille % 10),
+        _ => format!("{}%", percent(permille)),
+    }
+}
+
+/// Does the report know the user's background and place (P15 and later)? A report saved before
+/// has none of it: the screen then shows no direction, mark, scope, gap or wish. Told by the
+/// counts' version, so a new report with thin data is not taken for an old one.
+pub fn knows_background(counts: &SkillCounts) -> bool {
+    counts.version >= MARKET_SCAN_VERSION
+}
+
+/// How a direction reads on its tag, and the tag's tone.
+pub fn direction_tag(direction: Direction) -> (&'static str, Tone) {
+    match direction {
+        Direction::Rising => ("rising", Tone::Ok),
+        Direction::Steady => ("steady", Tone::Accent),
+        Direction::Falling => ("falling", Tone::Warn),
+        Direction::Unclear => ("unclear", Tone::Neutral),
+    }
+}
+
+/// How a scope is spelled for the web app.
+pub fn scope_key(scope: GapScope) -> &'static str {
+    match scope {
+        GapScope::Global => "global",
+        GapScope::Local => "local",
+    }
+}
+
+/// `2026-06` -> `Jun`; anything else as it is.
+pub fn month_label(month: &str) -> String {
+    const NAMES: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    month
+        .split_once('-')
+        .and_then(|(_, m)| m.parse::<usize>().ok())
+        .and_then(|m| m.checked_sub(1))
+        .and_then(|m| NAMES.get(m))
+        .map_or_else(|| month.to_string(), |name| (*name).to_string())
+}
+
+/// What a scope of the chart says about its own data, when something needs saying: the local
+/// market was too thin for the gap, or no skill has a direction yet.
+pub fn scope_note(
+    scope: GapScope,
+    counts: &ScopeCounts,
+    gap_scope: GapScope,
+    knows: bool,
+) -> Option<String> {
+    if !knows {
+        return None;
+    }
+    if scope == GapScope::Local && gap_scope == GapScope::Global {
+        return Some(
+            "Too little local data to tell directions: your gap is judged on the global market."
+                .into(),
+        );
+    }
+    let unclear = counts
+        .skills
+        .iter()
+        .all(|s| s.direction == Direction::Unclear);
+    (!counts.skills.is_empty() && unclear)
+        .then(|| "Too few postings yet to tell which way a skill is going.".into())
+}
+
+/// The user's own leads next to the market, as one sentence: how many, and the skills they name
+/// most. They are never counted in the market's numbers.
+pub fn pipeline_note(pipeline: &ScopeCounts) -> String {
+    let documents: u32 = pipeline.documents.iter().sum();
+    let top: Vec<&str> = pipeline
+        .skills
+        .iter()
+        .take(3)
+        .map(|s| s.skill.as_str())
+        .collect();
+    let named = if top.is_empty() {
+        String::new()
+    } else {
+        format!("; they name {} most", top.join(", "))
+    };
+    format!("Your own leads, for comparison: {documents} over the window{named}. They are not counted in the market above.")
+}
+
+/// The heading of a section. A report saved before P15 wrote its `for_you` points about the
+/// user's wishes, not the gap: it keeps the old title.
+pub fn section_title(section: Section, knows: bool) -> &'static str {
+    match section {
+        Section::ForYou if !knows => "What it means for you",
+        _ => section.title(),
+    }
+}
+
+/// The buckets of the gap, in display order.
+pub const BUCKETS: [GapBucket; 3] = [GapBucket::BuildOn, GapBucket::LearnNext, GapBucket::AtRisk];
+
+/// `build_on` / `learn_next` / `at_risk`: the stable part of the element ids.
+pub fn bucket_key(bucket: GapBucket) -> &'static str {
+    match bucket {
+        GapBucket::BuildOn => "build_on",
+        GapBucket::LearnNext => "learn_next",
+        GapBucket::AtRisk => "at_risk",
+    }
+}
+
+/// The title of a bucket, what it means, and what an empty one says.
+pub fn bucket_words(bucket: GapBucket) -> (&'static str, &'static str, &'static str) {
+    match bucket {
+        GapBucket::BuildOn => (
+            "Build on",
+            "In your profile, and rising or steadily asked for.",
+            "No skill of your profile is in steady demand here yet.",
+        ),
+        GapBucket::LearnNext => (
+            "Learn next",
+            "Not in your profile, and rising or often asked for in your field.",
+            "Nothing your field asks for is missing from your profile.",
+        ),
+        GapBucket::AtRisk => (
+            "At risk",
+            "In your profile, and asked for less and less.",
+            "No skill of your profile is falling.",
+        ),
+    }
+}
+
+/// Which market the gap and the wishes were judged on, in words.
+pub fn judged_on(scope: GapScope, place: &str, field: &[String]) -> String {
+    let market = match (scope, place.is_empty()) {
+        (GapScope::Local, false) => format!("postings in {place}"),
+        (GapScope::Local, true) => "local postings".to_string(),
+        (GapScope::Global, _) => "all postings".to_string(),
+    };
+    if field.is_empty() {
+        format!("Judged by the app on {market}.")
+    } else {
+        format!("Judged by the app on {market} for {}.", field.join(" "))
+    }
+}
+
+/// `skill` / `domain`.
+pub fn wish_kind(kind: WishKind) -> &'static str {
+    match kind {
+        WishKind::Skill => "skill",
+        WishKind::Domain => "domain",
+    }
+}
+
+/// What the market says about one wish: its direction's tag ("no data" when no posting names
+/// it), and the count behind it.
+pub fn wish_signal(wish: &WishSignal) -> ((&'static str, Tone), String) {
+    if wish.mentions == 0 {
+        return (("no data", Tone::Neutral), "no posting names it".into());
+    }
+    let postings = if wish.mentions == 1 {
+        "posting"
+    } else {
+        "postings"
+    };
+    (
+        direction_tag(wish.direction),
+        format!("{} {postings}", wish.mentions),
+    )
+}
+
 // ------------------------------------------------------------------ links
 
 /// Only web addresses are opened, whatever the saved data says.
@@ -158,6 +345,7 @@ pub fn is_web_url(url: &str) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Neutral,
+    Accent,
     Ok,
     Warn,
     Danger,
@@ -167,6 +355,7 @@ impl Tone {
     pub fn as_str(self) -> &'static str {
         match self {
             Tone::Neutral => "neutral",
+            Tone::Accent => "accent",
             Tone::Ok => "ok",
             Tone::Warn => "warn",
             Tone::Danger => "danger",
@@ -262,7 +451,7 @@ pub fn summarize(run: &TrendRun) -> (String, Vec<String>) {
     }
     if d.dropped > 0 {
         lines.push(format!(
-            "{} point(s) were left out: no valid source, or a quote that is not in the source.",
+            "{} point(s) were left out: no valid source, a quote that is not in the source, or a claim against the app's numbers.",
             d.dropped
         ));
     }
@@ -359,9 +548,16 @@ mod tests {
         Period, Section, SkillCount, SourceOutcome, SourceStatus, TrendRun,
     };
 
+    use crate::engine::trends::digest::{
+        Direction, GapBucket, GapScope, ScopeCounts, SkillCounts, WishKind, WishSignal,
+        MARKET_SCAN_VERSION,
+    };
+
     use super::{
-        describe, describe_source, header_summary, is_web_url, latest_month_is_partial,
-        period_title, status_tag, summarize, target, Cadence, Field, Preferences, Presence, Tone,
+        bucket_key, bucket_words, describe, describe_source, direction_tag, header_summary,
+        is_web_url, judged_on, knows_background, latest_month_is_partial, month_label, percent,
+        percent_text, period_title, permille, pipeline_note, scope_note, section_title, status_tag,
+        summarize, target, wish_signal, Cadence, Field, Preferences, Presence, Tone, BUCKETS,
     };
 
     fn period() -> Period {
@@ -373,6 +569,7 @@ mod tests {
             skill: "Rust".into(),
             by_month: by_month.to_vec(),
             total: by_month.iter().sum(),
+            ..SkillCount::default()
         }
     }
 
@@ -576,6 +773,172 @@ mod tests {
             "made after it"
         );
         assert!(!latest_month_is_partial(&[], "2026-12"));
+    }
+
+    // ---- market numbers
+
+    #[test]
+    fn shares_are_per_mille_of_the_documents_and_read_as_percents() {
+        assert_eq!(permille(30, 200), 150);
+        assert_eq!(permille(1, 3), 333);
+        assert_eq!(permille(2, 3), 667, "rounded");
+        assert_eq!(permille(5, 0), 0, "no documents, no share");
+        assert_eq!(permille(u32::MAX, 1), u32::MAX, "never overflows");
+        assert_eq!(
+            (percent(150), percent(25), percent(4), percent(0)),
+            (15, 3, 0, 0)
+        );
+        assert_eq!(percent_text(182), "18%");
+        assert_eq!(percent_text(95), "9.5%");
+        assert_eq!(percent_text(1), "0.1%");
+        assert_eq!(percent_text(0), "0%");
+        assert_eq!(percent_text(1000), "100%");
+    }
+
+    #[test]
+    fn a_report_knows_the_background_only_when_it_carries_any_of_it() {
+        let mut counts = SkillCounts {
+            skills: vec![skill(&[1, 2])],
+            ..SkillCounts::default()
+        };
+        assert!(!knows_background(&counts), "a report saved before P15");
+        let thin = SkillCounts {
+            version: MARKET_SCAN_VERSION,
+            ..SkillCounts::default()
+        };
+        assert!(
+            knows_background(&thin),
+            "a new report with thin data is still new"
+        );
+        assert_eq!(
+            section_title(crate::engine::trends::Section::ForYou, false),
+            "What it means for you"
+        );
+        counts.version = MARKET_SCAN_VERSION;
+        assert!(knows_background(&counts));
+        assert_eq!(
+            section_title(crate::engine::trends::Section::ForYou, true),
+            "Your gap: build on, learn next, at risk"
+        );
+        let placed = SkillCounts {
+            local: Some(ScopeCounts::default()),
+            ..SkillCounts::default()
+        };
+        assert!(
+            !knows_background(&placed),
+            "the version decides, not the fields"
+        );
+    }
+
+    #[test]
+    fn directions_and_wishes_read_as_tags() {
+        assert_eq!(direction_tag(Direction::Rising), ("rising", Tone::Ok));
+        assert_eq!(direction_tag(Direction::Steady), ("steady", Tone::Accent));
+        assert_eq!(direction_tag(Direction::Falling), ("falling", Tone::Warn));
+        assert_eq!(
+            direction_tag(Direction::Unclear),
+            ("unclear", Tone::Neutral)
+        );
+        let wish = |direction, mentions| WishSignal {
+            wish: "Rust".into(),
+            kind: WishKind::Skill,
+            avoided: false,
+            direction,
+            mentions,
+        };
+        assert_eq!(
+            wish_signal(&wish(Direction::Rising, 42)),
+            (("rising", Tone::Ok), "42 postings".to_string())
+        );
+        assert_eq!(wish_signal(&wish(Direction::Steady, 1)).1, "1 posting");
+        assert_eq!(
+            wish_signal(&wish(Direction::Rising, 0)),
+            (
+                ("no data", Tone::Neutral),
+                "no posting names it".to_string()
+            ),
+            "no mention is no data, whatever the direction says"
+        );
+    }
+
+    #[test]
+    fn a_scope_says_when_its_data_is_too_thin() {
+        let unclear = ScopeCounts {
+            documents: vec![5, 5],
+            skills: vec![skill(&[1, 2])],
+        };
+        assert!(
+            scope_note(GapScope::Local, &unclear, GapScope::Global, true)
+                .is_some_and(|n| n.starts_with("Too little local data"))
+        );
+        assert!(
+            scope_note(GapScope::Global, &unclear, GapScope::Global, true)
+                .is_some_and(|n| n.starts_with("Too few postings"))
+        );
+        assert_eq!(
+            scope_note(GapScope::Global, &unclear, GapScope::Global, false),
+            None,
+            "an old report says nothing"
+        );
+        let mut clear = unclear.clone();
+        clear.skills[0].direction = Direction::Rising;
+        assert_eq!(
+            scope_note(GapScope::Local, &clear, GapScope::Local, true),
+            None
+        );
+        assert_eq!(
+            scope_note(
+                GapScope::Global,
+                &ScopeCounts::default(),
+                GapScope::Global,
+                true
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn months_gap_buckets_and_the_pipeline_read_in_words() {
+        assert_eq!(month_label("2026-06"), "Jun");
+        assert_eq!(month_label("2026-12"), "Dec");
+        assert_eq!(month_label("2026-13"), "2026-13");
+        assert_eq!(month_label("June"), "June");
+        assert_eq!(
+            BUCKETS.map(bucket_key),
+            ["build_on", "learn_next", "at_risk"]
+        );
+        assert_eq!(
+            BUCKETS.map(|b| bucket_words(b).0),
+            ["Build on", "Learn next", "At risk"]
+        );
+        assert_eq!(
+            bucket_words(GapBucket::AtRisk).2,
+            "No skill of your profile is falling."
+        );
+        assert_eq!(
+            judged_on(
+                GapScope::Local,
+                "Singapore or remote",
+                &["backend".into(), "engineer".into()]
+            ),
+            "Judged by the app on postings in Singapore or remote for backend engineer."
+        );
+        assert_eq!(
+            judged_on(GapScope::Global, "Singapore", &[]),
+            "Judged by the app on all postings."
+        );
+        assert_eq!(
+            judged_on(GapScope::Local, "", &[]),
+            "Judged by the app on local postings."
+        );
+        let pipeline = ScopeCounts {
+            documents: vec![2, 3],
+            skills: Vec::new(),
+        };
+        assert_eq!(
+            pipeline_note(&pipeline),
+            "Your own leads, for comparison: 5 over the window. They are not counted in the market above."
+        );
     }
 
     // ---- links

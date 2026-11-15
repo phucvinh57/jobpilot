@@ -1,5 +1,9 @@
 //! `enforce_citations` and `save_report`: what the model wrote is checked in code before it is
 //! shown, then saved as a `reports` row.
+//!
+//! Besides the citations, a point must agree with what the app counted ([`CodeFacts`]): a rising
+//! or falling skill must not contradict the direction code computed, a `for_you` point is about a
+//! skill of the gap, a `wishes_check` point about one of the user's wishes.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -7,7 +11,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::{read_text, CitedItem, DigestData, DigestEnv, DigestState, Point, Section};
+use super::count::Vocabulary;
+use super::{read_text, CitedItem, DigestData, DigestEnv, DigestState, Direction, GapBucket, GapScope, Point, Section, SkillCounts, WishKind};
 use crate::engine::store::{NewReport, Report};
 use crate::engine::trends::collect::TrendRun;
 use crate::engine::trends::period::Period;
@@ -75,17 +80,83 @@ impl Searchable {
     }
 }
 
-/// Drop every point without a valid citation (an id of an item this digest was built from) and
-/// every point whose quote is in none of its cited items. Invalid ids are removed from the points
-/// that stay, at most [`MAX_CITATIONS`] are kept. Then the first [`MAX_POINTS_PER_SECTION`] points
-/// of a section and the first [`MAX_POINTS`] in all stay. Points dropped for the first two reasons
-/// are counted in `dropped`.
+/// What the app counted that a point must not contradict. Topics are matched ignoring case, and a
+/// skill also by the name the vocabulary gives it ("golang" is Go).
+struct CodeFacts {
+    /// The direction of each skill (lower-case name), one map per scope the prompt showed (global,
+    /// and local when there is one): a point may rest on either table.
+    directions: Vec<HashMap<String, Direction>>,
+    /// The skills of the gap (lower case).
+    gap: HashSet<String>,
+    /// The wishes (lower case).
+    wishes: HashSet<String>,
+    vocab: Vocabulary,
+}
+
+impl CodeFacts {
+    fn new(counts: &SkillCounts) -> Self {
+        let scopes = std::iter::once(&counts.skills).chain(counts.local.as_ref().map(|l| &l.skills));
+        Self {
+            directions: scopes.map(|skills| skills.iter().map(|s| (key(&s.skill), s.direction)).collect()).collect(),
+            gap: counts.gap.iter().map(|g| key(&g.skill)).collect(),
+            wishes: counts.wishes.iter().map(|w| key(&w.wish)).collect(),
+            vocab: Vocabulary::new(&[]),
+        }
+    }
+
+    /// The keys a topic may stand for: as written, and the vocabulary's name for it.
+    fn keys(&self, topic: &str) -> Vec<String> {
+        let mut keys = vec![key(topic)];
+        if let Some(name) = self.vocab.canonical(topic) {
+            keys.push(key(name));
+        }
+        keys
+    }
+
+    /// The skill's direction in each scope that counted it.
+    fn directions(&self, topic: &str) -> Vec<Direction> {
+        let keys = self.keys(topic);
+        self.directions.iter().filter_map(|scope| keys.iter().find_map(|k| scope.get(k).copied())).collect()
+    }
+
+    /// Is a rising (or falling) point against the counts: every scope that counted the skill gives
+    /// it a clear direction other than `claimed`? A skill that was not counted, or is unclear or
+    /// `claimed` in one scope, keeps its point: it rests on that table or on its cited evidence.
+    fn contradicts(&self, topic: &str, claimed: Direction) -> bool {
+        let found = self.directions(topic);
+        !found.is_empty() && found.iter().all(|&d| d != claimed && d != Direction::Unclear)
+    }
+
+    /// Does the point agree with the counts?
+    fn agree(&self, point: &Point) -> bool {
+        let topic = point.topic.as_str();
+        match point.section {
+            Section::RisingSkills => !self.contradicts(topic, Direction::Rising),
+            Section::FallingSkills => !self.contradicts(topic, Direction::Falling),
+            Section::ForYou => topic.is_empty() || self.keys(topic).iter().any(|k| self.gap.contains(k)),
+            Section::WishesCheck => self.wishes.contains(&key(topic)),
+            Section::Domains | Section::Funding | Section::Hiring => true,
+        }
+    }
+}
+
+fn key(text: &str) -> String {
+    one_line(text).to_lowercase()
+}
+
+/// Drop every point without a valid citation (an id of an item this digest was built from), every
+/// point whose quote is in none of its cited items, and every point that contradicts the counts
+/// ([`CodeFacts::agree`]). Invalid ids are removed from the points that stay, at most
+/// [`MAX_CITATIONS`] are kept. Then the first [`MAX_POINTS_PER_SECTION`] points of a section and
+/// the first [`MAX_POINTS`] in all stay. Points dropped for the first three reasons are counted in
+/// `dropped`.
 pub(super) async fn enforce_citations(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendRun> {
     let valid: HashSet<i64> = s.digest.items.iter().copied().collect();
+    let facts = CodeFacts::new(&s.digest.counts.clone().unwrap_or_default());
     let drafted = std::mem::take(&mut s.digest.points);
     let total = drafted.len();
     let mut searchable: HashMap<i64, Searchable> = HashMap::new();
-    let (mut uncited, mut fake_quotes, mut empty, mut over_limit) = (0usize, 0usize, 0usize, 0usize);
+    let (mut uncited, mut fake_quotes, mut empty, mut contradicts, mut over_limit) = (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut kept: Vec<Point> = Vec::new();
 
     for mut point in drafted {
@@ -94,6 +165,10 @@ pub(super) async fn enforce_citations(env: Arc<DigestEnv>, mut s: TrendRun) -> R
         point.quote = one_line(&point.quote);
         if point.text.is_empty() {
             empty += 1;
+            continue;
+        }
+        if !facts.agree(&point) {
+            contradicts += 1;
             continue;
         }
         let mut ids: Vec<i64> = Vec::new();
@@ -141,8 +216,8 @@ pub(super) async fn enforce_citations(env: Arc<DigestEnv>, mut s: TrendRun) -> R
     }
     kept.sort_by_key(|p| Section::ALL.iter().position(|s| *s == p.section));
 
-    tracing::info!(drafted = total, kept = kept.len(), uncited, fake_quotes, empty, over_limit, "digest citations enforced");
-    s.digest.dropped = u32::try_from(uncited + fake_quotes + empty).unwrap_or(u32::MAX);
+    tracing::info!(drafted = total, kept = kept.len(), uncited, fake_quotes, empty, contradicts, over_limit, "digest citations enforced");
+    s.digest.dropped = u32::try_from(uncited + fake_quotes + empty + contradicts).unwrap_or(u32::MAX);
     s.digest.points = kept;
     Ok(s)
 }
@@ -269,8 +344,10 @@ fn link_destination(url: &str) -> Option<String> {
 }
 
 /// The readable digest: sections of points, each point followed by its sources as links, the
-/// quote under it, and a table of the most mentioned skills. What the model wrote is escaped, and
-/// the only links are the stored addresses of the cited items.
+/// quote under it, a table of the most mentioned skills, and what code computed for the user (the
+/// gap by bucket, the wishes against the market, the terms not in the list). What the model wrote
+/// (and the extracted terms) is escaped, and the only links are the stored addresses of the cited
+/// items.
 pub fn render_markdown(period: &Period, data: &DigestData) -> String {
     let url_of: HashMap<i64, &str> = data.items.iter().map(|i| (i.id, i.url.as_str())).collect();
     let mut md = format!("# {}\n\n", report_title(period));
@@ -322,12 +399,56 @@ pub fn render_markdown(period: &Period, data: &DigestData) -> String {
         }
         md.push('\n');
     }
+    render_lens(&mut md, counts);
     if data.dropped > 0 {
         let _ = writeln!(
             md,
-            "_{} point(s) were left out: no valid source, or a quote that is not in the source._",
+            "_{} point(s) were left out: no valid source, a quote that is not in the source, or a claim against the app's numbers._",
             data.dropped
         );
     }
     md
+}
+
+
+
+/// The parts of `body_md` computed for the user, from the counts alone (reports saved before they
+/// existed have none of them, and render as before).
+fn render_lens(md: &mut String, counts: &SkillCounts) {
+    if !counts.gap.is_empty() {
+        let scope = match counts.gap_scope {
+            GapScope::Local => "local",
+            GapScope::Global => "global",
+        };
+        let _ = write!(md, "## Gap, sorted by the app\n\nSkills of the {scope} postings of your field against your profile; share of those postings over the window.\n\n");
+        for (bucket, label) in [(GapBucket::BuildOn, "Build on"), (GapBucket::LearnNext, "Learn next"), (GapBucket::AtRisk, "At risk")] {
+            let skills: Vec<String> = counts
+                .gap
+                .iter()
+                .filter(|g| g.bucket == bucket)
+                .map(|g| format!("{} ({}, {})", escape_md(&g.skill), g.direction.as_str(), super::permille_text(g.share_permille)))
+                .collect();
+            if !skills.is_empty() {
+                let _ = writeln!(md, "- {label}: {}", skills.join(", "));
+            }
+        }
+        md.push('\n');
+    }
+    if !counts.wishes.is_empty() {
+        md.push_str("## Wishes against the market, measured by the app\n\n| Wish | Kind | Avoid? | Direction | Mentions |\n|---|---|---|---|---|\n");
+        for wish in &counts.wishes {
+            let kind = match wish.kind {
+                WishKind::Skill => "skill",
+                WishKind::Domain => "domain",
+            };
+            let direction = if wish.mentions == 0 { "no data" } else { wish.direction.as_str() };
+            let avoid = if wish.avoided { "yes" } else { "no" };
+            let _ = writeln!(md, "| {} | {kind} | {avoid} | {direction} | {} |", escape_md(&wish.wish), wish.mentions);
+        }
+        md.push('\n');
+    }
+    if !counts.uncatalogued.is_empty() {
+        let terms: Vec<String> = counts.uncatalogued.iter().map(|t| format!("{} ({})", escape_md(&t.term), t.items)).collect();
+        let _ = write!(md, "Terms not in the list (items naming them): {}\n\n", terms.join(", "));
+    }
 }

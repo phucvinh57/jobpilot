@@ -119,7 +119,7 @@ fn one_point(user: &str) -> Value {
 }
 
 fn digest_config(llm: &Arc<Scripted>) -> DigestConfig {
-    DigestConfig { llm: Some(llm.clone()), limits: DigestLimits { batch_items: 100, ..DigestLimits::default() } }
+    DigestConfig { llm: Some(llm.clone()), limits: DigestLimits { batch_items: 100, ..DigestLimits::default() }, profile: None }
 }
 
 fn done(outcome: Outcome<TrendRun>) -> TrendRun {
@@ -339,6 +339,7 @@ async fn one_failed_extraction_batch_does_not_fail_the_digest() {
     let digest = DigestConfig {
         llm: Some(llm.clone()),
         limits: DigestLimits { batch_items: 3, concurrency: 1, ..DigestLimits::default() },
+        profile: None,
     };
 
     let state = done(core.collect_trends_and_digest_with(period(), config(&fx), digest).await.unwrap());
@@ -449,11 +450,17 @@ async fn enforce_citations_applies_the_limits_of_the_prompt() {
     let ids: Vec<i64> = (0..8).map(|n| stored_item(&store, dir.path(), &format!("https://a.test/{n}"), &format!("Item {n}"), "text", None)).collect();
     let mut state = TrendRun::new(period());
     state.digest.items = ids.clone();
-    // Five valid points in each of the six sections, each citing all eight items.
+    state.digest.counts = Some(SkillCounts {
+        wishes: vec![WishSignal { wish: "Rust".into(), kind: WishKind::Skill, avoided: false, direction: Direction::Unclear, mentions: 0 }],
+        ..SkillCounts::default()
+    });
+    // Five valid points in each section, each citing all eight items.
     state.digest.points = Section::ALL
         .iter()
         .flat_map(|section| {
-            (0..5).map(|n| Point { section: *section, topic: String::new(), text: format!("{} point {n}", section.as_str()), quote: String::new(), citations: ids.clone() })
+            let topic = if *section == Section::WishesCheck { "Rust" } else { "" };
+            let ids = &ids;
+            (0..5).map(move |n| Point { section: *section, topic: topic.into(), text: format!("{} point {n}", section.as_str()), quote: String::new(), citations: ids.clone() })
         })
         .collect();
 
@@ -494,7 +501,7 @@ fn the_markdown_carries_no_link_or_markup_the_model_wrote() {
             },
             Point { section: Section::ForYou, topic: String::new(), text: "- not a nested list".into(), quote: String::new(), citations: vec![1] },
         ],
-        counts: SkillCounts { months: vec!["2026-11".into()], documents: vec![1], skills: vec![SkillCount { skill: "a|b".into(), by_month: vec![1], total: 1 }] },
+        counts: SkillCounts { months: vec!["2026-11".into()], documents: vec![1], skills: vec![SkillCount { skill: "a|b".into(), by_month: vec![1], total: 1, ..SkillCount::default() }], ..SkillCounts::default() },
         items_read: 5,
         dropped: 0,
     };
@@ -530,7 +537,7 @@ fn the_markdown_carries_no_link_or_markup_the_model_wrote() {
 }
 
 #[tokio::test]
-async fn the_digest_counts_hiring_postings_and_leads_from_the_store() {
+async fn the_digest_counts_hiring_postings_and_never_mixes_in_the_leads() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_in_memory().unwrap();
     let now = Utc::now();
@@ -542,25 +549,351 @@ async fn the_digest_counts_hiring_postings_and_leads_from_the_store() {
     stored_item(&store, dir.path(), "https://blog.test/hiring", "Blog", &posting("Rust Kafka Kubernetes"), Some(now));
     // A posting from long before the window is not counted either.
     stored_item(&store, dir.path(), "https://news.ycombinator.com/item?id=4", "Old", &posting("Rust Rust"), Some(now - Span::days(400)));
+    store.save_preferences(&Preferences { nice_skills: vec!["Kafka".into(), "Gleam".into()], ..Preferences::default() }).unwrap();
+    let env = env_with(store);
+    let period = Period::week_of(now.date_naive());
+
+    let before = count::count(env.clone(), TrendRun::new(period)).await.unwrap().digest.counts.unwrap();
+    assert_eq!(before.months.len(), 6);
+    assert_eq!(before.documents.iter().sum::<u32>(), 2, "two postings");
+    let total = |counts: &SkillCounts, skill: &str| counts.skills.iter().find(|s| s.skill == skill).map(|s| s.total);
+    assert_eq!(total(&before, "Rust"), Some(2));
+    assert_eq!(total(&before, "Kubernetes"), Some(1));
+    assert_eq!(total(&before, "Kafka"), Some(1));
+    assert_eq!(total(&before, "Go"), Some(1));
+    assert_eq!(total(&before, "Gleam"), None, "a wished skill is measured for the wishes only");
+    assert!(before.skills.iter().find(|s| s.skill == "Kafka").is_some_and(|s| s.wished));
+    assert!(before.pipeline.is_none());
+
+    // A lead arrives: the market numbers do not move, the lead is counted apart.
     let jd = dir.path().join("lead.md");
     std::fs::write(&jd, "We need strong Rust and Kubernetes skills. Docker too.").unwrap();
-    store
+    env.store
         .add_lead(&NewLead { url: "https://jobs.test/1".into(), company: "Initech".into(), role: "Platform Engineer".into(), jd_path: Some(jd), ..Default::default() })
         .unwrap();
-    store.save_preferences(&Preferences { nice_skills: vec!["Kafka".into(), "Gleam".into()], ..Preferences::default() }).unwrap();
+    let after = count::count(env, TrendRun::new(period)).await.unwrap().digest.counts.unwrap();
+    assert_eq!((&after.documents, &after.skills, &after.local), (&before.documents, &before.skills, &before.local));
+    assert_eq!((after.gap_scope, &after.gap, &after.wishes), (before.gap_scope, &before.gap, &before.wishes));
+    let pipeline = after.pipeline.expect("the lead is in the pipeline");
+    assert_eq!(pipeline.documents.iter().sum::<u32>(), 1);
+    assert_eq!(total(&SkillCounts { skills: pipeline.skills, ..SkillCounts::default() }, "Docker"), Some(1));
+}
 
-    let state = count::count(env_with(store), TrendRun::new(Period::week_of(now.date_naive()))).await.unwrap();
+/// A backend engineer who knows Rust and Python.
+const PROFILE: &str = "basics:
+  name: Test Person
+  headline: Backend Engineer
+  email: test@example.com
+experience:
+  - company: Acme
+    position: Backend Engineer
+    start: \"2020\"
+    end: Present
+    bullets: [Built services]
+skills:
+  - category: Languages
+    items: [Rust, Python]
+";
 
-    let counts = state.digest.counts.unwrap();
-    assert_eq!(counts.months.len(), 6);
-    assert_eq!(counts.documents.iter().sum::<u32>(), 3, "two postings and one lead");
-    let total = |skill: &str| counts.skills.iter().find(|s| s.skill == skill).map(|s| s.total);
-    assert_eq!(total("Rust"), Some(3));
-    assert_eq!(total("Kubernetes"), Some(2));
-    assert_eq!(total("Kafka"), Some(1));
-    assert_eq!(total("Go"), Some(1));
-    assert_eq!(total("Docker"), Some(1));
-    assert_eq!(total("Gleam"), None, "the user's skills are counted, and absent when nobody asks for them");
+/// Six months of hiring postings in the window of [`period`]: per month 12 backend postings in
+/// Singapore and 4 in Berlin. Python is in 8 of the 12 local ones in the first three months and in
+/// 2 later, Rust the other way round; Kafka is in half throughout, Gleam in 3, Kotlin in 1, and
+/// fintech in 2. Plus one news item of this week that the model cites.
+fn store_market(store: &Store, dir: &std::path::Path) {
+    let months = count::month_window(&period(), 6);
+    for (m, month) in months.iter().enumerate() {
+        let published = chrono::DateTime::parse_from_rfc3339(&format!("{month}-01T00:00:00Z")).unwrap().with_timezone(&Utc);
+        let late = m >= 3;
+        for n in 0..16 {
+            let mut skills = Vec::new();
+            let place = if n < 12 { "Singapore" } else { "Berlin" };
+            if n >= 12 {
+                skills.push("Go, Kubernetes");
+            } else {
+                if (!late && n < 8) || (late && n < 2) {
+                    skills.push("Python");
+                }
+                if (late && n < 8) || (!late && n < 2) {
+                    skills.push("Rust");
+                }
+                if n % 2 == 0 {
+                    skills.push("Kafka");
+                }
+                if n < 3 {
+                    skills.push("Gleam");
+                }
+                if n == 5 {
+                    skills.push("Kotlin");
+                }
+                if n < 2 {
+                    skills.push("fintech payments");
+                }
+            }
+            let title = format!("Acme{n} | Backend Engineer | {place}");
+            let text = format!("# Hacker News, Ask HN: Who is hiring? ({month})\n\n{title} | {}", skills.join(", "));
+            stored_item(store, dir, &format!("https://news.ycombinator.com/item?id={}", 1000 + m * 100 + n), &title, &text, Some(published));
+        }
+    }
+    stored_item(store, dir, "https://news.test/market", "Market news", "# Market news\n\nCompanies in Singapore keep hiring backend engineers this quarter.", Some(Utc::now()));
+}
+
+/// A digest that gets some things right and some against the app's numbers.
+fn lens_points(user: &str) -> Value {
+    let news = id_of(user, "Market news");
+    let point = |section: &str, topic: &str, text: &str| json!({"section": section, "topic": topic, "text": text, "quote": "", "citations": [news]});
+    json!({"points": [
+        point("rising_skills", "Rust", "Rust is asked for more."),
+        point("rising_skills", "Python", "Python is asked for more (the app counted it falling)."),
+        point("falling_skills", "python", "Python is asked for less."),
+        point("for_you", "Rust", "Build on Rust."),
+        point("for_you", "COBOL", "Learn COBOL (not in the gap)."),
+        point("wishes_check", "Kotlin", "Kotlin is steady."),
+        point("wishes_check", "Haskell", "Haskell (not a wish)."),
+    ]})
+}
+
+#[tokio::test]
+async fn wishes_never_change_the_market_numbers_or_the_gap() {
+    let (dir, core) = core();
+    store_market(&core.store, dir.path());
+    let profile = dir.path().join("profile.yaml");
+    std::fs::write(&profile, PROFILE).unwrap();
+    let place = Preferences { locations: vec!["Singapore".into()], remote: crate::engine::prefs::Remote::Onsite, ..Preferences::default() };
+    let first = Preferences {
+        roles: vec!["Product Manager".into()],
+        must_skills: vec!["Kotlin".into(), "Gleam".into()],
+        avoid_skills: vec!["PHP".into()],
+        domains: vec!["fintech".into()],
+        avoid_domains: vec!["gambling".into()],
+        ..place.clone()
+    };
+    let second = Preferences {
+        roles: vec!["Data Scientist".into()],
+        must_skills: vec!["Elixir".into()],
+        nice_skills: vec!["Rust".into()],
+        domains: vec!["robotics".into()],
+        ..place
+    };
+    let run = |prefs: Preferences| {
+        let core = &core;
+        let profile = profile.clone();
+        async move {
+            core.store.save_preferences(&prefs).unwrap();
+            let llm = Scripted::new(lens_points);
+            let config = DigestConfig { profile: Some(profile), ..digest_config(&llm) };
+            let state = done(core.build_trends_digest_with(period(), config).await.unwrap());
+            let prompt = llm.calls().into_iter().map(|(_, user)| user).find(|u| u.contains("<evidence>")).unwrap();
+            (digest_of(core, &state).data.unwrap(), prompt)
+        }
+    };
+    let (a, prompt_a) = run(first).await;
+    let (b, _) = run(second).await;
+
+    // The market numbers and the gap are the same; only the wishes (and their marks) differ.
+    let unmark = |skills: &[SkillCount]| skills.iter().map(|s| SkillCount { wished: false, ..s.clone() }).collect::<Vec<_>>();
+    assert_eq!(a.counts.documents, b.counts.documents);
+    assert_eq!(unmark(&a.counts.skills), unmark(&b.counts.skills));
+    assert_eq!(a.counts.local.as_ref().map(|l| (l.documents.clone(), unmark(&l.skills))), b.counts.local.as_ref().map(|l| (l.documents.clone(), unmark(&l.skills))));
+    assert_eq!((a.counts.gap_scope, &a.counts.gap), (b.counts.gap_scope, &b.counts.gap));
+    assert_ne!(a.counts.wishes, b.counts.wishes);
+    assert_ne!(a.counts.skills, b.counts.skills, "the wished marks differ");
+
+    // ... and they are not trivial: a local gap from the profile, directions from shares.
+    assert_eq!(a.counts.documents, [16; 6]);
+    assert_eq!(a.counts.gap_scope, GapScope::Local);
+    let gap: Vec<(&str, GapBucket)> = a.counts.gap.iter().map(|g| (g.skill.as_str(), g.bucket)).collect();
+    assert_eq!(gap, [("Rust", GapBucket::BuildOn), ("Kafka", GapBucket::LearnNext), ("Kotlin", GapBucket::LearnNext), ("Python", GapBucket::AtRisk)]);
+    assert!(a.counts.skills.iter().all(|s| s.skill != "Gleam"), "a wish is not part of the market vocabulary");
+    let gleam = a.counts.wishes.iter().find(|w| w.wish == "Gleam").unwrap();
+    assert_eq!((gleam.mentions, gleam.direction), (18, Direction::Steady), "but it is measured");
+    assert_eq!(a.counts.field, ["backend", "engineer"]);
+
+    // The prompt: the background from the profile, wishes only in their block, no target roles.
+    let (head, _) = prompt_a.split_once("\nEvidence:").unwrap();
+    assert!(head.contains("- Headline: Backend Engineer") && head.contains("- place: Singapore"), "{head}");
+    assert!(!prompt_a.contains("test@example.com") && !prompt_a.contains("Product Manager"));
+    let wishes = &head[head.find("Wishes to check").unwrap()..];
+    for wish in ["Gleam", "fintech", "gambling", "PHP"] {
+        assert!(wishes.contains(wish), "{wish}");
+        assert_eq!(head.matches(wish).count(), wishes.matches(wish).count(), "{wish} outside the wishes block: {head}");
+    }
+
+    // The checks of the points against the counts.
+    let kept = |data: &DigestData| data.points.iter().map(|p| (p.section, p.topic.clone())).collect::<Vec<_>>();
+    assert_eq!(
+        kept(&a),
+        [
+            (Section::RisingSkills, "Rust".to_string()),
+            (Section::FallingSkills, "python".to_string()),
+            (Section::ForYou, "Rust".to_string()),
+            (Section::WishesCheck, "Kotlin".to_string()),
+        ],
+        "a rise the app counted as a fall, a skill outside the gap and a topic that is not a wish are dropped"
+    );
+    assert_eq!(a.dropped, 3);
+    assert!(!kept(&b).contains(&(Section::WishesCheck, "Kotlin".to_string())), "Kotlin is not a wish of the second run");
+    assert_eq!(b.dropped, 4);
+}
+
+#[tokio::test]
+async fn enforce_citations_drops_points_against_the_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let a = stored_item(&store, dir.path(), "https://a.test/1", "News", "# News\n\nSomething happened in the market.", None);
+    let skill = |name: &str, direction: Direction| SkillCount { skill: name.into(), by_month: vec![9], total: 9, direction, ..SkillCount::default() };
+    let gap = |name: &str, bucket: GapBucket| GapSkill { skill: name.into(), bucket, direction: Direction::Steady, share_permille: 100 };
+    let wish = |name: &str, kind: WishKind| WishSignal { wish: name.into(), kind, avoided: false, direction: Direction::Unclear, mentions: 0 };
+    let mut state = TrendRun::new(period());
+    state.digest.items = vec![a];
+    state.digest.counts = Some(SkillCounts {
+        // The two scopes disagree on Rust and Python: a point that one table supports is kept.
+        skills: vec![skill("Python", Direction::Rising), skill("Rust", Direction::Falling)],
+        local: Some(ScopeCounts {
+            documents: vec![80],
+            skills: vec![
+                skill("Rust", Direction::Rising),
+                skill("Python", Direction::Falling),
+                skill("Kafka", Direction::Steady),
+                skill("Zig", Direction::Unclear),
+            ],
+        }),
+        gap_scope: GapScope::Local,
+        gap: vec![gap("Rust", GapBucket::BuildOn), gap("Go", GapBucket::LearnNext)],
+        wishes: vec![wish("Kotlin", WishKind::Skill), wish("fintech", WishKind::Domain)],
+        ..SkillCounts::default()
+    });
+    let point = |section: Section, topic: &str| Point { section, topic: topic.into(), text: format!("{} {topic}", section.as_str()), quote: String::new(), citations: vec![a] };
+    use Section::*;
+    state.digest.points = vec![
+        point(RisingSkills, "Rust"),
+        point(RisingSkills, "python"),
+        point(RisingSkills, "Kafka"),
+        point(RisingSkills, "Zig"),
+        point(RisingSkills, "Mojo"),
+        point(FallingSkills, "Python"),
+        point(FallingSkills, "Rust"),
+        point(FallingSkills, "Kafka"),
+        point(ForYou, ""),
+        point(ForYou, "golang"),
+        point(ForYou, "Kafka"),
+        point(WishesCheck, "KOTLIN"),
+        point(WishesCheck, ""),
+        point(WishesCheck, "Rust"),
+        point(Domains, "fintech"),
+    ];
+
+    let state = cite::enforce_citations(env_with(store), state).await.unwrap();
+
+    let kept: Vec<(Section, &str)> = state.digest.points.iter().map(|p| (p.section, p.topic.as_str())).collect();
+    assert_eq!(
+        kept,
+        [
+            (RisingSkills, "Rust"),
+            (RisingSkills, "python"),
+            (RisingSkills, "Zig"),
+            (RisingSkills, "Mojo"),
+            (FallingSkills, "Python"),
+            (FallingSkills, "Rust"),
+            (Domains, "fintech"),
+            (ForYou, ""),
+            (ForYou, "golang"),
+            (WishesCheck, "KOTLIN"),
+        ],
+        "either table supports Rust and Python; unclear and uncounted skills rest on their evidence; golang is Go, a gap skill; wishes ignore case"
+    );
+    assert_eq!(state.digest.dropped, 5, "Kafka rising and falling (steady in the only table that counts it), Kafka for you, two wishes");
+}
+
+#[test]
+fn a_report_saved_before_the_market_scan_still_loads() {
+    let old = r#"{"items":[{"id":3,"title":"T","url":"https://t.test/"}],
+        "points":[{"section":"for_you","topic":"","text":"Matches your Rust preference.","quote":"","citations":[3]}],
+        "counts":{"months":["2026-10","2026-11"],"documents":[3,4],"skills":[{"skill":"Rust","by_month":[1,2],"total":3}]},
+        "items_read":2,"dropped":1}"#;
+    let data: DigestData = serde_json::from_str(old).unwrap();
+    assert_eq!(data.counts.skills[0], SkillCount { skill: "Rust".into(), by_month: vec![1, 2], total: 3, ..SkillCount::default() });
+    assert_eq!(data.counts.skills[0].direction, Direction::Unclear);
+    assert!(data.counts.local.is_none() && data.counts.pipeline.is_none());
+    assert!(data.counts.gap.is_empty() && data.counts.wishes.is_empty() && data.counts.uncatalogued.is_empty());
+    assert_eq!(data.counts.gap_scope, GapScope::Global);
+
+    let (_dir, core) = core();
+    let row = core
+        .store
+        .add_report(&crate::engine::store::NewReport { kind: "weekly".into(), period: "2026-W46".into(), title: "Old".into(), body_md: "old".into(), citations_json: old.into() })
+        .unwrap();
+    assert_eq!(core.trend_digest(row.id).unwrap().unwrap().data, Some(data.clone()));
+    // Rendered again, it has no part it lacks the data for.
+    let md = cite::render_markdown(&Period::parse("2026-W46").unwrap(), &data);
+    assert!(!md.contains("## Gap") && !md.contains("## Wishes") && !md.contains("Terms not in the list"), "{md}");
+}
+
+#[test]
+fn the_markdown_shows_the_gap_the_wishes_and_the_new_terms_from_the_counts() {
+    let data = DigestData {
+        counts: SkillCounts {
+            months: vec!["2026-11".into()],
+            documents: vec![40],
+            gap_scope: GapScope::Local,
+            gap: vec![
+                GapSkill { skill: "Rust".into(), bucket: GapBucket::BuildOn, direction: Direction::Rising, share_permille: 125 },
+                GapSkill { skill: "Kafka".into(), bucket: GapBucket::LearnNext, direction: Direction::Steady, share_permille: 500 },
+                GapSkill { skill: "Py|thon".into(), bucket: GapBucket::AtRisk, direction: Direction::Falling, share_permille: 7 },
+            ],
+            wishes: vec![
+                WishSignal { wish: "Kotlin".into(), kind: WishKind::Skill, avoided: false, direction: Direction::Steady, mentions: 6 },
+                WishSignal { wish: "[gambling](http://evil.test)".into(), kind: WishKind::Domain, avoided: true, direction: Direction::Falling, mentions: 0 },
+            ],
+            uncatalogued: vec![TermCount { term: "mojo *now*".into(), items: 4 }],
+            ..SkillCounts::default()
+        },
+        ..DigestData::default()
+    };
+    let md = cite::render_markdown(&Period::parse("2026-W46").unwrap(), &data);
+    for expected in [
+        "## Gap, sorted by the app\n\nSkills of the local postings of your field",
+        "- Build on: Rust (rising, 12.5%)\n- Learn next: Kafka (steady, 50.0%)\n- At risk: Py\\|thon (falling, 0.7%)\n",
+        "| Wish | Kind | Avoid? | Direction | Mentions |",
+        "| Kotlin | skill | no | steady | 6 |",
+        "| \\[gambling\\](http\\://evil.test) | domain | yes | no data | 0 |",
+        "Terms not in the list (items naming them): mojo \\*now\\* (4)",
+    ] {
+        assert!(md.contains(expected), "{expected:?} missing in {md}");
+    }
+    assert!(!md.contains("](http://"), "{md}");
+}
+
+#[tokio::test]
+async fn hiring_postings_only_fill_the_room_the_other_items_leave() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let now = Utc::now();
+    // Five postings of one backfilled thread, the newest items of the period.
+    let postings: Vec<i64> = (0..5)
+        .map(|n| {
+            let text = format!("# Hacker News, Ask HN: Who is hiring? (this month)\n\nAcme{n} | Rust");
+            stored_item(&store, dir.path(), &format!("https://news.ycombinator.com/item?id={}", 100 + n), &format!("Acme{n} | Rust"), &text, Some(now))
+        })
+        .collect();
+    // Three other items, older: an HN text post (an item URL too), a feed post, a page.
+    let story = stored_item(&store, dir.path(), "https://news.ycombinator.com/item?id=7", "Ask HN: Is anyone hiring SREs?", "# Ask HN: Is anyone hiring SREs?\n\n12 points", Some(now - Span::hours(1)));
+    let feed = stored_item(&store, dir.path(), "https://blog.test/1", "A post", "# A post\n\nWho is hiring? We are.", Some(now - Span::hours(2)));
+    let page = stored_item(&store, dir.path(), "https://page.test/", "A page", "# A page", Some(now - Span::hours(3)));
+    // A posting of an older thread, backfilled (fetched) now: it belongs to its own month.
+    let old_text = "# Hacker News, Ask HN: Who is hiring? (two months ago)\n\nOldCo | Go";
+    let old = stored_item(&store, dir.path(), "https://news.ycombinator.com/item?id=50", "OldCo | Go", old_text, Some(now - Span::days(60)));
+
+    let ids = |items: Vec<TrendItem>| items.into_iter().map(|i| i.id).collect::<Vec<_>>();
+    let picked = ids(period_items(&store, &period(), 4).await.unwrap());
+    assert_eq!(picked.len(), 4);
+    assert_eq!(picked[..3], [story, feed, page], "every other item first, newest first");
+    assert!(postings.contains(&picked[3]), "one posting fills the room left");
+
+    let all = ids(period_items(&store, &period(), 100).await.unwrap());
+    assert_eq!(all.len(), 8, "with room, the postings are read too");
+    assert!(!all.contains(&old), "a backfilled posting is not evidence for this period");
+    assert_eq!(all[..3], [story, feed, page]);
+    assert_eq!(ids(period_items(&store, &period(), 2).await.unwrap()), [story, feed], "no room: no posting");
 }
 
 #[test]
