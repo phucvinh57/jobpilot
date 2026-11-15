@@ -274,8 +274,7 @@ mod tests {
     #[test]
     fn saving_renders_the_edit_and_reports_problems() {
         let (_dir, core) = fresh_core();
-        core.set_profile_path(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../profile.yaml"))
-            .expect("the profile path");
+        crate::engine::profile::set_test_profile(&core, crate::engine::profile::TEST_PROFILE);
         let id = app(&core, None).id;
 
         // A valid CV: written, rendered, previews counted.
