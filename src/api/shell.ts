@@ -1,6 +1,7 @@
 // Typed calls over the shell's own `shared_*` commands: setup state, appearance, and the one way a
 // link leaves the app.
 
+import type { Appearance } from "@/lib/theme";
 import type { ShellStatus } from "@/types/shell";
 
 import { invoke } from "./bridge";
@@ -14,7 +15,7 @@ export function savedAppearance(): Promise<string> {
   return invoke<string>("shared_appearance");
 }
 
-export function saveAppearance(appearance: string): Promise<void> {
+export function saveAppearance(appearance: Appearance): Promise<void> {
   return invoke<void>("shared_set_appearance", { appearance });
 }
 

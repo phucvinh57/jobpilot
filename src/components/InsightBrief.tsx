@@ -2,7 +2,7 @@
 // does, the facts, the pages it comes from) and "Interview process" (the stages in order, then
 // notes). The lead drawer shows it under a Lead, the Application screen's JD tab under the posting.
 
-import { openUrl } from "@/api/shell";
+import { openLink } from "@/api/shell";
 import { Caption, LinkButton, SectionLabel, Tag } from "@/components/ui/kit";
 
 /** The stored brief of a job (`InsightDto` in `shared/insight.rs`). */
@@ -40,7 +40,7 @@ export function CompanyBlock({ insight }: { insight: Insight }) {
       {insight.sources.length > 0 && (
         <div className="flex flex-col gap-0.5">
           {insight.sources.map((url) => (
-            <LinkButton key={url} aria-label={`Source: ${url}`} onClick={() => void openUrl(url).catch(() => {})}>
+            <LinkButton key={url} aria-label={`Source: ${url}`} onClick={() => openLink(url)}>
               {url}
             </LinkButton>
           ))}

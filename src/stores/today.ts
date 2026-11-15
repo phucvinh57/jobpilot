@@ -10,7 +10,7 @@ import { create } from "zustand";
 import { CommandError, needsRecheck, toCommandError } from "@/lib/problem";
 import { useNav, type DrawerTarget } from "./nav";
 import { useShell } from "./shell";
-import type { GraphProgress } from "@/api/bridge";
+import type { GraphProgress } from "@/api/events";
 
 import * as api from "@/api/discovery";
 import {

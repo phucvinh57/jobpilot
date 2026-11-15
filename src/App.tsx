@@ -3,7 +3,7 @@
 import clsx from "clsx";
 import { useEffect, useState } from "react";
 
-import { onFileDrop } from "@/api/bridge";
+import { onFileDrop } from "@/api/events";
 import { SetupBanner } from "@/components/layout/SetupBanner";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ApplicationPage } from "@/pages/ApplicationPage";

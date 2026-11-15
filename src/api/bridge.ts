@@ -1,5 +1,6 @@
-// The one place that talks to the Tauri shell. Only the other modules in `src/api/` call it
-// (Biome enforces the Tauri import, `biome.jsonc`), so everything above runs without a shell (tests, mocks).
+// The one place that talks to the Tauri shell. Only the modules in `src/api/` import it (Biome
+// enforces it, `biome.jsonc`): the rest of the app calls their typed functions and subscribes to
+// events through `./events`, so everything above runs without a shell (tests, mocks).
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";

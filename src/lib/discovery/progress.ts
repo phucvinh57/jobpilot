@@ -1,7 +1,7 @@
 // Reading the graph runs Today follows: "Prepare CV" (one thread per lead, `lead:<id>`), the whole
 // search (`discovery`) and each source's search (`source_run`).
 
-import type { GraphProgress } from "@/api/bridge";
+import type { GraphProgress } from "@/api/events";
 
 export const PREPARE_GRAPH = "prepare_cv";
 export const DISCOVERY_GRAPH = "discovery";

@@ -4,7 +4,7 @@
 import { Caption, Card, Heading, LinkButton, SectionLabel, Tag } from "@/components/ui/kit";
 import { ErrorBanner } from "@/components/ProblemHelp";
 import { NOT_FOUND, CompanyBlock, InterviewBlock, type Insight } from "@/components/InsightBrief";
-import { openUrl } from "@/api/shell";
+import { openLink } from "@/api/shell";
 
 import { useJd } from "@/hooks/applications/useTabs";
 
@@ -54,7 +54,7 @@ export function JdTab({ id }: { id: number }) {
     <div id="jd-tab" className="flex flex-col gap-3">
       {data.source !== null &&
         (data.sourceIsLink ? (
-          <LinkButton id="jd-source" onClick={() => void openUrl(data.source ?? "").catch(() => undefined)}>
+          <LinkButton id="jd-source" onClick={() => openLink(data.source ?? "")}>
             {data.source}
           </LinkButton>
         ) : (

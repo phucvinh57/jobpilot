@@ -8,7 +8,7 @@ import { create } from "zustand";
 
 import { toCommandError, type CommandError } from "@/lib/problem";
 import { useShell } from "@/stores/shell";
-import type { GraphProgress } from "@/api/bridge";
+import type { GraphProgress } from "@/api/events";
 
 import * as api from "@/api/trends";
 import { isTrendsGraph, retryOf, stepLabel, STARTING, type Job } from "@/lib/trends/jobs";

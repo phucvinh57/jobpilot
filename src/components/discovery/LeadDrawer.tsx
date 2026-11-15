@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 
 import { Button, Caption, Checkbox, Drawer, LinkButton, TextInput } from "@/components/ui/kit";
 import { CompanyBlock, InterviewBlock } from "@/components/InsightBrief";
-import { openUrl } from "@/api/shell";
+import { openLink } from "@/api/shell";
 import { scoreLabel, scoreTone } from "@/lib/display";
 import { TONE_CLASS } from "@/lib/tokens";
 import { useNav } from "@/stores/nav";
@@ -49,7 +49,7 @@ function QueueActions({ open, primary, jobs, onDismiss }: ActionProps) {
           id="queue-open-posting"
           icon={ExternalLink}
           disabled={!isWebLink(open.url)}
-          onClick={() => void openUrl(open.url).catch(() => undefined)}
+          onClick={() => openLink(open.url)}
         >
           Open posting
         </Button>
@@ -138,11 +138,7 @@ function LeadBody({ lead, source, primary, jobs, profileSkills }: BodyProps) {
           </p>
           <p className="selectable font-heading text-h2 font-semibold text-ink">{lead.role}</p>
           {isWebLink(lead.url) && (
-            <LinkButton
-              id="lead-url"
-              aria-label={`Posting: ${lead.url}`}
-              onClick={() => void openUrl(lead.url).catch(() => undefined)}
-            >
+            <LinkButton id="lead-url" aria-label={`Posting: ${lead.url}`} onClick={() => openLink(lead.url)}>
               {lead.url}
             </LinkButton>
           )}

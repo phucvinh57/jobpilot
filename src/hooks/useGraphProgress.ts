@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { onGraphProgress, type GraphProgress } from "@/api/bridge";
+import { onGraphProgress, type GraphProgress } from "@/api/events";
 
 /** Call `handler` for every step of every graph run (discovery, trends, prepare-CV, chat). */
 export function useGraphProgress(handler: (progress: GraphProgress) => void): void {

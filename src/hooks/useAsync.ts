@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { onDataChanged, type Scope } from "@/api/bridge";
+import { onDataChanged, type Scope } from "@/api/events";
 import { toCommandError, type CommandError } from "@/lib/problem";
 
 export interface Query<T> {

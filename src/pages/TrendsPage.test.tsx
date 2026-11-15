@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
-import type { GraphProgress } from "@/api/bridge";
+import type { GraphProgress } from "@/api/events";
 
 import type { RunResult } from "@/types/trends";
 import { useRuns } from "@/hooks/trends/runs";

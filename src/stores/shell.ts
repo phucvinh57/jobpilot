@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-import { onDataChanged } from "@/api/bridge";
+import { onDataChanged } from "@/api/events";
 import { savedAppearance, saveAppearance, shellStatus } from "@/api/shell";
 import { applyTheme, cachedAppearance, parseAppearance, watchSystem, type Appearance } from "@/lib/theme";
 import type { ShellStatus } from "@/types/shell";

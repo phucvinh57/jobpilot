@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { GraphProgress } from "@/api/bridge";
+import type { GraphProgress } from "@/api/events";
 
 import { movesTheQueue, parsePrepareThread, prepareLabel } from "./progress";
 

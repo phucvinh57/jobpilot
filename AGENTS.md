@@ -66,8 +66,9 @@ src/                   React + Vite + TypeScript + Tailwind; feature folders (ap
   hooks/               `useAsync` (`useQuery`, `useAction`), `useGraphProgress`, `<feature>/` (screen state, loading, Problem)
   stores/              zustand: `nav` (screen, Jobs stage, drawer `{ kind: "lead" | "app", id }`, Jobs badge), `shell` (health line, banner,
                        appearance), `today` (the Leads queue)
-  api/                 `bridge.ts` (the only Tauri imports: invoke / listen / file picker; events), `shell.ts` (`shared_*`: status,
-                       appearance, `openUrl`), one file of typed command calls per feature; Biome keeps raw `invoke` / `listen` here
+  api/                 `bridge.ts` (the only Tauri imports: invoke / listen / file picker; imported only inside `api/`), `events.ts`
+                       (what the rest may subscribe to: data changed, graph progress, file drop), `shell.ts` (`shared_*`: status,
+                       appearance, `openUrl` / `openLink`), one file of typed command calls per feature
   lib/                 pure helpers + vitest: `problem`, `theme`/`tokens` (light/dark as `--jp-*` CSS variables; `styles.css` maps them to
                        the only Tailwind colours), `display`, `utils` (`cn`), `<feature>/`
   types/               types mirroring the shell's DTOs (one file per feature, `shell.ts`)
@@ -130,7 +131,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 - Never add facts to a CV that are not in `profile.yaml` (employers, titles, dates, institutions, numbers, technologies).
 - Secrets (API keys, OAuth tokens) only in the OS keyring via `engine::secrets`; never in the DB, logs or files. Logs are redacted as a second line of defence: still never put a secret in a log call, an error message or a `Debug` dump.
 - The UI never blocks and never owns I/O: a command calls the engine through `shared::run(fut)` / `shared::run_sync(f)` (the engine runtime); long work streams progress as events and the command returns the final result.
-- The shell reads/writes through `Core` only; no SQL or HTTP in `src-tauri` outside `engine/`. The web app talks to the shell only through `src/api/` (Tauri is imported in `src/api/bridge.ts` only).
+- The shell reads/writes through `Core` only; no SQL or HTTP in `src-tauri` outside `engine/`. The web app talks to the shell only through `src/api/` (Tauri is imported in `src/api/bridge.ts` only, and the bridge only inside `src/api/`).
 - Bounded contexts do not depend on each other: Rust `src-tauri/src/<context>` uses `shared` and `engine` only. What two contexts share goes to the shared kernel. (The web app is not split by context: see the `src/` layout above.)
 - DTOs (`<context>/dto.rs`) never carry a secret: keys and tokens are write-only from the web app (it can learn that one is saved, never its value).
 - The webview shows the app only: no remote origin in the CSP, navigation is refused (`main.rs::may_show`), and http(s) links open in the system browser through `shared_open_url`. Untrusted text is rendered as text, never as HTML.
@@ -153,7 +154,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 
 Engine (`src-tauri/src/engine`): each sub-plan edits only its own modules: `llm/` P1; `pipeline/` P2; `browser/` P4; `apply/` P5; `mail/` P6; `health`, `logging`, `redact`, packaging and docs P7. Add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
 
-Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and that feature's web files: its `<feature>/` folders and `<feature>.ts` files under `src/`, plus its page and store (applications: `pages/ApplicationPage.tsx`; discovery: `stores/today.ts`; trends: `pages/TrendsPage.tsx`). Features: discovery (P10 sources, P12 queue), applications (P2/P3/P5 screens), profile (P9), integrations (P1 providers, P4 sessions, P6 Gmail), trends (P13). The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`) and the web app's shared files (`src/components/ui`, `src/components/layout`, `src/stores/{nav,shell}.ts`, `src/api/{bridge,shell}.ts`, `src/App.tsx`, `src/pages/{Jobs,Settings}Page.tsx`) change only for something every context needs.
+Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and that feature's web files: every path under `src/` named after it (`<feature>/` folders, `<feature>.ts`; integrations also `api/{gmail,providers,sessions}.ts`), plus its page or store (applications: `pages/ApplicationPage.tsx`; discovery: `stores/today.ts`; trends: `pages/TrendsPage.tsx`). Features: discovery (P10 sources, P12 queue), applications (P2/P3/P5 screens), profile (P9), integrations (P1 providers, P4 sessions, P6 Gmail), trends (P13). The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`) and every other web file under `src/` (the kit, layout, nav and shell stores, `api/{bridge,events,shell}.ts`, the shared hooks, `lib/` and `types/` files, the Jobs and Settings pages) change only for something every context needs.
 
 The product plans (`docs/plans/`, status table in `docs/plans/README.md`):
 
