@@ -14,6 +14,14 @@ function profile(patch: Partial<Profile> = {}): Profile {
     jobType: "hybrid",
     fields: [
       {
+        key: "work_from",
+        label: "Can work from",
+        placeholder: "Add a country you may legally work from",
+        hint: "Hard limit: jobs that only hire elsewhere are hidden.",
+        items: ["Vietnam"],
+        suggestions: [],
+      },
+      {
         key: "locations",
         label: "Work locations",
         placeholder: "Add a city or country",
@@ -70,6 +78,27 @@ describe("ProfileSection", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toHaveProperty("disabled", false);
   });
 
+  it("shows Can work from first, with its hint", async () => {
+    render(<ProfileSection />);
+    const group = await screen.findByRole("group", { name: "Can work from" });
+    expect(group.textContent).toContain("Hard limit: jobs that only hire elsewhere are hidden.");
+    expect(screen.getByText("Vietnam").id).toBe("profile-work_from-0");
+    expect(document.getElementById("profile-add-work_from")).toBeTruthy();
+    const labels = screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"));
+    expect(labels.indexOf("Can work from")).toBeLessThan(labels.indexOf("Work locations"));
+    // Only the field with a hint shows one.
+    expect(screen.getByRole("group", { name: "Work locations" }).textContent).not.toContain("Hard limit");
+  });
+
+  it("adds a country to work from", async () => {
+    vi.mocked(api.addItem).mockResolvedValue({ profile: profile(), message: null });
+    render(<ProfileSection />);
+    const box = (await screen.findByRole("textbox", { name: "Add to Can work from" })) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "Thailand" } });
+    fireEvent.submit(box.closest("form") as HTMLFormElement);
+    expect(api.addItem).toHaveBeenCalledWith("work_from", "Thailand");
+  });
+
   it("has no primary action: every change is saved at once", async () => {
     render(<ProfileSection />);
     await screen.findByRole("button", { name: "Job type: Hybrid" });
@@ -82,8 +111,8 @@ describe("ProfileSection", () => {
 
   it("adds a suggestion with one click and shows the answer", async () => {
     const next = profile();
-    next.fields[2]?.items.push("Kubernetes");
-    next.fields[2]!.suggestions = [];
+    next.fields[3]?.items.push("Kubernetes");
+    next.fields[3]!.suggestions = [];
     vi.mocked(api.addItem).mockResolvedValue({ profile: next, message: null });
     render(<ProfileSection />);
 
@@ -118,7 +147,7 @@ describe("ProfileSection", () => {
 
   it("removes an entry by its name", async () => {
     const next = profile();
-    next.fields[2]!.items = ["Go"];
+    next.fields[3]!.items = ["Go"];
     vi.mocked(api.removeItem).mockResolvedValue(next);
     render(<ProfileSection />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove Rust" }));

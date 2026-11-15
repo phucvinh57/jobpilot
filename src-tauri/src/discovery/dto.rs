@@ -475,6 +475,7 @@ mod tests {
             dismiss_reason: None,
             app_id: None,
             found_at: Utc.with_ymd_and_hms(2026, 11, 14, 9, 30, 0).unwrap(),
+            filtered_reason: None,
         }
     }
 
@@ -498,6 +499,7 @@ mod tests {
                 seniority: crit(70, true, ""),
             },
             weights: Weights::default(),
+            ..Scored::default()
         };
         let mut l = lead();
         l.score_json = Some(scored.to_json().unwrap());

@@ -795,6 +795,40 @@ async fn insight_is_not_asked_for_a_posting_the_filters_dropped() {
 }
 
 #[tokio::test]
+async fn a_posting_the_model_reads_as_hiring_elsewhere_is_dismissed_with_its_score() {
+    let mut reply = scores();
+    reply["eligible"] = json!("no");
+    reply["eligible_reason"] = json!("hires in the United States only");
+    let h = Harness { llm: Arc::new(FakeLlm::with_replies(std::iter::repeat_n(reply, 10))), ..Harness::new() };
+    let core = h.open();
+    core.save_preferences(Preferences { work_from: vec!["Vietnam".into()], ..Default::default() }).unwrap();
+    // "Remote" names no place and the posting states no limit: only the model can tell.
+    let a = h.add_source(&core, "a", FakeSource::new(vec![vec![cand("a.test", 1, "Acme", "Backend Engineer")]]));
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!((result_of(&summary, a).saved, result_of(&summary, a).dismissed), (0, 1));
+    assert_eq!((summary.saved, summary.dismissed), (0, 1));
+    assert!(leads(&core, LeadState::New).is_empty());
+    let dismissed = leads(&core, LeadState::Dismissed);
+    let acme = dismissed.iter().find(|l| l.company == "Acme").unwrap();
+    assert_eq!(acme.dismiss_reason.as_deref(), Some("location: hires in United States, you can work from Vietnam"), "places only, never the model's line");
+    assert!(acme.score.is_some() && acme.score_json.as_deref().unwrap().contains("\"eligible\":\"no\""), "the score is kept");
+    assert_eq!(h.llm.calls().len(), 1);
+
+    // Without work_from the same answer keeps the lead.
+    let h = Harness { llm: Arc::new(FakeLlm::with_replies(std::iter::repeat_n(scores_with_no(), 10))), ..Harness::new() };
+    let core = h.open();
+    h.add_source(&core, "a", FakeSource::new(vec![vec![cand("a.test", 1, "Acme", "Backend Engineer")]]));
+    let summary = core.discover_now_with(h.deps()).await.unwrap();
+    assert_eq!((summary.saved, summary.dismissed), (1, 0));
+}
+
+fn scores_with_no() -> serde_json::Value {
+    let mut reply = scores();
+    reply["eligible"] = json!("no");
+    reply
+}
+
+#[tokio::test]
 async fn no_provider_and_no_profile_are_setup_problems_not_crashes() {
     let h = Harness::new();
     let core = h.open();

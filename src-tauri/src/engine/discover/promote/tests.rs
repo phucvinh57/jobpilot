@@ -263,6 +263,17 @@ fn dismissing_can_feed_the_preferences_back_but_never_promotes() {
 }
 
 #[test]
+fn dismissing_a_company_also_dismisses_its_leads_the_preferences_hide() {
+    let (_dir, core) = core();
+    let one = add_lead(&core, 1, "Acme", "Backend Engineer", Some(80.0));
+    let hidden = add_lead(&core, 2, "Acme", "SRE", Some(70.0));
+    core.store.set_lead_filtered(hidden.id, Some("location: hires in United States, you can work from Vietnam")).unwrap();
+    let out = dismiss(&core, one.id, "", true).unwrap();
+    assert_eq!(out.also, 1, "never this company reaches the hidden lead too");
+    assert_eq!(core.store.get_lead(hidden.id).unwrap().unwrap().state, LeadState::Dismissed);
+}
+
+#[test]
 fn dismissing_a_company_leaves_the_leads_whose_cv_is_queued_or_being_written() {
     let (_dir, core) = core();
     let one = add_lead(&core, 1, "Acme", "Backend Engineer", Some(80.0));

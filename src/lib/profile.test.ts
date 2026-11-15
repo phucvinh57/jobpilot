@@ -7,6 +7,14 @@ function profile(patch: Partial<Profile> = {}): Profile {
   return {
     jobType: "any",
     fields: [
+      {
+        key: "work_from",
+        label: "Can work from",
+        placeholder: "Add a country you may legally work from",
+        hint: "Hard limit: jobs that only hire elsewhere are hidden.",
+        items: [],
+        suggestions: [],
+      },
       { key: "locations", label: "Work locations", placeholder: "Add a city or country", items: [], suggestions: [] },
       {
         key: "domains",
@@ -45,11 +53,14 @@ describe("the saved label", () => {
   it("notices a changed list or note, and ignores what the card shows around them", () => {
     const shown = profile();
     const more = profile();
-    const skills = more.fields[2];
+    const skills = more.fields[3];
     if (skills) {
       skills.items = ["Rust", "Go"];
     }
     expect(changed(shown, more)).toBe(true);
+    const country = profile();
+    country.fields[0]?.items.push("Vietnam");
+    expect(changed(shown, country)).toBe(true);
     expect(changed(shown, profile({ notes: "Senior only" }))).toBe(true);
     // The undo flag and the suggestions are not a change of the preferences.
     expect(changed(shown, profile({ canUndo: true }))).toBe(false);

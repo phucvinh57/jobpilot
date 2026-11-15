@@ -6,6 +6,9 @@
 //! changed elsewhere (a Trends "add", a dismissed company, the model's merge). The edit hands back the
 //! document as it is after it, which is what the card shows.
 //!
+//! A saved change may hide leads or show them again (a job that only hires outside "Can work from",
+//! an excluded company), so every command that edits the preferences tells the Leads list to re-read.
+//!
 //! Settings > About you (`profile_about`, `profile_add_*`, `profile_remove_source`, `profile_read`):
 //! the documents the profile is read from. Each answers with the whole section ([`AboutDto`]).
 
@@ -17,13 +20,14 @@ use crate::engine::prefs::{clean_notes, PrefSuggestions, Preferences};
 use crate::engine::profile::sources::is_supported;
 use crate::engine::Core;
 use tauri::ipc::Invoke;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use super::dto::{AboutDto, AddDto, NotesReadDto, ProfileDto};
 use super::rules::{
     about, add_check, notes_status, parse_job_type, unread_notes_message, without_item, AddCheck,
     Field, NotesStatus, Presence,
 };
+use crate::shared::events::{data_changed, Scope};
 use crate::shared::{run, run_sync, CommandResult};
 
 type CoreState<'a> = State<'a, Arc<Core>>;
@@ -46,6 +50,15 @@ fn snapshot_of(core: &Core, prefs: Preferences) -> Result<ProfileDto> {
 
 fn read_snapshot(core: &Core) -> Result<ProfileDto> {
     snapshot_of(core, core.preferences()?)
+}
+
+/// Pass `result` on; after a preferences edit went through, the Leads list re-reads (the save may
+/// have hidden leads or shown them again).
+fn leads_may_have_changed<T>(app: &AppHandle, result: CommandResult<T>) -> CommandResult<T> {
+    if result.is_ok() {
+        data_changed(app, Scope::Leads);
+    }
+    result
 }
 
 fn field_named(key: &str) -> Result<Field> {
@@ -185,58 +198,75 @@ pub async fn profile_get(core: CoreState<'_>) -> CommandResult<ProfileDto> {
     run_sync(move || read_snapshot(&core)).await
 }
 
-/// Add an entry to the list `field` (`locations` / `domains` / `skills`).
+/// Add an entry to the list `field` (`work_from` / `locations` / `domains` / `skills`).
 #[tauri::command]
 pub async fn profile_add_item(
+    app: AppHandle,
     core: CoreState<'_>,
     field: String,
     text: String,
 ) -> CommandResult<AddDto> {
     let core = core.inner().clone();
-    run(async move { add_item(&core, field_named(&field)?, text).await }).await
+    let result = run(async move { add_item(&core, field_named(&field)?, text).await }).await;
+    leads_may_have_changed(&app, result)
 }
 
 /// Remove an entry from the list `field`, by value.
 #[tauri::command]
 pub async fn profile_remove_item(
+    app: AppHandle,
     core: CoreState<'_>,
     field: String,
     item: String,
 ) -> CommandResult<ProfileDto> {
     let core = core.inner().clone();
-    run(async move { remove_item(&core, field_named(&field)?, item).await }).await
+    let result = run(async move { remove_item(&core, field_named(&field)?, item).await }).await;
+    leads_may_have_changed(&app, result)
 }
 
 /// Choose the job type (`any` / `remote` / `hybrid` / `onsite`).
 #[tauri::command]
 pub async fn profile_set_job_type(
+    app: AppHandle,
     core: CoreState<'_>,
     job_type: String,
 ) -> CommandResult<ProfileDto> {
     let core = core.inner().clone();
-    run(async move { set_job_type(&core, &job_type).await }).await
+    let result = run(async move { set_job_type(&core, &job_type).await }).await;
+    leads_may_have_changed(&app, result)
 }
 
 /// Save the notes ("Anything else").
 #[tauri::command]
-pub async fn profile_save_notes(core: CoreState<'_>, notes: String) -> CommandResult<ProfileDto> {
+pub async fn profile_save_notes(
+    app: AppHandle,
+    core: CoreState<'_>,
+    notes: String,
+) -> CommandResult<ProfileDto> {
     let core = core.inner().clone();
-    run(async move { save_notes(&core, &notes).await }).await
+    let result = run(async move { save_notes(&core, &notes).await }).await;
+    leads_may_have_changed(&app, result)
 }
 
 /// Let the model read the notes in the background; resolves when it is done (up to a minute).
 /// The progress of the `prefs_chat` graph goes out as `shared:graph-progress`.
 #[tauri::command]
-pub async fn profile_read_notes(core: CoreState<'_>, notes: String) -> CommandResult<NotesReadDto> {
+pub async fn profile_read_notes(
+    app: AppHandle,
+    core: CoreState<'_>,
+    notes: String,
+) -> CommandResult<NotesReadDto> {
     let core = core.inner().clone();
-    run(async move { read_notes(&core, notes).await }).await
+    let result = run(async move { read_notes(&core, notes).await }).await;
+    leads_may_have_changed(&app, result)
 }
 
 /// Put back the preferences from before the last change.
 #[tauri::command]
-pub async fn profile_undo(core: CoreState<'_>) -> CommandResult<ProfileDto> {
+pub async fn profile_undo(app: AppHandle, core: CoreState<'_>) -> CommandResult<ProfileDto> {
     let core = core.inner().clone();
-    run(async move { undo(&core).await }).await
+    let result = run(async move { undo(&core).await }).await;
+    leads_may_have_changed(&app, result)
 }
 
 /// Settings > About you: the documents, where the reading stands, what was understood.
@@ -392,7 +422,7 @@ mod tests {
         });
         assert!(
             field_named("roles").is_err(),
-            "only the three lists of the card"
+            "only the lists of the card"
         );
     }
 

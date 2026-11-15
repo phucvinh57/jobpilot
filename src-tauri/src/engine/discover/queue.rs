@@ -133,8 +133,8 @@ pub fn filter_items<'a>(items: &'a [QueueItem], filter: &QueueFilter) -> Vec<&'a
 /// Everything the queue screen needs, read in one go.
 #[derive(Clone, Debug)]
 pub struct QueueSnapshot {
-    /// Leads waiting for the user (`new`, or promoted with the application since deleted), best
-    /// match first.
+    /// Leads waiting for the user (`new`, or promoted with the application since deleted) that the
+    /// preferences do not hide, best match first.
     pub items: Vec<QueueItem>,
     /// Leads promoted whose CV could not be written (retry or forget).
     pub failed: Vec<FailedPrepare>,
@@ -160,7 +160,7 @@ impl Core {
     }
 
     /// How many leads wait in the Job list (the sidebar badge): `new` leads, and promoted ones
-    /// whose application was deleted. One cheap count, so the badge can follow every change
+    /// whose application was deleted, except those the preferences hide. One cheap count, so the badge can follow every change
     /// without loading the list. A database read: run it off the UI thread.
     pub fn new_lead_count(&self) -> Result<usize> {
         self.store.count_queue_leads()
@@ -196,6 +196,7 @@ mod tests {
                 seniority: crit(70, true, ""),
             },
             weights: Weights::default(),
+            ..Scored::default()
         }
     }
 
@@ -222,7 +223,7 @@ mod tests {
         assert_eq!(all.iter().map(|r| r.criterion).collect::<Vec<_>>(), ["skills", "location", "domain"]);
         assert_eq!(top_reasons(&s, 2).len(), 2);
         assert_eq!(all[0], Reason { criterion: "skills", score: 90, text: "Rust and Postgres match".into() });
-        assert!(top_reasons(&Scored { total: None, criteria: Criteria::default(), weights: Weights::default() }, 2).is_empty());
+        assert!(top_reasons(&Scored::default(), 2).is_empty());
 
         let rows = criteria_rows(&s);
         assert_eq!(rows.iter().map(|r| (r.criterion, r.weight)).collect::<Vec<_>>(), [("skills", 35), ("domain", 20), ("location", 15), ("salary", 15), ("seniority", 15)]);

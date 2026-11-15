@@ -6,7 +6,7 @@ use anyhow::Result;
 use chrono::{Duration, Utc};
 use crate::engine::discover::dedup::dedup_key;
 use crate::engine::discover::lead_dir;
-use crate::engine::discover::score::{Criteria, Criterion, Scored};
+use crate::engine::discover::score::{Criteria, Criterion, Eligible, Scored};
 use crate::engine::discover::{RunSummary, LAST_RUN_KEY};
 use crate::engine::pipeline::cv::Cv;
 use crate::engine::pipeline::insight::{CompanyFacts, Interview, Skills};
@@ -181,8 +181,9 @@ fn seed_demo_queue(core: &Core) -> Result<()> {
     core.store.set_source_status(hn.id, "needs_human")?;
 
     // (source, company, role, location, [skills, domain, location, salary, seniority])
+    const US_ONLY: &str = "Remote - US";
     type Row = (u32, bool, &'static str);
-    let jobs: [(i64, &str, &str, &str, [Row; 5]); 6] = [
+    let jobs: [(i64, &str, &str, &str, [Row; 5]); 7] = [
         (
             greenhouse.id,
             "Acme",
@@ -277,6 +278,20 @@ fn seed_demo_queue(core: &Core) -> Result<()> {
                 (0, false, "No level stated."),
             ],
         ),
+        // Hires in the US only: with "Can work from" set to Vietnam, it is hidden from the queue.
+        (
+            lever.id,
+            "Initech",
+            "Senior Rust Engineer",
+            US_ONLY,
+            [
+                (85, true, "Rust, PostgreSQL and Kubernetes match."),
+                (50, true, "Enterprise software is neutral."),
+                (90, true, "Fully remote."),
+                (0, false, "No salary stated."),
+                (85, true, "Senior, as you look for."),
+            ],
+        ),
     ];
     let weights = Weights::default();
     for (i, (source_id, company, role, location, rows)) in jobs.into_iter().enumerate() {
@@ -293,10 +308,20 @@ fn seed_demo_queue(core: &Core) -> Result<()> {
             salary,
             seniority,
         };
+        // Only the US-only posting says where it hires; the others leave it open.
+        let (eligible, eligible_reason) = if location == US_ONLY {
+            (Eligible::No, "hires in the United States only".to_string())
+        } else {
+            (Eligible::Unclear, String::new())
+        };
         let scored = Scored {
             total: criteria.weighted(&weights),
             criteria,
             weights,
+            eligible,
+            eligible_reason,
+            // The demo preferences name no work_from: this "no" counts only after a new score.
+            judged_work_from: Vec::new(),
         };
         let slug = format!("{}-{i}", company.to_lowercase().replace(' ', "-"));
         let url = format!("https://jobs.example.com/{slug}");

@@ -188,7 +188,9 @@ fn score_reply(posting: &str) -> Value {
         "domain": {"score": domain, "known": true, "reason": "adjacent domain"},
         "location": {"score": 100, "known": true, "reason": "remote"},
         "salary": {"score": 0, "known": false, "reason": "not stated"},
-        "seniority": {"score": 80, "known": true, "reason": "fits"}
+        "seniority": {"score": 80, "known": true, "reason": "fits"},
+        "eligible": "unclear",
+        "eligible_reason": "remote, no limit stated"
     })
 }
 

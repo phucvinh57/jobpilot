@@ -6,14 +6,18 @@ use serde::Serialize;
 
 use super::rules::{job_type_key, visible_suggestions, Field, MAX_ITEM_CHARS};
 
-/// One tag field of the card: Work locations, Interested domains, Skills.
+/// One tag field of the card: Can work from, Work locations, Interested domains, Skills.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListFieldDto {
-    /// `locations` / `domains` / `skills`: what the web app sends back to add or remove an entry.
+    /// `work_from` / `locations` / `domains` / `skills`: what the web app sends back to add or
+    /// remove an entry.
     pub key: &'static str,
     pub label: &'static str,
     pub placeholder: &'static str,
+    /// A muted line under the field that says what it does (only where one is needed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<&'static str>,
     pub items: Vec<String>,
     /// Entries that could be added with one click (none of them is in the preferences already).
     pub suggestions: Vec<String>,
@@ -50,6 +54,7 @@ impl ProfileDto {
                 key: field.key(),
                 label: field.label(),
                 placeholder: field.placeholder(),
+                hint: field.hint(),
                 items: field.list(prefs).clone(),
                 suggestions: visible_suggestions(field, prefs, field.suggestions(suggestions)),
             })
@@ -174,6 +179,7 @@ mod tests {
     #[test]
     fn the_card_lists_every_field_with_the_suggestions_that_can_still_be_added() {
         let prefs = Preferences {
+            work_from: vec!["Vietnam".into()],
             locations: vec!["Hanoi".into()],
             must_skills: vec!["Rust".into()],
             avoid_skills: vec!["PHP".into()],
@@ -185,6 +191,7 @@ mod tests {
             skills: vec!["rust".into(), "PHP".into(), "Go".into()],
             locations: vec!["Hanoi".into(), "Remote".into()],
             domains: vec![],
+            work_from: vec!["vietnam".into(), "Thailand".into()],
         };
         let dto = ProfileDto::from_parts(&prefs, &suggestions, true);
 
@@ -195,17 +202,25 @@ mod tests {
         let keys: Vec<_> = dto.fields.iter().map(|f| f.key).collect();
         assert_eq!(
             keys,
-            ["locations", "domains", "skills"],
+            ["work_from", "locations", "domains", "skills"],
             "the order of the card"
         );
-        assert_eq!(dto.fields[0].items, ["Hanoi"]);
+        assert_eq!(dto.fields[0].label, "Can work from");
+        assert_eq!(dto.fields[0].items, ["Vietnam"]);
+        assert_eq!(dto.fields[0].suggestions, ["Thailand"]);
+        assert!(dto.fields[0].hint.is_some_and(|h| h.contains("Hard limit")));
+        assert!(
+            dto.fields[1..].iter().all(|f| f.hint.is_none()),
+            "only Can work from has a hint"
+        );
+        assert_eq!(dto.fields[1].items, ["Hanoi"]);
         assert_eq!(
-            dto.fields[0].suggestions,
+            dto.fields[1].suggestions,
             ["Remote"],
             "what is saved is not suggested"
         );
         assert_eq!(
-            dto.fields[2].suggestions,
+            dto.fields[3].suggestions,
             ["Go"],
             "neither is what is saved or avoided"
         );
@@ -218,7 +233,13 @@ mod tests {
         assert!(json.get("profilePath").is_none() && json.get("cv").is_none());
         assert_eq!(json["jobType"], "any");
         assert_eq!(json["canUndo"], false);
-        assert_eq!(json["fields"][2]["key"], "skills");
+        assert_eq!(json["fields"][3]["key"], "skills");
+        assert_eq!(json["fields"][0]["key"], "work_from");
+        assert!(json["fields"][0]["hint"].is_string());
+        assert!(
+            json["fields"][1].get("hint").is_none(),
+            "no hint, no key"
+        );
         assert!(json["limits"]["maxNotesChars"]
             .as_u64()
             .is_some_and(|n| n > 0));

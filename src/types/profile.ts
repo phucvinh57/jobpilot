@@ -1,14 +1,16 @@
 // What the "Profile & preferences" card shows (the shell's `ProfileDto`).
 
-export type FieldKey = "locations" | "domains" | "skills";
+export type FieldKey = "work_from" | "locations" | "domains" | "skills";
 
 export type JobType = "any" | "remote" | "hybrid" | "onsite";
 
-/** One tag field: Work locations, Interested domains, Skills. */
+/** One tag field: Can work from, Work locations, Interested domains, Skills. */
 export interface ListField {
   key: FieldKey;
   label: string;
   placeholder: string;
+  /** A muted line under the label that says what the field does (only where one is needed). */
+  hint?: string;
   items: string[];
   /** Entries that could be added with one click. */
   suggestions: string[];

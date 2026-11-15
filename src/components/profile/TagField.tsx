@@ -30,7 +30,7 @@ export function TagField({
   };
 
   return (
-    <Row label={label}>
+    <Row label={label} hint={field.hint}>
       <div className="flex flex-col gap-2">
         {field.items.length > 0 && (
           <ul aria-label={label} className="flex flex-wrap gap-1.5">

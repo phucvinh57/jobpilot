@@ -94,8 +94,12 @@ pub struct Preferences {
     /// Business domains of interest ("fintech").
     pub domains: Vec<String>,
     pub avoid_domains: Vec<String>,
-    /// Cities / countries.
+    /// Cities / countries where the user would like the job or office to be (a preference).
     pub locations: Vec<String>,
+    /// Countries the user may legally work from (residence / work authorization). A hard limit:
+    /// jobs that hire only elsewhere are dismissed when found, and waiting ones are hidden from the
+    /// queue (`discover::score::hard_filter`, `discover::refilter`).
+    pub work_from: Vec<String>,
     pub remote: Remote,
     /// Minimum salary, in `currency`.
     pub salary_min: Option<u64>,
@@ -128,6 +132,7 @@ impl Preferences {
             &mut self.domains,
             &mut self.avoid_domains,
             &mut self.locations,
+            &mut self.work_from,
             &mut self.company_size,
             &mut self.company_stage,
             &mut self.languages,

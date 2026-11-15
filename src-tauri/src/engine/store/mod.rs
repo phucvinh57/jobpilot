@@ -223,6 +223,11 @@ const MIGRATIONS: &[&str] = &[
     );
     DELETE FROM kv WHERE key IN ('profile_path', 'prefs_cv_name');
     ",
+    // 6: a `new` lead the saved preferences filter out is hidden from the queue, not dismissed, so a
+    // later change can show it again (`Store::set_lead_filtered`, `discover::refilter`)
+    "
+    ALTER TABLE leads ADD COLUMN filtered_reason TEXT;
+    ",
 ];
 
 #[derive(Clone)]
@@ -369,7 +374,9 @@ mod tests {
         store.save_preferences(&Default::default()).unwrap();
         store.add_chat_message("prefs", crate::engine::llm::Role::User, "hi").unwrap();
         store.add_source(&NewSource { kind: "lever".into(), ..Default::default() }).unwrap();
-        store.add_lead(&NewLead { url: "https://a.test/1".into(), ..Default::default() }).unwrap();
+        let lead = store.add_lead(&NewLead { url: "https://a.test/1".into(), ..Default::default() }).unwrap();
+        assert_eq!(lead.filtered_reason, None);
+        assert!(store.set_lead_filtered(lead.id, Some("location")).unwrap());
         store.add_report(&NewReport { kind: "weekly".into(), ..Default::default() }).unwrap();
         store.add_profile_source(&NewProfileSource::text("Note", "I build APIs."), usize::MAX).unwrap();
         store.save_profile("basics: {name: A}\n", "hash", &[]).unwrap();

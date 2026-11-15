@@ -1,11 +1,12 @@
-//! Ideas for the preferences screen: skills from the stored profile, and the locations and business
-//! domains of the jobs found so far. Each list is something the user could add to their preferences
+//! Ideas for the preferences screen: skills and the home country from the stored profile, and the
+//! locations and business domains of the jobs found so far. Each list is something the user could add to their preferences
 //! with one click, so it never repeats what the saved preferences already say.
 //!
 //! ```text
 //! let s = core.preference_suggestions()?;      // one local read, no network and no model call
 //! for skill in &s.skills { .. }                // "Rust", "Go", ... (profile order)
 //! for place in &s.locations { .. }             // most common among the leads first, "Remote" last
+//! for country in &s.work_from { .. }           // "Vietnam" from the profile's "Ho Chi Minh City, Vietnam"
 //! ```
 
 use std::collections::{HashMap, HashSet};
@@ -13,6 +14,8 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 
 use super::Preferences;
+use crate::engine::discover::region::{self, Place};
+use crate::engine::pipeline::cv::Cv;
 use crate::engine::pipeline::Insight;
 use crate::engine::store::{Lead, LeadState};
 use crate::engine::Core;
@@ -29,19 +32,27 @@ pub struct PrefSuggestions {
     pub locations: Vec<String>,
     /// Business domains of the leads' briefs, the most common first.
     pub domains: Vec<String>,
+    /// The country of the profile's location, by its gazetteer name ("Vietnam"), if it names one.
+    pub work_from: Vec<String>,
 }
 
 impl Core {
     /// Suggestions for the preferences screen: skills from the stored profile, locations and domains
-    /// from the leads that are in the queue or were prepared (dismissed leads say what the user
-    /// does not want). Each list has no repeats (ignoring case), at most [`MAX_SUGGESTIONS`]
-    /// entries, and leaves out what the saved preferences already name. No profile (or one that
-    /// cannot be read) only means no skills.
+    /// from the leads that are in the queue or were prepared (dismissed leads, and the ones the
+    /// preferences hide, say what the user does not want), and the country the profile says the
+    /// user lives in. Each list has no repeats
+    /// (ignoring case), at most [`MAX_SUGGESTIONS`] entries, and leaves out what the saved
+    /// preferences already name. No profile (or one that cannot be read) only means no skills and
+    /// no country.
     pub fn preference_suggestions(&self) -> Result<PrefSuggestions> {
         let prefs = self.store.preferences()?;
         let mut leads = self.store.list_leads(LeadState::New)?;
+        leads.retain(|l| l.filtered_reason.is_none());
         leads.extend(self.store.list_leads(LeadState::Promoted)?);
-        Ok(suggest(&prefs, profile_skills(self), &leads))
+        let cv = profile_cv(self, "suggestions");
+        let skills = cv.as_ref().map(visible_skills).unwrap_or_default();
+        let country = cv.as_ref().and_then(|cv| country_of(&cv.basics.location));
+        Ok(suggest(&prefs, skills, country, &leads))
     }
 }
 
@@ -53,25 +64,45 @@ impl Core {
     }
 }
 
-/// The skills of the visible groups of the stored profile.
-fn profile_skills(core: &Core) -> Vec<String> {
-    let cv = match core.profile() {
-        Ok(Some(profile)) => profile.cv,
-        Ok(None) => return Vec::new(),
+/// The stored profile's CV; `None` when there is no profile yet, or it cannot be read (logged,
+/// naming `what` was given up).
+fn profile_cv(core: &Core, what: &str) -> Option<Cv> {
+    match core.profile() {
+        Ok(profile) => profile.map(|p| p.cv),
         Err(e) => {
-            tracing::warn!("no skill suggestions: the profile cannot be read: {e:#}");
-            return Vec::new();
+            tracing::warn!("no profile {what}: the profile cannot be read: {e:#}");
+            None
         }
-    };
-    cv.skills.into_iter().filter(|g| !g.hidden).flat_map(|g| g.items).collect()
+    }
 }
 
-fn suggest(prefs: &Preferences, skills: Vec<String>, leads: &[Lead]) -> PrefSuggestions {
+/// The skills of the visible groups of the stored profile.
+fn profile_skills(core: &Core) -> Vec<String> {
+    profile_cv(core, "skills").as_ref().map(visible_skills).unwrap_or_default()
+}
+
+fn visible_skills(cv: &Cv) -> Vec<String> {
+    cv.skills.iter().filter(|g| !g.hidden).flat_map(|g| g.items.iter().cloned()).collect()
+}
+
+/// The country a location such as "Ho Chi Minh City, Vietnam" names, by the gazetteer's name
+/// for it ([`region::places_in`]): the first country found, so a city the gazetteer knows says
+/// its country. A region, "Remote" or a place it does not know is no country.
+fn country_of(location: &str) -> Option<String> {
+    region::places_in(location).into_iter().find_map(|p| match p {
+        Place::Country(name) => Some(name.to_string()),
+        Place::Anywhere | Place::Region(_) => None,
+    })
+}
+
+fn suggest(prefs: &Preferences, skills: Vec<String>, country: Option<String>, leads: &[Lead]) -> PrefSuggestions {
     let have_skills = [&prefs.must_skills, &prefs.nice_skills, &prefs.avoid_skills];
     let have_places = [&prefs.locations];
     let have_domains = [&prefs.domains, &prefs.avoid_domains];
+    let have_countries = [&prefs.work_from];
 
     let skills = pick(skills, &have_skills, None);
+    let work_from = pick(country.into_iter().collect(), &have_countries, None);
 
     let places = most_common(leads.iter().map(|l| l.location.as_str()));
     let locations = pick(places, &have_places, Some("Remote"));
@@ -81,7 +112,7 @@ fn suggest(prefs: &Preferences, skills: Vec<String>, leads: &[Lead]) -> PrefSugg
     );
     let domains = pick(domains, &have_domains, None);
 
-    PrefSuggestions { skills, locations, domains }
+    PrefSuggestions { skills, locations, domains, work_from }
 }
 
 /// One line, single spaces.
@@ -140,7 +171,7 @@ mod tests {
 
     fn core() -> (tempfile::TempDir, Core) {
         crate::engine::profile::test_core_with_profile(
-            "basics: {name: Ada}\nskills:\n  - {category: Languages, items: [Rust, Go, rust]}\n  - {category: Cloud, items: [AWS]}\n  - {category: Old, items: [COBOL], hidden: true}\n",
+            "basics: {name: Ada, location: 'Ho Chi Minh City, Vietnam'}\nskills:\n  - {category: Languages, items: [Rust, Go, rust]}\n  - {category: Cloud, items: [AWS]}\n  - {category: Old, items: [COBOL], hidden: true}\n",
         )
     }
 
@@ -164,6 +195,26 @@ mod tests {
         assert_eq!(s.skills, ["Rust", "Go", "AWS"], "profile order, no repeats, hidden groups left out");
         assert_eq!(s.locations, ["Remote"]);
         assert!(s.domains.is_empty());
+        assert_eq!(s.work_from, ["Vietnam"], "the country of the profile's location");
+    }
+
+    #[test]
+    fn the_country_is_the_one_the_location_names_and_not_offered_once_chosen() {
+        assert_eq!(country_of("Ho Chi Minh City, Vietnam").as_deref(), Some("Vietnam"));
+        assert_eq!(country_of(" Berlin ,  Germany ").as_deref(), Some("Germany"));
+        assert_eq!(country_of("Viet Nam").as_deref(), Some("Vietnam"), "the gazetteer's name");
+        assert_eq!(country_of("Hanoi").as_deref(), Some("Vietnam"), "a city it knows says its country");
+        assert_eq!(country_of("Hanoi, ").as_deref(), Some("Vietnam"));
+        assert_eq!(country_of("San Francisco, CA").as_deref(), Some("United States"));
+        assert_eq!(country_of("Springfield, IL"), None, "not a country: no state codes");
+        assert_eq!(country_of("Atlantis"), None, "a place it does not know");
+        assert_eq!(country_of("Remote - APAC"), None, "a region is no country");
+        assert_eq!(country_of(""), None);
+        assert_eq!(country_of("Remote"), None);
+
+        let (_dir, core) = core();
+        core.save_preferences(Preferences { work_from: vec!["VIETNAM".into()], ..Default::default() }).unwrap();
+        assert!(core.preference_suggestions().unwrap().work_from.is_empty(), "already chosen");
     }
 
     #[test]
@@ -243,7 +294,7 @@ mod tests {
         let hash = core.store.profile_sources_hash().unwrap();
         core.store.save_profile("skills: [unclosed", &hash, &[]).unwrap();
         let s = core.preference_suggestions().unwrap();
-        assert!(s.skills.is_empty());
+        assert!(s.skills.is_empty() && s.work_from.is_empty());
         assert_eq!(s.locations, ["Remote"]);
     }
 }

@@ -72,6 +72,10 @@ pub struct Lead {
     pub dismiss_reason: Option<String>,
     pub app_id: Option<i64>,
     pub found_at: DateTime<Utc>,
+    /// Why the saved preferences hide this `new` lead from the queue (the hard filters' reason);
+    /// `None` when it is shown. Unlike a dismissal it is undone when the preferences change back
+    /// (see `discover::refilter`).
+    pub filtered_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -92,7 +96,7 @@ pub struct NewLead {
 }
 
 const COLS: &str = "id, source_id, url, dedup_key, company, role, location, jd_path, score, score_json, \
-                    insight_json, state, dismiss_reason, app_id, found_at";
+                    insight_json, state, dismiss_reason, app_id, found_at, filtered_reason";
 
 impl Lead {
     fn from_row(r: &Row) -> rusqlite::Result<Self> {
@@ -115,6 +119,7 @@ impl Lead {
             dismiss_reason: r.get(12)?,
             app_id: r.get(13)?,
             found_at: r.get(14)?,
+            filtered_reason: r.get(15)?,
         })
     }
 }
@@ -174,12 +179,22 @@ impl Store {
     }
 
     /// The leads the queue shows: every `new` lead, plus promoted ones whose application was
-    /// deleted (they can be prepared again). Best score first (unscored last), then newest.
+    /// deleted (they can be prepared again), except those the preferences hide
+    /// ([`Lead::filtered_reason`]). Best score first (unscored last), then newest.
     pub fn list_queue_leads(&self) -> Result<Vec<Lead>> {
+        self.queue_leads(&format!("{IN_QUEUE} AND {SHOWN}"))
+    }
+
+    /// Every lead in the queue (see [`Lead::in_queue`]), also the ones the preferences hide: what
+    /// a dismissal of a whole company must reach. Same order as [`Store::list_queue_leads`].
+    pub fn list_queue_leads_with_hidden(&self) -> Result<Vec<Lead>> {
+        self.queue_leads(IN_QUEUE)
+    }
+
+    fn queue_leads(&self, filter: &str) -> Result<Vec<Lead>> {
         self.with_conn(|c| {
-            let mut stmt = c.prepare(&format!(
-                "SELECT {COLS} FROM leads WHERE {IN_QUEUE} ORDER BY score DESC, found_at DESC, id DESC"
-            ))?;
+            let mut stmt =
+                c.prepare(&format!("SELECT {COLS} FROM leads WHERE {filter} ORDER BY score DESC, found_at DESC, id DESC"))?;
             let rows = stmt.query_map([], Lead::from_row)?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
@@ -188,8 +203,22 @@ impl Store {
     /// How many leads the queue shows (see [`Store::list_queue_leads`]), without reading them.
     pub fn count_queue_leads(&self) -> Result<usize> {
         self.with_conn(|c| {
-            let n: i64 = c.query_row(&format!("SELECT COUNT(*) FROM leads WHERE {IN_QUEUE}"), [], |r| r.get(0))?;
+            let n: i64 =
+                c.query_row(&format!("SELECT COUNT(*) FROM leads WHERE {IN_QUEUE} AND {SHOWN}"), [], |r| r.get(0))?;
             Ok(usize::try_from(n).unwrap_or(0))
+        })
+    }
+
+    /// Hide a `new` lead from the queue with the preferences' `reason`, or show it again (`None`).
+    /// The state does not change, so this can always be undone. Returns whether the lead was
+    /// changed: `false` when it already had that value, or is no longer `new`.
+    pub fn set_lead_filtered(&self, id: i64, reason: Option<&str>) -> Result<bool> {
+        self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE leads SET filtered_reason = ?1 WHERE id = ?2 AND state = 'new' AND filtered_reason IS NOT ?1",
+                params![reason, id],
+            )?;
+            Ok(n == 1)
         })
     }
 
@@ -217,7 +246,12 @@ impl Store {
 
     /// The lead became application `app_id`. Only a lead in the queue can be promoted.
     pub fn promote_lead(&self, id: i64, app_id: i64) -> Result<()> {
-        self.update_lead("state = 'promoted', app_id = ?1", params![app_id, id], id, &format!(" AND {IN_QUEUE}"))
+        self.update_lead(
+            "state = 'promoted', app_id = ?1, filtered_reason = NULL",
+            params![app_id, id],
+            id,
+            &format!(" AND {IN_QUEUE}"),
+        )
     }
 
     /// Create the Draft application `new` for a `new` lead and mark the lead promoted, in one
@@ -239,7 +273,11 @@ impl Store {
             if insight_json.is_some() {
                 tx.execute("UPDATE applications SET insight_json = ?1 WHERE id = ?2", params![insight_json, app_id])?;
             }
-            tx.execute("UPDATE leads SET state = 'promoted', app_id = ?1 WHERE id = ?2", params![app_id, id])?;
+            // The user chose it: a filter that hid it meanwhile no longer applies.
+            tx.execute(
+                "UPDATE leads SET state = 'promoted', app_id = ?1, filtered_reason = NULL WHERE id = ?2",
+                params![app_id, id],
+            )?;
             Ok(app_id)
         })?;
         self.get_application(app_id)?.context("application vanished after insert")
@@ -257,6 +295,8 @@ impl Store {
 
 /// A lead the user can act on: `new`, or `promoted` whose application was deleted.
 const IN_QUEUE: &str = "(state = 'new' OR (state = 'promoted' AND app_id IS NULL))";
+/// A lead the preferences do not hide.
+const SHOWN: &str = "filtered_reason IS NULL";
 
 
 
@@ -373,6 +413,43 @@ mod tests {
         store.dismiss_lead(lead.id, "gone").unwrap();
         assert!(store.list_queue_leads().unwrap().is_empty());
         assert!(store.promote_lead_to_application(lead.id, &spec("fourth"), None).is_err());
+    }
+
+    #[test]
+    fn a_lead_the_preferences_filter_is_hidden_from_the_queue_until_shown_again() {
+        let store = Store::open_in_memory().unwrap();
+        let shown = store.add_lead(&new("https://a.test/1", "a-1", Some(50.0))).unwrap();
+        let hidden = store.add_lead(&new("https://a.test/2", "a-2", Some(90.0))).unwrap();
+        assert_eq!(hidden.filtered_reason, None, "a new lead is shown");
+        let ids = |leads: Vec<Lead>| leads.into_iter().map(|l| l.id).collect::<Vec<_>>();
+
+        assert!(store.set_lead_filtered(hidden.id, Some("location: hires in United States")).unwrap());
+        assert!(!store.set_lead_filtered(hidden.id, Some("location: hires in United States")).unwrap(), "same value, no write");
+        let got = store.get_lead(hidden.id).unwrap().unwrap();
+        assert_eq!((got.state, got.filtered_reason.as_deref()), (LeadState::New, Some("location: hires in United States")));
+        assert_eq!(ids(store.list_queue_leads().unwrap()), [shown.id]);
+        assert_eq!(store.count_queue_leads().unwrap(), 1, "the badge does not count it");
+        assert_eq!(ids(store.list_queue_leads_with_hidden().unwrap()), [hidden.id, shown.id]);
+        assert_eq!(ids(store.list_leads(LeadState::New).unwrap()), [hidden.id, shown.id], "still new");
+
+        assert!(store.set_lead_filtered(hidden.id, None).unwrap());
+        assert!(!store.set_lead_filtered(hidden.id, None).unwrap());
+        assert_eq!(ids(store.list_queue_leads().unwrap()), [hidden.id, shown.id]);
+        assert_eq!(store.count_queue_leads().unwrap(), 2);
+
+        // A hidden lead can still be dismissed or promoted; promoting it shows it again.
+        store.set_lead_filtered(hidden.id, Some("x")).unwrap();
+        let app = store
+            .promote_lead_to_application(hidden.id, &NewApplication { slug: "s".into(), dir: "/tmp/s".into(), ..Default::default() }, None)
+            .unwrap();
+        assert_eq!(store.get_lead(hidden.id).unwrap().unwrap().filtered_reason, None);
+        store.delete_application(app.id).unwrap();
+        assert_eq!(ids(store.list_queue_leads().unwrap()), [hidden.id, shown.id], "an orphan is back in the queue");
+        assert!(!store.set_lead_filtered(hidden.id, Some("x")).unwrap(), "only a new lead is hidden");
+        store.set_lead_filtered(shown.id, Some("x")).unwrap();
+        store.dismiss_lead(shown.id, "no").unwrap();
+        assert!(!store.set_lead_filtered(shown.id, None).unwrap(), "a dismissed lead stays dismissed");
+        assert!(!store.set_lead_filtered(999, None).unwrap());
     }
 
     #[test]
