@@ -4,7 +4,18 @@
 
 import clsx from "clsx";
 
-import { Banner, Button, Checkbox, ErrorBanner, FilterChip, ProblemHelp, Section, Tag, TextArea, TextInput } from "@/shared";
+import {
+  Banner,
+  Button,
+  Checkbox,
+  ErrorBanner,
+  FilterChip,
+  ProblemHelp,
+  Section,
+  Tag,
+  TextArea,
+  TextInput,
+} from "@/shared";
 
 import {
   canRemember,
@@ -17,7 +28,7 @@ import {
   rowLabel,
   stepTag,
   toggleChoice,
-  valueOf,
+  fieldValue,
 } from "../domain/apply";
 import type { ApplyReview, ReviewRow } from "../domain/types";
 import type { ApplySession } from "../hooks/useApplySession";
@@ -27,9 +38,20 @@ import { Screenshots } from "./Screenshots";
 function RowEditor({ row, value, onChange }: { row: ReviewRow; value: string; onChange: (value: string) => void }) {
   switch (row.input) {
     case "readonly":
-      return <p className={clsx("selectable text-body", row.shown === "" ? "text-muted" : "text-ink")}>{readOnlyText(row)}</p>;
+      return (
+        <p className={clsx("selectable text-body", row.shown === "" ? "text-muted" : "text-ink")}>
+          {readOnlyText(row)}
+        </p>
+      );
     case "checkbox":
-      return <Checkbox id={`cb-${row.id}`} label="Yes" checked={isChecked(value)} onChange={(e) => onChange(checkboxValue(e.target.checked))} />;
+      return (
+        <Checkbox
+          id={`cb-${row.id}`}
+          label="Yes"
+          checked={isChecked(value)}
+          onChange={(e) => onChange(checkboxValue(e.target.checked))}
+        />
+      );
     case "chips":
     case "multiChips": {
       const multi = row.input === "multiChips";
@@ -38,7 +60,12 @@ function RowEditor({ row, value, onChange }: { row: ReviewRow; value: string; on
         <div role="group" aria-label={row.label} className="flex flex-wrap gap-2">
           {row.options.map((option, i) => (
             // A choice is a toggle (tinted when chosen), never a second primary button.
-            <FilterChip key={option} id={`chip-${row.id}-${i}`} selected={isChosen(chosen, option)} onClick={() => onChange(toggleChoice(multi, value, option))}>
+            <FilterChip
+              key={option}
+              id={`chip-${row.id}-${i}`}
+              selected={isChosen(chosen, option)}
+              onClick={() => onChange(toggleChoice(multi, value, option))}
+            >
               {option}
             </FilterChip>
           ))}
@@ -46,18 +73,39 @@ function RowEditor({ row, value, onChange }: { row: ReviewRow; value: string; on
       );
     }
     case "area":
-      return <TextArea aria-label={row.label} rows={3} placeholder="Your answer" value={value} onChange={(e) => onChange(e.target.value)} />;
+      return (
+        <TextArea
+          aria-label={row.label}
+          rows={3}
+          placeholder="Your answer"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      );
     case "line":
-      return <TextInput aria-label={row.label} placeholder={row.placeholder} value={value} onChange={(e) => onChange(e.target.value)} />;
+      return (
+        <TextInput
+          aria-label={row.label}
+          placeholder={row.placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      );
   }
 }
 
 function Row({ row, session }: { row: ReviewRow; session: ApplySession }) {
-  const value = valueOf(session.edits, row);
+  const value = fieldValue(session.edits, row);
   const highlighted = row.editable && isHighlighted(row, value);
   const step = stepTag(row);
   return (
-    <div id={`row-${row.id}`} className={clsx("flex flex-col gap-1.5 border p-3", highlighted ? "border-warn bg-warn-bg" : "border-border bg-surface")}>
+    <div
+      id={`row-${row.id}`}
+      className={clsx(
+        "flex flex-col gap-1.5 border p-3",
+        highlighted ? "border-warn bg-warn-bg" : "border-border bg-surface",
+      )}
+    >
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 text-body font-semibold text-ink">{rowLabel(row)}</span>
         {step !== null && <Tag tone="neutral">{step}</Tag>}
@@ -77,7 +125,17 @@ function Row({ row, session }: { row: ReviewRow; session: ApplySession }) {
   );
 }
 
-export function ReviewPanel({ id, review, session, generation }: { id: number; review: ApplyReview; session: ApplySession; generation: number }) {
+export function ReviewPanel({
+  id,
+  review,
+  session,
+  generation,
+}: {
+  id: number;
+  review: ApplyReview;
+  session: ApplySession;
+  generation: number;
+}) {
   const apply = session.apply;
   const error = apply?.error ?? null;
   return (
@@ -91,7 +149,9 @@ export function ReviewPanel({ id, review, session, generation }: { id: number; r
           </Button>
         }
       />
-      {review.notice !== null && <Banner id="review-notice" tone={review.notice.tone} title={review.notice.title} body={review.notice.body} />}
+      {review.notice !== null && (
+        <Banner id="review-notice" tone={review.notice.tone} title={review.notice.title} body={review.notice.body} />
+      )}
       {error !== null && <ErrorBanner id="apply-error" error={error} title="The application step failed" />}
       {review.notes.map((note, i) => (
         <div key={`${i}-${note.text}`} className="flex flex-col gap-1">
@@ -110,7 +170,9 @@ export function ReviewPanel({ id, review, session, generation }: { id: number; r
           <span className="text-body text-ink">{review.attached}</span>
         </div>
       )}
-      {review.screenshots > 0 && <Screenshots id={id} kind="filled" count={review.screenshots} version={generation} title="Filled form" />}
+      {review.screenshots > 0 && (
+        <Screenshots id={id} kind="filled" count={review.screenshots} version={generation} title="Filled form" />
+      )}
     </div>
   );
 }

@@ -10,7 +10,7 @@ function isTyped(row: ReviewRow): boolean {
 }
 
 /** What a row has now: what the user typed, else what the form was filled with. */
-export function valueOf(edits: ReviewEdits, row: ReviewRow): string {
+export function fieldValue(edits: ReviewEdits, row: ReviewRow): string {
   return edits.values[row.id] ?? row.value;
 }
 
@@ -51,7 +51,7 @@ export function isEmptyRequired(row: ReviewRow, value: string): boolean {
 
 /** Required rows that are still empty, from what is typed right now. */
 export function missingCount(review: ApplyReview, edits: ReviewEdits): number {
-  return review.rows.filter((row) => isEmptyRequired(row, valueOf(edits, row))).length;
+  return review.rows.filter((row) => isEmptyRequired(row, fieldValue(edits, row))).length;
 }
 
 /** The answers the shell gets: editable rows only. */
@@ -59,7 +59,7 @@ export function snapshot(review: ApplyReview, edits: ReviewEdits): ReviewEdits {
   const values: Record<string, string> = {};
   for (const row of review.rows) {
     if (row.editable) {
-      values[row.id] = valueOf(edits, row);
+      values[row.id] = fieldValue(edits, row);
     }
   }
   return { values, remember: edits.remember.filter((id) => review.rows.some((r) => r.id === id && r.editable)) };
@@ -103,7 +103,9 @@ export function isChosen(chosen: readonly string[], option: string): boolean {
 export function toggleChoice(multi: boolean, value: string, option: string): string {
   const chosen = chosenOptions(multi, value);
   if (multi) {
-    return isChosen(chosen, option) ? chosen.filter((c) => !sameOption(c, option)).join("; ") : [...chosen, option].join("; ");
+    return isChosen(chosen, option)
+      ? chosen.filter((c) => !sameOption(c, option)).join("; ")
+      : [...chosen, option].join("; ");
   }
   return isChosen(chosen, option) ? "" : option;
 }

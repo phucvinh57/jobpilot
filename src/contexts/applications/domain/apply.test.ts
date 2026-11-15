@@ -16,7 +16,7 @@ import {
   stepTag,
   toggleChoice,
   toggleRemember,
-  valueOf,
+  fieldValue,
   withValue,
 } from "./apply";
 import type { ApplyReview, ReviewRow } from "./types";
@@ -61,7 +61,11 @@ function review(rows: ReviewRow[]): ApplyReview {
 
 describe("the answers of a review", () => {
   it("starts from the filled values of the editable rows and the answers the shell remembers", () => {
-    const r = review([row(), row({ id: "later", editable: false, value: "x" }), row({ id: "pitch", remember: true, value: "hi" })]);
+    const r = review([
+      row(),
+      row({ id: "later", editable: false, value: "x" }),
+      row({ id: "pitch", remember: true, value: "hi" }),
+    ]);
     expect(initialEdits(r)).toEqual({ values: { name: "Ada", pitch: "hi" }, remember: ["pitch"] });
     expect(initialEdits(null)).toEqual({ values: {}, remember: [] });
   });
@@ -69,8 +73,8 @@ describe("the answers of a review", () => {
   it("changes one answer without touching the others", () => {
     const edits = withValue({ values: { a: "1", b: "2" }, remember: [] }, "a", "9");
     expect(edits.values).toEqual({ a: "9", b: "2" });
-    expect(valueOf(edits, row({ id: "a" }))).toBe("9");
-    expect(valueOf(edits, row({ id: "c", value: "filled" }))).toBe("filled");
+    expect(fieldValue(edits, row({ id: "a" }))).toBe("9");
+    expect(fieldValue(edits, row({ id: "c", value: "filled" }))).toBe("filled");
   });
 
   it("toggles what goes to the profile", () => {
