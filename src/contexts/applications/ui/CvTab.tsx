@@ -52,7 +52,11 @@ export function CvTab(input: CvTabInput) {
         {/* Left: what the posting asks for, the fact check, then the YAML. */}
         <div id="cv-left" className="flex min-w-0 flex-col gap-3">
           {data.requirements.length > 0 && (
-            <Section title="What they ask for" hint="From the job description, checked against your profile." id="cv-gaps">
+            <Section
+              title="What they ask for"
+              hint="From the job description, checked against your profile."
+              id="cv-gaps"
+            >
               <ul className="flex flex-col gap-2.5">
                 {data.requirements.map((requirement) => (
                   <RequirementRow key={requirement.text} requirement={requirement} />
@@ -111,7 +115,12 @@ export function CvTab(input: CvTabInput) {
           <Heading>Preview</Heading>
           <div id="cv-preview" className="flex max-h-[900px] flex-1 flex-col items-center gap-3 overflow-y-auto">
             {cv.pages.map((url, i) => (
-              <img key={url} src={url} alt={`CV page ${i + 1} of ${cv.pages.length}`} className="w-full max-w-[720px] border border-border shadow-sm" />
+              <img
+                key={url}
+                src={url}
+                alt={`CV page ${i + 1} of ${cv.pages.length}`}
+                className="w-full max-w-[720px] border border-border shadow-sm"
+              />
             ))}
             {cv.pages.length === 0 && (
               <div className="flex min-h-[240px] w-full max-w-[720px] items-start border border-dashed border-border p-6 font-serif text-body text-muted">

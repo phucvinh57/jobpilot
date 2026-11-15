@@ -11,7 +11,13 @@ vi.mock("../api/providersApi");
 
 const KINDS: Providers["kinds"] = [
   { kind: "openai", label: "OpenAI-compatible", name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "" },
-  { kind: "anthropic", label: "Anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-5" },
+  {
+    kind: "anthropic",
+    label: "Anthropic",
+    name: "Anthropic",
+    baseUrl: "https://api.anthropic.com",
+    model: "claude-sonnet-4-5",
+  },
 ];
 
 function provider(patch: Partial<Provider> = {}): Provider {
@@ -29,7 +35,20 @@ function provider(patch: Partial<Provider> = {}): Provider {
 }
 
 beforeEach(() => {
-  vi.mocked(api.loadProviders).mockResolvedValue({ providers: [provider(), provider({ id: 2, name: "Claude", kind: "anthropic", kindLabel: "Anthropic", model: "claude-sonnet-4-5", isDefault: false })], kinds: KINDS });
+  vi.mocked(api.loadProviders).mockResolvedValue({
+    providers: [
+      provider(),
+      provider({
+        id: 2,
+        name: "Claude",
+        kind: "anthropic",
+        kindLabel: "Anthropic",
+        model: "claude-sonnet-4-5",
+        isDefault: false,
+      }),
+    ],
+    kinds: KINDS,
+  });
   vi.mocked(api.hasKey).mockResolvedValue(true);
 });
 
@@ -68,7 +87,9 @@ describe("ProvidersSection", () => {
     expect(key.value).toBe("");
     expect(await screen.findByText("A key is saved in your system keyring.")).toBeTruthy();
     expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Local");
-    expect((screen.getByRole("textbox", { name: "Base URL" }) as HTMLInputElement).value).toBe("http://localhost:11434/v1");
+    expect((screen.getByRole("textbox", { name: "Base URL" }) as HTMLInputElement).value).toBe(
+      "http://localhost:11434/v1",
+    );
     expect(screen.queryByRole("button", { name: "Make default" }), "it is the default already").toBeNull();
     expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
   });
@@ -82,7 +103,12 @@ describe("ProvidersSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(api.saveProvider).toHaveBeenCalled());
-    expect(vi.mocked(api.saveProvider).mock.calls[0]?.[0]).toMatchObject({ id: 1, name: "Local", apiKey: "sk-typed-secret", jsonObject: false });
+    expect(vi.mocked(api.saveProvider).mock.calls[0]?.[0]).toMatchObject({
+      id: 1,
+      name: "Local",
+      apiKey: "sk-typed-secret",
+      jsonObject: false,
+    });
     expect(await screen.findByText("Saved.")).toBeTruthy();
     expect(key.value).toBe("");
     expect(screen.queryByDisplayValue("sk-typed-secret")).toBeNull();
@@ -108,7 +134,10 @@ describe("ProvidersSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Type: Anthropic" }));
     expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Anthropic");
     expect((screen.getByRole("textbox", { name: "Model" }) as HTMLInputElement).value).toBe("claude-sonnet-4-5");
-    expect(screen.queryByLabelText("Endpoint lacks json_schema support: use json_object mode"), "only OpenAI-compatible endpoints").toBeNull();
+    expect(
+      screen.queryByLabelText("Endpoint lacks json_schema support: use json_object mode"),
+      "only OpenAI-compatible endpoints",
+    ).toBeNull();
   });
 
   it("tests the provider and says it works, or why it does not", async () => {
@@ -131,7 +160,9 @@ describe("ProvidersSection", () => {
     await openLocal();
     fireEvent.click(screen.getByRole("button", { name: "Load models" }));
     expect(await screen.findByText("2 model(s) available; pick one from the list.")).toBeTruthy();
-    fireEvent.change(screen.getByRole("combobox", { name: "Pick from the loaded models" }), { target: { value: "mistral" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Pick from the loaded models" }), {
+      target: { value: "mistral" },
+    });
     expect((screen.getByRole("textbox", { name: "Model" }) as HTMLInputElement).value).toBe("mistral");
   });
 

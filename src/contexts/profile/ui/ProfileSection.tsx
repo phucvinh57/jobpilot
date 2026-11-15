@@ -24,11 +24,24 @@ export function ProfileSection() {
   const actions = (
     <div className="flex items-center gap-2">
       {card.flash && opacity > 0 && (
-        <span id="profile-saved" role="status" aria-label={card.flash.label} style={{ opacity }} className="text-small text-ok">
+        <span
+          id="profile-saved"
+          role="status"
+          aria-label={card.flash.label}
+          style={{ opacity }}
+          className="text-small text-ok"
+        >
           {card.flash.label}
         </span>
       )}
-      <Button id="profile-undo" variant="ghost" size="compact" icon={Undo2} disabled={!card.canUndo} onClick={card.undo}>
+      <Button
+        id="profile-undo"
+        variant="ghost"
+        size="compact"
+        icon={Undo2}
+        disabled={!card.canUndo}
+        onClick={card.undo}
+      >
         Undo
       </Button>
     </div>
@@ -38,7 +51,12 @@ export function ProfileSection() {
     return (
       <Section id="settings-profile" title={TITLE} hint={HINT} actions={actions}>
         {card.loadError ? (
-          <ErrorBanner id="profile-error" error={card.loadError} title="Could not read your preferences" onRetry={card.retry} />
+          <ErrorBanner
+            id="profile-error"
+            error={card.loadError}
+            title="Could not read your preferences"
+            onRetry={card.retry}
+          />
         ) : (
           <Caption>Loading...</Caption>
         )}
@@ -56,7 +74,12 @@ export function ProfileSection() {
           </div>
         </Row>
         {profile.fields.map((field) => (
-          <TagField key={field.key} field={field} onAdd={(text) => card.addItem(field.key, text)} onRemove={(item) => card.removeItem(field.key, item)} />
+          <TagField
+            key={field.key}
+            field={field}
+            onAdd={(text) => card.addItem(field.key, text)}
+            onRemove={(item) => card.removeItem(field.key, item)}
+          />
         ))}
         <NotesField
           text={card.notesText}
@@ -67,7 +90,11 @@ export function ProfileSection() {
         />
         <Row label="Profile file" hint="The master profile your CVs are written from. JobPilot only reads it.">
           <div className="flex flex-wrap items-center gap-2">
-            <p id="profile-path" aria-label={`Profile file: ${profile.profilePath}`} className="selectable min-w-0 max-w-[420px] truncate text-small text-ink">
+            <p
+              id="profile-path"
+              aria-label={`Profile file: ${profile.profilePath}`}
+              className="selectable min-w-0 max-w-[420px] truncate text-small text-ink"
+            >
               {profile.profilePath}
             </p>
             <Button id="profile-path-choose" size="compact" busy={card.fileBusy} onClick={card.chooseProfileFile}>
@@ -75,7 +102,9 @@ export function ProfileSection() {
             </Button>
           </div>
         </Row>
-        {card.error && <ErrorBanner id="profile-error" error={card.error} title="Not saved" onDismiss={card.clearError} />}
+        {card.error && (
+          <ErrorBanner id="profile-error" error={card.error} title="Not saved" onDismiss={card.clearError} />
+        )}
       </div>
     </Section>
   );

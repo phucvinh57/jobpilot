@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { addAccessibleName, addButton, addLabel, addTooltip, canAdd, itemKey, topicKey, type AddButton } from "./preferences";
+import {
+  addAccessibleName,
+  addButton,
+  addLabel,
+  addTooltip,
+  canAdd,
+  itemKey,
+  topicKey,
+  type AddButton,
+} from "./preferences";
 
 describe("the add button", () => {
   it("follows where the topic stands", () => {

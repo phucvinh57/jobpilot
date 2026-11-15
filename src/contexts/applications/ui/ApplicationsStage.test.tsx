@@ -44,7 +44,10 @@ describe("an application stage", () => {
   it("lists the CVs with their role, company, next step and age", async () => {
     render(<ApplicationsStage stage="cv" />);
     const table = await screen.findByRole("table", { name: "CVs" });
-    expect(rowNames(table)).toEqual(["Acme, Backend Engineer: Approve CV, Draft", "Globex, SRE: Review & submit, CV ready"]);
+    expect(rowNames(table)).toEqual([
+      "Acme, Backend Engineer: Approve CV, Draft",
+      "Globex, SRE: Review & submit, CV ready",
+    ]);
     const row = within(table).getByRole("row", { name: "Globex, SRE: Review & submit, CV ready" });
     expect(within(row).getByText("SRE")).toBeTruthy();
     expect(within(row).getByText("Globex")).toBeTruthy();
@@ -62,7 +65,9 @@ describe("an application stage", () => {
     render(<ApplicationsStage stage="done" />);
     const done = await screen.findByRole("table", { name: "Done" });
     expect(within(within(done).getByRole("row", { name: /^Hooli/ })).getByText("Offer")).toBeTruthy();
-    expect(within(within(done).getByRole("row", { name: /^Vandelay/ })).getByText("Rejected").className).toContain("danger");
+    expect(within(within(done).getByRole("row", { name: /^Vandelay/ })).getByText("Rejected").className).toContain(
+      "danger",
+    );
   });
 
   it("shows what the shell says happens next, for every card", async () => {
@@ -85,7 +90,9 @@ describe("an application stage", () => {
     render(<ApplicationsStage stage="cv" />);
     await user.click(await screen.findByRole("row", { name: "Acme, Backend Engineer: Approve CV, Draft" }));
     expect(useNav.getState().drawer).toEqual({ kind: "app", id: 1 });
-    expect(screen.getByRole("row", { name: "Acme, Backend Engineer: Approve CV, Draft" }).getAttribute("aria-current")).toBe("true");
+    expect(
+      screen.getByRole("row", { name: "Acme, Backend Engineer: Approve CV, Draft" }).getAttribute("aria-current"),
+    ).toBe("true");
 
     screen.getByRole("row", { name: "Globex, SRE: Review & submit, CV ready" }).focus();
     await user.keyboard("{Enter}");
@@ -112,7 +119,10 @@ describe("an application stage", () => {
     render(<ApplicationsStage stage="cv" />);
     const list = await screen.findByRole("list", { name: "Recent activity" });
     const rows = within(list).getAllByRole("button");
-    expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual(["Initech: moved to Applied, 09:05", "Acme: application created, Yesterday"]);
+    expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual([
+      "Initech: moved to Applied, 09:05",
+      "Acme: application created, Yesterday",
+    ]);
     expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
     await user.click(rows[0] as HTMLElement);
     const nav = useNav.getState();
@@ -121,7 +131,13 @@ describe("an application stage", () => {
 
   it("folds a long activity feed", async () => {
     const user = userEvent.setup();
-    const activity: ActivityItem[] = Array.from({ length: 12 }, (_, i) => ({ id: i, appId: 1, text: `Acme: event ${i}`, when: "09:00", tone: "neutral" }));
+    const activity: ActivityItem[] = Array.from({ length: 12 }, (_, i) => ({
+      id: i,
+      appId: 1,
+      text: `Acme: event ${i}`,
+      when: "09:00",
+      tone: "neutral",
+    }));
     mocked.readBoard.mockResolvedValue({ ...board(), activity });
     render(<ApplicationsStage stage="cv" />);
     const list = await screen.findByRole("list", { name: "Recent activity" });

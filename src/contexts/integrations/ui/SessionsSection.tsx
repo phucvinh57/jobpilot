@@ -1,6 +1,15 @@
 import { Button, Caption, ErrorBanner, Field, FilterChip, Section, Tag, TextInput } from "@/shared";
 
-import { browserLine, browserTag, downloadLabel, NEW_KEY, sessionLine, statusTone, SUGGESTIONS, type Session } from "../domain/sessions";
+import {
+  browserLine,
+  browserTag,
+  downloadLabel,
+  NEW_KEY,
+  sessionLine,
+  statusTone,
+  SUGGESTIONS,
+  type Session,
+} from "../domain/sessions";
 import { useSessions, type SessionsCard } from "../hooks/useSessions";
 
 /** What a row offers: Check / Open / Sign out / Delete, or the label of what is running, or the
@@ -15,7 +24,11 @@ function SessionActions({ session, card }: { session: Session; card: SessionsCar
     return (
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-small text-muted">Log in in the browser window, then press Done</span>
-        <Button id={`done-${id}`} aria-label={`Done logging in to ${session.name}`} onClick={() => card.finishLogin(id)}>
+        <Button
+          id={`done-${id}`}
+          aria-label={`Done logging in to ${session.name}`}
+          onClick={() => card.finishLogin(id)}
+        >
           Done
         </Button>
       </div>
@@ -30,10 +43,19 @@ function SessionActions({ session, card }: { session: Session; card: SessionsCar
       <Button id={`open-${id}`} aria-label={`Open ${session.name}`} onClick={() => card.openLogin(id)}>
         Open
       </Button>
-      <Button id={`sign-out-${id}`} aria-label={`Sign out of ${session.name}`} onClick={() => card.destructive(id, "signOut")}>
+      <Button
+        id={`sign-out-${id}`}
+        aria-label={`Sign out of ${session.name}`}
+        onClick={() => card.destructive(id, "signOut")}
+      >
         {armed("signOut") ? "Sure?" : "Sign out"}
       </Button>
-      <Button id={`delete-${id}`} variant="danger" aria-label={`Delete ${session.name}`} onClick={() => card.destructive(id, "delete")}>
+      <Button
+        id={`delete-${id}`}
+        variant="danger"
+        aria-label={`Delete ${session.name}`}
+        onClick={() => card.destructive(id, "delete")}
+      >
         {armed("delete") ? "Sure?" : "Delete"}
       </Button>
     </div>
@@ -59,7 +81,13 @@ function NewSession({ card }: { card: SessionsCard }) {
   return (
     <div className="flex flex-col gap-3 border border-border bg-surface-alt p-3">
       <Field label="Name">
-        <TextInput id="session-name" aria-label="Name" placeholder="Name, e.g. LinkedIn" value={card.name} onChange={(e) => card.setName(e.target.value)} />
+        <TextInput
+          id="session-name"
+          aria-label="Name"
+          placeholder="Name, e.g. LinkedIn"
+          value={card.name}
+          onChange={(e) => card.setName(e.target.value)}
+        />
       </Field>
       <Field label="Login address">
         <TextInput
@@ -73,7 +101,12 @@ function NewSession({ card }: { card: SessionsCard }) {
       <div role="group" aria-label="Suggestions" className="flex flex-wrap items-center gap-2">
         <span className="text-tiny text-muted">Suggestions:</span>
         {SUGGESTIONS.map((suggestion, index) => (
-          <FilterChip key={suggestion.name} id={`suggestion-${index}`} selected={false} onClick={() => card.fill(suggestion.name, suggestion.url)}>
+          <FilterChip
+            key={suggestion.name}
+            id={`suggestion-${index}`}
+            selected={false}
+            onClick={() => card.fill(suggestion.name, suggestion.url)}
+          >
             {suggestion.name}
           </FilterChip>
         ))}
@@ -106,14 +139,21 @@ export function SessionsSection() {
       hint="Logins kept in a managed browser profile, separate from your own browser."
       actions={tag && <Tag tone={tag.tone}>{tag.text}</Tag>}
     >
-      {card.query.error && !data && <ErrorBanner error={card.query.error} title="Could not read the sessions" onRetry={card.query.reload} />}
+      {card.query.error && !data && (
+        <ErrorBanner error={card.query.error} title="Could not read the sessions" onRetry={card.query.reload} />
+      )}
       {data && (
         <>
           <div className="flex flex-wrap items-center gap-3">
             <p id="browser-line" className="selectable min-w-[200px] flex-1 truncate text-small text-muted">
               {browserLine(chrome, card.download)}
             </p>
-            <Button id="download-browser" busy={card.download.active} disabled={card.download.active} onClick={card.downloadBrowser}>
+            <Button
+              id="download-browser"
+              busy={card.download.active}
+              disabled={card.download.active}
+              onClick={card.downloadBrowser}
+            >
               {downloadLabel(chrome)}
             </Button>
           </div>
@@ -136,7 +176,9 @@ export function SessionsSection() {
           )}
         </>
       )}
-      {card.error && <ErrorBanner id="sessions-error" error={card.error} title="Something went wrong" onDismiss={card.clearError} />}
+      {card.error && (
+        <ErrorBanner id="sessions-error" error={card.error} title="Something went wrong" onDismiss={card.clearError} />
+      )}
     </Section>
   );
 }

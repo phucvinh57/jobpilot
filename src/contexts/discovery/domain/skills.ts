@@ -48,7 +48,10 @@ export function sameSkill(a: string, b: string): boolean {
 }
 
 /** The posting's skills (required first, then preferred, each once) split by the profile's. */
-export function splitSkills(wanted: { required: readonly string[]; preferred: readonly string[] }, profile: readonly string[]): SkillSplit {
+export function splitSkills(
+  wanted: { required: readonly string[]; preferred: readonly string[] },
+  profile: readonly string[],
+): SkillSplit {
   const seen = new Set<string>();
   const split: SkillSplit = { matched: [], gaps: [] };
   for (const skill of [...wanted.required, ...wanted.preferred]) {

@@ -7,7 +7,20 @@ import clsx from "clsx";
 import { Check } from "lucide-react";
 import { useState } from "react";
 
-import { Banner, Button, Caption, Card, Checkbox, ErrorBanner, Heading, Section, Spinner, Tag, TextInput, TONE_CLASS } from "@/shared";
+import {
+  Banner,
+  Button,
+  Caption,
+  Card,
+  Checkbox,
+  ErrorBanner,
+  Heading,
+  Section,
+  Spinner,
+  Tag,
+  TextInput,
+  TONE_CLASS,
+} from "@/shared";
 
 import type { Apply, ApplyDone, ApplyHandoff, ApplyIdle, ApplyWorking } from "../domain/types";
 import type { ApplySession } from "../hooks/useApplySession";
@@ -23,7 +36,14 @@ function ApplyError({ apply, session }: { apply: Apply; session: ApplySession })
   }
   // Retry only re-opens and re-fills the form (never submits); a failed submit is retried with the
   // Submit button itself.
-  return <ErrorBanner id="apply-error" error={apply.error} title="The application step failed" onRetry={apply.canRetry ? session.prepare : undefined} />;
+  return (
+    <ErrorBanner
+      id="apply-error"
+      error={apply.error}
+      title="The application step failed"
+      onRetry={apply.canRetry ? session.prepare : undefined}
+    />
+  );
 }
 
 function UrlLine({ idle, session }: { idle: ApplyIdle; session: ApplySession }) {
@@ -41,7 +61,12 @@ function UrlLine({ idle, session }: { idle: ApplyIdle; session: ApplySession }) 
       <p className="text-body text-warn-fg">No apply URL found in the job description.</p>
       <div className="flex gap-2">
         <div className="min-w-0 flex-1">
-          <TextInput aria-label="Apply URL" placeholder="Link of the application form, https://..." value={url} onChange={(e) => setUrl(e.target.value)} />
+          <TextInput
+            aria-label="Apply URL"
+            placeholder="Link of the application form, https://..."
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
         </div>
         <Button id="save-apply-url" disabled={session.busy} onClick={() => session.saveUrl(url)}>
           Save
@@ -58,7 +83,9 @@ function Idle({ id, idle, apply, session }: { id: number; idle: ApplyIdle; apply
         <UrlLine idle={idle} session={session} />
         <p className={clsx("text-body", TONE_CLASS[idle.sessionTone].fg)}>{idle.session}</p>
       </Section>
-      <p className="text-body text-muted">{idle.applied ? "This application was sent. Replies are tracked from your email." : READY_TEXT}</p>
+      <p className="text-body text-muted">
+        {idle.applied ? "This application was sent. Replies are tracked from your email." : READY_TEXT}
+      </p>
       {!idle.applied && (
         <>
           <Checkbox
@@ -87,8 +114,17 @@ function Working({ working, lines }: { working: ApplyWorking; lines: string[] })
       </div>
       <ul aria-label="Progress" className="flex flex-col gap-1">
         {lines.map((line, i) => (
-          <li key={`${i}-${line}`} className={clsx("flex items-center gap-2 text-body", i === last ? "text-ink" : "text-muted")}>
-            {i === last ? <span aria-hidden className="w-4 text-center">›</span> : <Check aria-hidden className="size-4" />}
+          <li
+            key={`${i}-${line}`}
+            className={clsx("flex items-center gap-2 text-body", i === last ? "text-ink" : "text-muted")}
+          >
+            {i === last ? (
+              <span aria-hidden className="w-4 text-center">
+                ›
+              </span>
+            ) : (
+              <Check aria-hidden className="size-4" />
+            )}
             {line}
           </li>
         ))}
@@ -107,7 +143,17 @@ function Done({ id, done, generation }: { id: number; done: ApplyDone; generatio
   );
 }
 
-function Handoff({ id, handoff, apply, session }: { id: number; handoff: ApplyHandoff; apply: Apply; session: ApplySession }) {
+function Handoff({
+  id,
+  handoff,
+  apply,
+  session,
+}: {
+  id: number;
+  handoff: ApplyHandoff;
+  apply: Apply;
+  session: ApplySession;
+}) {
   const opening = apply.busy === "Opening the browser...";
   const busy = apply.busy !== null || session.busy;
   return (
@@ -131,7 +177,9 @@ function Handoff({ id, handoff, apply, session }: { id: number; handoff: ApplyHa
         {apply.busy !== null && <Caption>{apply.busy}</Caption>}
       </div>
       <ApplyError apply={apply} session={session} />
-      {handoff.hasScreenshot && <Screenshots id={id} kind="handoff" count={1} version={apply.generation} title="What the page looked like" />}
+      {handoff.hasScreenshot && (
+        <Screenshots id={id} kind="handoff" count={1} version={apply.generation} title="What the page looked like" />
+      )}
     </div>
   );
 }
@@ -139,17 +187,27 @@ function Handoff({ id, handoff, apply, session }: { id: number; handoff: ApplyHa
 export function ApplyTab({ id, session }: { id: number; session: ApplySession }) {
   const apply = session.apply;
   if (apply === undefined) {
-    return session.loadError ? <ErrorBanner error={session.loadError} title="The apply step could not be read" /> : null;
+    return session.loadError ? (
+      <ErrorBanner error={session.loadError} title="The apply step could not be read" />
+    ) : null;
   }
   return (
     <div id="apply-tab" className="flex flex-col gap-3">
-      {apply.phase === "idle" && apply.idle !== null && <Idle id={id} idle={apply.idle} apply={apply} session={session} />}
+      {apply.phase === "idle" && apply.idle !== null && (
+        <Idle id={id} idle={apply.idle} apply={apply} session={session} />
+      )}
       {(apply.phase === "preparing" || apply.phase === "submitting") && apply.working !== null && (
         <Working working={apply.working} lines={session.lines} />
       )}
-      {apply.phase === "review" && apply.review !== null && <ReviewPanel id={id} review={apply.review} session={session} generation={apply.generation} />}
-      {apply.phase === "done" && apply.done !== null && <Done id={id} done={apply.done} generation={apply.generation} />}
-      {apply.phase === "handoff" && apply.handoff !== null && <Handoff id={id} handoff={apply.handoff} apply={apply} session={session} />}
+      {apply.phase === "review" && apply.review !== null && (
+        <ReviewPanel id={id} review={apply.review} session={session} generation={apply.generation} />
+      )}
+      {apply.phase === "done" && apply.done !== null && (
+        <Done id={id} done={apply.done} generation={apply.generation} />
+      )}
+      {apply.phase === "handoff" && apply.handoff !== null && (
+        <Handoff id={id} handoff={apply.handoff} apply={apply} session={session} />
+      )}
     </div>
   );
 }

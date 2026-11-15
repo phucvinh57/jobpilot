@@ -85,7 +85,12 @@ function SkillRow({
   return (
     <li id={`trends-skill-${index}`} aria-label={tip} title={tip} className="flex items-center gap-1">
       <div className="min-w-0 flex-1">
-        <SkillBar name={skill.name} count={skill.percent} max={scope.maxPercent} inProfile={marks ? skill.inProfile : state === "added"} />
+        <SkillBar
+          name={skill.name}
+          count={skill.percent}
+          max={scope.maxPercent}
+          inProfile={marks ? skill.inProfile : state === "added"}
+        />
       </div>
       {marks && (
         <>

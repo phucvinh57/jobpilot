@@ -6,7 +6,17 @@ import { CommandError, type GraphProgress } from "@/shared";
 
 import type { RunResult } from "../domain/types";
 import { useRuns } from "../hooks";
-import { ACME, chartFixture, challengeFixture, deferred, GLOBEX, globalScope, localScope, oldChartFixture, overviewFixture } from "../testing";
+import {
+  ACME,
+  chartFixture,
+  challengeFixture,
+  deferred,
+  GLOBEX,
+  globalScope,
+  localScope,
+  oldChartFixture,
+  overviewFixture,
+} from "../testing";
 import { TrendsScreen } from "./TrendsScreen";
 
 const mocks = vi.hoisted(() => ({
@@ -98,26 +108,40 @@ describe("the Trends screen", () => {
     expect(screen.getAllByRole("button", { name: "Source 1" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: `Open source: ${GLOBEX}` })).toHaveLength(3);
     expect(screen.getByText("Every point links to the stored items it came from.")).toBeTruthy();
-    expect(screen.getByText("1 point(s) were left out: no valid source, a quote that is not in the source, or a claim against the app's numbers.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "1 point(s) were left out: no valid source, a quote that is not in the source, or a claim against the app's numbers.",
+      ),
+    ).toBeTruthy();
 
     // The skill chart: the local market first (the gap's scope), three rows with share, direction and marks.
     const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
     const rows = within(chart.getByRole("list", { name: "Skill share, Local" }));
     expect(rows.getAllByRole("listitem")).toHaveLength(3);
-    expect(rows.getByRole("listitem", { name: /^Rust: 9\.4% · rising · in your profile · in your wishes · 56 in total/ })).toBeTruthy();
+    expect(
+      rows.getByRole("listitem", { name: /^Rust: 9\.4% · rising · in your profile · in your wishes · 56 in total/ }),
+    ).toBeTruthy();
     expect(rows.getAllByText("rising")).toHaveLength(2);
     expect(chart.getByText("In your profile")).toBeTruthy();
     expect(chart.getByText("In your wishes")).toBeTruthy();
-    expect(chart.getByText(/^Local market: Ho Chi Minh City, Singapore or remote, 593 hiring postings, 2026-06 to 2026-11/)).toBeTruthy();
+    expect(
+      chart.getByText(/^Local market: Ho Chi Minh City, Singapore or remote, 593 hiring postings, 2026-06 to 2026-11/),
+    ).toBeTruthy();
     expect(chart.getByRole("listitem", { name: "2026-06: 92 postings" })).toBeTruthy();
     expect(chart.getByText(/^Your own leads, for comparison: 26 over the window/)).toBeTruthy();
 
     // The gap as the app sorted it, next to the model's point; the wishes; the unknown terms.
     const gap = within(screen.getByRole("region", { name: "Your gap: build on, learn next, at risk" }));
     expect(gap.getByText(/^Judged by the app on postings in Ho Chi Minh City/)).toBeTruthy();
-    expect(within(gap.getByRole("group", { name: "Build on" })).getByRole("listitem", { name: "Rust: 9.4% of postings, rising" })).toBeTruthy();
+    expect(
+      within(gap.getByRole("group", { name: "Build on" })).getByRole("listitem", {
+        name: "Rust: 9.4% of postings, rising",
+      }),
+    ).toBeTruthy();
     expect(within(gap.getByRole("group", { name: "Learn next" })).getByText("Kubernetes")).toBeTruthy();
-    expect(within(gap.getByRole("group", { name: "At risk" })).getByText("No skill of your profile is falling.")).toBeTruthy();
+    expect(
+      within(gap.getByRole("group", { name: "At risk" })).getByText("No skill of your profile is falling."),
+    ).toBeTruthy();
     expect(gap.getByText("Kubernetes is the skill platform roles ask for most next to Rust and Go.")).toBeTruthy();
     const wishes = within(screen.getByRole("list", { name: "Your wishes, measured" }));
     expect(wishes.getByRole("listitem", { name: "PHP (skill, avoided): falling, 29 postings" })).toBeTruthy();
@@ -127,7 +151,9 @@ describe("the Trends screen", () => {
 
     // Sources and report search.
     expect(screen.getByRole("switch", { name: "Collect from Hacker News" }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByRole("switch", { name: "Collect from Example engineering blog" }).getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen.getByRole("switch", { name: "Collect from Example engineering blog" }).getAttribute("aria-checked"),
+    ).toBe("false");
     expect(screen.getByText("Report search is on.")).toBeTruthy();
   });
 
@@ -143,7 +169,9 @@ describe("the Trends screen", () => {
     expect(global.getAttribute("aria-pressed")).toBe("true");
     const rows = within(chart.getByRole("list", { name: "Skill share, Global" }));
     expect(rows.getAllByRole("listitem")).toHaveLength(2);
-    expect(rows.getByRole("listitem", { name: /^PHP: 4\.6% · falling · in your profile · in your wishes/ })).toBeTruthy();
+    expect(
+      rows.getByRole("listitem", { name: /^PHP: 4\.6% · falling · in your profile · in your wishes/ }),
+    ).toBeTruthy();
     expect(chart.getByText(/^Global market: every posting, 2106 hiring postings/)).toBeTruthy();
     expect(chart.getByRole("listitem", { name: "2026-06: 340 postings" })).toBeTruthy();
 
@@ -156,7 +184,10 @@ describe("the Trends screen", () => {
       overviewFixture({
         chart: chartFixture({
           scope: "global",
-          scopes: [localScope({ note: "Too little local data to tell directions: your gap is judged on the global market." }), globalScope()],
+          scopes: [
+            localScope({ note: "Too little local data to tell directions: your gap is judged on the global market." }),
+            globalScope(),
+          ],
         }),
       }),
     );
@@ -186,16 +217,21 @@ describe("the Trends screen", () => {
     expect(collect().hasAttribute("disabled")).toBe(false);
     // Exactly one primary button on the screen (the kit's primary fill is the only one with `text-on-fill`),
     // also with the form of a source open.
-    const primaries = () => Array.from(document.querySelectorAll("button")).filter((b) => b.className.includes("text-on-fill"));
+    const primaries = () =>
+      Array.from(document.querySelectorAll("button")).filter((b) => b.className.includes("text-on-fill"));
     expect(primaries()).toEqual([collect()]);
     await user.click(screen.getByRole("button", { name: "Web page" }));
     expect(primaries()).toEqual([collect()]);
     await user.click(screen.getByRole("button", { name: "Web page" }));
-    expect(screen.getByText(/^2026-W46: collects from your sources, then your AI provider writes the digest/)).toBeTruthy();
+    expect(
+      screen.getByText(/^2026-W46: collects from your sources, then your AI provider writes the digest/),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Digest period: Weekly" }).getAttribute("aria-pressed")).toBe("true");
 
     mocks.api.overview.mockImplementation((_selected: number | undefined, cadence: string) =>
-      Promise.resolve(overviewFixture(cadence === "quarterly" ? { period: { label: "2026-Q4", title: "Q4 2026" } } : {})),
+      Promise.resolve(
+        overviewFixture(cadence === "quarterly" ? { period: { label: "2026-Q4", title: "Q4 2026" } } : {}),
+      ),
     );
     await user.click(screen.getByRole("button", { name: "Digest period: Quarterly" }));
     expect(await screen.findByText(/^2026-Q4: collects from your sources/)).toBeTruthy();
@@ -321,9 +357,16 @@ describe("the Trends screen", () => {
     expect(within(banner).getByText(/Open the page, deal with it yourself, then continue/)).toBeTruthy();
 
     await user.click(within(banner).getByRole("button", { name: "Open page" }));
-    expect(mocks.invoke).toHaveBeenCalledWith("shared_open_url", { url: "https://reports.example.com/annual-2026.html" });
+    expect(mocks.invoke).toHaveBeenCalledWith("shared_open_url", {
+      url: "https://reports.example.com/annual-2026.html",
+    });
 
-    mocks.api.runJob.mockResolvedValue({ status: "waiting", reportId: null, headline: "A source needs you before the digest can be built: see the banner below.", details: [] });
+    mocks.api.runJob.mockResolvedValue({
+      status: "waiting",
+      reportId: null,
+      headline: "A source needs you before the digest can be built: see the banner below.",
+      details: [],
+    });
     await user.click(within(banner).getByRole("button", { name: "Continue" }));
     expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "resume", period: "2026-W46" });
     expect(await screen.findByText(/A source needs you before the digest can be built/)).toBeTruthy();
@@ -333,7 +376,11 @@ describe("the Trends screen", () => {
   });
 
   it("does not offer a page that is not a web address", async () => {
-    mocks.api.overview.mockResolvedValue(overviewFixture({ challenges: [challengeFixture({ kind: "blocked", what: "blocks automated access", url: null })] }));
+    mocks.api.overview.mockResolvedValue(
+      overviewFixture({
+        challenges: [challengeFixture({ kind: "blocked", what: "blocks automated access", url: null })],
+      }),
+    );
     await shown();
     const banner = screen.getByRole("group", { name: "Example annual report blocks automated access (2026-W46)" });
     expect(within(banner).getByRole("button", { name: "Open page" }).hasAttribute("disabled")).toBe(true);
@@ -363,7 +410,9 @@ describe("the Trends screen", () => {
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
 
     const history = within(screen.getByRole("region", { name: "Earlier digests" }));
-    expect(history.getByRole("button", { name: "Weekly digest 2026-W46, 2026-11-14 09:12" }).getAttribute("aria-current")).toBe("true");
+    expect(
+      history.getByRole("button", { name: "Weekly digest 2026-W46, 2026-11-14 09:12" }).getAttribute("aria-current"),
+    ).toBe("true");
     await user.click(history.getByRole("button", { name: "Weekly digest 2026-W45, 2026-11-07 09:00" }));
     expect(mocks.api.overview).toHaveBeenLastCalledWith(2, "weekly");
   });
@@ -399,7 +448,13 @@ describe("the Trends screen", () => {
     mocks.api.overview.mockResolvedValue(
       overviewFixture({
         chart: null,
-        digest: { reportId: 1, title: "Old digest", when: "2026-01-02 10:00", itemsRead: null, body: { kind: "plain", lines: ["# Old digest", "- a point"] } },
+        digest: {
+          reportId: 1,
+          title: "Old digest",
+          when: "2026-01-02 10:00",
+          itemsRead: null,
+          body: { kind: "plain", lines: ["# Old digest", "- a point"] },
+        },
       }),
     );
     render(<TrendsScreen />);

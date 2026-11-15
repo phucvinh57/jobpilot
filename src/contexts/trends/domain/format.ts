@@ -27,7 +27,10 @@ export function chartHint(
 }
 
 /** The scope the chart shows: the one picked, else the one the gap was judged on, else the first. */
-export function pickScope(chart: Pick<Chart, "scopes" | "scope">, picked: ScopeKey | undefined): ChartScope | undefined {
+export function pickScope(
+  chart: Pick<Chart, "scopes" | "scope">,
+  picked: ScopeKey | undefined,
+): ChartScope | undefined {
   const find = (key: ScopeKey | undefined) => chart.scopes.find((s) => s.key === key);
   return find(picked) ?? find(chart.scope) ?? chart.scopes[0];
 }

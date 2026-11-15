@@ -89,14 +89,23 @@ export function useProviders(): ProvidersCard {
   );
 
   const save = useCallback(() => {
-    void withDraft("saving", "Could not save", (form) => api.saveProvider(inputOf(form)).then((saved) => ({ saved, form }))).then((done) => {
+    void withDraft("saving", "Could not save", (form) =>
+      api.saveProvider(inputOf(form)).then((saved) => ({ saved, form })),
+    ).then((done) => {
       if (!done) {
         return;
       }
       const { saved, form } = done;
       // The key box is emptied: what was typed is in the keyring now.
-      setDraft((d) =>
-        d && { ...d, id: saved.id, isDefault: saved.isDefault, apiKey: "", hasKey: d.hasKey || form.apiKey.trim() !== "" },
+      setDraft(
+        (d) =>
+          d && {
+            ...d,
+            id: saved.id,
+            isDefault: saved.isDefault,
+            apiKey: "",
+            hasKey: d.hasKey || form.apiKey.trim() !== "",
+          },
       );
       setNotice("Saved.");
       reload();
@@ -104,11 +113,13 @@ export function useProviders(): ProvidersCard {
   }, [withDraft, setNotice, reload]);
 
   const test = useCallback(() => {
-    void withDraft("testing", "The test failed", (form) => api.testProvider(inputOf(form)).then(() => true)).then((ok) => {
-      if (ok) {
-        setNotice("✓ Works");
-      }
-    });
+    void withDraft("testing", "The test failed", (form) => api.testProvider(inputOf(form)).then(() => true)).then(
+      (ok) => {
+        if (ok) {
+          setNotice("✓ Works");
+        }
+      },
+    );
   }, [withDraft, setNotice]);
 
   const loadModels = useCallback(() => {
@@ -124,13 +135,15 @@ export function useProviders(): ProvidersCard {
     if (!draft || draft.id === 0) {
       return;
     }
-    void withDraft("saving", "Could not make it the default", (form) => api.makeDefault(form.id).then(() => true)).then((ok) => {
-      if (ok) {
-        edit({ isDefault: true });
-        setNotice("This is now the default provider.");
-        reload();
-      }
-    });
+    void withDraft("saving", "Could not make it the default", (form) => api.makeDefault(form.id).then(() => true)).then(
+      (ok) => {
+        if (ok) {
+          edit({ isDefault: true });
+          setNotice("This is now the default provider.");
+          reload();
+        }
+      },
+    );
   }, [draft, withDraft, edit, setNotice, reload]);
 
   const remove = useCallback(() => {

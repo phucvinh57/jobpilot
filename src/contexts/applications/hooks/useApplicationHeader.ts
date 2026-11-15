@@ -78,7 +78,9 @@ export function useApplicationHeader(id: number): HeaderModel {
   const approveAction = useAction(() => recheckOnFailure(() => approveCv(id)));
   const retryAction = useAction(() => recheckOnFailure(() => retry(id)));
   const dismissAction = useAction(() => dismissError(id));
-  const reviseAction = useAction((instruction: string, yaml: string) => recheckOnFailure(() => revise(id, instruction, yaml)));
+  const reviseAction = useAction((instruction: string, yaml: string) =>
+    recheckOnFailure(() => revise(id, instruction, yaml)),
+  );
 
   return {
     header,

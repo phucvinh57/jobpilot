@@ -22,7 +22,11 @@ export function DigestCard({ digest, adds }: { digest: Digest | null; adds: Pref
     );
   }
   return (
-    <section id="trends-digest" aria-label={digest.title} className="flex flex-col gap-4 border border-border bg-surface p-5">
+    <section
+      id="trends-digest"
+      aria-label={digest.title}
+      className="flex flex-col gap-4 border border-border bg-surface p-5"
+    >
       <div className="flex flex-col gap-0.5">
         <Heading>{digest.title}</Heading>
         <Caption>{digestHint(digest.when, digest.itemsRead)}</Caption>
@@ -47,7 +51,12 @@ function DigestBody({ digest, adds }: { digest: Digest; adds: PreferenceAdds }) 
   return (
     <div className="flex flex-col gap-5">
       {body.sections.map((section) => (
-        <section key={section.key} id={`trends-section-${section.key}`} aria-label={section.title} className="flex flex-col gap-4">
+        <section
+          key={section.key}
+          id={`trends-section-${section.key}`}
+          aria-label={section.title}
+          className="flex flex-col gap-4"
+        >
           <SectionLabel>{section.title}</SectionLabel>
           {section.gap && <GapView gap={section.gap} />}
           {section.wishes && <WishesView wishes={section.wishes} />}
@@ -60,7 +69,9 @@ function DigestBody({ digest, adds }: { digest: Digest; adds: PreferenceAdds }) 
           )}
         </section>
       ))}
-      {body.sections.length === 0 && <p className="text-body text-muted">No point could be tied to a source this time.</p>}
+      {body.sections.length === 0 && (
+        <p className="text-body text-muted">No point could be tied to a source this time.</p>
+      )}
       {body.uncatalogued.length > 0 && (
         <p id="trends-uncatalogued" className="selectable text-small text-muted">
           <span className="font-semibold text-ink">Terms not in the list: </span>
@@ -69,7 +80,10 @@ function DigestBody({ digest, adds }: { digest: Digest; adds: PreferenceAdds }) 
       )}
       <Caption>Every point links to the stored items it came from.</Caption>
       {body.dropped > 0 && (
-        <Caption>{body.dropped} point(s) were left out: no valid source, a quote that is not in the source, or a claim against the app's numbers.</Caption>
+        <Caption>
+          {body.dropped} point(s) were left out: no valid source, a quote that is not in the source, or a claim against
+          the app's numbers.
+        </Caption>
       )}
     </div>
   );
@@ -81,7 +95,13 @@ function GapView({ gap }: { gap: Gap }) {
     <div id="trends-gap" className="flex flex-col gap-3">
       <Caption>{gap.hint}</Caption>
       {gap.groups.map((group) => (
-        <div key={group.bucket} id={`trends-gap-${group.bucket}`} role="group" aria-label={group.title} className="flex flex-col gap-1.5">
+        <div
+          key={group.bucket}
+          id={`trends-gap-${group.bucket}`}
+          role="group"
+          aria-label={group.title}
+          className="flex flex-col gap-1.5"
+        >
           <p className="text-body">
             <span className="font-semibold text-ink">{group.title}</span>
             <span className="text-small text-muted"> · {group.hint}</span>
@@ -114,7 +134,11 @@ function WishesView({ wishes }: { wishes: Wishes }) {
   return (
     <div className="flex flex-col gap-2">
       <Caption>{wishes.hint}</Caption>
-      <ul id="trends-wishes" aria-label="Your wishes, measured" className="flex flex-col divide-y divide-border border border-border">
+      <ul
+        id="trends-wishes"
+        aria-label="Your wishes, measured"
+        className="flex flex-col divide-y divide-border border border-border"
+      >
         {wishes.wishes.map((wish, i) => (
           <li
             key={`${wish.kind}-${wish.wish}`}
@@ -123,7 +147,9 @@ function WishesView({ wishes }: { wishes: Wishes }) {
             className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2"
           >
             <span className="selectable min-w-0 text-body font-semibold text-ink">{wish.wish}</span>
-            <span className="text-small text-muted">{wish.avoided ? `${wish.kind} you avoid` : `${wish.kind} you want`}</span>
+            <span className="text-small text-muted">
+              {wish.avoided ? `${wish.kind} you avoid` : `${wish.kind} you want`}
+            </span>
             <span className="ml-auto flex items-center gap-2">
               <span className="text-small text-muted tabular-nums">{wish.detail}</span>
               <Tag tone={wish.signal.tone}>{wish.signal.label}</Tag>

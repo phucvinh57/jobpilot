@@ -20,11 +20,20 @@ export function FilterBar({ filter, sources, shown, total }: Props) {
       {sources.length > 1 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <Caption>Source</Caption>
-          <FilterChip id="flt-src-all" selected={filter.sourceId === null} onClick={() => setFilter({ sourceId: null })}>
+          <FilterChip
+            id="flt-src-all"
+            selected={filter.sourceId === null}
+            onClick={() => setFilter({ sourceId: null })}
+          >
             All
           </FilterChip>
           {sources.map((s) => (
-            <FilterChip key={s.id} id={`flt-src-${s.id}`} selected={filter.sourceId === s.id} onClick={() => setFilter({ sourceId: s.id })}>
+            <FilterChip
+              key={s.id}
+              id={`flt-src-${s.id}`}
+              selected={filter.sourceId === s.id}
+              onClick={() => setFilter({ sourceId: s.id })}
+            >
               {sourceName(s)}
             </FilterChip>
           ))}
@@ -32,11 +41,20 @@ export function FilterBar({ filter, sources, shown, total }: Props) {
       )}
       <div className="flex flex-wrap items-center gap-1.5">
         <Caption>Min score</Caption>
-        <FilterChip id="flt-score-any" selected={filter.minScore === null} onClick={() => setFilter({ minScore: null })}>
+        <FilterChip
+          id="flt-score-any"
+          selected={filter.minScore === null}
+          onClick={() => setFilter({ minScore: null })}
+        >
           Any
         </FilterChip>
         {MIN_SCORES.map((min) => (
-          <FilterChip key={min} id={`flt-score-${min}`} selected={filter.minScore === min} onClick={() => setFilter({ minScore: min })}>
+          <FilterChip
+            key={min}
+            id={`flt-score-${min}`}
+            selected={filter.minScore === min}
+            onClick={() => setFilter({ minScore: min })}
+          >
             {min}+
           </FilterChip>
         ))}

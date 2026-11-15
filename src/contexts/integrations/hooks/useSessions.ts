@@ -109,7 +109,12 @@ export function useSessions(): SessionsCard {
   }, [fill]);
 
   const createAndLogin = useCallback(() => {
-    void run(NEW_KEY, "Opening browser...", () => api.createSession(name, url), () => setFormOpen(false));
+    void run(
+      NEW_KEY,
+      "Opening browser...",
+      () => api.createSession(name, url),
+      () => setFormOpen(false),
+    );
   }, [run, name, url]);
 
   const openLogin = useCallback((id: number) => void run(id, "Opening browser...", () => api.openSession(id)), [run]);
@@ -137,19 +142,22 @@ export function useSessions(): SessionsCard {
     }
     setError(undefined);
     setLive({ active: true, percent: null });
-    api.downloadBrowser().then(
-      () => undefined,
-      (thrown: unknown) => {
+    api
+      .downloadBrowser()
+      .then(
+        () => undefined,
+        (thrown: unknown) => {
+          if (alive.current) {
+            setError(toCommandError(thrown));
+          }
+        },
+      )
+      .finally(() => {
         if (alive.current) {
-          setError(toCommandError(thrown));
+          setLive(NO_DOWNLOAD);
+          reload();
         }
-      },
-    ).finally(() => {
-      if (alive.current) {
-        setLive(NO_DOWNLOAD);
-        reload();
-      }
-    });
+      });
   }, [download.active, reload]);
 
   return {

@@ -15,7 +15,12 @@ export function Breakdown({ criteria }: { criteria: readonly Criterion[] | null 
     return null;
   }
   return (
-    <div id="queue-breakdown" role="group" aria-label="Score breakdown" className="flex min-w-[220px] flex-1 flex-col gap-2.5">
+    <div
+      id="queue-breakdown"
+      role="group"
+      aria-label="Score breakdown"
+      className="flex min-w-[220px] flex-1 flex-col gap-2.5"
+    >
       <SectionLabel>Why it fits</SectionLabel>
       {criteria.map((c) => {
         const label = `${capitalize(c.criterion)} ${c.weight}%`;
@@ -81,7 +86,9 @@ export function SkillsBlock({
           ))
         )}
       </div>
-      <Caption>{judged ? "Blue: in your profile. Dashed: asked for, not in your profile." : "What the posting asks for."}</Caption>
+      <Caption>
+        {judged ? "Blue: in your profile. Dashed: asked for, not in your profile." : "What the posting asks for."}
+      </Caption>
     </div>
   );
 }

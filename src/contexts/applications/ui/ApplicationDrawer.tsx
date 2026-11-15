@@ -22,14 +22,28 @@ import {
 } from "@/shared";
 
 import type { ApplicationHeader, MarkKey } from "../domain/types";
-import { useApplicationDrawer, useApplicationMarks, type ApplicationDrawerModel, type ApplicationMarks } from "../hooks/useApplicationDrawer";
+import {
+  useApplicationDrawer,
+  useApplicationMarks,
+  type ApplicationDrawerModel,
+  type ApplicationMarks,
+} from "../hooks/useApplicationDrawer";
 import { JdTab } from "./JdTab";
 import { TimelineTab } from "./TimelineTab";
 
 /** The interview round: a chip per usual round (the current one selected), and a free one. */
-function RoundPicker({ header, setRound }: { header: ApplicationHeader; setRound: Action<[round: string | null], ApplicationHeader> }) {
+function RoundPicker({
+  header,
+  setRound,
+}: {
+  header: ApplicationHeader;
+  setRound: Action<[round: string | null], ApplicationHeader>;
+}) {
   const [other, setOther] = useState("");
-  const options = header.round !== null && !header.roundOptions.includes(header.round) ? [...header.roundOptions, header.round] : header.roundOptions;
+  const options =
+    header.round !== null && !header.roundOptions.includes(header.round)
+      ? [...header.roundOptions, header.round]
+      : header.roundOptions;
   const saveOther = () => {
     const round = other.trim();
     if (round !== "") {
@@ -41,14 +55,25 @@ function RoundPicker({ header, setRound }: { header: ApplicationHeader; setRound
       <div className="flex items-center justify-between gap-2">
         <SectionLabel>Interview round</SectionLabel>
         {header.round !== null && (
-          <Button id="round-clear" variant="ghost" size="compact" disabled={setRound.busy} onClick={() => void setRound.run(null)}>
+          <Button
+            id="round-clear"
+            variant="ghost"
+            size="compact"
+            disabled={setRound.busy}
+            onClick={() => void setRound.run(null)}
+          >
             Clear
           </Button>
         )}
       </div>
       <div role="group" aria-label="Rounds" className="flex flex-wrap gap-1.5">
         {options.map((option) => (
-          <FilterChip key={option} selected={option === header.round} disabled={setRound.busy} onClick={() => void setRound.run(option)}>
+          <FilterChip
+            key={option}
+            selected={option === header.round}
+            disabled={setRound.busy}
+            onClick={() => void setRound.run(option)}
+          >
             {option}
           </FilterChip>
         ))}
@@ -60,12 +85,21 @@ function RoundPicker({ header, setRound }: { header: ApplicationHeader; setRound
           saveOther();
         }}
       >
-        <TextInput id="round-other" aria-label="Other round" placeholder="Other…" value={other} onChange={(e) => setOther(e.target.value)} className="h-8 flex-1" />
+        <TextInput
+          id="round-other"
+          aria-label="Other round"
+          placeholder="Other…"
+          value={other}
+          onChange={(e) => setOther(e.target.value)}
+          className="h-8 flex-1"
+        />
         <Button id="round-save" type="submit" size="compact" disabled={setRound.busy || other.trim() === ""}>
           Save
         </Button>
       </form>
-      {setRound.error && <ErrorBanner error={setRound.error} title="The round could not be saved" onDismiss={setRound.clearError} />}
+      {setRound.error && (
+        <ErrorBanner error={setRound.error} title="The round could not be saved" onDismiss={setRound.clearError} />
+      )}
     </section>
   );
 }
@@ -98,7 +132,11 @@ function Marks({ header, mark }: { header: ApplicationHeader; mark: ApplicationM
           ))}
         </div>
       ) : (
-        <div role="group" aria-label={`Confirm: ${pending.label}`} className="flex flex-col gap-2 border border-border bg-surface-alt p-3">
+        <div
+          role="group"
+          aria-label={`Confirm: ${pending.label}`}
+          className="flex flex-col gap-2 border border-border bg-surface-alt p-3"
+        >
           <p className="text-body text-ink">Record &ldquo;{pending.label}&rdquo;? This can&apos;t be undone.</p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -111,13 +149,21 @@ function Marks({ header, mark }: { header: ApplicationHeader; mark: ApplicationM
             >
               Confirm
             </Button>
-            <Button id="mark-cancel" size="compact" variant="ghost" disabled={mark.busy} onClick={() => setAsking(undefined)}>
+            <Button
+              id="mark-cancel"
+              size="compact"
+              variant="ghost"
+              disabled={mark.busy}
+              onClick={() => setAsking(undefined)}
+            >
               Cancel
             </Button>
           </div>
         </div>
       )}
-      {mark.error && <ErrorBanner error={mark.error} title="The answer could not be saved" onDismiss={mark.clearError} />}
+      {mark.error && (
+        <ErrorBanner error={mark.error} title="The answer could not be saved" onDismiss={mark.clearError} />
+      )}
     </section>
   );
 }
@@ -127,7 +173,9 @@ function JobDescription({ id }: { id: number }) {
   const [open, setOpen] = useState(false);
   return (
     <details id="drawer-jd" onToggle={(e) => setOpen(e.currentTarget.open)} className="border border-border">
-      <summary className="cursor-pointer px-3 py-2 text-body font-semibold text-ink hover:bg-track">Job description</summary>
+      <summary className="cursor-pointer px-3 py-2 text-body font-semibold text-ink hover:bg-track">
+        Job description
+      </summary>
       {open && (
         <div className="border-t border-border p-3">
           <JdTab id={id} />
@@ -162,12 +210,22 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
         <div className="flex flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
             {primary !== null && (
-              <Button id="primary-action" variant="primary" busy={primary.loading} disabled={!primary.enabled} onClick={model.onPrimary}>
+              <Button
+                id="primary-action"
+                variant="primary"
+                busy={primary.loading}
+                disabled={!primary.enabled}
+                onClick={model.onPrimary}
+              >
                 {primary.label}
               </Button>
             )}
             {primary?.settings != null && (
-              <Button id="primary-settings" icon={Settings} onClick={() => openSettings(primary.settings as SettingsSection)}>
+              <Button
+                id="primary-settings"
+                icon={Settings}
+                onClick={() => openSettings(primary.settings as SettingsSection)}
+              >
                 Open Settings &gt; {primary.settings}
               </Button>
             )}
@@ -180,7 +238,15 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
           {primary?.hint != null && <Caption>{primary.hint}</Caption>}
         </div>
       )}
-      {head.error !== null && <ErrorBanner id="job-error" error={head.error} title="The last job failed" onRetry={head.retry} onDismiss={head.dismiss} />}
+      {head.error !== null && (
+        <ErrorBanner
+          id="job-error"
+          error={head.error}
+          title="The last job failed"
+          onRetry={head.retry}
+          onDismiss={head.dismiss}
+        />
+      )}
       <Stepper steps={header.steps} current={header.stepIndex} />
       {header.status.key === "interview" && <RoundPicker header={header} setRound={marks.setRound} />}
       {header.marks.length > 0 && <Marks header={header} mark={marks.mark} />}
@@ -198,9 +264,17 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
 function Content({ id, model }: { id: number; model: ApplicationDrawerModel }) {
   const header = model.header;
   if (header === undefined) {
-    return model.head.loadError ? <ErrorBanner error={model.head.loadError} title="The application could not be read" /> : <Caption>Loading...</Caption>;
+    return model.head.loadError ? (
+      <ErrorBanner error={model.head.loadError} title="The application could not be read" />
+    ) : (
+      <Caption>Loading...</Caption>
+    );
   }
-  return header === null ? <Caption>This application is gone.</Caption> : <Body id={id} model={model} header={header} />;
+  return header === null ? (
+    <Caption>This application is gone.</Caption>
+  ) : (
+    <Body id={id} model={model} header={header} />
+  );
 }
 
 function AppDrawer({ id, open }: { id: number; open: boolean }) {

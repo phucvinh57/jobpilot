@@ -10,7 +10,15 @@ import { Banner, Button, ProblemHelp, useNav, type CommandError } from "@/shared
 import type { FailureRow } from "../domain/queue";
 import { shorten } from "../domain/text";
 import type { Waiting } from "../domain/types";
-import { closePrepared, continueSource, forgetFailure, openBrowser, prepare, skipSource, type Prepared } from "../hooks/todayStore";
+import {
+  closePrepared,
+  continueSource,
+  forgetFailure,
+  openBrowser,
+  prepare,
+  skipSource,
+  type Prepared,
+} from "../hooks/todayStore";
 import { useToday } from "../hooks/useToday";
 
 /** Characters of a failure message the danger banner shows; the whole text goes under it. */
@@ -47,7 +55,8 @@ function WaitingBanner({
 }) {
   const { thread, sourceId: id } = waiting;
   const title = `${waiting.sourceName} ${what(waiting.reason)}`;
-  const body = waiting.url !== null ? shorten(waiting.url, 90) : "Deal with the page in the browser, then press Continue.";
+  const body =
+    waiting.url !== null ? shorten(waiting.url, 90) : "Deal with the page in the browser, then press Continue.";
   return (
     <div id={`waiting-${id}`} className={BANNER}>
       <Banner
@@ -66,17 +75,34 @@ function WaitingBanner({
             >
               Open browser
             </Button>
-            <Button id={`waiting-continue-${id}`} size="compact" busy={continuing} disabled={continuing} onClick={() => void continueSource(thread)}>
+            <Button
+              id={`waiting-continue-${id}`}
+              size="compact"
+              busy={continuing}
+              disabled={continuing}
+              onClick={() => void continueSource(thread)}
+            >
               Continue
             </Button>
-            <Button id={`waiting-skip-${id}`} size="compact" variant="ghost" disabled={continuing} onClick={() => void skipSource(thread)}>
+            <Button
+              id={`waiting-skip-${id}`}
+              size="compact"
+              variant="ghost"
+              disabled={continuing}
+              onClick={() => void skipSource(thread)}
+            >
               Skip
             </Button>
           </>
         }
       />
       {openError && (
-        <div id={`waiting-open-error-${id}`} role="group" aria-label={`The browser could not be opened: ${openError.message}`} className="flex flex-col gap-1">
+        <div
+          id={`waiting-open-error-${id}`}
+          role="group"
+          aria-label={`The browser could not be opened: ${openError.message}`}
+          className="flex flex-col gap-1"
+        >
           <p className="selectable text-body text-danger-fg">The browser could not be opened: {openError.message}</p>
           <ProblemHelp problem={openError.problem} onRetry={() => void openBrowser(thread)} />
         </div>
@@ -120,7 +146,10 @@ function FailureBanner({ row }: { row: FailureRow }) {
         }
       />
       {hasMore && (
-        <pre id={`failure-text-${id}`} className="selectable max-h-[72px] overflow-y-auto font-mono text-small whitespace-pre-wrap text-danger-fg">
+        <pre
+          id={`failure-text-${id}`}
+          className="selectable max-h-[72px] overflow-y-auto font-mono text-small whitespace-pre-wrap text-danger-fg"
+        >
           {row.message}
         </pre>
       )}
@@ -143,7 +172,14 @@ function PreparedBanner({ index, prepared }: { index: number; prepared: Prepared
             <Button id={`prepared-open-${index}`} size="compact" onClick={() => openAppDrawer(prepared.applicationId)}>
               Open application
             </Button>
-            <Button id={`prepared-close-${index}`} size="compact" variant="ghost" icon={X} aria-label="Dismiss this message" onClick={() => closePrepared(index)} />
+            <Button
+              id={`prepared-close-${index}`}
+              size="compact"
+              variant="ghost"
+              icon={X}
+              aria-label="Dismiss this message"
+              onClick={() => closePrepared(index)}
+            />
           </>
         }
       />

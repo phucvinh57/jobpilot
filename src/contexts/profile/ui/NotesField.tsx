@@ -44,13 +44,23 @@ export function NotesField({
           <span className="text-small text-muted">or {shortcut}</span>
         </div>
         {status.kind === "reading" && (
-          <div id="profile-notes-reading" role="status" aria-label="Reading your notes" className="flex items-center gap-2 text-small text-muted">
+          <div
+            id="profile-notes-reading"
+            role="status"
+            aria-label="Reading your notes"
+            className="flex items-center gap-2 text-small text-muted"
+          >
             <Spinner className="size-3.5" />
             Reading your notes to fill in the rest...
           </div>
         )}
         {status.kind === "failed" && (
-          <p id="profile-notes-unread" role="status" aria-label="Notes saved, not read" className="selectable text-small text-muted">
+          <p
+            id="profile-notes-unread"
+            role="status"
+            aria-label="Notes saved, not read"
+            className="selectable text-small text-muted"
+          >
             {status.line}
           </p>
         )}

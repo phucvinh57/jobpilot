@@ -5,9 +5,30 @@
 import clsx from "clsx";
 import { useState } from "react";
 
-import { Button, Caption, Card, DataTable, ErrorBanner, Heading, Tag, TONE_CLASS, useNav, type DataColumn, type Query } from "@/shared";
+import {
+  Button,
+  Caption,
+  Card,
+  DataTable,
+  ErrorBanner,
+  Heading,
+  Tag,
+  TONE_CLASS,
+  useNav,
+  type DataColumn,
+  type Query,
+} from "@/shared";
 
-import { ACTIVITY_PREVIEW, activityLabel, cardLabel, emptyHint, shownActivity, stageCards, stageLabel, stageOf } from "../domain/pipeline";
+import {
+  ACTIVITY_PREVIEW,
+  activityLabel,
+  cardLabel,
+  emptyHint,
+  shownActivity,
+  stageCards,
+  stageLabel,
+  stageOf,
+} from "../domain/pipeline";
 import type { ActivityItem, Board, BoardCard, StageKey } from "../domain/types";
 
 const COLUMNS: readonly DataColumn<BoardCard>[] = [
@@ -79,7 +100,13 @@ function Activity({ items, onOpen }: { items: readonly ActivityItem[]; onOpen: (
       <div className="flex items-center justify-between gap-2">
         <Heading>Recent activity</Heading>
         {more && (
-          <Button id="activity-toggle" variant="ghost" size="compact" aria-expanded={all} onClick={() => setAll((on) => !on)}>
+          <Button
+            id="activity-toggle"
+            variant="ghost"
+            size="compact"
+            aria-expanded={all}
+            onClick={() => setAll((on) => !on)}
+          >
             {all ? "Show less" : `Show all ${items.length}`}
           </Button>
         )}
@@ -107,14 +134,26 @@ export function ApplicationsStage({ stage, board }: { stage: StageKey; board: Qu
 
   if (data === undefined) {
     return board.error ? (
-      <ErrorBanner id="board-error" error={board.error} title="The applications could not be read" onRetry={board.reload} />
+      <ErrorBanner
+        id="board-error"
+        error={board.error}
+        title="The applications could not be read"
+        onRetry={board.reload}
+      />
     ) : (
       <Caption>Loading the applications...</Caption>
     );
   }
   return (
     <>
-      {board.error && <ErrorBanner id="board-error" error={board.error} title="The applications could not be read" onRetry={board.reload} />}
+      {board.error && (
+        <ErrorBanner
+          id="board-error"
+          error={board.error}
+          title="The applications could not be read"
+          onRetry={board.reload}
+        />
+      )}
       <DataTable
         id={`table-${stage}`}
         label={label}

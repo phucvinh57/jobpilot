@@ -56,7 +56,8 @@ export function useApplySession(id: number, onPrimary: (primary: Primary | null)
   // The editors start from a review once; a new review (new generation) starts them again.
   const [typed, setTyped] = useState<{ generation: number; edits: ReviewEdits }>();
   const generation = apply?.generation;
-  const edits = typed !== undefined && typed.generation === generation ? typed.edits : initialEdits(apply?.review ?? null);
+  const edits =
+    typed !== undefined && typed.generation === generation ? typed.edits : initialEdits(apply?.review ?? null);
 
   const onPrimaryRef = useRef(onPrimary);
   onPrimaryRef.current = onPrimary;
@@ -95,7 +96,10 @@ export function useApplySession(id: number, onPrimary: (primary: Primary | null)
   if (working === null && live !== null && apply !== undefined) {
     setLive(null);
   }
-  const lines = live !== null && working !== null && live.lines.length >= working.lines.length ? live.lines : (working?.lines ?? []);
+  const lines =
+    live !== null && working !== null && live.lines.length >= working.lines.length
+      ? live.lines
+      : (working?.lines ?? []);
 
   const prepareAction = useAction(() => recheckOnFailure(() => prepareApply(id)));
   const confirmAction = useAction((current: ReviewEdits) => recheckOnFailure(() => confirmApply(id, current)));

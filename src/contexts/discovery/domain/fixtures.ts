@@ -73,7 +73,11 @@ export const FAILED: FailedPrepare = {
 
 export function queue(extra: Partial<Queue> = {}): Queue {
   return {
-    items: [lead(1), lead(2), lead(3, { sourceId: null, url: "manual:abc", score: null, criteria: null, insight: null, reasons: [] })],
+    items: [
+      lead(1),
+      lead(2),
+      lead(3, { sourceId: null, url: "manual:abc", score: null, criteria: null, insight: null, reasons: [] }),
+    ],
     failed: [],
     sources: [SOURCE],
     waiting: [],
@@ -85,7 +89,19 @@ export function queue(extra: Partial<Queue> = {}): Queue {
 
 export function jobSources(extra: Partial<JobSources> = {}): JobSources {
   return {
-    sources: [SOURCE, { ...SOURCE, id: 2, kind: "career_page", name: "", host: "beta.test", enabled: false, sessionId: 5, lastStatus: "needs_human" }],
+    sources: [
+      SOURCE,
+      {
+        ...SOURCE,
+        id: 2,
+        kind: "career_page",
+        name: "",
+        host: "beta.test",
+        enabled: false,
+        sessionId: 5,
+        lastStatus: "needs_human",
+      },
+    ],
     waiting: [2],
     sessions: [
       { id: 5, name: "LinkedIn" },

@@ -117,7 +117,11 @@ describe("where the one primary button sits", () => {
 
 describe("jobs that never reported", () => {
   it("are cleared and can be retried", () => {
-    const jobs: Record<number, Job> = { 2: { state: "queued" }, 3: { state: "queued" }, 9: { state: "running", label: "other batch" } };
+    const jobs: Record<number, Job> = {
+      2: { state: "queued" },
+      3: { state: "queued" },
+      9: { state: "running", label: "other batch" },
+    };
     const next = dropUnreported(jobs, {}, [2, 3], OTHER);
     expect(Object.keys(next.jobs), "only this batch's jobs are cleared").toEqual(["9"]);
     expect(Object.keys(next.failed).sort()).toEqual(["2", "3"]);
@@ -155,7 +159,7 @@ describe("the filters", () => {
 describe("which lead is open", () => {
   const shown = [lead(10), lead(11), lead(12)];
 
-  it("is the one asked for when it is listed, the best for \"best\", else none", () => {
+  it('is the one asked for when it is listed, the best for "best", else none', () => {
     expect(openLeadId(shown, 11)).toBe(11);
     expect(openLeadId(shown, 99), "not listed: the drawer stays closed").toBeUndefined();
     expect(openLeadId(shown, "best"), "Next job opens the best one").toBe(10);
@@ -193,14 +197,20 @@ describe("what needs the user", () => {
   });
 
   it("lists the failures the core remembers, then those of this session, by lead", () => {
-    const session: Record<number, SessionFailure> = { 3: { message: "no AI provider", problem: OTHER }, 1: { message: "dup", problem: OTHER } };
+    const session: Record<number, SessionFailure> = {
+      3: { message: "no AI provider", problem: OTHER },
+      1: { message: "dup", problem: OTHER },
+    };
     const rows = failureRows([stored(1), stored(5)], [lead(3, { company: "Beta", role: "SRE" })], {}, session);
     expect(rows.map((r) => r.leadId)).toEqual([1, 3, 5]);
     expect(rows[0]?.message, "the stored failure wins over a session one of the same lead").toBe("boom");
     expect(rows[0]?.title).toBe("Acme — Engineer");
     expect(rows[1]?.title).toBe("Beta — SRE");
     expect(rows[1]?.applicationId).toBeNull();
-    expect(failureRows([], [], {}, { 9: { message: "x", problem: OTHER } })[0]?.title, "a lead that is not listed").toBe("Lead 9");
+    expect(
+      failureRows([], [], {}, { 9: { message: "x", problem: OTHER } })[0]?.title,
+      "a lead that is not listed",
+    ).toBe("Lead 9");
   });
 
   it("hides the failure of a lead that is being prepared again", () => {
@@ -209,7 +219,14 @@ describe("what needs the user", () => {
   });
 
   it("counts sources waiting, failed CVs and CVs to read", () => {
-    const queue = { items: [], failed: [], sources: [], waiting: [{}, {}], lastRun: null, searching: false } as unknown as Queue;
+    const queue = {
+      items: [],
+      failed: [],
+      sources: [],
+      waiting: [{}, {}],
+      lastRun: null,
+      searching: false,
+    } as unknown as Queue;
     const rows = failureRows([stored(1)], [], {}, {});
     expect(needsYouCount(queue, rows, 3)).toBe(2 + 1 + 3);
     expect(needsYouCount(undefined, [], 0)).toBe(0);

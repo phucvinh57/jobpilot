@@ -19,7 +19,8 @@ function tsxFiles(dir: string): string[] {
 }
 
 /** A radius class (any variant prefix), except `rounded-none`. */
-const ROUNDED = /(?<![\w-])(?:[\w-[\]=&>*:]+:)?rounded(?:-(?:t|r|b|l|tl|tr|br|bl|s|e|ss|se|es|ee))?(?:-(?!none\b)[\w[\]().%/-]+)?(?![\w-])/g;
+const ROUNDED =
+  /(?<![\w-])(?:[\w-[\]=&>*:]+:)?rounded(?:-(?:t|r|b|l|tl|tr|br|bl|s|e|ss|se|es|ee))?(?:-(?!none\b)[\w[\]().%/-]+)?(?![\w-])/g;
 
 /** A class string that draws a small dot may be round. */
 function isDot(line: string): boolean {

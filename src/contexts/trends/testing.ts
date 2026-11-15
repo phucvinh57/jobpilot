@@ -161,7 +161,8 @@ export function localScope(patch: Partial<ChartScope> = {}): ChartScope {
         total: 124,
         percent: 21,
         share: "21%",
-        description: "124 in total · 20 so far this month · last month 20.0% of documents, about the same as the month before (21.2%)",
+        description:
+          "124 in total · 20 so far this month · last month 20.0% of documents, about the same as the month before (21.2%)",
         presence: "absent",
         direction: { label: "steady", tone: "accent" },
         inProfile: true,
@@ -172,7 +173,8 @@ export function localScope(patch: Partial<ChartScope> = {}): ChartScope {
         total: 79,
         percent: 13,
         share: "13%",
-        description: "79 in total · 15 so far this month · last month 14.5% of documents, up from 13.5% the month before",
+        description:
+          "79 in total · 15 so far this month · last month 14.5% of documents, up from 13.5% the month before",
         presence: "added",
         direction: { label: "rising", tone: "ok" },
         inProfile: false,
@@ -183,7 +185,8 @@ export function localScope(patch: Partial<ChartScope> = {}): ChartScope {
         total: 56,
         percent: 9,
         share: "9.4%",
-        description: "56 in total · 13 so far this month · last month 10.9% of documents, up from 9.6% the month before",
+        description:
+          "56 in total · 13 so far this month · last month 10.9% of documents, up from 9.6% the month before",
         presence: "absent",
         direction: { label: "rising", tone: "ok" },
         inProfile: true,
@@ -238,7 +241,8 @@ export function chartFixture(patch: Partial<Chart> = {}): Chart {
     fromMonth: "2026-06",
     toMonth: "2026-11",
     marks: true,
-    pipeline: "Your own leads, for comparison: 26 over the window; they name Rust, Go, Kubernetes most. They are not counted in the market above.",
+    pipeline:
+      "Your own leads, for comparison: 26 over the window; they name Rust, Go, Kubernetes most. They are not counted in the market above.",
     ...patch,
   };
 }
@@ -347,9 +351,27 @@ function wishesSection(): DigestSection {
     wishes: {
       hint: "Judged by the app on postings in Ho Chi Minh City, Singapore or remote.",
       wishes: [
-        { wish: "PHP", kind: "skill", avoided: true, signal: { label: "falling", tone: "warn" }, detail: "29 postings" },
-        { wish: "fintech", kind: "domain", avoided: false, signal: { label: "steady", tone: "accent" }, detail: "18 postings" },
-        { wish: "climate tech", kind: "domain", avoided: false, signal: { label: "no data", tone: "neutral" }, detail: "no posting names it" },
+        {
+          wish: "PHP",
+          kind: "skill",
+          avoided: true,
+          signal: { label: "falling", tone: "warn" },
+          detail: "29 postings",
+        },
+        {
+          wish: "fintech",
+          kind: "domain",
+          avoided: false,
+          signal: { label: "steady", tone: "accent" },
+          detail: "18 postings",
+        },
+        {
+          wish: "climate tech",
+          kind: "domain",
+          avoided: false,
+          signal: { label: "no data", tone: "neutral" },
+          detail: "no posting names it",
+        },
       ],
     },
   };

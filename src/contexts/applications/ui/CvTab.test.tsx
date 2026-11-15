@@ -19,11 +19,23 @@ vi.mock("@/shared/bridge", () => ({
 vi.mock("./CvEditor", async () => {
   const { createElement } = await import("react");
   return {
-    CvEditor: ({ doc, readOnly, onChange }: { doc?: { text: string }; readOnly: boolean; onChange: (text: string) => void }) =>
+    CvEditor: ({
+      doc,
+      readOnly,
+      onChange,
+    }: {
+      doc?: { text: string };
+      readOnly: boolean;
+      onChange: (text: string) => void;
+    }) =>
       createElement(
         "div",
         null,
-        createElement("textarea", { "aria-label": "cv.yaml", readOnly, onChange: (e: { target: { value: string } }) => onChange(e.target.value) }),
+        createElement("textarea", {
+          "aria-label": "cv.yaml",
+          readOnly,
+          onChange: (e: { target: { value: string } }) => onChange(e.target.value),
+        }),
         createElement("output", { "aria-label": "loaded" }, doc?.text ?? ""),
       ),
   };
@@ -65,7 +77,11 @@ async function edit(text: string) {
 beforeEach(() => {
   revise.mockReset();
   revise.mockResolvedValue(undefined);
-  Object.defineProperty(URL, "createObjectURL", { value: vi.fn(() => "blob:page"), configurable: true, writable: true });
+  Object.defineProperty(URL, "createObjectURL", {
+    value: vi.fn(() => "blob:page"),
+    configurable: true,
+    writable: true,
+  });
   Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true, writable: true });
   mocked.readCv.mockResolvedValue(cv());
   mocked.readCvPage.mockResolvedValue(new Blob(["png"], { type: "image/png" }));
@@ -159,14 +175,22 @@ describe("editing", () => {
     mocked.saveCv.mockResolvedValue({ pageCount: 1, warnings: ["employer 'Initech' is not in the profile"] });
     show();
     await edit("a: 1\n");
-    const warnings = await screen.findByRole("group", { name: "Not backed by profile.yaml (kept, check before approving):" });
+    const warnings = await screen.findByRole("group", {
+      name: "Not backed by profile.yaml (kept, check before approving):",
+    });
     expect(within(warnings).getByText("employer 'Initech' is not in the profile")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Every fact traced to your profile" })).toBeNull();
   });
 
   it("says when the CV does not compile, with what to do about it", async () => {
     mocked.saveCv.mockRejectedValue(
-      new CommandError("typst: command not found", { kind: "noTypst", challenge: null, advice: "Install Typst.", settingsSection: null, retryable: false }),
+      new CommandError("typst: command not found", {
+        kind: "noTypst",
+        challenge: null,
+        advice: "Install Typst.",
+        settingsSection: null,
+        retryable: false,
+      }),
     );
     show();
     await edit("a: 1\n");
@@ -217,7 +241,9 @@ describe("Ask AI", () => {
 
 describe("without a CV", () => {
   it("offers Generate and keeps the editor and Ask AI away", async () => {
-    mocked.readCv.mockResolvedValue(cv({ hasCv: false, yaml: null, pageCount: 0, requirements: [], hasGaps: false, guardClean: false }));
+    mocked.readCv.mockResolvedValue(
+      cv({ hasCv: false, yaml: null, pageCount: 0, requirements: [], hasGaps: false, guardClean: false }),
+    );
     show();
     expect(await screen.findByText("No CV yet: Generate creates one from the profile.")).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "cv.yaml" })).toBeNull();
@@ -226,7 +252,9 @@ describe("without a CV", () => {
   });
 
   it("says the CV is being written while a job runs", async () => {
-    mocked.readCv.mockResolvedValue(cv({ hasCv: false, yaml: null, pageCount: 0, requirements: [], hasGaps: false, guardClean: false }));
+    mocked.readCv.mockResolvedValue(
+      cv({ hasCv: false, yaml: null, pageCount: 0, requirements: [], hasGaps: false, guardClean: false }),
+    );
     show(true);
     expect(await screen.findByText("The CV is being written...")).toBeTruthy();
   });

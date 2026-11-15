@@ -48,14 +48,16 @@ export function useGmail(): GmailCard {
       return;
     }
     const secret = clientSecret.trim();
-    void run("connecting", "Could not connect", () => api.connect(id, secret === "" ? null : secret)).then((account) => {
-      if (account !== undefined) {
-        // The box is emptied: what was typed is in the keyring now.
-        setClientSecret("");
-        reload();
-        setNotice(`Connected as ${account}. Syncing…`);
-      }
-    });
+    void run("connecting", "Could not connect", () => api.connect(id, secret === "" ? null : secret)).then(
+      (account) => {
+        if (account !== undefined) {
+          // The box is emptied: what was typed is in the keyring now.
+          setClientSecret("");
+          reload();
+          setNotice(`Connected as ${account}. Syncing…`);
+        }
+      },
+    );
   }, [clientId, clientSecret, fail, run, reload, setNotice]);
 
   const cancelConnect = useCallback(() => {

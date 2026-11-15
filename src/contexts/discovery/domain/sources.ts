@@ -29,7 +29,10 @@ export function compactAgo(now: Date, then: Date): string {
 }
 
 /** The status of a source as one line and its outcome: when it last ran and how it ended. */
-export function statusLine(source: Pick<Source, "lastRunAt" | "lastStatus">, now: Date): { line: string; outcome: Outcome } {
+export function statusLine(
+  source: Pick<Source, "lastRunAt" | "lastStatus">,
+  now: Date,
+): { line: string; outcome: Outcome } {
   const status = source.lastStatus?.trim() ?? "";
   const at = source.lastRunAt === null ? undefined : new Date(source.lastRunAt);
   const ran = at !== undefined && !Number.isNaN(at.getTime()) ? at : undefined;
@@ -40,7 +43,13 @@ export function statusLine(source: Pick<Source, "lastRunAt" | "lastStatus">, now
     return { line: "needs you: continue it from Jobs", outcome: "needsYou" };
   }
   const outcome: Outcome =
-    status === "ok" ? "ok" : status.startsWith("failed") ? "failed" : status.startsWith(BOARD_HINT_STATUS) ? "boardHint" : "other";
+    status === "ok"
+      ? "ok"
+      : status.startsWith("failed")
+        ? "failed"
+        : status.startsWith(BOARD_HINT_STATUS)
+          ? "boardHint"
+          : "other";
   const chars = Array.from(status);
   const shown = chars.length > STATUS_CHARS ? `${chars.slice(0, STATUS_CHARS).join("").trimEnd()}...` : status;
   if (ran === undefined) {

@@ -45,10 +45,21 @@ function QueueActions({ open, primary, jobs, onDismiss }: ActionProps) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Button id="queue-primary" variant="primary" busy={primary.loading} disabled={!primary.enabled} onClick={() => void prepare([open.id])}>
+        <Button
+          id="queue-primary"
+          variant="primary"
+          busy={primary.loading}
+          disabled={!primary.enabled}
+          onClick={() => void prepare([open.id])}
+        >
           {actionLabel(primary.action)}
         </Button>
-        <Button id="queue-open-posting" icon={ExternalLink} disabled={!isWebLink(open.url)} onClick={() => void openUrl(open.url).catch(() => undefined)}>
+        <Button
+          id="queue-open-posting"
+          icon={ExternalLink}
+          disabled={!isWebLink(open.url)}
+          onClick={() => void openUrl(open.url).catch(() => undefined)}
+        >
           Open posting
         </Button>
         <Button id="queue-dismiss-open" disabled={jobs[open.id] !== undefined} onClick={onDismiss}>
@@ -66,11 +77,27 @@ function DismissForm({ lead, onClose }: { lead: Lead; onClose: () => void }) {
   const dismiss = useDismiss(lead.id);
   const company = lead.company.trim();
   return (
-    <div id="queue-dismiss" role="group" aria-label="Dismiss this lead" className="flex flex-col gap-2.5 border border-border bg-surface-alt p-4">
+    <div
+      id="queue-dismiss"
+      role="group"
+      aria-label="Dismiss this lead"
+      className="flex flex-col gap-2.5 border border-border bg-surface-alt p-4"
+    >
       <p className="font-semibold text-ink">Dismiss {leadTitle(lead.company, lead.role)}</p>
-      <TextInput id="queue-reason" aria-label="Why dismiss this lead" placeholder="Why? (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+      <TextInput
+        id="queue-reason"
+        aria-label="Why dismiss this lead"
+        placeholder="Why? (optional)"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+      />
       {company !== "" && (
-        <Checkbox id="dismiss-exclude" label={`Don't show ${company} again`} checked={exclude} onChange={(e) => setExclude(e.target.checked)} />
+        <Checkbox
+          id="dismiss-exclude"
+          label={`Don't show ${company} again`}
+          checked={exclude}
+          onChange={(e) => setExclude(e.target.checked)}
+        />
       )}
       {dismiss.error && (
         <p role="alert" className="selectable text-body text-danger-fg">
@@ -108,7 +135,9 @@ function LeadBody({ lead, source, primary, jobs, profileSkills }: BodyProps) {
   const [dismissing, setDismissing] = useState(false);
   const score = TONE_CLASS[scoreTone(lead.score)];
   const insight = lead.insight;
-  const hasFit = lead.criteria !== null || (insight !== null && (insight.requiredSkills.length > 0 || insight.preferredSkills.length > 0));
+  const hasFit =
+    lead.criteria !== null ||
+    (insight !== null && (insight.requiredSkills.length > 0 || insight.preferredSkills.length > 0));
   return (
     <div id="queue-lead" className="fade-in flex flex-col gap-5">
       <div className="flex items-start justify-between gap-4">
@@ -118,13 +147,20 @@ function LeadBody({ lead, source, primary, jobs, profileSkills }: BodyProps) {
           </p>
           <p className="selectable font-heading text-h2 font-semibold text-ink">{lead.role}</p>
           {isWebLink(lead.url) && (
-            <LinkButton id="lead-url" aria-label={`Posting: ${lead.url}`} onClick={() => void openUrl(lead.url).catch(() => undefined)}>
+            <LinkButton
+              id="lead-url"
+              aria-label={`Posting: ${lead.url}`}
+              onClick={() => void openUrl(lead.url).catch(() => undefined)}
+            >
               {lead.url}
             </LinkButton>
           )}
         </div>
         <div className="flex shrink-0 flex-col items-end">
-          <span aria-label={`Fit score ${scoreLabel(lead.score)}`} className={clsx("font-heading text-[36px] leading-none font-semibold", score.fg)}>
+          <span
+            aria-label={`Fit score ${scoreLabel(lead.score)}`}
+            className={clsx("font-heading text-[36px] leading-none font-semibold", score.fg)}
+          >
             {scoreLabel(lead.score)}
           </span>
           <Caption>fit score</Caption>
@@ -135,7 +171,10 @@ function LeadBody({ lead, source, primary, jobs, profileSkills }: BodyProps) {
       {hasFit && (
         <div className="flex flex-wrap items-start gap-6">
           <Breakdown criteria={lead.criteria} />
-          <SkillsBlock skills={insight ? { required: insight.requiredSkills, preferred: insight.preferredSkills } : undefined} profileSkills={profileSkills} />
+          <SkillsBlock
+            skills={insight ? { required: insight.requiredSkills, preferred: insight.preferredSkills } : undefined}
+            profileSkills={profileSkills}
+          />
         </div>
       )}
       <div className="border-t border-border pt-5">
@@ -168,7 +207,13 @@ export function LeadDrawer() {
     }
   }, [unshown, closeDrawer]);
   return (
-    <Drawer open={open !== undefined} title={open ? `${open.company}: ${open.role}` : ""} width="md" onClose={closeDrawer} id="drawer">
+    <Drawer
+      open={open !== undefined}
+      title={open ? `${open.company}: ${open.role}` : ""}
+      width="md"
+      onClose={closeDrawer}
+      id="drawer"
+    >
       {open && (
         <LeadBody
           key={open.id}

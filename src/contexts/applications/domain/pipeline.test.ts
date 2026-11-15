@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { board } from "./fixtures";
-import { activityLabel, appStages, cardLabel, emptyHint, shownActivity, stageCards, stageLabel, stageOf } from "./pipeline";
+import {
+  activityLabel,
+  appStages,
+  cardLabel,
+  emptyHint,
+  shownActivity,
+  stageCards,
+  stageLabel,
+  stageOf,
+} from "./pipeline";
 import type { ActivityItem, BoardCard } from "./types";
 
 const card: BoardCard = {
@@ -50,7 +59,13 @@ describe("the application stages", () => {
   });
 
   it("shows the first rows of the activity until all are asked for", () => {
-    const items: ActivityItem[] = Array.from({ length: 10 }, (_, i) => ({ id: i, appId: 1, text: `e${i}`, when: "09:00", tone: "neutral" }));
+    const items: ActivityItem[] = Array.from({ length: 10 }, (_, i) => ({
+      id: i,
+      appId: 1,
+      text: `e${i}`,
+      when: "09:00",
+      tone: "neutral",
+    }));
     expect(shownActivity(items, false)).toHaveLength(8);
     expect(shownActivity(items, true)).toHaveLength(10);
   });
@@ -63,6 +78,8 @@ describe("the names of rows", () => {
   });
 
   it("names an activity row", () => {
-    expect(activityLabel({ id: 1, appId: 1, text: "Acme: moved to Applied", when: "09:05", tone: "accent" })).toBe("Acme: moved to Applied, 09:05");
+    expect(activityLabel({ id: 1, appId: 1, text: "Acme: moved to Applied", when: "09:05", tone: "accent" })).toBe(
+      "Acme: moved to Applied, 09:05",
+    );
   });
 });

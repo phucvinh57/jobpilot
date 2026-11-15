@@ -35,6 +35,7 @@ export function usePageUrls(): { urls: string[]; replace: (blobs: Blob[]) => voi
  *  `version` makes it read again (a new review, a new run). */
 export function useShot(id: number, kind: ShotKind, index: number, version: unknown): string | undefined {
   const [url, setUrl] = useState<string>();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` is the trigger to read again.
   useEffect(() => {
     let stopped = false;
     let made: string | undefined;

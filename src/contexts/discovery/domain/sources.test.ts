@@ -23,7 +23,9 @@ describe("a source's status line", () => {
       outcome: "failed",
     });
     expect(statusLine(source(null, "needs_human"), NOW).outcome).toBe("needsYou");
-    expect(statusLine(source(hoursAgo(2), "needs_human"), NOW).outcome, "a paused source is not finished").toBe("needsYou");
+    expect(statusLine(source(hoursAgo(2), "needs_human"), NOW).outcome, "a paused source is not finished").toBe(
+      "needsYou",
+    );
     expect(statusLine(source(hoursAgo(30), "paused for today: repeated challenges"), NOW).outcome).toBe("other");
     expect(statusLine(source(hoursAgo(2), null), NOW).line).toBe("ran 2h ago");
     expect(statusLine(source(null, "running"), NOW)).toEqual({ line: "running", outcome: "other" });
@@ -61,7 +63,9 @@ describe("a source row", () => {
   it("is named by itself or by its kind, with the host under it", () => {
     expect(rowName({ name: " Acme ", kind: "greenhouse" }, KINDS)).toBe("Acme");
     expect(rowName({ name: " ", kind: "greenhouse" }, KINDS)).toBe("Greenhouse");
-    expect(rowAddress({ kind: "greenhouse", host: "boards.greenhouse.io" }, KINDS)).toBe("Greenhouse boards.greenhouse.io");
+    expect(rowAddress({ kind: "greenhouse", host: "boards.greenhouse.io" }, KINDS)).toBe(
+      "Greenhouse boards.greenhouse.io",
+    );
     expect(rowAddress({ kind: "yc", host: "" }, KINDS)).toBe("Y Combinator");
   });
 

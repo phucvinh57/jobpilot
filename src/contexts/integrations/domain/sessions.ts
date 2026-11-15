@@ -65,7 +65,8 @@ export function statusTone(status: SessionStatus): Tone {
 
 /** `host - verified 5 min ago`, or `host - never verified`. */
 export function sessionLine(session: Pick<Session, "host" | "verifiedAt">, now: Date): string {
-  const verified = session.verifiedAt === null ? "never verified" : `verified ${ago(now, new Date(session.verifiedAt))}`;
+  const verified =
+    session.verifiedAt === null ? "never verified" : `verified ${ago(now, new Date(session.verifiedAt))}`;
   return `${session.host} - ${verified}`;
 }
 
