@@ -2,7 +2,7 @@
 //! topic may be added, what the line under the notes says. Ported from the GPUI card.
 //!
 //! The rules that only the screen needs (whether Save is on, when a "Saved" label shows and how it
-//! fades) live in the web app's `contexts/profile/domain`.
+//! fades) live in the web app's `src/lib/profile.ts`.
 
 use std::path::Path;
 
