@@ -210,18 +210,18 @@ fn watch(key: String) {
 
 impl Core {
     /// "Open browser" for a source that waits at a login, captcha or block page: a **visible**
-    /// browser opens on that page, in the profile of the source's bound session if it has one (else a
-    /// clean throwaway window). The user deals with the page themselves; the app does nothing in it.
-    /// Then "Continue" is [`Core::discover_resume`], which closes the window and goes on.
+    /// browser on that page, in the source's bound session profile if it has one (else a throwaway
+    /// one). The user deals with the page themselves; the app does nothing in it. "Continue"
+    /// ([`Core::discover_resume`]) closes the window and goes on.
     ///
-    /// Opening it again while the window is still open does nothing (also when two clicks come at
-    /// once); if the user closed it, a new one opens. `Err` when the thread is not a source waiting
-    /// for the user, when no Chrome is installed (`classify` gives `Problem::NoChrome`), when the
-    /// session's profile is open elsewhere, or when the session is being read right now for longer
-    /// than a minute ([`SessionInUse`](crate::engine::browser::gate::SessionInUse)).
+    /// Does nothing while the window is open (double clicks included); once the user closed it, a
+    /// new one opens. `Err` when the thread is not a waiting source, no Chrome is installed
+    /// (`Problem::NoChrome`), the profile is open elsewhere, or a read of the session holds it for
+    /// over a minute
+    /// ([`SessionInUse`](crate::engine::browser::gate::SessionInUse)).
     ///
-    /// The window is a browser like the headless reads: not disguised, and its requests go through the
-    /// request guard (no machine-local or private hosts).
+    /// Like the headless reads, the window is not disguised and its requests go through the request
+    /// guard (no machine-local or private hosts).
     pub async fn discover_open_browser(&self, thread: &str) -> Result<()> {
         open_browser(self, thread, false).await
     }

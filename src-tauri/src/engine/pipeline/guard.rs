@@ -44,7 +44,7 @@ const SYNONYMS: &[&[&str]] = &[
     &["node", "nodejs", "node.js"],
 ];
 
-/// Check `cv` against the master `profile`. Empty result = the CV is clean.
+/// Check `cv` against the stored `profile`. Empty result = the CV is clean.
 pub fn guard(profile: &Cv, cv: &Cv) -> Vec<Violation> {
     let mut out = Vec::new();
     check_basics(profile, cv, &mut out);

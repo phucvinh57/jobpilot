@@ -1,5 +1,5 @@
-//! The `trends` graph: collection (P13a) and, for a run started with the digest on, the digest
-//! (P13b, [`super::digest`]).
+//! The `trends` graph: collection and, for a run started with the digest on, the digest
+//! ([`super::digest`]).
 //!
 //! ```text
 //! START -> plan -> { hackernews, yc, feeds, report_search } -> store_items -> wait_human
@@ -20,10 +20,9 @@
 //!   as [`SourceStatus::TimedOut`] in `outcomes` (and in the source's `last_status`), so
 //!   `store_items`, which the library runs once all four collectors are done, waits at most one
 //!   budget.
-//! - `report_search` is skipped, without a request, when no search API key is saved. (The plan
-//!   names a route for this. The library joins only unconditional edges: a skipped branch that
-//!   never reaches the join would hold `store_items` back forever, so the check is the first thing
-//!   the node does instead of an edge in front of it.)
+//! - `report_search` is skipped, without a request, when no search API key is saved. The check is
+//!   the node's first step, not a route in front of it: the join waits for every incoming edge, so
+//!   a skipped branch would hold `store_items` back forever.
 //! - `store_items` deduplicates by URL into `trend_items`, then adds the Hacker News hiring
 //!   threads read in full (`hn_settled`) to kv [`HN_SETTLED_KEY`], which the next run's
 //!   `hackernews` node reads: those threads are not downloaded again. A run that fails or is
@@ -31,10 +30,10 @@
 //! - `wait_human` is the shared challenge interrupt (`graph::nodes::challenge`): a collector that
 //!   meets a login or bot wall sets `challenge`; the items of the other sources are stored first,
 //!   then the thread pauses until the user continues
-//!   ([`Core::resume_trends_collection`](crate::engine::Core)). Only the `page` adapter can detect one
-//!   here ([`detect_challenge`]); P10's `browser/challenge.rs` will replace the hook.
+//!   ([`Core::resume_trends_collection`](crate::engine::Core)). Only the `page` adapter can detect one,
+//!   by status code ([`detect_challenge`]); trends never opens a browser.
 //!
-//! # The digest (P13b)
+//! # The digest
 //!
 //! After `wait_human` a route (`TrendRun::digest.enabled`) leads to `extract` or to END. The
 //! digest nodes read their items from the store, so what the other collectors stored is enough
@@ -167,7 +166,7 @@ pub struct TrendRun {
     /// Set by `feeds` when a source needs the user; cleared by "Continue".
     #[serde(default)]
     pub challenge: Option<Challenge>,
-    /// The digest (P13b): whether to build it, and what its nodes made.
+    /// The digest: whether to build it, and what its nodes made.
     #[serde(default)]
     pub digest: DigestState,
     /// Append list: Hacker News hiring threads (ids) read in full this run (`hackernews::Hn::settled`);
@@ -487,10 +486,9 @@ where
     Attempt { outcome: SourceOutcome { source_id, kind: kind.into(), status, items: count }, items, challenge }
 }
 
-/// The hook that tells a login or bot wall from an ordinary failure. API adapters (Hacker News, YC,
-/// feeds, report search) have none, so they never pause the run; a `page` source that answers 401
-/// (login) or 403, 429, 503 (blocked) does. P10's `browser/challenge.rs` will look at the rendered
-/// page instead; this is the status-code check that needs no browser.
+/// Tells a login or bot wall from an ordinary failure, by status code (no browser). API adapters
+/// (Hacker News, YC, feeds, report search) never pause the run; a `page` source that answers 401
+/// (login) or 403, 429, 503 (blocked) does.
 pub fn detect_challenge(kind: &str, error: &anyhow::Error) -> Option<ChallengeKind> {
     if kind != SourceKind::Page.as_str() {
         return None;

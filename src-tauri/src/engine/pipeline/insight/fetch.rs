@@ -1,11 +1,7 @@
-//! The fetch of one company page, with rules of its own: the address comes from code, but a
-//! redirect (or a DNS answer) can still lead somewhere that must not be read, so every hop is
-//! checked, not only the first. A redirect from https to http is refused as well.
-//!
-//! A page is fetched only when its scheme is http(s) and its host is a public DNS name: no IP
-//! literal, `localhost`, single-label or `.local`-style name. The same check runs on every
-//! redirect (a refused hop ends the fetch), and the connection itself only goes to public
-//! addresses: the resolver drops loopback, private, link-local and other special-use ranges, so a
+//! The fetch of one company page. The address comes from code, but a redirect or a DNS answer can
+//! still lead somewhere that must not be read, so every hop is checked: http(s) only, a public DNS
+//! name (no IP literal, `localhost`, single-label or `.local`-style name), never https -> http.
+//! The resolver drops loopback, private, link-local and other special-use addresses, so a
 //! public-looking name that points inside the network is refused too. (Behind an HTTP proxy the
 //! proxy resolves names, so the name check is the part that still holds.)
 

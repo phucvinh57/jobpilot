@@ -1,7 +1,7 @@
 // Compact bar above the main pane while something the main flow needs is missing (no AI
 // provider, no typst, no profile read from the user's documents), and until the job preferences
-// are saved. One line per missing thing, each
-// with its action button. Nothing when everything is in place or the first check has not finished.
+// are saved. One line per missing thing, each with its action button. Nothing when everything is
+// in place or the first check has not finished.
 
 import { FilePlus, Settings2, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";

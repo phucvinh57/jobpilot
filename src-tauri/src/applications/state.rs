@@ -291,7 +291,7 @@ struct AppRuntime {
 #[derive(Default)]
 struct Inner {
     apps: HashMap<i64, AppRuntime>,
-    /// The "Dry run" box of the Apply tab (one for the window, like the legacy tab).
+    /// The "Dry run" box of the Apply tab (one for the window, not per application).
     dry_run: bool,
 }
 

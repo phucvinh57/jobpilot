@@ -16,7 +16,7 @@ use crate::engine::Core;
 pub const TYPST_INSTALL_HINT: &str = "cargo install --locked typst-cli";
 
 /// Why a site cannot be used without the user: something only they may do in the visible browser.
-/// The app never solves or evades these (see `docs/plans/README.md`, rules).
+/// The app never solves or evades these.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Challenge {
     /// The site wants a login.

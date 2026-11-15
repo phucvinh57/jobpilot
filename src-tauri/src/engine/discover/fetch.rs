@@ -249,13 +249,13 @@ mod tests {
         );
         assert!(text.contains("replication protocol") && text.contains("Profile and tune SQLite") && !text.contains("Cookie settings"), "{text}");
 
-        // A teaser description: the page is read as today, with the header first (an expired
+        // A teaser description: the page itself is read, with the header first (an expired
         // posting is still read; its header says so).
         let text = posting_text(&http, &format!("{}/teaser", fx.base())).await.unwrap();
         assert!(text.starts_with("Title: Backend Engineer\nLocation: Hanoi, VN\nSalary: USD 50000-70000 per year\nValid through: 2020-01-31\n\n"), "{text}");
         assert!(text.contains("sync engine in Rust") && !text.contains("Join our sync team"), "{text}");
 
-        // Two postings, or a teaser on a page with no text of its own: the page is read as today,
+        // Two postings, or a teaser on a page with no text of its own: the page itself is read,
         // and that page is mostly empty without its JSON-LD, so it needs the browser.
         for page in ["/two", "/teaser-empty-page"] {
             let err = posting_text(&http, &format!("{}{page}", fx.base())).await.unwrap_err();

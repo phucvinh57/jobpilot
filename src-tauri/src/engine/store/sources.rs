@@ -4,7 +4,7 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use super::{now, Store};
 
-/// What a source feeds: job postings (P10) or market-trend items (P13).
+/// What a source feeds: job postings or market-trend items.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SourcePurpose {
     #[default]

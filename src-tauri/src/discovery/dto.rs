@@ -268,7 +268,7 @@ impl From<&RunSummary> for RunSummaryDto {
     }
 }
 
-/// Everything Today shows, read in one go.
+/// Everything the Leads stage shows, read in one go.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueDto {

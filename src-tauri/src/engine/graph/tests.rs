@@ -547,7 +547,7 @@ fn the_library_is_named_only_inside_the_graph_module() {
     assert!(hits.is_empty(), "`adk_graph` may only be named in src-tauri/src/engine/graph/: {hits:?}");
 }
 
-/// The engine was its own crate: it still never names Tauri or the shell (contexts, `shared`, `demo`).
+/// The engine never names Tauri or the shell (contexts, `shared`, `demo`).
 #[test]
 fn the_engine_does_not_depend_on_the_shell() {
     fn walk(dir: &Path, hits: &mut Vec<(PathBuf, String)>) {

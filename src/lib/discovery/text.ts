@@ -1,4 +1,4 @@
-// Small text rules of Today: links, meta lines, the sentences about a search and a dismissal.
+// Small text rules of the Leads stage: links, meta lines, the sentences about a search and a dismissal.
 
 import { ago } from "@/lib/display";
 

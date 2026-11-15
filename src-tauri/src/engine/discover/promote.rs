@@ -1,4 +1,4 @@
-//! P12 - from a lead to an application with a CV (design: `docs/plans/P12-queue.md`).
+//! From a lead to an application with a CV.
 //!
 //! ```text
 //! let app = core.prepare_cv(lead_id).await?;       // "Prepare CV": lead -> Draft application + CV

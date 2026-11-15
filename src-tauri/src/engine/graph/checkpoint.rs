@@ -16,9 +16,8 @@ const KEEP: usize = 3;
 
 /// Saves graph checkpoints in the `graph_checkpoints` table, tagged with the graph's name.
 ///
-/// The store calls are single short statements on a local WAL database behind the store's
-/// connection mutex, like every other store call the app makes from async code, so they run inline
-/// in the async methods instead of through `spawn_blocking`.
+/// Store calls run inline, not through `spawn_blocking`: they are single short statements on a
+/// local WAL database, like every other store call made from async code.
 ///
 /// Once its [cancellation token](Self::with_cancel) is set, `save` is refused (inside the
 /// transaction, see [`Store::graph_save_checkpoint`]), so a cancelled thread cannot be written

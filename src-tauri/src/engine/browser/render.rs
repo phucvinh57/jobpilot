@@ -160,7 +160,7 @@ fn scrub(e: anyhow::Error, url: &str) -> anyhow::Error {
     if let Some(parsed) = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)) {
         text = text.replace(&parsed, "<host>");
     }
-    // Names and connections are the guard's now: a name that does not resolve or a host that does not
+    // The guard resolves names and connects: a name that does not resolve or a host that does not
     // answer reaches the browser as a tunnel / proxy error.
     const NETWORK: [&str; 8] = [
         "CONNECTION_",

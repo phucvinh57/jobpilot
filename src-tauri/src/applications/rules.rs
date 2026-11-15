@@ -517,7 +517,7 @@ pub fn primary_for(
 }
 
 /// After the application was sent (or while its confirmation shows), a plain "Next job" button
-/// keeps the user moving: it opens the best lead left on Today.
+/// keeps the user moving: it opens the best lead left in the queue.
 pub fn next_job_offered(status: Status, apply: &ApplyUi) -> bool {
     matches!(apply, ApplyUi::Done) || is_sent(status)
 }

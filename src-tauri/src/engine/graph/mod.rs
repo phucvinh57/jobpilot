@@ -1,5 +1,5 @@
 //! Graph runtime: flows as graphs of small async steps over a typed state, with interrupts and
-//! checkpoints (design: `docs/plans/graph-libraries.md`, `docs/plans/activity-diagram.md`).
+//! checkpoints.
 //!
 //! This module is a facade over the `adk-graph` crate and the only code in the workspace that
 //! names it; everything else uses the types below, so the library can be swapped without touching
@@ -30,7 +30,7 @@
 //!   pauses the thread ([`Outcome::Waiting`]), `None` lets it through. [`Graphs::resume`] applies
 //!   the caller's change to the saved state, then runs the waiting node again; it passes once the
 //!   change made the predicate `None`. A waiting node cannot change the state itself.
-//! - **Separate threads** (P10's one run per source): the library stops a whole run at an
+//! - **Separate threads** (e.g. discovery's one thread per source): the library stops a whole run at an
 //!   interrupt, so a paused branch holds back the downstream nodes of its siblings in the same
 //!   run. Work that must go on independently runs as its own thread: a parent node calls
 //!   [`Graphs::run_each`] with one thread id per item.

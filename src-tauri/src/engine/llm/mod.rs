@@ -1,4 +1,4 @@
-//! P1 - AI providers: OpenAI-compatible and Anthropic clients with JSON-schema output.
+//! AI providers: OpenAI-compatible and Anthropic clients with JSON-schema output.
 //!
 //! ```text
 //! let llm = core.default_llm()?;                       // or core.llm_for(provider_id)

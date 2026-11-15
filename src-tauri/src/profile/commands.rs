@@ -278,7 +278,7 @@ pub async fn profile_read(core: CoreState<'_>) -> CommandResult<AboutDto> {
     run(async move { read_sources(&core).await }).await
 }
 
-/// This context's commands; `main.rs` routes every `profile_*` call here.
+/// This context's commands; `lib.rs` routes every `profile_*` call here.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         profile_get,

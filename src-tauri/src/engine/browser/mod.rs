@@ -1,4 +1,4 @@
-//! P4 - managed Chrome sessions (chromiumoxide).
+//! Managed Chrome sessions (chromiumoxide).
 //!
 //! - [`chrome`]: which Chrome to run (`JOBPILOT_CHROME` -> managed Chrome-for-Testing -> system) and the
 //!   explicit "download browser" step.
@@ -17,7 +17,7 @@
 //! let rx = runtime::spawn(async move { mgr.check(id).await });
 //! ```
 //!
-//! P5 launches automation browsers with [`SessionManager::launch`] and drives the returned
+//! Auto-apply launches automation browsers with [`SessionManager::launch`] and drives the returned
 //! [`BrowserHandle`] (`new_page(url)` -> `chromiumoxide::Page`, `cookies()`, `close()`).
 
 pub mod challenge;
@@ -45,7 +45,7 @@ pub use session::{BrowserHandle, SessionManager, SessionStatus};
 use crate::engine::Core;
 
 /// One manager per data dir, so live browsers / login windows are tracked in one place however many
-/// times `core.sessions()` is called (`Core` itself is owned by the foundation and has no field for it).
+/// times `core.sessions()` is called (`Core` has no field for it).
 static MANAGERS: OnceLock<Mutex<HashMap<PathBuf, SessionManager>>> = OnceLock::new();
 
 impl Core {

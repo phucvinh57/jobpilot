@@ -1,10 +1,10 @@
-//! P6 - Gmail status tracking: OAuth, sync, matching, applying status changes.
+//! Gmail status tracking: OAuth, sync, matching, applying status changes.
 //!
 //! - [`oauth`]: loopback + PKCE sign-in by hand; [`gmail`]: read-only REST client and message
 //!   parsing; [`classify`]: deterministic matching + LLM classification; [`sync`]: the sync,
 //!   the poller and the apply/review logic; `account`: `impl Core` (connect, disconnect, state).
 //!
-//! Public API (UI and other sub-plans):
+//! Public API:
 //! ```text
 //! core.gmail_save_client(client_id, Some(secret))?;      // client id -> kv, secret -> keyring
 //! let email = core.gmail_connect().await?;                // opens the system browser, <= 5 min
@@ -24,7 +24,7 @@ pub mod gmail;
 pub mod oauth;
 pub mod sync;
 
-/// Desktop notifications moved to [`crate::engine::notify`]; kept here for existing callers.
+/// Desktop notifications, re-exported from [`crate::engine::notify`].
 pub use crate::engine::notify;
 pub use account::{
     GmailState, KV_ACCOUNT, KV_CLIENT_ID, KV_HISTORY_ID, KV_LAST_REPORT, KV_LAST_SYNC, KV_POLL_MINUTES,

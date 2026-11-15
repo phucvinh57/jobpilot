@@ -1,7 +1,7 @@
 //! JD ingest: a URL, a file or pasted text -> plain readable text.
 //!
 //! JS-rendered pages come back (almost) empty from a plain HTTP fetch. [`ingest`] reports that as
-//! [`NeedsBrowser`]; the caller can render the page with the managed browser (P4) and feed its HTML
+//! [`NeedsBrowser`]; the caller can render the page with the managed browser and feed its HTML
 //! to [`ingest_html`] (or `JdInput::Html` to the generator).
 
 use std::fmt;

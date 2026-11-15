@@ -95,7 +95,7 @@ type Notify<'a> = &'a (dyn Fn(Progress) + Send + Sync);
 pub struct Pipeline<'a> {
     pub core: &'a Core,
     pub llm: &'a dyn Llm,
-    /// An owned handle on the same provider for the company brief (P11), which runs as a graph and
+    /// An owned handle on the same provider for the company brief (job insight), which runs as a graph and
     /// so cannot borrow `llm`. `None` = no brief ([`Pipeline::new`]); see [`Pipeline::with_insight`].
     pub insight: Option<Arc<dyn Llm>>,
 }
@@ -171,7 +171,7 @@ impl<'a> Pipeline<'a> {
         Self { core, llm, insight: None }
     }
 
-    /// Also write the job brief (P11) of an application that has none, with `llm` (normally a clone
+    /// Also write the job brief of an application that has none, with `llm` (normally a clone
     /// of the handle `llm` was borrowed from). The brief runs detached: it never delays or fails the
     /// pipeline, and lands in `insight_json` when done (the UI shows it on its next refresh).
     pub fn with_insight(mut self, llm: Arc<dyn Llm>) -> Self {

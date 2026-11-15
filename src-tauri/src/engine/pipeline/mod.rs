@@ -1,4 +1,4 @@
-//! P2 - JD ingest, CV generation, fact guard and Typst rendering.
+//! JD ingest, CV generation, fact guard and Typst rendering.
 //!
 //! ```text
 //! // UI side (inside runtime::spawn):

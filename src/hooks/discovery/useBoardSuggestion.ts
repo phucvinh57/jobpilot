@@ -1,7 +1,7 @@
 // Settings > Job sources, the add form: the job boards behind the careers page being entered. The
-// page is checked once the address rests (or the field is left), in the background: typing never
-// waits, an answer for an older address is dropped, and a failure only means no suggestion (for now:
-// the address is asked again later).
+// page is checked in the background once the address rests (or the field is left): typing never
+// waits, an answer for an older address is dropped, and a failure only means no suggestion (the
+// address is checked again later).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 

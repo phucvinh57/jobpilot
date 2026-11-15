@@ -1,4 +1,6 @@
-//! Bounded context `profile`: `dto` (read models), `rules` (pure rules + tests), `commands` (application services).
+//! Bounded context `profile`: Settings > About you (the documents the profile is read from) and the
+//! job-search preferences. `dto` (read models), `rules` (pure rules + tests), `commands` (application
+//! services).
 
 pub mod commands;
 pub mod dto;
@@ -9,6 +11,5 @@ use std::sync::Arc;
 use crate::engine::Core;
 use tauri::AppHandle;
 
-/// Called once at startup, before the window opens: register this context's own state
-/// (`app.manage(..)`) and start its background listeners here.
+/// Called once at startup, before the window opens. This context keeps no state of its own.
 pub fn setup(_app: &AppHandle, _core: &Arc<Core>) {}

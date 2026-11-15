@@ -4,7 +4,7 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use super::Store;
 
-/// A Gmail message seen by the sync, with its classification (P6). Bodies are not stored.
+/// A Gmail message seen by the sync, with its classification. Bodies are not stored.
 #[derive(Clone, Debug)]
 pub struct Email {
     /// Gmail message id.

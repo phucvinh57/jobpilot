@@ -67,7 +67,7 @@ pub struct FetchRequest {
 /// [`classify`]: crate::engine::health::classify
 pub type PostingFetcher = Arc<dyn Fn(FetchRequest) -> BoxFuture<'static, Result<String>> + Send + Sync>;
 
-/// A lead that passed the hard filters, for the insight step (P11).
+/// A lead that passed the hard filters, for the insight step.
 #[derive(Clone, Debug)]
 pub struct InsightRequest {
     pub url: String,
@@ -101,7 +101,7 @@ pub struct DiscoverDeps {
 
 impl DiscoverDeps {
     /// The real adapters and fetch with `llm` and `limits`; the text-based challenge probe, no
-    /// browser (a page that needs one is skipped) and no insight yet, desktop notifications. The
+    /// browser (a page that needs one is skipped), no insight hook, desktop notifications. The
     /// adapters' JSON calls, their page reads and the posting fetch go through one shared client, so
     /// they share its host check and per-host delays.
     pub fn new(llm: Arc<dyn Llm>, limits: DiscoverLimits) -> Result<Self> {
@@ -137,7 +137,7 @@ impl DiscoverDeps {
     /// message, which the UI shows as the setup problem, when there is none), default limits, the
     /// managed browser as the page reader of the `yc` and `career_page` sources and the fallback of the
     /// posting fetch (it sees login, captcha and block pages, and the run waits for the user), and the
-    /// job insight of P11 (`pipeline::insight`) as the insight hook.
+    /// job insight (`pipeline::insight`) as the insight hook.
     pub fn live(core: &Core) -> Result<Self> {
         let limits = DiscoverLimits::default();
         let renderer = Renderer::new(core, limits.allow_private_hosts);

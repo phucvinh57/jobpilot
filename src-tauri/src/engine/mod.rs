@@ -1,14 +1,13 @@
 //! The engine: everything except the UI (no Tauri, no webview). The shell's contexts call it; it
 //! never names them (`graph/tests.rs` checks that).
 //!
-//! Module ownership (so parallel work does not collide):
-//! - `paths`, `runtime`, `store`, `secrets`, `facade` — P0 (foundation)
-//! - `llm` — P1, `pipeline` — P2, `browser` — P4, `apply` — P5, `mail` — P6, `graph` — P8
-//! - `notify`, `prefs` (and the store tables behind them) — P8, then P9+
-//! - `trends` — P13 (collection; the digest follows in part B)
-//! - `discover` — P10
-//! - `net` — the shared safe HTTP client (moved out of `trends`)
-//! - `profile` — the user's documents and the profile read from them (replaces `profile.yaml`)
+//! - `paths`, `runtime`, `store`, `secrets`, `redact`, `logging`, `health`, `facade`: foundation
+//! - `llm`: AI providers; `pipeline`: JD -> tailored CV -> PDF, job insight
+//! - `browser`: managed Chrome; `apply`: review -> confirm -> submit; `mail`: Gmail status
+//! - `graph`: flows as resumable graphs; `notify`: desktop notifications
+//! - `prefs`: job-search preferences; `profile`: the user's documents and the profile read from them
+//! - `discover`: job sources -> scored leads; `trends`: market trends and the digest
+//! - `net`: the one safe HTTP client for third-party data
 //!
 //! Extend [`Core`] from your own module with `impl Core { ... }` instead of editing `facade.rs`.
 

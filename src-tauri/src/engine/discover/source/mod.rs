@@ -1,5 +1,5 @@
 //! Job sources: code that turns the preferences into candidate postings. The model never picks
-//! URLs; every candidate comes from an adapter reading a public API.
+//! URLs; every candidate comes from an adapter reading a public API or page.
 //!
 //! | `sources.kind` | `sources.url` | How |
 //! |----------------|---------------|-----|

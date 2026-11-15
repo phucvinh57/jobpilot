@@ -87,11 +87,9 @@ impl Core {
     /// and role) returns that lead unchanged, whatever its state (a dismissed lead stays dismissed:
     /// check [`Lead::state`]). Never creates an application and never writes a CV.
     ///
-    /// Takes seconds to about a minute (the page, the model twice, the company pages): run it on
-    /// the global runtime. Errors the user can act on: no AI provider, no profile, a bad link or an
-    /// unreadable file, a page that needs a login or captcha (`open the link in your browser and
-    /// paste the text`), no Chrome for a page that needs one, a network failure (retry), text that
-    /// has no job title, and a job that is an application already.
+    /// Takes up to about a minute: run it on the global runtime. Errors the user can act on: no AI
+    /// provider, no profile, a bad link or file, a login or captcha page (paste the text instead),
+    /// no Chrome, a network failure (retry), no job title, and a job that is an application already.
     pub async fn add_lead(&self, input: JdInput) -> Result<Lead> {
         let deps = ManualDeps::live(self)?;
         let paths = self.paths.clone();

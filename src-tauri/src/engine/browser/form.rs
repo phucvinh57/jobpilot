@@ -1,4 +1,4 @@
-//! Browsers for auto-apply (P5): either a managed session (a logged-in profile, launched through the
+//! Browsers for auto-apply: either a managed session (a logged-in profile, launched through the
 //! [`SessionManager`]) or a throwaway profile for ATSes that need no login (Greenhouse, Lever, Ashby).
 //!
 //! Both are driven through the same four calls: [`FormBrowser::new_page`], [`is_alive`], [`close`] and

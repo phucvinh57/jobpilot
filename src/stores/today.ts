@@ -1,9 +1,7 @@
-// What the Leads stage of the Jobs page remembers while the app runs: the queue it last read, the
-// filters, the leads ticked, the CVs being written, the postings being read, the notes and the
-// banners. A page is shown and hidden as the user moves around, but a CV finishes, a source pauses
-// at a captcha or a posting is read whether or not the Jobs page is on screen, and the sidebar badge
-// has to follow; so this lives in a store that outlasts the page, and `startWatching` (once, for the
-// life of the app) keeps it current. Which lead is open is the nav store's drawer.
+// State of the Leads stage: the queue, filters, ticks, CVs being written, postings being read, notes
+// and banners. CVs finish and sources pause whether or not the Jobs page is shown, and the sidebar
+// badge must follow, so this store outlives the page; `startWatching` (once per app run) keeps it
+// current. Which lead is open is the nav store's drawer.
 
 import { create } from "zustand";
 
@@ -55,7 +53,7 @@ export interface TodayState {
   /** The queue as last read; `undefined` until the first answer. */
   queue: Queue | undefined;
   loadError: CommandError | undefined;
-  /** The skill names of the master profile (empty when it cannot be read). */
+  /** The profile's skill names (empty when it cannot be read). */
   profileSkills: string[];
   filter: QueueFilter;
   /** Ticked leads (several CVs at once). */
@@ -191,8 +189,8 @@ function load(): Promise<void> {
   return done;
 }
 
-/** The profile is a file the user edits outside the app, so its skills are read when the Jobs page is shown,
- *  not on every refresh. */
+/** The profile changes only when the user reads their documents again, so its skills are read when
+ *  the Jobs page is shown, not on every refresh. */
 function loadSkills(): void {
   api.readProfileSkills().then(
     (profileSkills) => set({ profileSkills }),

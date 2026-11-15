@@ -66,7 +66,7 @@ pub struct Lead {
     pub score: Option<f64>,
     /// Per-criterion scores with a reason each, as JSON text.
     pub score_json: Option<String>,
-    /// Job insight as JSON text (P11).
+    /// Job insight as JSON text.
     pub insight_json: Option<String>,
     pub state: LeadState,
     pub dismiss_reason: Option<String>,

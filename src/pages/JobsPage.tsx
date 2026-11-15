@@ -1,7 +1,7 @@
-// The Jobs page: every job from found to finished. The header and the Leads stage come from the
-// components in `components/discovery`, the CVs / Applied / In progress / Done stages from `components/applications`;
-// a drawer at the right shows the open lead or application. At most one drawer is open, and it holds
-// the one primary button while it is.
+// The Jobs page: every job from found to finished. The header and the Leads stage come from
+// `components/discovery`, the CVs / Applied / In progress / Done stages from
+// `components/applications`; a drawer at the right shows the open lead or application. At most one
+// drawer is open, and it holds the one primary button while it is.
 
 import clsx from "clsx";
 

@@ -19,19 +19,19 @@ import type {
   Source,
 } from "@/types/discovery";
 
-// ------------------------------------------------------------------ Today: reading
+// ------------------------------------------------------------------ Leads: reading
 
-/** Everything Today shows. */
+/** Everything the Leads stage shows. */
 export function readQueue(): Promise<Queue> {
   return invoke<Queue>("discovery_queue");
 }
 
-/** The skill names of the master profile (empty when it cannot be read). */
+/** The profile's skill names (empty when it cannot be read). */
 export function readProfileSkills(): Promise<string[]> {
   return invoke<string[]>("discovery_profile_skills");
 }
 
-// ------------------------------------------------------------------ Today: the link box
+// ------------------------------------------------------------------ Leads: the link box
 
 /** What a pasted link, path or text is; `null` for a blank box. */
 export function parseInput(raw: string): Promise<LeadInput | null> {
@@ -50,7 +50,7 @@ export async function addLead(input: LeadInput): Promise<AddedLead> {
   return added;
 }
 
-// ------------------------------------------------------------------ Today: acting on leads
+// ------------------------------------------------------------------ Leads: acting on leads
 
 interface PrepareOutcomeDto {
   leadId: number;
@@ -84,7 +84,7 @@ export async function dismissLead(leadId: number, reason: string, excludeCompany
   return out;
 }
 
-// ------------------------------------------------------------------ Today: searching
+// ------------------------------------------------------------------ Leads: searching
 
 /** "Search now": every enabled job source. Resolves when each is done, paused or failed. */
 export async function searchNow(): Promise<RunSummary> {

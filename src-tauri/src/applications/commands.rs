@@ -654,7 +654,7 @@ pub async fn applications_apply_image(
     Ok(Response::new(bytes))
 }
 
-/// This context's commands; `main.rs` routes every `applications_*` call here.
+/// This context's commands; `lib.rs` routes every `applications_*` call here.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         applications_board,

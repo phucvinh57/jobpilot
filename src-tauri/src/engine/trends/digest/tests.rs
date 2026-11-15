@@ -1,4 +1,4 @@
-//! The digest end to end (against the fixture server of P13a and a scripted model: nothing leaves
+//! The digest end to end (against the collection's fixture server and a scripted model: nothing leaves
 //! the machine) and its checks, node by node.
 
 use std::sync::atomic::{AtomicUsize, Ordering};

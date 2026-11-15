@@ -1,6 +1,5 @@
-//! The one global tokio runtime. The UI never owns an executor for I/O:
-//! it calls [`spawn`] and awaits the returned receiver inside `cx.spawn`
-//! (oneshot receivers are runtime-agnostic).
+//! The one global tokio runtime. The UI never owns an executor for I/O: commands call [`spawn`]
+//! (through `shared::run`) and await the returned receiver (oneshot receivers are runtime-agnostic).
 
 use std::future::Future;
 use std::sync::OnceLock;

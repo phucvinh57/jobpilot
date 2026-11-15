@@ -22,13 +22,13 @@ pub struct Application {
     pub status: Status,
     /// `applications/<slug>/` (jd.md, cv.yaml, cv.pdf, page-*.png).
     pub dir: PathBuf,
-    /// JD analysis as JSON text (P2).
+    /// JD analysis as JSON text.
     pub analysis_json: Option<String>,
-    /// CV gaps as JSON text (P2).
+    /// CV gaps as JSON text.
     pub gaps_json: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Job insight (domain, company, skills, interview process) as JSON text (P11).
+    /// Job insight (domain, company, skills, interview process) as JSON text.
     pub insight_json: Option<String>,
     /// The interview round the user marked while the status is `Interview` (`Technical interview`).
     pub interview_round: Option<String>,

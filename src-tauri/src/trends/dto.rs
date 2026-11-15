@@ -911,7 +911,7 @@ mod tests {
             ..Preferences::default()
         };
         let chart = ChartDto::new(&digest, &prefs).expect("a chart");
-        // A report saved before P15: one global scope, no marks, no direction, no note.
+        // A report saved before the market scan: one global scope, no marks, no direction, no note.
         assert!(!chart.marks && chart.pipeline.is_none());
         assert_eq!(chart.scope, "global");
         assert_eq!(chart.scopes.len(), 1);
@@ -1142,7 +1142,7 @@ mod tests {
             ]
         );
 
-        // A report saved before P15: its "for you" points keep their old title, nothing is added.
+        // A report saved before the market scan: its "for you" points keep their old title, nothing is added.
         let old = DigestData {
             items: vec![item(7, "https://a.test/1")],
             points: vec![point(Section::ForYou, "", &[7])],

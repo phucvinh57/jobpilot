@@ -72,7 +72,7 @@ pub struct FormField {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
-    /// Profile basics or a saved `application:` answer.
+    /// Profile basics or a remembered answer.
     Profile,
     /// The tailored CV.
     Cv,

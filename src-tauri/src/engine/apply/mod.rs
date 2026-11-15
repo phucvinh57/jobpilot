@@ -1,4 +1,4 @@
-//! P5 - auto-apply: review -> confirm -> submit.
+//! Auto-apply: review -> confirm -> submit.
 //!
 //! ```text
 //! // Apply tab, idle: what would happen?

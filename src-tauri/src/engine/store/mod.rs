@@ -1,11 +1,10 @@
 //! SQLite store. One `Store` (cheap to clone) shared by the whole app.
 //!
-//! Each table lives in its own file as `impl Store { .. }` so sub-plans can extend
-//! their table without touching others: `applications`/`events`/`status` (P2/P3),
-//! `providers` (P1), `sessions` (P4), `emails` (P6), `kv` (shared settings); P8 adds `preferences`,
-//! `chat` (preference chat), `sources`, `leads` (discovery), `trends` (trend items + reports) and
-//! `graph` (graph runtime checkpoints); `profile` (the user's documents and the profile read from
-//! them) and `answers` (remembered application answers).
+//! Each table lives in its own file as `impl Store { .. }`, so a module extends its table without
+//! touching the others: `applications`/`events`/`status`, `providers`, `sessions`, `emails`, `kv`
+//! (shared settings), `preferences`, `chat` (preference chat), `sources`, `leads` (discovery),
+//! `trends` (trend items + reports), `graph` (graph checkpoints), `profile` (the user's documents
+//! and the profile read from them) and `answers` (remembered application answers).
 //!
 //! Schema changes: append a new entry to [`MIGRATIONS`] (never edit an existing one).
 
@@ -108,7 +107,7 @@ const MIGRATIONS: &[&str] = &[
         value TEXT NOT NULL
     );
     ",
-    // 2: P8 foundation (preferences, discovery leads, market trends, per-application insight)
+    // 2: preferences, discovery leads, market trends, per-application insight
     "
     CREATE TABLE preferences (
         id         INTEGER PRIMARY KEY CHECK (id = 1),

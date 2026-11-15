@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::WaitReason;
 
-/// What stands between a source and its pages (found by `browser/challenge.rs`, later).
+/// What stands between a source and its pages (found by `browser/challenge.rs` or a status code).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChallengeKind {

@@ -989,7 +989,7 @@ async fn at_most_sources_in_parallel_sources_run_at_once() {
     assert_eq!(peak.load(Ordering::SeqCst), 2);
 }
 
-// ---------------------------------------------------------------- challenges met in the browser (part B)
+// ---------------------------------------------------------------- challenges met in the browser
 
 use crate::engine::browser::challenge::ChallengeFound;
 use crate::engine::health::{Challenge, Problem};
