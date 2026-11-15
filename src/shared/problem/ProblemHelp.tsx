@@ -27,7 +27,12 @@ export function ProblemActions({ problem, onRetry, onOpenBrowser }: ActionsProps
         switch (action) {
           case "settings":
             return (
-              <Button key={action} size="compact" icon={Settings} onClick={() => openSettings(problem.settingsSection as SettingsSection)}>
+              <Button
+                key={action}
+                size="compact"
+                icon={Settings}
+                onClick={() => openSettings(problem.settingsSection as SettingsSection)}
+              >
                 Open Settings &gt; {problem.settingsSection}
               </Button>
             );
@@ -39,7 +44,12 @@ export function ProblemActions({ problem, onRetry, onOpenBrowser }: ActionsProps
             );
           case "openBrowser":
             return (
-              <Button key={action} size="compact" icon={ExternalLink} onClick={onOpenBrowser ?? (() => openSettings("Browser sessions"))}>
+              <Button
+                key={action}
+                size="compact"
+                icon={ExternalLink}
+                onClick={onOpenBrowser ?? (() => openSettings("Browser sessions"))}
+              >
                 Open browser
               </Button>
             );

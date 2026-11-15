@@ -48,7 +48,10 @@ function LinkBoxView({ adding, waiting, failures, note }: Props) {
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1">
-          <Plus aria-hidden className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+          <Plus
+            aria-hidden
+            className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
+          />
           <TextInput
             id="queue-link"
             aria-label="Job link or posting text"

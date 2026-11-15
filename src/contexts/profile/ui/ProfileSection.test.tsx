@@ -14,9 +14,27 @@ function profile(patch: Partial<Profile> = {}): Profile {
     profilePath: "/home/me/.local/share/jobpilot/profile.yaml",
     jobType: "hybrid",
     fields: [
-      { key: "locations", label: "Work locations", placeholder: "Add a city or country", items: ["Hanoi"], suggestions: ["Remote"] },
-      { key: "domains", label: "Interested domains", placeholder: "Add a domain, e.g. fintech", items: [], suggestions: [] },
-      { key: "skills", label: "Skills", placeholder: "Add a skill", items: ["Rust", "Go"], suggestions: ["Kubernetes"] },
+      {
+        key: "locations",
+        label: "Work locations",
+        placeholder: "Add a city or country",
+        items: ["Hanoi"],
+        suggestions: ["Remote"],
+      },
+      {
+        key: "domains",
+        label: "Interested domains",
+        placeholder: "Add a domain, e.g. fintech",
+        items: [],
+        suggestions: [],
+      },
+      {
+        key: "skills",
+        label: "Skills",
+        placeholder: "Add a skill",
+        items: ["Rust", "Go"],
+        suggestions: ["Kubernetes"],
+      },
     ],
     notes: "Senior roles only",
     cv: { name: "cv.pdf", chars: 1234, truncated: false },
@@ -90,7 +108,10 @@ describe("ProfileSection", () => {
   });
 
   it("says why a topic was not added", async () => {
-    vi.mocked(api.addItem).mockResolvedValue({ profile: profile(), message: '"php" is in your avoid list, so it was not added.' });
+    vi.mocked(api.addItem).mockResolvedValue({
+      profile: profile(),
+      message: '"php" is in your avoid list, so it was not added.',
+    });
     render(<ProfileSection />);
     const box = (await screen.findByRole("textbox", { name: "Add to Skills" })) as HTMLInputElement;
     fireEvent.change(box, { target: { value: "php" } });
@@ -111,7 +132,10 @@ describe("ProfileSection", () => {
 
   it("saves the notes and shows the line when the model could not read them", async () => {
     vi.mocked(api.saveNotes).mockResolvedValue(profile({ notes: "Senior, remote" }));
-    vi.mocked(api.readNotes).mockResolvedValue({ profile: profile({ notes: "Senior, remote" }), line: "Your notes are saved; I could not read everything from them." });
+    vi.mocked(api.readNotes).mockResolvedValue({
+      profile: profile({ notes: "Senior, remote" }),
+      line: "Your notes are saved; I could not read everything from them.",
+    });
     render(<ProfileSection />);
     const notes = (await screen.findByRole("textbox", { name: "Anything else" })) as HTMLTextAreaElement;
     await waitFor(() => expect(notes.value).toBe("Senior roles only"));
@@ -144,7 +168,9 @@ describe("ProfileSection", () => {
     render(<ProfileSection />);
     fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
     expect(api.undo).toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Job type: Any" }).getAttribute("aria-pressed")).toBe("true"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Job type: Any" }).getAttribute("aria-pressed")).toBe("true"),
+    );
     expect(await screen.findByRole("status", { name: "Undone" })).toBeTruthy();
   });
 

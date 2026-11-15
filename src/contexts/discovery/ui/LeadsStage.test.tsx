@@ -44,7 +44,14 @@ function JobsPage({ otherDrawerOpen = false }: { otherDrawerOpen?: boolean }) {
 
 beforeEach(() => {
   resetToday();
-  useNav.setState({ screen: "jobs", stage: "leads", drawer: undefined, needsYou: 0, droppedFile: undefined, applicationId: undefined });
+  useNav.setState({
+    screen: "jobs",
+    stage: "leads",
+    drawer: undefined,
+    needsYou: 0,
+    droppedFile: undefined,
+    applicationId: undefined,
+  });
   mocked.readQueue.mockResolvedValue(queue());
   mocked.readProfileSkills.mockResolvedValue(["Rust", "Kubernetes (EKS)"]);
   mocked.onChanged.mockReturnValue(() => undefined);
@@ -93,7 +100,9 @@ describe("the list of leads", () => {
     expect(screen.getByText("Acme careers: ok, 1 h ago")).toBeTruthy();
     expect(screen.getByText("3 of 3 shown")).toBeTruthy();
     // Nothing is open or ticked: no primary button at all.
-    expect((screen.getByRole("button", { name: "Search now" }) as HTMLButtonElement).className).not.toContain("bg-accent");
+    expect((screen.getByRole("button", { name: "Search now" }) as HTMLButtonElement).className).not.toContain(
+      "bg-accent",
+    );
     expect(primaryButtons()).toEqual([]);
   });
 
@@ -102,7 +111,9 @@ describe("the list of leads", () => {
     await showList();
     const drawer = await openLead(user, "Acme: Backend Engineer 1, score 80");
     expect(useNav.getState().drawer).toEqual({ kind: "lead", id: 1 });
-    expect(screen.getByRole("row", { name: "Acme: Backend Engineer 1, score 80" }).getAttribute("aria-current")).toBe("true");
+    expect(screen.getByRole("row", { name: "Acme: Backend Engineer 1, score 80" }).getAttribute("aria-current")).toBe(
+      "true",
+    );
 
     const prepare = within(drawer).getByRole("button", { name: "Prepare CV" });
     expect(primaryButtons()).toEqual([prepare]);
@@ -215,7 +226,9 @@ describe("the list of leads", () => {
     await user.click(within(drawer).getByRole("button", { name: "Prepare CV" }));
     expect(mocked.prepareCvs).toHaveBeenCalledWith([2]);
     // Lead 1 is still ticked, for the bulk bar.
-    expect((screen.getByRole("checkbox", { name: "Select Acme: Backend Engineer 1" }) as HTMLInputElement).checked).toBe(true);
+    expect(
+      (screen.getByRole("checkbox", { name: "Select Acme: Backend Engineer 1" }) as HTMLInputElement).checked,
+    ).toBe(true);
   });
 
   it("closes the drawer when a filter hides its lead", async () => {
@@ -302,7 +315,13 @@ describe("Needs you", () => {
 
   it("says why the browser could not be opened, with what to do about it", async () => {
     const user = userEvent.setup();
-    const problem: Problem = { kind: "noChrome", challenge: null, advice: "Chrome is needed.", settingsSection: "Browser sessions", retryable: false };
+    const problem: Problem = {
+      kind: "noChrome",
+      challenge: null,
+      advice: "Chrome is needed.",
+      settingsSection: "Browser sessions",
+      retryable: false,
+    };
     mocked.readQueue.mockResolvedValue(queue({ waiting: [{ ...WAITING, reason: "captcha", url: null }] }));
     mocked.openBrowser.mockRejectedValue(new CommandError("no Chrome found", problem));
     render(<JobsPage />);
@@ -335,7 +354,9 @@ describe("Needs you", () => {
 
   it("shows a CV that is ready, opening its application in the drawer", async () => {
     const user = userEvent.setup();
-    mocked.prepareCvs.mockResolvedValue([{ leadId: 1, applicationId: 12, label: "Acme — Backend Engineer 1", error: null }]);
+    mocked.prepareCvs.mockResolvedValue([
+      { leadId: 1, applicationId: 12, label: "Acme — Backend Engineer 1", error: null },
+    ]);
     await showList();
     const drawer = await openLead(user, "Acme: Backend Engineer 1, score 80");
     await user.click(within(drawer).getByRole("button", { name: "Prepare CV" }));
@@ -371,18 +392,24 @@ describe("the link box", () => {
   it("says why a job could not be added, with Try again", async () => {
     const user = userEvent.setup();
     mocked.parseInput.mockResolvedValue({ kind: "text", value: "We are hiring" });
-    mocked.addLead.mockRejectedValueOnce(new CommandError("text that has no job title")).mockReturnValue(new Promise(() => undefined));
+    mocked.addLead
+      .mockRejectedValueOnce(new CommandError("text that has no job title"))
+      .mockReturnValue(new Promise(() => undefined));
     await showList();
     await user.type(screen.getByRole("textbox", { name: "Job link or posting text" }), "We are hiring");
     await user.click(screen.getByRole("button", { name: "Add job" }));
-    const failure = await screen.findByRole("group", { name: "The posting could not be added: text that has no job title" });
+    const failure = await screen.findByRole("group", {
+      name: "The posting could not be added: text that has no job title",
+    });
     await user.click(within(failure).getByRole("button", { name: "Try again" }));
     expect(mocked.addLead).toHaveBeenCalledTimes(2);
     expect(await screen.findByRole("status", { name: "Reading the posting" })).toBeTruthy();
   });
 
   it("turns a dropped file into a lead, or says why it was refused", async () => {
-    mocked.fileInput.mockRejectedValue(new CommandError("c.png: .png files are not supported (use .md, .txt, .html or .pdf)."));
+    mocked.fileInput.mockRejectedValue(
+      new CommandError("c.png: .png files are not supported (use .md, .txt, .html or .pdf)."),
+    );
     await showList();
     useNav.getState().dropFile("/tmp/c.png");
     expect(await screen.findByText(/c\.png: \.png files are not supported/)).toBeTruthy();

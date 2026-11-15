@@ -39,9 +39,19 @@ const primaryButtons = () => Array.from(document.querySelectorAll("button.bg-acc
 beforeEach(() => {
   bridge.invoke.mockReset();
   bridge.invoke.mockResolvedValue(undefined);
-  useNav.setState({ screen: "application", applicationId: 7, stage: "cv", drawer: { kind: "app", id: 7 }, settingsFocus: undefined });
+  useNav.setState({
+    screen: "application",
+    applicationId: 7,
+    stage: "cv",
+    drawer: { kind: "app", id: 7 },
+    settingsFocus: undefined,
+  });
   useShell.setState({ status: undefined });
-  Object.defineProperty(URL, "createObjectURL", { value: vi.fn(() => "blob:page"), configurable: true, writable: true });
+  Object.defineProperty(URL, "createObjectURL", {
+    value: vi.fn(() => "blob:page"),
+    configurable: true,
+    writable: true,
+  });
   Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true, writable: true });
   progress = undefined;
   mocked.onProgress.mockImplementation((handler) => {
@@ -94,7 +104,9 @@ describe("the Application screen header", () => {
   });
 
   it("disables the primary button and says why", async () => {
-    open({ primary: primary({ action: "submit", label: "Submit", enabled: false, hint: "2 required field(s) still empty" }) });
+    open({
+      primary: primary({ action: "submit", label: "Submit", enabled: false, hint: "2 required field(s) still empty" }),
+    });
     const button = await screen.findByRole("button", { name: "Submit" });
     expect(button.hasAttribute("disabled")).toBe(true);
     expect(screen.getByText("2 required field(s) still empty")).toBeTruthy();
@@ -102,7 +114,15 @@ describe("the Application screen header", () => {
 
   it("points to the Settings section that fixes what blocks the button", async () => {
     const user = userEvent.setup();
-    open({ primary: primary({ action: "generate", label: "Generate", enabled: false, hint: "No AI provider", settings: "AI providers" }) });
+    open({
+      primary: primary({
+        action: "generate",
+        label: "Generate",
+        enabled: false,
+        hint: "No AI provider",
+        settings: "AI providers",
+      }),
+    });
     await user.click(await screen.findByRole("button", { name: "Open Settings > AI providers" }));
     expect(useNav.getState().screen).toBe("settings");
     expect(useNav.getState().settingsFocus).toBe("AI providers");
@@ -119,7 +139,10 @@ describe("the Application screen header", () => {
   });
 
   it("shows the progress line of a running job, as it moves", async () => {
-    open({ job: "Writing the CV...", primary: primary({ action: "generate", label: "Generate", enabled: false, loading: true }) });
+    open({
+      job: "Writing the CV...",
+      primary: primary({ action: "generate", label: "Generate", enabled: false, loading: true }),
+    });
     expect(await screen.findByText("Writing the CV...")).toBeTruthy();
     act(() => progress?.({ appId: 7, label: "Rendering..." }));
     expect(screen.getByText("Rendering...")).toBeTruthy();
@@ -164,7 +187,13 @@ describe("the primary action", () => {
   it("asks the shell to check the setup again when a prerequisite is missing", async () => {
     const user = userEvent.setup();
     mocked.generate.mockRejectedValue(
-      new CommandError("no AI provider", { kind: "noProvider", challenge: null, advice: "Add a provider.", settingsSection: "AI providers", retryable: false }),
+      new CommandError("no AI provider", {
+        kind: "noProvider",
+        challenge: null,
+        advice: "Add a provider.",
+        settingsSection: "AI providers",
+        retryable: false,
+      }),
     );
     open({ hasCv: false, primary: primary({ action: "generate", label: "Generate" }) });
     await user.click(await screen.findByRole("button", { name: "Generate" }));
@@ -210,7 +239,15 @@ describe("the tabs", () => {
 describe("with nothing open", () => {
   it("explains how to get an application when there is none", async () => {
     useNav.setState({ applicationId: undefined });
-    useShell.setState({ status: { health: { ok: true, text: "", focus: null }, blockers: [], prefsSaved: true, newLeads: 0, applications: 0 } });
+    useShell.setState({
+      status: {
+        health: { ok: true, text: "", focus: null },
+        blockers: [],
+        prefsSaved: true,
+        newLeads: 0,
+        applications: 0,
+      },
+    });
     render(<ApplicationScreen />);
     expect(screen.getByText("No applications yet")).toBeTruthy();
     expect(screen.getByText(/paste the link of a job posting/)).toBeTruthy();
@@ -218,13 +255,29 @@ describe("with nothing open", () => {
 
   it("asks to pick one when there are some", async () => {
     useNav.setState({ applicationId: undefined });
-    useShell.setState({ status: { health: { ok: true, text: "", focus: null }, blockers: [], prefsSaved: true, newLeads: 0, applications: 3 } });
+    useShell.setState({
+      status: {
+        health: { ok: true, text: "", focus: null },
+        blockers: [],
+        prefsSaved: true,
+        newLeads: 0,
+        applications: 3,
+      },
+    });
     render(<ApplicationScreen />);
     expect(screen.getByText("Nothing selected")).toBeTruthy();
   });
 
   it("shows the same when the application is gone", async () => {
-    useShell.setState({ status: { health: { ok: true, text: "", focus: null }, blockers: [], prefsSaved: true, newLeads: 0, applications: 3 } });
+    useShell.setState({
+      status: {
+        health: { ok: true, text: "", focus: null },
+        blockers: [],
+        prefsSaved: true,
+        newLeads: 0,
+        applications: 3,
+      },
+    });
     mocked.readApplication.mockResolvedValue(null);
     render(<ApplicationScreen />);
     expect(await screen.findByText("Nothing selected")).toBeTruthy();

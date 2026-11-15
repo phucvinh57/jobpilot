@@ -36,13 +36,25 @@ export function ProvidersSection() {
   const status = providersStatus(data?.providers ?? []);
 
   return (
-    <Section id="settings-providers" title="AI providers" hint={HINT} actions={data && <Tag tone={status.tone}>{status.text}</Tag>}>
-      {card.query.error && !data && <ErrorBanner error={card.query.error} title="Could not read the providers" onRetry={card.query.reload} />}
+    <Section
+      id="settings-providers"
+      title="AI providers"
+      hint={HINT}
+      actions={data && <Tag tone={status.tone}>{status.text}</Tag>}
+    >
+      {card.query.error && !data && (
+        <ErrorBanner error={card.query.error} title="Could not read the providers" onRetry={card.query.reload} />
+      )}
       {data && data.providers.length === 0 && <Caption>No provider yet. Add one to generate CVs.</Caption>}
       {data && data.providers.length > 0 && (
         <div className="flex flex-col gap-1">
           {data.providers.map((provider) => (
-            <ProviderRow key={provider.id} provider={provider} editing={card.draft?.id === provider.id} onOpen={() => card.open(provider)} />
+            <ProviderRow
+              key={provider.id}
+              provider={provider}
+              editing={card.draft?.id === provider.id}
+              onOpen={() => card.open(provider)}
+            />
           ))}
         </div>
       )}

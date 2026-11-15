@@ -22,7 +22,9 @@ describe("toCommandError", () => {
 
 describe("problemActions", () => {
   it("offers the Settings shortcut for a problem Settings fixes", () => {
-    expect(problemActions(problem({ kind: "noProvider", settingsSection: "AI providers" }), true)).toEqual(["settings"]);
+    expect(problemActions(problem({ kind: "noProvider", settingsSection: "AI providers" }), true)).toEqual([
+      "settings",
+    ]);
   });
 
   it("offers Check again for a missing typst", () => {

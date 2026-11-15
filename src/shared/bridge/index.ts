@@ -1,5 +1,5 @@
 // The one place that talks to the Tauri shell. A context calls it from its `api/` layer only
-// (eslint enforces it), so everything above the api layer runs without a shell (tests, mocks).
+// (Biome enforces it, `biome.jsonc`), so everything above the api layer runs without a shell (tests, mocks).
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";

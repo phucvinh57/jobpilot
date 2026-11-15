@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { clearFailureOf, enqueue, fullMessage, MAX_FAILURES, MAX_WAITING, pushFailure, queueBehind, sameInput, type AddFailure } from "./addQueue";
+import {
+  clearFailureOf,
+  enqueue,
+  fullMessage,
+  MAX_FAILURES,
+  MAX_WAITING,
+  pushFailure,
+  queueBehind,
+  sameInput,
+  type AddFailure,
+} from "./addQueue";
 import { waitingLabel } from "./text";
 
 const failure = (message: string, input?: string): AddFailure<string> => ({ message, input });
@@ -45,7 +55,11 @@ describe("the add queue", () => {
     failures = pushFailure(failures, failure("a failed", "a"));
     failures = pushFailure(failures, failure("b failed", "b"));
     failures = pushFailure(failures, failure("drop refused"));
-    expect(messages(failures), "a batch keeps every failure, newest first").toEqual(["drop refused", "b failed", "a failed"]);
+    expect(messages(failures), "a batch keeps every failure, newest first").toEqual([
+      "drop refused",
+      "b failed",
+      "a failed",
+    ]);
 
     // Reading `a` again clears its failure only.
     failures = clearFailureOf(failures, "a");
@@ -83,7 +97,10 @@ describe("the add queue", () => {
     expect(full.queued).toBe("full");
     expect(full.failures).toHaveLength(3);
     expect(full.failures[0], "the refusal is the newest line").toEqual({ message: fullMessage(), input: undefined });
-    expect(full.failures.some((f) => f.input === "b"), "b still has its own failure and Retry").toBe(true);
+    expect(
+      full.failures.some((f) => f.input === "b"),
+      "b still has its own failure and Retry",
+    ).toBe(true);
     expect(fullMessage()).toContain(`${MAX_WAITING} postings are already waiting`);
   });
 
@@ -98,7 +115,9 @@ describe("the add queue", () => {
   });
 
   it("two inputs are the same posting when their kind and value are", () => {
-    expect(sameInput({ kind: "url", value: "https://a.test/1" }, { kind: "url", value: "https://a.test/1" })).toBe(true);
+    expect(sameInput({ kind: "url", value: "https://a.test/1" }, { kind: "url", value: "https://a.test/1" })).toBe(
+      true,
+    );
     expect(sameInput({ kind: "url", value: "x" }, { kind: "text", value: "x" })).toBe(false);
     expect(sameInput({ kind: "file", value: "/a" }, { kind: "file", value: "/b" })).toBe(false);
   });

@@ -22,7 +22,11 @@ export function DigestCard({ digest, adds }: { digest: Digest | null; adds: Pref
     );
   }
   return (
-    <section id="trends-digest" aria-label={digest.title} className="flex flex-col gap-4 border border-border bg-surface p-5">
+    <section
+      id="trends-digest"
+      aria-label={digest.title}
+      className="flex flex-col gap-4 border border-border bg-surface p-5"
+    >
       <div className="flex flex-col gap-0.5">
         <Heading>{digest.title}</Heading>
         <Caption>{digestHint(digest.when, digest.itemsRead)}</Caption>
@@ -56,7 +60,9 @@ function DigestBody({ digest, adds }: { digest: Digest; adds: PreferenceAdds }) 
           </ul>
         </section>
       ))}
-      {body.sections.length === 0 && <p className="text-body text-muted">No point could be tied to a source this time.</p>}
+      {body.sections.length === 0 && (
+        <p className="text-body text-muted">No point could be tied to a source this time.</p>
+      )}
       <Caption>Every point links to the stored items it came from.</Caption>
       {body.dropped > 0 && (
         <Caption>{body.dropped} point(s) were left out: no valid source, or a quote that is not in the source.</Caption>

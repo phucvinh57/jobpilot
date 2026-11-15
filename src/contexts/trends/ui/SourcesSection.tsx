@@ -89,7 +89,11 @@ export function SourcesSection({ sources, kinds }: { sources: readonly Source[];
           }}
         >
           <Field label="Name (optional)">
-            <TextInput placeholder="Name (optional)" value={editing.name} onChange={(e) => editing.setName(e.target.value)} />
+            <TextInput
+              placeholder="Name (optional)"
+              value={editing.name}
+              onChange={(e) => editing.setName(e.target.value)}
+            />
           </Field>
           <Field label="Address">
             <TextInput

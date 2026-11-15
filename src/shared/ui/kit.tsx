@@ -29,10 +29,24 @@ import { barFraction, scoreLabel, scoreTone, stepState } from "./rules";
 // ------------------------------------------------------------------ text
 
 /** A heading in Space Grotesk: `h1` is the page title (24 px), `h2` a card title (16 px). */
-export function Heading({ level = "h2", className, children }: { level?: "h1" | "h2"; className?: string; children: ReactNode }) {
+export function Heading({
+  level = "h2",
+  className,
+  children,
+}: {
+  level?: "h1" | "h2";
+  className?: string;
+  children: ReactNode;
+}) {
   const Tag = level;
   return (
-    <Tag className={cn("font-heading font-semibold text-ink", level === "h1" ? "text-h1 tracking-tight" : "text-h2", className)}>
+    <Tag
+      className={cn(
+        "font-heading font-semibold text-ink",
+        level === "h1" ? "text-h1 tracking-tight" : "text-h2",
+        className,
+      )}
+    >
       {children}
     </Tag>
   );
@@ -110,7 +124,12 @@ export function Banner({
 }) {
   const c = TONE_CLASS[tone];
   return (
-    <div id={id} role="group" aria-label={title} className={cn("flex items-center gap-3 border border-l-2 px-3 py-2.5", c.border, c.bg)}>
+    <div
+      id={id}
+      role="group"
+      aria-label={title}
+      className={cn("flex items-center gap-3 border border-l-2 px-3 py-2.5", c.border, c.bg)}
+    >
       <span className={cn("size-2 shrink-0", c.dot)} />
       <div className={cn("flex min-w-0 flex-1 flex-col gap-0.5", c.fg)}>
         <p className="text-body font-semibold">{title}</p>
@@ -122,7 +141,17 @@ export function Banner({
 }
 
 /** What a list shows when it has nothing: an icon, a title, a hint and an optional action. */
-export function EmptyState({ icon: Icon, title, body, action }: { icon: LucideIcon; title: string; body: string; action?: ReactNode }) {
+export function EmptyState({
+  icon: Icon,
+  title,
+  body,
+  action,
+}: {
+  icon: LucideIcon;
+  title: string;
+  body: string;
+  action?: ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center gap-2 border border-dashed border-border p-6 text-center">
       <span className="flex size-10 items-center justify-center border border-border bg-track">
@@ -153,22 +182,34 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
 /** The kit's button looks. `primary` keeps `bg-accent`: tests find THE primary button by it. A
  *  disabled button still takes the pointer (over the primitive's `disabled:pointer-events-none`), so
  *  its `title` says why it is off; the browser never clicks a disabled button. */
-const buttonLook = cva("cursor-pointer border font-medium transition-colors disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-55", {
-  variants: {
-    variant: {
-      primary: "border-accent bg-accent text-on-fill enabled:hover:border-accent-dark enabled:hover:bg-accent-dark",
-      secondary: "border-control-border bg-surface text-ink enabled:hover:bg-track",
-      ghost: "border-transparent bg-transparent text-muted enabled:hover:bg-track enabled:hover:text-ink",
-      danger: "border-danger/50 bg-surface text-danger enabled:hover:bg-danger-bg",
-    },
-    size: {
-      regular: "h-9 px-4 text-body",
-      compact: "h-8 gap-1.5 px-3 text-small",
+const buttonLook = cva(
+  "cursor-pointer border font-medium transition-colors disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-55",
+  {
+    variants: {
+      variant: {
+        primary: "border-accent bg-accent text-on-fill enabled:hover:border-accent-dark enabled:hover:bg-accent-dark",
+        secondary: "border-control-border bg-surface text-ink enabled:hover:bg-track",
+        ghost: "border-transparent bg-transparent text-muted enabled:hover:bg-track enabled:hover:text-ink",
+        danger: "border-danger/50 bg-surface text-danger enabled:hover:bg-danger-bg",
+      },
+      size: {
+        regular: "h-9 px-4 text-body",
+        compact: "h-8 gap-1.5 px-3 text-small",
+      },
     },
   },
-});
+);
 
-export function Button({ variant = "secondary", size = "regular", icon: Icon, busy = false, disabled, className, children, ...rest }: ButtonProps) {
+export function Button({
+  variant = "secondary",
+  size = "regular",
+  icon: Icon,
+  busy = false,
+  disabled,
+  className,
+  children,
+  ...rest
+}: ButtonProps) {
   return (
     <ButtonPrimitive
       type="button"
@@ -191,7 +232,10 @@ export function LinkButton({ className, children, ...rest }: ButtonHTMLAttribute
     <button
       type="button"
       {...rest}
-      className={cn("cursor-pointer truncate text-left text-small text-accent underline-offset-2 hover:text-accent-dark hover:underline", className)}
+      className={cn(
+        "cursor-pointer truncate text-left text-small text-accent underline-offset-2 hover:text-accent-dark hover:underline",
+        className,
+      )}
     >
       {children}
     </button>
@@ -208,7 +252,9 @@ export function Chip({ kind, children }: { kind: "match" | "gap"; children: Reac
       variant={null}
       className={cn(
         "h-7 border px-2.5 text-small font-medium",
-        kind === "match" ? "border-accent/30 bg-accent-soft text-accent-dark" : "border-dashed border-bar-grey text-muted",
+        kind === "match"
+          ? "border-accent/30 bg-accent-soft text-accent-dark"
+          : "border-dashed border-bar-grey text-muted",
       )}
     >
       {children}
@@ -217,7 +263,12 @@ export function Chip({ kind, children }: { kind: "match" | "gap"; children: Reac
 }
 
 /** A filter toggle: a real button (`aria-pressed`), tinted when selected. */
-export function FilterChip({ selected, className, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { selected: boolean }) {
+export function FilterChip({
+  selected,
+  className,
+  children,
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & { selected: boolean }) {
   return (
     <button
       type="button"
@@ -226,7 +277,9 @@ export function FilterChip({ selected, className, children, ...rest }: ButtonHTM
       className={cn(
         "inline-flex h-8 cursor-pointer items-center gap-1.5 border px-3 text-small font-medium transition-colors",
         "disabled:cursor-not-allowed disabled:opacity-55",
-        selected ? "border-accent bg-accent-soft text-accent-dark" : "border-control-border bg-surface text-ink hover:bg-track",
+        selected
+          ? "border-accent bg-accent-soft text-accent-dark"
+          : "border-control-border bg-surface text-ink hover:bg-track",
         className,
       )}
     >
@@ -262,7 +315,14 @@ export function CiteChip({ number, onClick }: { number: number; onClick?: () => 
 /** A small status dot: green when `ok`, amber when something needs a look, grey while checking.
  *  (The one round shape of the app.) */
 export function HealthDot({ state }: { state: "ok" | "warn" | "checking" }) {
-  return <span className={cn("size-2 shrink-0 rounded-full", state === "ok" ? "bg-ok" : state === "warn" ? "bg-warn" : "bg-bar-grey")} />;
+  return (
+    <span
+      className={cn(
+        "size-2 shrink-0 rounded-full",
+        state === "ok" ? "bg-ok" : state === "warn" ? "bg-warn" : "bg-bar-grey",
+      )}
+    />
+  );
 }
 
 // ----------------------------------------------------------------- forms
@@ -283,7 +343,9 @@ const CONTROL =
   "focus-visible:ring-accent/25 disabled:opacity-55 dark:bg-surface";
 
 export function TextInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return <Input type="text" spellCheck={false} autoComplete="off" {...rest} className={cn(CONTROL, "h-9", className)} />;
+  return (
+    <Input type="text" spellCheck={false} autoComplete="off" {...rest} className={cn(CONTROL, "h-9", className)} />
+  );
 }
 
 export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -292,9 +354,18 @@ export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLText
 
 /** A checkbox with its label: a native input (so `onChange` gets `e.target.checked`), drawn as a
  *  square box with a check mark. */
-export function Checkbox({ label, className, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & { label: ReactNode }) {
+export function Checkbox({
+  label,
+  className,
+  ...rest
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & { label: ReactNode }) {
   return (
-    <label className={cn("inline-flex cursor-pointer items-center gap-2 text-body text-ink has-disabled:cursor-not-allowed has-disabled:opacity-55", className)}>
+    <label
+      className={cn(
+        "inline-flex cursor-pointer items-center gap-2 text-body text-ink has-disabled:cursor-not-allowed has-disabled:opacity-55",
+        className,
+      )}
+    >
       <span className="relative inline-grid size-4 shrink-0 place-items-center">
         <input
           type="checkbox"
@@ -304,7 +375,11 @@ export function Checkbox({ label, className, ...rest }: Omit<InputHTMLAttributes
             "checked:border-accent checked:bg-accent disabled:cursor-not-allowed",
           )}
         />
-        <Check aria-hidden strokeWidth={3} className="pointer-events-none col-start-1 row-start-1 size-3 text-on-fill opacity-0 peer-checked:opacity-100" />
+        <Check
+          aria-hidden
+          strokeWidth={3}
+          className="pointer-events-none col-start-1 row-start-1 size-3 text-on-fill opacity-0 peer-checked:opacity-100"
+        />
       </span>
       {label}
     </label>
@@ -329,7 +404,12 @@ export function Switch({
   disabled?: boolean;
 }) {
   return (
-    <label className={cn("inline-flex items-center gap-3 text-body text-ink", disabled ? "cursor-not-allowed opacity-55" : "cursor-pointer")}>
+    <label
+      className={cn(
+        "inline-flex items-center gap-3 text-body text-ink",
+        disabled ? "cursor-not-allowed opacity-55" : "cursor-pointer",
+      )}
+    >
       <SwitchPrimitive
         id={id}
         checked={checked}
@@ -406,7 +486,12 @@ export function Tabs<T extends string>({
 }) {
   const keys = tabs.map((tab) => tab.value);
   return (
-    <div role="tablist" aria-label={label} onKeyDown={(e) => onTabKeys(e, keys, value, onChange)} className="flex gap-1 border-b border-border">
+    <div
+      role="tablist"
+      aria-label={label}
+      onKeyDown={(e) => onTabKeys(e, keys, value, onChange)}
+      className="flex gap-1 border-b border-border"
+    >
       {tabs.map((tab) => {
         const selected = tab.value === value;
         return (
@@ -445,7 +530,12 @@ export function StageBar<T extends string>({
 }) {
   const keys = stages.map((stage) => stage.key);
   return (
-    <div role="tablist" aria-label={label} onKeyDown={(e) => onTabKeys(e, keys, value, onChange)} className="flex flex-wrap border border-border bg-surface">
+    <div
+      role="tablist"
+      aria-label={label}
+      onKeyDown={(e) => onTabKeys(e, keys, value, onChange)}
+      className="flex flex-wrap border border-border bg-surface"
+    >
       {stages.map((stage) => {
         const selected = stage.key === value;
         return (
@@ -460,11 +550,20 @@ export function StageBar<T extends string>({
             onClick={() => onChange(stage.key)}
             className={cn(
               "-mb-px flex min-w-0 cursor-pointer items-center gap-2 border-b-2 px-3 py-2 text-body transition-colors not-last:border-r not-last:border-r-border",
-              selected ? "border-b-accent bg-track font-semibold text-ink" : "border-b-transparent text-muted hover:bg-track hover:text-ink",
+              selected
+                ? "border-b-accent bg-track font-semibold text-ink"
+                : "border-b-transparent text-muted hover:bg-track hover:text-ink",
             )}
           >
             <span className="truncate">{stage.label}</span>
-            <span className={cn("shrink-0 px-1.5 text-tiny font-semibold", selected ? "bg-accent-soft text-accent-dark" : "bg-track text-muted")}>{stage.count}</span>
+            <span
+              className={cn(
+                "shrink-0 px-1.5 text-tiny font-semibold",
+                selected ? "bg-accent-soft text-accent-dark" : "bg-track text-muted",
+              )}
+            >
+              {stage.count}
+            </span>
           </button>
         );
       })}
@@ -509,7 +608,17 @@ export function FitBar({ label, value }: { label: string; value: number }) {
 
 /** A skill row of the trends chart: name, a bar scaled to the most frequent skill (accent when
  *  the skill is already in the profile, grey when it is not) and its count. */
-export function SkillBar({ name, count, max, inProfile }: { name: string; count: number; max: number; inProfile: boolean }) {
+export function SkillBar({
+  name,
+  count,
+  max,
+  inProfile,
+}: {
+  name: string;
+  count: number;
+  max: number;
+  inProfile: boolean;
+}) {
   return (
     <div className="flex items-center gap-3">
       <span className="w-[120px] shrink-0 truncate text-small text-ink">{name}</span>
@@ -526,7 +635,12 @@ export function Stepper({ steps, current }: { steps: readonly string[]; current:
       {steps.map((label, i) => {
         const state = stepState(i, current);
         return (
-          <li key={label} aria-label={`Step ${i + 1}: ${label}`} aria-current={state === "current" ? "step" : undefined} className="contents">
+          <li
+            key={label}
+            aria-label={`Step ${i + 1}: ${label}`}
+            aria-current={state === "current" ? "step" : undefined}
+            className="contents"
+          >
             <span className="flex items-center gap-2">
               <span
                 className={cn(
@@ -538,11 +652,19 @@ export function Stepper({ steps, current }: { steps: readonly string[]; current:
               >
                 {state === "done" ? <Check aria-hidden className="size-3" /> : i + 1}
               </span>
-              <span className={cn("text-small", state === "current" && "font-semibold", state === "todo" ? "text-muted" : "text-ink")}>
+              <span
+                className={cn(
+                  "text-small",
+                  state === "current" && "font-semibold",
+                  state === "todo" ? "text-muted" : "text-ink",
+                )}
+              >
                 {label}
               </span>
             </span>
-            {i < steps.length - 1 && <span className={cn("h-px min-w-4 flex-1", i < current ? "bg-accent" : "bg-border")} />}
+            {i < steps.length - 1 && (
+              <span className={cn("h-px min-w-4 flex-1", i < current ? "bg-accent" : "bg-border")} />
+            )}
           </li>
         );
       })}
@@ -605,7 +727,10 @@ export function DataTable<T>({
         <TableHeader className="bg-surface-alt">
           <TableRow className="hover:bg-transparent">
             {columns.map((column) => (
-              <TableHead key={column.key} className={cn("h-9 px-3 text-tiny font-semibold tracking-wider text-muted uppercase", column.className)}>
+              <TableHead
+                key={column.key}
+                className={cn("h-9 px-3 text-tiny font-semibold tracking-wider text-muted uppercase", column.className)}
+              >
                 {column.header}
               </TableHead>
             ))}
@@ -698,7 +823,7 @@ export function Drawer({
           event.preventDefault();
           const back = returnTo.current;
           returnTo.current = null;
-          if (back && back.isConnected) {
+          if (back?.isConnected) {
             back.focus();
           }
         }}
@@ -714,7 +839,15 @@ export function Drawer({
             <h2 className="min-w-0 flex-1 truncate font-heading text-h2 font-semibold text-ink">{title}</h2>
           </SheetTitle>
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
-          <Button id="drawer-close" variant="ghost" size="compact" aria-label="Close" icon={X} onClick={onClose} className="px-2" />
+          <Button
+            id="drawer-close"
+            variant="ghost"
+            size="compact"
+            aria-label="Close"
+            icon={X}
+            onClick={onClose}
+            className="px-2"
+          />
         </header>
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">{children}</div>
       </SheetContent>

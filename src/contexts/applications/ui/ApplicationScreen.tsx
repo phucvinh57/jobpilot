@@ -51,7 +51,13 @@ function Breadcrumb({ company }: { company: string }) {
   const crumb = crumbFor(stage);
   return (
     <div className="flex min-w-0 items-center gap-1.5 text-small text-muted">
-      <button id={crumb.id} type="button" aria-label={crumb.aria} onClick={() => show("jobs")} className="cursor-pointer text-accent hover:underline">
+      <button
+        id={crumb.id}
+        type="button"
+        aria-label={crumb.aria}
+        onClick={() => show("jobs")}
+        className="cursor-pointer text-accent hover:underline"
+      >
         {crumb.label}
       </button>
       <span aria-hidden>/</span>
@@ -69,7 +75,11 @@ function OpenApplication({ id }: { id: number }) {
   if (header === undefined) {
     return (
       <Page label="Application" title="Application">
-        {head.loadError ? <ErrorBanner error={head.loadError} title="The application could not be read" /> : <Caption>Loading...</Caption>}
+        {head.loadError ? (
+          <ErrorBanner error={head.loadError} title="The application could not be read" />
+        ) : (
+          <Caption>Loading...</Caption>
+        )}
       </Page>
     );
   }
@@ -108,12 +118,22 @@ function OpenApplication({ id }: { id: number }) {
             </Button>
           )}
           {primary?.settings != null && (
-            <Button id="primary-settings" icon={Settings} onClick={() => openSettings(primary.settings as SettingsSection)}>
+            <Button
+              id="primary-settings"
+              icon={Settings}
+              onClick={() => openSettings(primary.settings as SettingsSection)}
+            >
               Open Settings &gt; {primary.settings}
             </Button>
           )}
           {primary !== null && (
-            <Button id="primary-action" variant="primary" busy={primary.loading} disabled={!primary.enabled} onClick={model.onPrimary}>
+            <Button
+              id="primary-action"
+              variant="primary"
+              busy={primary.loading}
+              disabled={!primary.enabled}
+              onClick={model.onPrimary}
+            >
               {primary.label}
             </Button>
           )}
@@ -121,7 +141,15 @@ function OpenApplication({ id }: { id: number }) {
       }
     >
       {primary?.hint != null && <p className="text-right text-small text-muted">{primary.hint}</p>}
-      {head.error !== null && <ErrorBanner id="job-error" error={head.error} title="The last job failed" onRetry={head.retry} onDismiss={head.dismiss} />}
+      {head.error !== null && (
+        <ErrorBanner
+          id="job-error"
+          error={head.error}
+          title="The last job failed"
+          onRetry={head.retry}
+          onDismiss={head.dismiss}
+        />
+      )}
       <Stepper steps={header.steps} current={header.stepIndex} />
       <Tabs<Tab> label="Application sections" tabs={TABS} value={tab} onChange={model.setTab} />
       {tab === "jd" && <JdTab id={id} />}

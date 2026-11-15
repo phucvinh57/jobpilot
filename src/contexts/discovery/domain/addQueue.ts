@@ -39,7 +39,12 @@ export interface AddFailure<T = LeadInput> {
 /** Put `item` at the end of `queue`, unless it is the `running` one or one already waiting (a Retry
  *  or a second paste of the same link would read the same posting twice), or [`MAX_WAITING`] wait
  *  already. */
-export function enqueue<T>(running: T | undefined, queue: readonly T[], item: T, same: Same<T> = identical): { queued: Queued; queue: T[] } {
+export function enqueue<T>(
+  running: T | undefined,
+  queue: readonly T[],
+  item: T,
+  same: Same<T> = identical,
+): { queued: Queued; queue: T[] } {
   if ((running !== undefined && same(running, item)) || queue.some((q) => same(q, item))) {
     return { queued: "duplicate", queue: [...queue] };
   }
@@ -51,7 +56,11 @@ export function enqueue<T>(running: T | undefined, queue: readonly T[], item: T,
 
 /** Show `failure` first. It replaces the one of the same input (or, without an input, the one with
  *  the same message); at most [`MAX_FAILURES`] are kept. */
-export function pushFailure<T>(failures: readonly AddFailure<T>[], failure: AddFailure<T>, same: Same<T> = identical): AddFailure<T>[] {
+export function pushFailure<T>(
+  failures: readonly AddFailure<T>[],
+  failure: AddFailure<T>,
+  same: Same<T> = identical,
+): AddFailure<T>[] {
   const kept = failures.filter((f) => {
     if (f.input !== undefined && failure.input !== undefined) {
       return !same(f.input, failure.input);
@@ -65,7 +74,11 @@ export function pushFailure<T>(failures: readonly AddFailure<T>[], failure: AddF
 }
 
 /** Forget the failure of `input` (it is being read again, or was read): the others stay. */
-export function clearFailureOf<T>(failures: readonly AddFailure<T>[], input: T, same: Same<T> = identical): AddFailure<T>[] {
+export function clearFailureOf<T>(
+  failures: readonly AddFailure<T>[],
+  input: T,
+  same: Same<T> = identical,
+): AddFailure<T>[] {
   return failures.filter((f) => f.input === undefined || !same(f.input, input));
 }
 
@@ -91,6 +104,10 @@ export function queueBehind<T>(
     case "duplicate":
       return { queued, waiting: queue, failures: [...failures] };
     case "full":
-      return { queued, waiting: queue, failures: pushFailure(failures, { message: fullMessage(), input: undefined }, same) };
+      return {
+        queued,
+        waiting: queue,
+        failures: pushFailure(failures, { message: fullMessage(), input: undefined }, same),
+      };
   }
 }

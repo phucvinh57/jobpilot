@@ -6,7 +6,17 @@ import type { Cv } from "../domain/profile";
 import { Row } from "./Row";
 
 /** The CV attached for suggestions. It is context only: it is never copied into a CV. */
-export function CvRow({ cv, busy, onUpload, onRemove }: { cv: Cv | null; busy: boolean; onUpload: () => void; onRemove: () => void }) {
+export function CvRow({
+  cv,
+  busy,
+  onUpload,
+  onRemove,
+}: {
+  cv: Cv | null;
+  busy: boolean;
+  onUpload: () => void;
+  onRemove: () => void;
+}) {
   return (
     <Row label="Your CV" hint="Used only to suggest preferences, never copied into a CV">
       {cv ? (

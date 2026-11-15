@@ -25,7 +25,11 @@ export function isLatestRead(read: number, latest: number): boolean {
  * Read with `load`, again whenever `deps` change, `reload()` is called or one of `refreshOn`
  * changed. An older answer that arrives after a newer one is dropped.
  */
-export function useQuery<T>(load: () => Promise<T>, deps: readonly unknown[], refreshOn: readonly Scope[] = []): Query<T> {
+export function useQuery<T>(
+  load: () => Promise<T>,
+  deps: readonly unknown[],
+  refreshOn: readonly Scope[] = [],
+): Query<T> {
   const [data, setData] = useState<T>();
   const [error, setError] = useState<CommandError>();
   const [loading, setLoading] = useState(true);

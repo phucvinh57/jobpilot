@@ -158,7 +158,14 @@ describe("DataTable", () => {
     const user = userEvent.setup();
     const onOpen = vi.fn();
     const { rerender } = render(
-      <DataTable label="Leads" columns={columns} rows={rows} rowKey={(r) => r.id} rowLabel={(r) => `${r.company}: ${r.role}`} onOpen={onOpen} />,
+      <DataTable
+        label="Leads"
+        columns={columns}
+        rows={rows}
+        rowKey={(r) => r.id}
+        rowLabel={(r) => `${r.company}: ${r.role}`}
+        onOpen={onOpen}
+      />,
     );
     expect(screen.getByRole("table", { name: "Leads" })).toBeTruthy();
     await user.click(screen.getByText("Globex"));
@@ -171,7 +178,15 @@ describe("DataTable", () => {
     expect(onOpen).toHaveBeenCalledTimes(2);
 
     rerender(
-      <DataTable label="Leads" columns={columns} rows={rows} rowKey={(r) => r.id} rowLabel={(r) => `${r.company}: ${r.role}`} onOpen={onOpen} openKey="1" />,
+      <DataTable
+        label="Leads"
+        columns={columns}
+        rows={rows}
+        rowKey={(r) => r.id}
+        rowLabel={(r) => `${r.company}: ${r.role}`}
+        onOpen={onOpen}
+        openKey="1"
+      />,
     );
     expect(screen.getByRole("row", { name: "Acme: Backend" }).getAttribute("aria-current")).toBe("true");
     expect(screen.getByRole("row", { name: "Globex: Platform" }).getAttribute("aria-current")).toBeNull();

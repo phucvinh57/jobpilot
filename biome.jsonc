@@ -1,0 +1,326 @@
+// Lint + format of the web app, and its architecture rules:
+//   - layers inside a context: ui -> hooks -> api / domain (never the other way)
+//   - a context reaches another context only through its `index.ts` (`@/contexts/<name>`), and
+//     anything outside itself only through `@/`, so a relative import never leaves the context
+//   - `shared` knows no context and not the app shell; contexts do not know the app shell
+//   - only `shared/bridge` talks to Tauri, and only a context's `api/` layer (or the app shell)
+//     calls the bridge
+//   - only the design kit (`shared/ui`) imports the shadcn/ui primitives (`shared/ui/primitives`)
+// Each file matches exactly one override below (Biome does not merge rule options across
+// overrides), so every override repeats the full list of patterns that applies to it.
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": ["src/**", "*.ts", "*.json", "*.jsonc", "!src/styles.css", "!components.json"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120
+  },
+  "javascript": {
+    "formatter": { "quoteStyle": "double", "trailingCommas": "all", "semicolons": "always" }
+  },
+  "assist": { "actions": { "source": { "organizeImports": "off" } } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "a11y": {
+        // `role="group"` / `role="list"` and aria-labels are deliberate: every interactive
+        // element has an accessible name (UI scripts and assistive technology reach it), and a
+        // <fieldset> would change the layout. Fields wrap their control, which this rule misses.
+        "useSemanticElements": "off",
+        "noRedundantRoles": "off",
+        "useAriaPropsSupportedByRole": "off",
+        "noLabelWithoutControl": "off"
+      },
+      "suspicious": {
+        // Static lists (lines of a brief, notices) have no id; they never reorder.
+        "noArrayIndexKey": "off",
+        // Mistakes a local `before(...)` helper for a mocha hook.
+        "noDuplicateTestHooks": "off",
+        // `list.forEach((handler) => handler(x))` is fine.
+        "useIterableCallbackReturn": "off"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.test.ts", "**/*.test.tsx"],
+      "linter": {
+        "rules": {
+          "style": { "noNonNullAssertion": "off" },
+          "correctness": { "noComponentHookFactories": "off" }
+        }
+      }
+    },
+    {
+      // The app shell (composition root): may reach into contexts (tests do), never Tauri directly.
+      "includes": ["src/main.tsx", "src/app/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "Use @/shared/bridge (from a context's api/ layer)."
+                  },
+                  {
+                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "message": "Use the design kit from @/shared; only src/shared/ui builds on the primitives."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/shared/bridge/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  { "group": ["**/contexts", "**/contexts/**"], "message": "shared/ knows no context." },
+                  { "group": ["**/app", "**/app/**"], "message": "shared/ does not depend on the app shell." },
+                  {
+                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "message": "Use the design kit from @/shared; only src/shared/ui builds on the primitives."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/shared/ui/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  { "group": ["**/contexts", "**/contexts/**"], "message": "shared/ knows no context." },
+                  { "group": ["**/app", "**/app/**"], "message": "shared/ does not depend on the app shell." },
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "Use @/shared/bridge (from a context's api/ layer)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/shared/**", "!src/shared/bridge/**", "!src/shared/ui/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  { "group": ["**/contexts", "**/contexts/**"], "message": "shared/ knows no context." },
+                  { "group": ["**/app", "**/app/**"], "message": "shared/ does not depend on the app shell." },
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "Use @/shared/bridge (from a context's api/ layer)."
+                  },
+                  {
+                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "message": "Use the design kit from @/shared; only src/shared/ui builds on the primitives."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      // A context's public files (index.ts, testing.ts).
+      "includes": ["src/contexts/*/*.ts", "src/contexts/*/*.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@/contexts/*/**", "../**"],
+                    "message": "Import another context through its index.ts only (@/contexts/<name>)."
+                  },
+                  { "group": ["**/app", "**/app/**"], "message": "A context does not depend on the app shell." },
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "Use @/shared/bridge (from a context's api/ layer)."
+                  },
+                  {
+                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "message": "Use the design kit from @/shared; only src/shared/ui builds on the primitives."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/contexts/*/domain/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["../api", "../api/**", "../hooks", "../hooks/**", "../ui", "../ui/**"],
+                    "message": "domain/ imports no other layer (ui -> hooks -> api / domain)."
+                  },
+                  {
+                    "group": ["@/contexts/*/**", "../../**"],
+                    "message": "Import another context through its index.ts only (@/contexts/<name>)."
+                  },
+                  { "group": ["**/app", "**/app/**"], "message": "A context does not depend on the app shell." },
+                  {
+                    "group": ["@/shared/bridge", "@/shared/bridge/**"],
+                    "message": "Call the shell from the context's api/ layer."
+                  },
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "Use @/shared/bridge (from a context's api/ layer)."
+                  },
+                  {
+                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "message": "Use the design kit from @/shared; only src/shared/ui builds on the primitives."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/contexts/*/api/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["../hooks", "../hooks/**", "../ui", "../ui/**"],
+                    "message": "api/ must not import hooks/ or ui/ (ui -> hooks -> api / domain)."
+                  },
+                  {
+                    "group": ["@/contexts/*/**", "../../**"],
+                    "message": "Import another context through its index.ts only (@/contexts/<name>)."
+                  },
+                  { "group": ["**/app", "**/app/**"], "message": "A context does not depend on the app shell." },
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "Use @/shared/bridge (from a context's api/ layer)."
+                  },
+                  {
+                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "message": "Use the design kit from @/shared; only src/shared/ui builds on the primitives."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/contexts/*/hooks/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["../ui", "../ui/**"],
+                    "message": "hooks/ must not import ui/ (ui -> hooks -> api / domain)."
+                  },
+                  {
+                    "group": ["@/contexts/*/**", "../../**"],
+                    "message": "Import another context through its index.ts only (@/contexts/<name>)."
+                  },
+                  { "group": ["**/app", "**/app/**"], "message": "A context does not depend on the app shell." },
+                  {
+                    "group": ["@/shared/bridge", "@/shared/bridge/**"],
+                    "message": "Call the shell from the context's api/ layer."
+                  },
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "Use @/shared/bridge (from a context's api/ layer)."
+                  },
+                  {
+                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "message": "Use the design kit from @/shared; only src/shared/ui builds on the primitives."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/contexts/*/ui/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@/contexts/*/**", "../../**"],
+                    "message": "Import another context through its index.ts only (@/contexts/<name>)."
+                  },
+                  { "group": ["**/app", "**/app/**"], "message": "A context does not depend on the app shell." },
+                  {
+                    "group": ["@/shared/bridge", "@/shared/bridge/**"],
+                    "message": "Call the shell from the context's api/ layer."
+                  },
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "Use @/shared/bridge (from a context's api/ layer)."
+                  },
+                  {
+                    "group": ["**/ui/primitives", "**/ui/primitives/**"],
+                    "message": "Use the design kit from @/shared; only src/shared/ui builds on the primitives."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

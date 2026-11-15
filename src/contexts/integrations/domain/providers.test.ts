@@ -14,7 +14,13 @@ import {
 
 const KINDS: KindDefaults[] = [
   { kind: "openai", label: "OpenAI-compatible", name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "" },
-  { kind: "anthropic", label: "Anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-5" },
+  {
+    kind: "anthropic",
+    label: "Anthropic",
+    name: "Anthropic",
+    baseUrl: "https://api.anthropic.com",
+    model: "claude-sonnet-4-5",
+  },
 ];
 
 function provider(patch: Partial<Provider> = {}): Provider {
@@ -34,19 +40,40 @@ function provider(patch: Partial<Provider> = {}): Provider {
 describe("the provider form", () => {
   it("starts a new provider from the OpenAI-compatible defaults", () => {
     const draft = draftOf(undefined, KINDS);
-    expect(draft).toMatchObject({ id: 0, kind: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "", apiKey: "", hasKey: false });
+    expect(draft).toMatchObject({
+      id: 0,
+      kind: "openai",
+      name: "OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      model: "",
+      apiKey: "",
+      hasKey: false,
+    });
     expect(draft.models).toEqual([]);
   });
 
   it("opens a saved provider with an empty key box", () => {
     const draft = draftOf(provider({ isDefault: true }), KINDS, true);
-    expect(draft).toMatchObject({ id: 3, name: "Local", jsonObject: true, isDefault: true, hasKey: true, apiKey: "", confirmDelete: false });
+    expect(draft).toMatchObject({
+      id: 3,
+      name: "Local",
+      jsonObject: true,
+      isDefault: true,
+      hasKey: true,
+      apiKey: "",
+      confirmDelete: false,
+    });
   });
 
   it("changes the kind and keeps what the user typed", () => {
     // Still the defaults: all three follow the kind.
     const fresh = switchKind(draftOf(undefined, KINDS), "anthropic", KINDS);
-    expect(fresh).toMatchObject({ kind: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-5" });
+    expect(fresh).toMatchObject({
+      kind: "anthropic",
+      name: "Anthropic",
+      baseUrl: "https://api.anthropic.com",
+      model: "claude-sonnet-4-5",
+    });
 
     // Typed values stay; empty ones are filled.
     const typed = { ...draftOf(undefined, KINDS), name: "My proxy", baseUrl: "http://proxy.local/v1", model: "  " };
@@ -64,7 +91,15 @@ describe("the provider form", () => {
 
   it("is sent trimmed, with the key only when one was typed", () => {
     const draft = { ...draftOf(provider(), KINDS), name: " Local ", apiKey: "  sk-1  " };
-    expect(inputOf(draft)).toEqual({ id: 3, kind: "openai", name: "Local", baseUrl: "http://localhost:11434/v1", model: "llama3", jsonObject: true, apiKey: "sk-1" });
+    expect(inputOf(draft)).toEqual({
+      id: 3,
+      kind: "openai",
+      name: "Local",
+      baseUrl: "http://localhost:11434/v1",
+      model: "llama3",
+      jsonObject: true,
+      apiKey: "sk-1",
+    });
     expect(inputOf({ ...draft, apiKey: "   " }).apiKey).toBeNull();
   });
 

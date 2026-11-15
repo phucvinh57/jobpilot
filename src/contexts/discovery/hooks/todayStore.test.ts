@@ -51,7 +51,15 @@ function lead(id: number, extra: Partial<Lead> = {}): Lead {
 }
 
 function queue(extra: Partial<Queue> = {}): Queue {
-  return { items: [lead(1), lead(2), lead(3)], failed: [], sources: [], waiting: [], lastRun: null, searching: false, ...extra };
+  return {
+    items: [lead(1), lead(2), lead(3)],
+    failed: [],
+    sources: [],
+    waiting: [],
+    lastRun: null,
+    searching: false,
+    ...extra,
+  };
 }
 
 /** The lead the drawer asks for (`undefined`: closed or showing something else). */
@@ -74,12 +82,29 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const ready = (leadId: number, applicationId: number): PrepareOutcome => ({ leadId, applicationId, label: `Acme — Role ${leadId}`, error: null });
-const failed = (leadId: number, message: string): PrepareOutcome => ({ leadId, applicationId: null, label: null, error: new CommandError(message) });
+const ready = (leadId: number, applicationId: number): PrepareOutcome => ({
+  leadId,
+  applicationId,
+  label: `Acme — Role ${leadId}`,
+  error: null,
+});
+const failed = (leadId: number, message: string): PrepareOutcome => ({
+  leadId,
+  applicationId: null,
+  label: null,
+  error: new CommandError(message),
+});
 
 beforeEach(() => {
   resetToday();
-  useNav.setState({ screen: "jobs", stage: "leads", drawer: undefined, needsYou: 0, droppedFile: undefined, applicationId: undefined });
+  useNav.setState({
+    screen: "jobs",
+    stage: "leads",
+    drawer: undefined,
+    needsYou: 0,
+    droppedFile: undefined,
+    applicationId: undefined,
+  });
   mocked.readQueue.mockResolvedValue(queue());
   mocked.readProfileSkills.mockResolvedValue(["Rust"]);
   mocked.onChanged.mockReturnValue(() => undefined);
@@ -143,7 +168,10 @@ describe("reading the queue", () => {
     setFilter({ minScore: 78 });
     expect(useTodayStore.getState().filter.minScore).toBe(78);
     selectLead(3);
-    expect(openedLeadId(useTodayStore.getState()), "lead 3 (score 77) is filtered out: no lead is open").toBeUndefined();
+    expect(
+      openedLeadId(useTodayStore.getState()),
+      "lead 3 (score 77) is filtered out: no lead is open",
+    ).toBeUndefined();
     selectLead("best");
     expect(openedLeadId(useTodayStore.getState()), "the best shown").toBe(1);
   });
@@ -153,7 +181,9 @@ describe("the sidebar badge", () => {
   it("counts sources waiting, failed CVs and CVs to read", async () => {
     mocked.readQueue.mockResolvedValue(
       queue({
-        waiting: [{ thread: "discover:1:3", sourceId: 3, sourceName: "Acme", reason: "login", url: "https://a.test/login" }],
+        waiting: [
+          { thread: "discover:1:3", sourceId: 3, sourceName: "Acme", reason: "login", url: "https://a.test/login" },
+        ],
         failed: [{ leadId: 1, company: "Acme", role: "Role 1", message: "boom", problem: NO_ADVICE, applicationId: 5 }],
       }),
     );
@@ -197,7 +227,10 @@ describe("Prepare CV", () => {
     await done;
     s = useTodayStore.getState();
     expect(s.jobs).toEqual({});
-    expect(s.prepared.map((p) => p.applicationId), "an outcome seen twice is shown once").toEqual([11, 12]);
+    expect(
+      s.prepared.map((p) => p.applicationId),
+      "an outcome seen twice is shown once",
+    ).toEqual([11, 12]);
   });
 
   it("does not move the user to the Jobs page when a CV finishes elsewhere", async () => {
@@ -361,7 +394,9 @@ describe("the link box", () => {
 
   it("queues what is added while one is read, and reads them in order", async () => {
     const first = deferred<AddedLead>();
-    mocked.addLead.mockReturnValueOnce(first.promise).mockResolvedValue({ leadId: 5, state: "new", applicationId: null });
+    mocked.addLead
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue({ leadId: 5, state: "new", applicationId: null });
     const b = { kind: "url", value: "https://b.test/1" } as const;
     expect(addInput(url)).toBe(true);
     expect(addInput(b)).toBe(true);
@@ -380,8 +415,16 @@ describe("the link box", () => {
   });
 
   it("keeps why a posting failed, with its own Try again, and carries on with the next", async () => {
-    const problem: Problem = { kind: "network", challenge: null, advice: "The connection failed.", settingsSection: null, retryable: true };
-    mocked.addLead.mockRejectedValueOnce(new CommandError("connection refused", problem)).mockResolvedValue({ leadId: 6, state: "new", applicationId: null });
+    const problem: Problem = {
+      kind: "network",
+      challenge: null,
+      advice: "The connection failed.",
+      settingsSection: null,
+      retryable: true,
+    };
+    mocked.addLead
+      .mockRejectedValueOnce(new CommandError("connection refused", problem))
+      .mockResolvedValue({ leadId: 6, state: "new", applicationId: null });
     addInput(url);
     await settle();
     let s = useTodayStore.getState();
@@ -410,7 +453,10 @@ describe("the link box", () => {
     mocked.addLead.mockResolvedValueOnce({ leadId: 8, state: "dismissed", applicationId: null });
     addInput(url);
     await settle();
-    expect(useTodayStore.getState().note).toEqual({ ok: false, text: "You dismissed this job before, so it is not in the list." });
+    expect(useTodayStore.getState().note).toEqual({
+      ok: false,
+      text: "You dismissed this job before, so it is not in the list.",
+    });
 
     mocked.addLead.mockResolvedValueOnce({ leadId: 9, state: "promoted", applicationId: 21 });
     addInput({ kind: "url", value: "https://a.test/jobs/10" });
@@ -427,7 +473,9 @@ describe("the link box", () => {
     await addDropped("/tmp/jd.pdf");
     expect(mocked.addLead).toHaveBeenCalledWith({ kind: "file", value: "/tmp/jd.pdf" });
 
-    mocked.fileInput.mockRejectedValueOnce(new CommandError("c.png: .png files are not supported (use .md, .txt, .html or .pdf)."));
+    mocked.fileInput.mockRejectedValueOnce(
+      new CommandError("c.png: .png files are not supported (use .md, .txt, .html or .pdf)."),
+    );
     await addDropped("/tmp/c.png");
     const failure = useTodayStore.getState().addFailures[0];
     expect(failure?.message).toContain(".png");
@@ -451,7 +499,14 @@ describe("searching", () => {
   });
 
   it("shows why a search failed", async () => {
-    mocked.searchNow.mockRejectedValue(new CommandError("no AI provider is configured", { ...NO_ADVICE, kind: "noProvider", advice: "Add one.", settingsSection: "AI providers" }));
+    mocked.searchNow.mockRejectedValue(
+      new CommandError("no AI provider is configured", {
+        ...NO_ADVICE,
+        kind: "noProvider",
+        advice: "Add one.",
+        settingsSection: "AI providers",
+      }),
+    );
     await searchNow();
     const note = useTodayStore.getState().note;
     expect(note?.ok).toBe(false);

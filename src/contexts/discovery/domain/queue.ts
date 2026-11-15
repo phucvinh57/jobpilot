@@ -108,7 +108,12 @@ export interface QueueFacts {
  *  empty. Disabled while the work it starts runs. Where it sits is `primaryPlace`. */
 export function queuePrimaryFor(f: QueueFacts): QueuePrimary {
   const ready = (action: QueueAction, hint?: string): QueuePrimary => ({ action, enabled: true, loading: false, hint });
-  const blocked = (action: QueueAction, hint: string): QueuePrimary => ({ action, enabled: false, loading: false, hint });
+  const blocked = (action: QueueAction, hint: string): QueuePrimary => ({
+    action,
+    enabled: false,
+    loading: false,
+    hint,
+  });
   if (f.total === 0) {
     if (f.searching) {
       return { action: "searchNow", enabled: false, loading: true, hint: "Searching your sources" };
@@ -124,7 +129,10 @@ export function queuePrimaryFor(f: QueueFacts): QueuePrimary {
   if (f.idleTargets === 0) {
     return { action: "prepareCv", enabled: false, loading: true };
   }
-  return ready("prepareCv", f.targets > 1 ? `${f.targets} leads selected, their CVs are written one after the other` : undefined);
+  return ready(
+    "prepareCv",
+    f.targets > 1 ? `${f.targets} leads selected, their CVs are written one after the other` : undefined,
+  );
 }
 
 /** Where the one primary button of the Leads stage sits. */

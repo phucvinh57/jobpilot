@@ -5,7 +5,18 @@
 import { toCommandError, type GraphProgress } from "@/shared";
 import { invoke, listen, notifyChanged, onDataChanged, onGraphProgress, type Scope } from "@/shared/bridge";
 
-import type { AddedLead, BoardHint, Dismissed, JobSources, LeadInput, PrepareOutcome, Queue, RunSummary, SearchFinished, Source } from "../domain/types";
+import type {
+  AddedLead,
+  BoardHint,
+  Dismissed,
+  JobSources,
+  LeadInput,
+  PrepareOutcome,
+  Queue,
+  RunSummary,
+  SearchFinished,
+  Source,
+} from "../domain/types";
 
 // ------------------------------------------------------------------ Today: reading
 
@@ -119,9 +130,12 @@ export function onPrepared(handler: (outcome: PrepareOutcome) => void): () => vo
 
 /** The daily search ended. Returns the unsubscribe. */
 export function onSearchFinished(handler: (finished: SearchFinished) => void): () => void {
-  return listen<{ summary: RunSummary | null; error: { problem: unknown; message: string } | null }>("discovery:search-finished", (dto) => {
-    handler({ summary: dto.summary, error: dto.error === null ? null : toCommandError(dto.error) });
-  });
+  return listen<{ summary: RunSummary | null; error: { problem: unknown; message: string } | null }>(
+    "discovery:search-finished",
+    (dto) => {
+      handler({ summary: dto.summary, error: dto.error === null ? null : toCommandError(dto.error) });
+    },
+  );
 }
 
 /** Stored data changed (any screen). Returns the unsubscribe. */

@@ -14,7 +14,9 @@ export function TimelineTab({ id }: { id: number }) {
   }
   return (
     <div id="timeline" className="flex flex-col gap-3">
-      {resolve.error && <ErrorBanner error={resolve.error} title="That email could not be handled" onDismiss={resolve.clearError} />}
+      {resolve.error && (
+        <ErrorBanner error={resolve.error} title="That email could not be handled" onDismiss={resolve.clearError} />
+      )}
       {data.reviews.map((review) => (
         <div key={review.id} id={`review-${review.id}`}>
           <Banner
@@ -23,10 +25,21 @@ export function TimelineTab({ id }: { id: number }) {
             body={review.body}
             actions={
               <>
-                <Button id={`accept-${review.id}`} size="compact" disabled={resolve.busy} onClick={() => void resolve.run(review.id, true)}>
+                <Button
+                  id={`accept-${review.id}`}
+                  size="compact"
+                  disabled={resolve.busy}
+                  onClick={() => void resolve.run(review.id, true)}
+                >
                   Accept
                 </Button>
-                <Button id={`dismiss-${review.id}`} size="compact" variant="ghost" disabled={resolve.busy} onClick={() => void resolve.run(review.id, false)}>
+                <Button
+                  id={`dismiss-${review.id}`}
+                  size="compact"
+                  variant="ghost"
+                  disabled={resolve.busy}
+                  onClick={() => void resolve.run(review.id, false)}
+                >
                   Dismiss
                 </Button>
               </>

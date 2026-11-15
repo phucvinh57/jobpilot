@@ -32,7 +32,9 @@ function NavItem({
       onClick={onClick}
       className={clsx(
         "flex h-9 w-full cursor-pointer items-center gap-2.5 border-l-2 px-3 text-left text-body transition-colors",
-        current ? "border-accent bg-track font-medium text-ink" : "border-transparent text-muted hover:bg-track hover:text-ink",
+        current
+          ? "border-accent bg-track font-medium text-ink"
+          : "border-transparent text-muted hover:bg-track hover:text-ink",
       )}
     >
       <Icon aria-hidden className={clsx("size-4", current ? "text-accent" : "text-muted")} />
@@ -75,7 +77,13 @@ function HealthLine() {
     );
   }
   return (
-    <button id="health" type="button" aria-label={text} onClick={() => openSettings(focus as SettingsSection)} className={clsx(base, "cursor-pointer hover:text-ink")}>
+    <button
+      id="health"
+      type="button"
+      aria-label={text}
+      onClick={() => openSettings(focus as SettingsSection)}
+      className={clsx(base, "cursor-pointer hover:text-ink")}
+    >
       {body}
     </button>
   );
@@ -98,7 +106,13 @@ export function Sidebar() {
         <Heading>JobPilot</Heading>
       </div>
       <nav aria-label="Navigation" className="flex flex-col gap-0.5">
-        <NavItem id="nav-jobs" icon={Inbox} label="Jobs" badge={jobsBadge(needsYou, status?.newLeads ?? 0)} {...entry("jobs")} />
+        <NavItem
+          id="nav-jobs"
+          icon={Inbox}
+          label="Jobs"
+          badge={jobsBadge(needsYou, status?.newLeads ?? 0)}
+          {...entry("jobs")}
+        />
         <NavItem id="nav-trends" icon={ChartPie} label="Trends" {...entry("trends")} />
       </nav>
       <div className="flex-1" />

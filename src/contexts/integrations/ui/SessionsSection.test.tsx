@@ -12,12 +12,23 @@ vi.mock("../api/sessionsApi");
 const IDLE: Download = { active: false, percent: null };
 
 function session(patch: Partial<Session> = {}): Session {
-  return { id: 1, name: "LinkedIn", host: "www.linkedin.com", status: "ok", verifiedAt: new Date(Date.now() - 5 * 60_000).toISOString(), loginInProgress: false, ...patch };
+  return {
+    id: 1,
+    name: "LinkedIn",
+    host: "www.linkedin.com",
+    status: "ok",
+    verifiedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    loginInProgress: false,
+    ...patch,
+  };
 }
 
 function sessions(patch: Partial<Sessions> = {}): Sessions {
   return {
-    sessions: [session(), session({ id: 2, name: "Indeed", host: "secure.indeed.com", status: "expired", verifiedAt: null })],
+    sessions: [
+      session(),
+      session({ id: 2, name: "Indeed", host: "secure.indeed.com", status: "expired", verifiedAt: null }),
+    ],
     chrome: { path: "/usr/bin/chromium", source: "system" },
     download: IDLE,
     ...patch,
@@ -90,7 +101,9 @@ describe("SessionsSection", () => {
   });
 
   it("waits for the user in a login window and finishes on Done", async () => {
-    vi.mocked(api.loadSessions).mockResolvedValue(sessions({ sessions: [session({ loginInProgress: true, status: "new", verifiedAt: null })] }));
+    vi.mocked(api.loadSessions).mockResolvedValue(
+      sessions({ sessions: [session({ loginInProgress: true, status: "new", verifiedAt: null })] }),
+    );
     vi.mocked(api.finishLogin).mockResolvedValue(undefined);
     render(<SessionsSection />);
     expect(await screen.findByText("Log in in the browser window, then press Done")).toBeTruthy();
@@ -104,12 +117,18 @@ describe("SessionsSection", () => {
     render(<SessionsSection />);
     fireEvent.click(await screen.findByRole("button", { name: "New session" }));
     expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("LinkedIn");
-    expect((screen.getByRole("textbox", { name: "Login address" }) as HTMLInputElement).value).toBe("https://www.linkedin.com/login");
+    expect((screen.getByRole("textbox", { name: "Login address" }) as HTMLInputElement).value).toBe(
+      "https://www.linkedin.com/login",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Indeed" }));
-    expect((screen.getByRole("textbox", { name: "Login address" }) as HTMLInputElement).value).toBe("https://secure.indeed.com/account/login");
+    expect((screen.getByRole("textbox", { name: "Login address" }) as HTMLInputElement).value).toBe(
+      "https://secure.indeed.com/account/login",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Open browser to log in" }));
-    await waitFor(() => expect(api.createSession).toHaveBeenCalledWith("Indeed", "https://secure.indeed.com/account/login"));
+    await waitFor(() =>
+      expect(api.createSession).toHaveBeenCalledWith("Indeed", "https://secure.indeed.com/account/login"),
+    );
     await waitFor(() => expect(screen.queryByRole("button", { name: "Open browser to log in" })).toBeNull());
   });
 

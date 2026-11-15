@@ -24,10 +24,22 @@ export function ProviderForm({ card }: { card: ProvidersCard }) {
         </div>
       </div>
       <Field label="Name">
-        <TextInput id="provider-name" aria-label="Name" placeholder="Name" value={draft.name} onChange={(e) => card.edit({ name: e.target.value })} />
+        <TextInput
+          id="provider-name"
+          aria-label="Name"
+          placeholder="Name"
+          value={draft.name}
+          onChange={(e) => card.edit({ name: e.target.value })}
+        />
       </Field>
       <Field label="Base URL">
-        <TextInput id="provider-base-url" aria-label="Base URL" placeholder="Base URL" value={draft.baseUrl} onChange={(e) => card.edit({ baseUrl: e.target.value })} />
+        <TextInput
+          id="provider-base-url"
+          aria-label="Base URL"
+          placeholder="Base URL"
+          value={draft.baseUrl}
+          onChange={(e) => card.edit({ baseUrl: e.target.value })}
+        />
       </Field>
       <Field label={keyLabel(draft)} hint={draft.hasKey ? "A key is saved in your system keyring." : undefined}>
         <TextInput
@@ -43,7 +55,13 @@ export function ProviderForm({ card }: { card: ProvidersCard }) {
       <Field label="Model">
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
-            <TextInput id="provider-model" aria-label="Model" placeholder="Model id, e.g. gpt-4o-mini" value={draft.model} onChange={(e) => card.edit({ model: e.target.value })} />
+            <TextInput
+              id="provider-model"
+              aria-label="Model"
+              placeholder="Model id, e.g. gpt-4o-mini"
+              value={draft.model}
+              onChange={(e) => card.edit({ model: e.target.value })}
+            />
           </div>
           <Button id="load-models" busy={runner.busy === "models"} disabled={!idle} onClick={card.loadModels}>
             Load models
@@ -96,7 +114,15 @@ export function ProviderForm({ card }: { card: ProvidersCard }) {
         </Button>
       </div>
       {runner.notice && <Notice text={runner.notice} />}
-      {runner.error && <ErrorBanner id="providers-error" error={runner.error} title={runner.errorTitle} onRetry={runner.retry} onDismiss={runner.reset} />}
+      {runner.error && (
+        <ErrorBanner
+          id="providers-error"
+          error={runner.error}
+          title={runner.errorTitle}
+          onRetry={runner.retry}
+          onDismiss={runner.reset}
+        />
+      )}
     </div>
   );
 }

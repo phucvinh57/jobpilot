@@ -17,7 +17,12 @@ import { LeadList } from "./LeadList";
 function BulkBar({ t, primary }: { t: TodayView; primary: boolean }) {
   const n = t.targets.length;
   return (
-    <div id="queue-bulk" role="group" aria-label={`${t.checked.length} selected`} className="flex flex-wrap items-center gap-3 border border-border bg-surface-alt px-3 py-2">
+    <div
+      id="queue-bulk"
+      role="group"
+      aria-label={`${t.checked.length} selected`}
+      className="flex flex-wrap items-center gap-3 border border-border bg-surface-alt px-3 py-2"
+    >
       <span className="text-body font-semibold text-ink">{t.checked.length} selected</span>
       <Button
         id="queue-prepare-checked"
@@ -49,9 +54,21 @@ export function LeadsStage({ otherDrawerOpen = false }: { otherDrawerOpen?: bool
 
   return (
     <div id="queue" className="flex flex-1 flex-col gap-3">
-      {t.loadError && <ErrorBanner id="queue-load-error" error={t.loadError} title="The job list could not be read" onRetry={reload} />}
+      {t.loadError && (
+        <ErrorBanner
+          id="queue-load-error"
+          error={t.loadError}
+          title="The job list could not be read"
+          onRetry={reload}
+        />
+      )}
       {total === 0 ? (
-        <div id="queue-empty" role="group" aria-label="No jobs yet" className="flex flex-1 items-center justify-center py-6">
+        <div
+          id="queue-empty"
+          role="group"
+          aria-label="No jobs yet"
+          className="flex flex-1 items-center justify-center py-6"
+        >
           <div className="max-w-[520px]">
             <EmptyState
               icon={Inbox}

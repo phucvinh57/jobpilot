@@ -93,7 +93,11 @@ export function changed(shown: Profile | undefined, next: Profile): boolean {
     shown.fields.length !== next.fields.length ||
     shown.fields.some((field, i) => {
       const other = next.fields[i];
-      return other === undefined || field.items.length !== other.items.length || field.items.some((item, j) => item !== other.items[j]);
+      return (
+        other === undefined ||
+        field.items.length !== other.items.length ||
+        field.items.some((item, j) => item !== other.items[j])
+      );
     })
   );
 }

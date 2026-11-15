@@ -18,7 +18,13 @@ export function SkillChart({ chart, adds }: { chart: Chart; adds: PreferenceAdds
           const state = adds.stateOf("skills", skill.name, skill.presence);
           const tip = `${skill.name}: ${skill.description}`;
           return (
-            <li key={skill.name} id={`trends-skill-${i}`} aria-label={tip} title={tip} className="flex items-center gap-1">
+            <li
+              key={skill.name}
+              id={`trends-skill-${i}`}
+              aria-label={tip}
+              title={tip}
+              className="flex items-center gap-1"
+            >
               <div className="min-w-0 flex-1">
                 <SkillBar name={skill.name} count={skill.total} max={chart.max} inProfile={state === "added"} />
               </div>
