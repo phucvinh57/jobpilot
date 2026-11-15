@@ -52,14 +52,15 @@ src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bound
                        `commands.rs` application services: thin `#[tauri::command]`s that call `Core` through `shared::run`
   src/demo.rs          `JOBPILOT_DEMO=1` sample data
   src/devtools.rs      cargo feature `dev-tools` only: webview snapshot + UI script runner (see "Check the UI")
-package.json, bun.lock, index.html, vite.config.ts, tsconfig.json, eslint.config.js   the web app (bun), standard Tauri layout
+package.json, bun.lock, index.html, vite.config.ts, tsconfig.json, biome.jsonc   the web app (bun), standard Tauri layout; biome.jsonc = lint, format and the architecture rules
+lefthook.yml           git hooks: pre-commit Biome on staged files, pre-push `scripts/check.sh`
 src/                   React + Vite + TypeScript + Tailwind
   app/                 composition root of the web app: App (screen switch, file drop), Sidebar, SetupBanner, SettingsScreen,
                        JobsScreen (the Jobs page: header, stage bar Leads | CVs | Applied | In progress | Done, the stage's list,
                        and a right-side drawer for the open lead or application; `jobs.ts` page rules)
   shared/              `bridge` (the only Tauri imports: invoke / listen / file picker), `ui/kit.tsx` (design kit: Page, Card, Section,
                        Banner, Button, Chip, Tag, Segmented, Tabs, StageBar, DataTable, Drawer, ScoreBadge, Stepper, ...),
-                       `ui/primitives/` (shadcn/ui, square: no rounded corners; only the kit imports them, eslint enforces it;
+                       `ui/primitives/` (shadcn/ui, square: no rounded corners; only the kit imports them, Biome enforces it;
                        `bunx shadcn add` writes `import { cn } from "cn"` and adds a junk `cn` dependency: point the import at
                        `../cn` and drop the dependency after each add), `theme` (tokens light/dark as `--jp-*`
                        CSS variables; `styles.css` maps them to the only Tailwind colours), `problem` (ErrorBanner, ProblemHelp),
@@ -68,20 +69,20 @@ src/                   React + Vite + TypeScript + Tailwind
                        `hooks/` (use-cases), `ui/` (screens), `index.ts` (public surface)
                        discovery = the Leads stage + lead drawer, Job sources; applications = the CVs / Applied / In progress / Done
                        stages, the application drawer and the full Application screen (the drawer's "Open full view")
-                       direction: ui -> hooks -> api / domain; another context only through its `index.ts` (eslint enforces both)
+                       direction: ui -> hooks -> api / domain; another context only through its `index.ts` (Biome enforces both)
 ```
 
 ## Commands
 
 - Web app first (the shell embeds `dist/` at compile time): `bun install`, then `bun run build`.
 - Run: `cargo run -p jobpilot` (the built web app; sample data: `JOBPILOT_DEMO=1`; throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory`). With hot reload: `bun run tauri dev`.
-- Web checks: `bun run check` (tsc, eslint with the context-boundary rules, vitest).
-- Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace` (the engine shares the `jobpilot` crate with Tauri: even engine-only tests need `dist/` built and the Linux libs below)
+- Web checks: `bun run check` (tsc, Biome lint + format with the context-boundary rules, vitest); `bun run format` applies Biome's fixes.
+- Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace` (the engine shares the `jobpilot` crate with Tauri: even engine-only tests need a `dist/` (`scripts/check.sh` writes a placeholder when there is none) and the Linux libs below)
 - Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
 - End-to-end without real services: `cargo test -p jobpilot --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
 - Package: `scripts/package.sh` -> `release/`
 - Needs: Rust, Node + bun, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
-- Pre-PR checks: `scripts/check.sh [--all]` (paths changed since main: web typecheck/lint/test/build, clippy + test, typst render); CI adds `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps) and restores the cache saved by main; `git config core.hooksPath .githooks` once per clone runs it before every push.
+- Pre-PR checks: `scripts/check.sh [--all] [--only web|rust|render]` runs the groups the paths changed since main touch: `web` (typecheck, Biome, vitest, vite build), `rust` (clippy + test; a placeholder `dist/` when there is no web build, so a UI change never builds Rust), `render` (typst). CI runs each group as its own parallel job (`--plan` decides which) with `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps), restoring the caches saved by main. `bun install` installs the lefthook hooks (pre-commit: Biome on staged files; pre-push: `check.sh`); a clone that set `core.hooksPath` before: `git config --unset core.hooksPath && bunx lefthook install`.
 - Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_lib::engine=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
 
 ## Check the UI visually

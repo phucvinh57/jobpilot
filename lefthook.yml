@@ -1,0 +1,17 @@
+# Git hooks (https://lefthook.dev). `bun install` installs them (not on CI); after a config change,
+# or in a clone that still has `core.hooksPath` set: `git config --unset core.hooksPath && bunx lefthook install`.
+# Never skip them with --no-verify.
+
+# Format and lint the staged web files (fixes are staged again).
+pre-commit:
+  jobs:
+    - name: biome
+      glob: "*.{js,ts,tsx,json,jsonc}"
+      run: bun x biome check --write --error-on-warnings --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      stage_fixed: true
+
+# The checks for the paths changed since main (web, Rust, Typst: only the groups they touch).
+pre-push:
+  jobs:
+    - name: check
+      run: scripts/check.sh
