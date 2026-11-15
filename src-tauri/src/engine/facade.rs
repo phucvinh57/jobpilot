@@ -1,14 +1,9 @@
 //! The single entry point the UI (the shell's contexts) uses.
 
-use std::path::{Path, PathBuf};
-
 use anyhow::Result;
 
 use crate::engine::graph::Graphs;
 use crate::engine::{Paths, Secrets, Store};
-
-/// kv key holding the effective profile path.
-pub const PROFILE_PATH_KEY: &str = "profile_path";
 
 /// Shared app state. Wrap in `Arc` to share: `Arc::new(Core::open()?)`.
 /// Sub-plans add behaviour with `impl Core { .. }` in their own module.
@@ -33,18 +28,6 @@ impl Core {
         let graphs = Graphs::new(store.clone());
         Ok(Self { paths, store, secrets, graphs })
     }
-
-    /// The effective profile path: kv `profile_path`, else [`Paths::default_profile_path`].
-    pub fn profile_path(&self) -> PathBuf {
-        match self.store.kv_get(PROFILE_PATH_KEY) {
-            Ok(Some(p)) if !p.is_empty() => PathBuf::from(p),
-            _ => self.paths.default_profile_path(),
-        }
-    }
-
-    pub fn set_profile_path(&self, path: &Path) -> Result<()> {
-        self.store.kv_set(PROFILE_PATH_KEY, &path.to_string_lossy())
-    }
 }
 
 #[cfg(test)]
@@ -52,16 +35,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn open_creates_layout_and_profile_path_setting() {
+    fn open_creates_the_layout() {
         let dir = tempfile::tempdir().unwrap();
         let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
         assert!(core.paths.db.is_file());
         assert!(core.paths.applications_dir.is_dir());
         assert!(core.paths.sessions_dir.is_dir());
         assert!(core.paths.shots_dir.is_dir());
-
-        core.set_profile_path(Path::new("/x/profile.yaml")).unwrap();
-        assert_eq!(core.profile_path(), PathBuf::from("/x/profile.yaml"));
     }
 
     #[test]
