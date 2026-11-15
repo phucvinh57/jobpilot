@@ -12,9 +12,9 @@
 //!   locations, never the wished skills, domains or roles). Only ids, names and queries go into the
 //!   state, never a key.
 //! - The collectors run in parallel and each writes only its own part of the state: the lists
-//!   `items` and `outcomes` (append fields) and, for `feeds`, `challenge`. Item text goes to
-//!   `<data_dir>/trends/<hash of the URL>.txt` right away, so a checkpoint carries addresses, not
-//!   pages.
+//!   `items`, `outcomes` and `hn_settled` (append fields) and, for `feeds`, `challenge`. Item text
+//!   goes to `<data_dir>/trends/<hash of the URL>.txt` right away, so a checkpoint carries
+//!   addresses, not pages.
 //! - A slow or failing source never fails the run. Every source gets its own timeout and every
 //!   collector a total budget (`CollectLimits`); what runs out is left out of this run and shows up
 //!   as [`SourceStatus::TimedOut`] in `outcomes` (and in the source's `last_status`), so
@@ -24,7 +24,10 @@
 //!   names a route for this. The library joins only unconditional edges: a skipped branch that
 //!   never reaches the join would hold `store_items` back forever, so the check is the first thing
 //!   the node does instead of an edge in front of it.)
-//! - `store_items` deduplicates by URL into `trend_items`.
+//! - `store_items` deduplicates by URL into `trend_items`, then adds the Hacker News hiring
+//!   threads read in full (`hn_settled`) to kv [`HN_SETTLED_KEY`], which the next run's
+//!   `hackernews` node reads: those threads are not downloaded again. A run that fails or is
+//!   cancelled before `store_items` records none; a retry re-runs the failed step.
 //! - `wait_human` is the shared challenge interrupt (`graph::nodes::challenge`): a collector that
 //!   meets a login or bot wall sets `challenge`; the items of the other sources are stored first,
 //!   then the thread pauses until the user continues
@@ -67,6 +70,13 @@ use crate::engine::{Paths, Secrets, Store};
 pub const GRAPH: &str = "trends";
 /// Slack the library's per-node timeout gets on top of a collector's own budget.
 const NODE_MARGIN: Duration = Duration::from_secs(30);
+/// kv key of the Hacker News "Who is hiring" threads read in full, their postings stored: a JSON
+/// array of thread ids (strings), newest first. `hackernews::collect` does not download them again
+/// (except the newest thread); only `store_items` writes it.
+pub const HN_SETTLED_KEY: &str = "trends.hn_settled_threads";
+/// How many settled thread ids kv keeps (the newest): two years of monthly threads, more than any
+/// `hiring_threads` window.
+const HN_SETTLED_KEEP: usize = 24;
 
 /// The graph thread of a period.
 pub fn thread_id(period: &Period) -> String {
@@ -158,11 +168,24 @@ pub struct TrendRun {
     /// The digest (P13b): whether to build it, and what its nodes made.
     #[serde(default)]
     pub digest: DigestState,
+    /// Append list: Hacker News hiring threads (ids) read in full this run (`hackernews::Hn::settled`);
+    /// `store_items` records them in kv [`HN_SETTLED_KEY`] once their postings are stored.
+    #[serde(default)]
+    pub hn_settled: Vec<String>,
 }
 
 impl TrendRun {
     pub fn new(period: Period) -> Self {
-        Self { period, plan: Plan::default(), items: Vec::new(), outcomes: Vec::new(), stored: Stored::default(), challenge: None, digest: DigestState::default() }
+        Self {
+            period,
+            plan: Plan::default(),
+            items: Vec::new(),
+            outcomes: Vec::new(),
+            stored: Stored::default(),
+            challenge: None,
+            digest: DigestState::default(),
+            hn_settled: Vec::new(),
+        }
     }
 
     /// Outcomes of one adapter kind.
@@ -191,7 +214,7 @@ struct Env {
 
 impl Env {
     fn ctx(&self, known: &Arc<HashSet<String>>, period: Period) -> Ctx {
-        Ctx { http: self.http.clone(), config: self.config.clone(), known: known.clone(), period }
+        Ctx { http: self.http.clone(), config: self.config.clone(), known: known.clone(), period, settled_threads: Arc::default() }
     }
 }
 
@@ -208,7 +231,7 @@ pub fn graph(
     let profile = digest.profile.clone();
     let digest_env = Arc::new(DigestEnv { store: store.clone(), secrets: secrets.clone(), config: digest });
     let env = Arc::new(Env { store, secrets, paths, config: Arc::new(config), http, profile });
-    let mut graph = GraphDef::new(GRAPH).append("items").append("outcomes").node("plan", {
+    let mut graph = GraphDef::new(GRAPH).append("items").append("outcomes").append("hn_settled").node("plan", {
         let env = env.clone();
         move |s| plan(env.clone(), s)
     });
@@ -302,17 +325,51 @@ async fn group(env: Arc<Env>, mut s: TrendRun, group: SourceKind) -> Result<Tren
         // Deleted since the plan, or not of this group any more: nothing to do.
         let Some(source) = env.store.get_source(id)?.filter(|src| src.enabled) else { continue };
         let Some(kind) = SourceKind::parse(&source.kind) else { continue };
+        // Hacker News also names the hiring threads it read in full (set inside `work`).
+        let mut settled = Vec::new();
         let work = async {
             match kind {
-                SourceKind::HackerNews => hackernews::collect(&ctx).await,
+                SourceKind::HackerNews => {
+                    let ctx = Ctx { settled_threads: Arc::new(settled_threads(&env.store)), ..ctx.clone() };
+                    hackernews::collect(&ctx).await.map(|hn| {
+                        settled = hn.settled;
+                        hn.items
+                    })
+                }
                 SourceKind::Yc => yc::collect(&ctx).await,
                 SourceKind::Rss => rss::collect(&ctx, &source.url).await,
                 SourceKind::Page => page::collect(&ctx, &source.url).await,
             }
         };
-        attempt(&env, deadline, Some(&source), kind.as_str(), work).await.apply(&mut s);
+        let done = attempt(&env, deadline, Some(&source), kind.as_str(), work).await;
+        // Only when the postings are in `items`: not after a timeout or a failed write.
+        if done.outcome.status == SourceStatus::Ok {
+            s.hn_settled.extend(settled);
+        }
+        done.apply(&mut s);
     }
     Ok(s)
+}
+
+/// The settled hiring threads saved in kv [`HN_SETTLED_KEY`]. Unreadable or invalid: a warning,
+/// and none (every thread in the window is read).
+fn settled_threads(store: &Store) -> HashSet<String> {
+    load_settled(store).unwrap_or_else(|_| {
+        tracing::warn!("the settled hiring threads could not be read; every hiring thread is read");
+        HashSet::new()
+    })
+}
+
+/// [`settled_threads`], with a store error as an error; an invalid value is a warning and none.
+fn load_settled(store: &Store) -> Result<HashSet<String>> {
+    let Some(json) = store.kv_get(HN_SETTLED_KEY)? else { return Ok(HashSet::new()) };
+    match serde_json::from_str::<Vec<String>>(&json) {
+        Ok(ids) => Ok(ids.into_iter().collect()),
+        Err(_) => {
+            tracing::warn!("the saved settled hiring threads are not a list of ids and are ignored");
+            Ok(HashSet::new())
+        }
+    }
 }
 
 async fn report_search_node(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
@@ -512,5 +569,28 @@ async fn store_items(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
     }
     tracing::info!(period = %s.period.label(), new = stored.new, duplicates = stored.duplicates, "trend items stored");
     s.stored = stored;
+    // After every item: a thread is recorded only once its postings are stored. A failure costs a
+    // download next run, not the run.
+    if record_settled(&env.store, &s.hn_settled).is_err() {
+        tracing::warn!("could not record the hiring threads read in full; they are read again next run");
+    }
     Ok(s)
+}
+
+/// Merge `new` into kv [`HN_SETTLED_KEY`] and keep the [`HN_SETTLED_KEEP`] newest ids (numeric
+/// order; an id that is not a number is dropped). Writes nothing when nothing new settled.
+fn record_settled(store: &Store, new: &[String]) -> Result<()> {
+    let saved = load_settled(store)?;
+    let added = new.iter().filter(|id| !saved.contains(*id)).collect::<HashSet<_>>().len();
+    if added == 0 {
+        return Ok(());
+    }
+    let mut ids: Vec<u64> = saved.iter().chain(new).filter_map(|id| id.parse().ok()).collect();
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    ids.dedup();
+    ids.truncate(HN_SETTLED_KEEP);
+    let ids: Vec<String> = ids.iter().map(u64::to_string).collect();
+    store.kv_set(HN_SETTLED_KEY, &serde_json::to_string(&ids)?)?;
+    tracing::info!(added, kept = ids.len(), "hiring threads read in full recorded");
+    Ok(())
 }
