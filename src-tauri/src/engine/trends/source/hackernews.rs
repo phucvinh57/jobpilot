@@ -1,9 +1,12 @@
 //! Hacker News through the Algolia API: the front page, the period's most upvoted stories, and the
 //! newest "Ask HN: Who is hiring?" threads before the period's end (one item per posting; several
-//! monthly threads, so the digest's skill window is full from the first run).
+//! monthly threads, so the digest's skill window is full from the first run; an older thread read
+//! in full is not downloaded again until its comment count changes).
 //!
 //! A story's item is the story itself (its link, or the HN thread for text posts): the title and
 //! the numbers are the text; the linked article is not fetched.
+
+use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
@@ -48,9 +51,42 @@ struct Comment {
     created_at_i: Option<i64>,
 }
 
+/// What the source read.
+#[derive(Debug, Default)]
+pub struct Hn {
+    /// Stories and hiring postings, new ones only.
+    pub items: Vec<Item>,
+    /// Hiring threads this run read in full, newest first, as [`settled_key`]s: not the newest
+    /// selected thread, downloaded, and none of their new postings cut by `hiring_posts`. Once their
+    /// postings are stored, the collector saves them, and a later run passes them back to
+    /// [`collect`] so they are not downloaded again while their comment count stays the same.
+    pub settled: Vec<String>,
+}
+
+/// How a settled thread is remembered: its id and its comment count when it was read
+/// (`"903@412"`, the count the thread list gives, which also counts replies and deleted comments).
+/// People still post to a thread after the next month's opens; a new comment changes the count, so
+/// the thread is read again.
+pub fn settled_key(thread: &str, comments: u64) -> String {
+    format!("{thread}@{comments}")
+}
+
+/// The thread id of a [`settled_key`]; `None` for anything else.
+pub fn settled_thread(key: &str) -> Option<u64> {
+    let (thread, comments) = key.split_once('@')?;
+    comments.parse::<u64>().ok()?;
+    thread.parse().ok()
+}
+
+/// The settled key of a listed thread, `None` when the list gives no comment count (such a thread
+/// is never settled).
+fn key_of(thread: &Hit) -> Option<String> {
+    thread.num_comments.and_then(|n| u64::try_from(n).ok()).map(|n| settled_key(&thread.object_id, n))
+}
+
 /// Stories and hiring postings. A part that fails is left out; the adapter fails only when every
-/// part did.
-pub async fn collect(ctx: &Ctx) -> Result<Vec<Item>> {
+/// part did. `settled` holds the [`settled_key`]s of hiring threads an earlier run read in full.
+pub async fn collect(ctx: &Ctx, settled: &HashSet<String>) -> Result<Hn> {
     let started = std::time::Instant::now();
     let mut items = Vec::new();
     let mut failures = Vec::new();
@@ -61,18 +97,21 @@ pub async fn collect(ctx: &Ctx) -> Result<Vec<Item>> {
         }
     }
     let mut items = take_new(ctx, items, ctx.limits().max_items);
-    let hiring = hiring_posts(ctx, started).await;
-    match hiring {
-        Ok(found) => items.extend(found),
+    let mut now_settled = Vec::new();
+    match hiring_posts(ctx, settled, started).await {
+        Ok(found) => {
+            items.extend(found.items);
+            now_settled = found.settled;
+        }
         Err(e) => failures.push(e),
     }
     match failures.into_iter().next() {
         Some(first) if items.is_empty() => Err(first),
         Some(_) => {
             tracing::warn!(kept = items.len(), "a Hacker News request failed; the other parts are kept");
-            Ok(items)
+            Ok(Hn { items, settled: now_settled })
         }
-        None => Ok(items),
+        None => Ok(Hn { items, settled: now_settled }),
     }
 }
 
@@ -125,7 +164,12 @@ fn story_item(hit: Hit) -> Option<Item> {
 /// already stored are skipped (`take_new`), so a later run reads only what is new. At most
 /// `hiring_posts` new postings per thread. A thread that cannot be read is left out; this part
 /// fails only when every thread did.
-async fn hiring_posts(ctx: &Ctx, started: std::time::Instant) -> Result<Vec<Item>> {
+///
+/// An older thread whose [`settled_key`] is in `settled` (same id, same comment count) is not
+/// downloaded: it still takes its place in the window, its postings are already stored. The newest
+/// selected thread is always read, since it still gets new postings. [`Hn::settled`] lists the
+/// older threads read in full this run.
+async fn hiring_posts(ctx: &Ctx, settled: &HashSet<String>, started: std::time::Instant) -> Result<Hn> {
     let l = ctx.limits();
     // The whole source runs under `source_timeout`, and a timeout loses everything it read: stop
     // starting threads once two thirds of it are spent, and keep what is in hand.
@@ -143,17 +187,28 @@ async fn hiring_posts(ctx: &Ctx, started: std::time::Instant) -> Result<Vec<Item
     let threads: Search = ctx.http.get(&list, &[]).await?.json("Hacker News")?;
     let threads = hiring_threads(threads.hits, end, l.hiring_threads);
 
+    let is_settled = |t: &Hit| key_of(t).is_some_and(|k| settled.contains(&k));
     let mut items = Vec::new();
-    let (mut read, mut first_error) = (0usize, None);
+    let mut now_settled = Vec::new();
+    let (mut read, mut skipped, mut first_error) = (0usize, 0usize, None);
     for (n, thread) in threads.iter().enumerate() {
-        if n > 0 && started.elapsed() >= budget {
-            tracing::warn!(left = threads.len() - n, "time is running out: the older hiring threads are left for a later run");
+        let newest = n == 0;
+        if !newest && is_settled(thread) {
+            skipped += 1;
+            continue;
+        }
+        if !newest && started.elapsed() >= budget {
+            let left = threads[n..].iter().filter(|t| !is_settled(t)).count();
+            tracing::warn!(left, "time is running out: the older hiring threads are left for a later run");
             break;
         }
         match thread_posts(ctx, thread).await {
-            Ok(found) => {
+            Ok((found, complete)) => {
                 read += 1;
                 items.extend(found);
+                if !newest && complete {
+                    now_settled.extend(key_of(thread));
+                }
             }
             Err(e) => {
                 tracing::warn!(thread = %thread.object_id, "a hiring thread could not be read and is left out");
@@ -161,10 +216,10 @@ async fn hiring_posts(ctx: &Ctx, started: std::time::Instant) -> Result<Vec<Item
             }
         }
     }
-    tracing::info!(threads = threads.len(), read, postings = items.len(), "hiring threads read");
+    tracing::info!(threads = threads.len(), read, skipped, postings = items.len(), "hiring threads read");
     match first_error {
         Some(e) if read == 0 => Err(e),
-        _ => Ok(items),
+        _ => Ok(Hn { items, settled: now_settled }),
     }
 }
 
@@ -179,15 +234,16 @@ fn hiring_threads(hits: Vec<Hit>, end: i64, max: usize) -> Vec<Hit> {
         .filter(|h| h.created_at_i.is_some_and(|t| t < end))
         .collect();
     threads.sort_by_key(|h| std::cmp::Reverse(h.created_at_i));
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     threads.retain(|h| seen.insert(h.object_id.clone()));
     threads.truncate(max);
     threads
 }
 
-/// The new postings of one thread (at most `hiring_posts`). Each keeps the thread's title in its
-/// text header (`# Hacker News, <title>`): the digest recognises hiring postings by it.
-async fn thread_posts(ctx: &Ctx, thread: &Hit) -> Result<Vec<Item>> {
+/// The new postings of one thread (at most `hiring_posts`), and whether that is all of them (the
+/// cap cut none). Each keeps the thread's title in its text header (`# Hacker News, <title>`): the
+/// digest recognises hiring postings by it.
+async fn thread_posts(ctx: &Ctx, thread: &Hit) -> Result<(Vec<Item>, bool)> {
     let title = thread.title.clone().unwrap_or_default();
     let full: Thread = ctx
         .http
@@ -209,7 +265,12 @@ async fn thread_posts(ctx: &Ctx, thread: &Hit) -> Result<Vec<Item>> {
             text: format!("# Hacker News, {title}\n\n{text}"),
         })
     });
-    Ok(take_new(ctx, postings.collect(), ctx.limits().hiring_posts))
+    // One more than the cap: a thread with more new postings than that is not read in full.
+    let cap = ctx.limits().hiring_posts;
+    let mut new = take_new(ctx, postings.collect(), cap.saturating_add(1));
+    let complete = new.len() <= cap;
+    new.truncate(cap);
+    Ok((new, complete))
 }
 
 fn api_url(ctx: &Ctx, path: &str, query: &[(&str, &str)]) -> Result<String> {
@@ -246,10 +307,10 @@ mod tests {
     const THREADS: &str = r#"{"hits": [
         {"objectID": "900", "title": "Ask HN: Who wants to be hired? (November 2026)", "created_at_i": 1793635297},
         {"objectID": "901", "title": "Ask HN: Who is hiring? (December 2026)", "created_at_i": 1796300000},
-        {"objectID": "904", "title": "Ask HN: Who is hiring? (September 2026)", "created_at_i": 1788274800},
-        {"objectID": "902", "title": "Ask HN: Who is hiring? (November 2026)", "created_at_i": 1793635297},
-        {"objectID": "903", "title": "Ask HN: Who is hiring? (October 2026)", "created_at_i": 1790866927},
-        {"objectID": "902", "title": "Ask HN: Who is hiring? (November 2026)", "created_at_i": 1793635297}
+        {"objectID": "904", "title": "Ask HN: Who is hiring? (September 2026)", "created_at_i": 1788274800, "num_comments": 1},
+        {"objectID": "902", "title": "Ask HN: Who is hiring? (November 2026)", "created_at_i": 1793635297, "num_comments": 3},
+        {"objectID": "903", "title": "Ask HN: Who is hiring? (October 2026)", "created_at_i": 1790866927, "num_comments": 2},
+        {"objectID": "902", "title": "Ask HN: Who is hiring? (November 2026)", "created_at_i": 1793635297, "num_comments": 3}
     ]}"#;
 
     const THREAD: &str = r#"{"id": 902, "title": "Ask HN: Who is hiring? (November 2026)", "children": [
@@ -328,7 +389,7 @@ mod tests {
         hiring_fixtures(&fx);
         let ctx = ctx(&fx, &[]);
 
-        let posts = hiring_posts(&ctx, Instant::now()).await.unwrap();
+        let posts = hiring_posts(&ctx, &HashSet::new(), Instant::now()).await.unwrap().items;
         // Newest thread first; December's thread starts after 2026-W46, "Who wants to be hired" is
         // another thread, and a thread listed twice is read once.
         assert_eq!(
@@ -365,13 +426,13 @@ mod tests {
         hiring_fixtures(&fx);
 
         let two = ctx_with(&fx, &[], |l| l.hiring_threads = 2);
-        let posts = hiring_posts(&two, Instant::now()).await.unwrap();
+        let posts = hiring_posts(&two, &HashSet::new(), Instant::now()).await.unwrap().items;
         assert_eq!(posts.len(), 4);
         assert!(fx.hits_on("/hn/items/904").is_empty(), "the third newest thread is not read");
 
         // The cap is per thread, and it counts only new postings.
         let one = ctx_with(&fx, &["https://news.ycombinator.com/item?id=7001"], |l| l.hiring_posts = 1);
-        let posts = hiring_posts(&one, Instant::now()).await.unwrap();
+        let posts = hiring_posts(&one, &HashSet::new(), Instant::now()).await.unwrap().items;
         assert_eq!(
             urls(&posts),
             ["https://news.ycombinator.com/item?id=7005", "https://news.ycombinator.com/item?id=8001", "https://news.ycombinator.com/item?id=9001"]
@@ -383,20 +444,99 @@ mod tests {
         let fx = Fixtures::start().await;
         hiring_fixtures(&fx);
         let spent = ctx_with(&fx, &[], |l| l.source_timeout = Duration::ZERO);
-        let posts = hiring_posts(&spent, Instant::now()).await.unwrap();
-        assert!(!posts.is_empty(), "the newest thread is always read");
+        let posts = hiring_posts(&spent, &HashSet::new(), Instant::now()).await.unwrap();
+        assert!(!posts.items.is_empty(), "the newest thread is always read");
         assert!(fx.hits_on("/hn/items/903").is_empty(), "the older threads are left for a later run");
+        assert!(posts.settled.is_empty(), "a thread not read is not settled: {:?}", posts.settled);
+    }
+
+    /// Settled keys, as an earlier run saved them.
+    fn keys(keys: &[&str]) -> HashSet<String> {
+        keys.iter().map(|k| k.to_string()).collect()
+    }
+
+    #[test]
+    fn a_settled_key_names_the_thread_and_its_comment_count() {
+        assert_eq!(settled_key("903", 412), "903@412");
+        assert_eq!(settled_thread("903@412"), Some(903));
+        for bad in ["903", "903@", "@412", "abc@1", "903@x", ""] {
+            assert_eq!(settled_thread(bad), None, "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn settled_older_threads_are_not_downloaded_again_and_the_newest_always_is() {
+        let fx = Fixtures::start().await;
+        hiring_fixtures(&fx);
+        // October is settled; November is listed too, but it is the newest thread.
+        let ctx = ctx(&fx, &[]);
+
+        let posts = hiring_posts(&ctx, &keys(&["902@3", "903@2"]), Instant::now()).await.unwrap();
+        assert!(fx.hits_on("/hn/items/903").is_empty(), "a settled older thread is not requested");
+        assert_eq!(fx.hits_on("/hn/items/902").len(), 1, "the newest thread is read even when listed as settled");
+        assert_eq!(fx.hits_on("/hn/items/904").len(), 1, "September is still in the window and not settled yet");
+        assert_eq!(
+            urls(&posts.items),
+            ["https://news.ycombinator.com/item?id=7001", "https://news.ycombinator.com/item?id=7005", "https://news.ycombinator.com/item?id=9001"]
+        );
+        assert_eq!(posts.settled, ["904@1"], "September is now read in full; the newest never is");
+
+        // A settled thread keeps its place in the window: two threads are November and October,
+        // and September stays out.
+        let two = ctx_with(&fx, &[], |l| l.hiring_threads = 2);
+        let posts = hiring_posts(&two, &keys(&["903@2"]), Instant::now()).await.unwrap();
+        assert_eq!(fx.hits_on("/hn/items/904").len(), 1, "September is not read");
+        assert_eq!(posts.items.len(), 2);
+        assert!(posts.settled.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_settled_thread_with_new_comments_is_read_again() {
+        let fx = Fixtures::start().await;
+        hiring_fixtures(&fx);
+        // October was settled with one comment; it has two now (a late posting).
+        let posts = hiring_posts(&ctx(&fx, &[]), &keys(&["903@1", "904@1"]), Instant::now()).await.unwrap();
+        assert_eq!(fx.hits_on("/hn/items/903").len(), 1, "October changed: read again");
+        assert!(fx.hits_on("/hn/items/904").is_empty(), "September did not");
+        assert_eq!(posts.settled, ["903@2"], "settled again with its new count");
+    }
+
+    #[tokio::test]
+    async fn only_older_threads_read_in_full_are_settled() {
+        let fx = Fixtures::start().await;
+        hiring_fixtures(&fx);
+        let all = hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap();
+        assert_eq!(all.settled, ["903@2", "904@1"], "every older thread, newest first; not the newest");
+
+        // October has two new postings and the cap is one: cut, so not settled. September has one.
+        let capped = hiring_posts(&ctx_with(&fx, &[], |l| l.hiring_posts = 1), &HashSet::new(), Instant::now()).await.unwrap();
+        assert_eq!(capped.settled, ["904@1"]);
+        // The cap counts only new postings: with one of October's stored, the other fits.
+        let known = ctx_with(&fx, &["https://news.ycombinator.com/item?id=8001"], |l| l.hiring_posts = 1);
+        assert_eq!(hiring_posts(&known, &HashSet::new(), Instant::now()).await.unwrap().settled, ["903@2", "904@1"]);
+
+        // A thread that fails to load is not settled.
+        fx.route("/hn/items/903", 500, "text/plain", "boom");
+        let failed = hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap();
+        assert_eq!(failed.settled, ["904@1"]);
+        // A thread listed without a comment count is never settled.
+        fx.route("/hn/items/903", 200, "application/json", r#"{"id": 903, "children": []}"#);
+        let list = r#"{"hits": [
+            {"objectID": "902", "title": "Ask HN: Who is hiring? (November 2026)", "created_at_i": 1793635297, "num_comments": 3},
+            {"objectID": "903", "title": "Ask HN: Who is hiring? (October 2026)", "created_at_i": 1790866927}]}"#;
+        fx.route("/hn/search_by_date", 200, "application/json", list);
+        assert!(hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap().settled.is_empty());
     }
 
     #[tokio::test]
     async fn a_second_run_reads_nothing_new() {
         let fx = Fixtures::start().await;
         hiring_fixtures(&fx);
-        let first = hiring_posts(&ctx(&fx, &[]), Instant::now()).await.unwrap();
+        let first = hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap().items;
         assert_eq!(first.len(), 5);
 
         let known: Vec<&str> = urls(&first);
-        let again = hiring_posts(&ctx(&fx, &known), Instant::now()).await.unwrap();
+        let again = hiring_posts(&ctx(&fx, &known), &HashSet::new(), Instant::now()).await.unwrap().items;
         assert!(again.is_empty(), "every posting is already stored: {:?}", urls(&again));
 
         // A new posting in the newest thread is all a later run adds.
@@ -404,7 +544,7 @@ mod tests {
             r#"{"id": 7003, "created_at_i": 1793635400, "text": "short reply""#,
             r#"{"id": 7006, "created_at_i": 1793700000, "text": "Vandelay | Rust Engineer | Singapore | Rust, Tokio, Postgres""#,
         ));
-        let later = hiring_posts(&ctx(&fx, &known), Instant::now()).await.unwrap();
+        let later = hiring_posts(&ctx(&fx, &known), &HashSet::new(), Instant::now()).await.unwrap().items;
         assert_eq!(urls(&later), ["https://news.ycombinator.com/item?id=7006"]);
     }
 
@@ -413,17 +553,17 @@ mod tests {
         let fx = Fixtures::start().await;
         hiring_fixtures(&fx);
         fx.route("/hn/items/903", 500, "text/plain", "boom");
-        let posts = hiring_posts(&ctx(&fx, &[]), Instant::now()).await.unwrap();
+        let posts = hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap().items;
         assert_eq!(posts.len(), 3, "November and September are kept: {:?}", urls(&posts));
 
         fx.route("/hn/items/902", 500, "text/plain", "boom");
         fx.route("/hn/items/904", 503, "text/plain", "down");
-        let err = hiring_posts(&ctx(&fx, &[]), Instant::now()).await.unwrap_err().to_string();
+        let err = hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap_err().to_string();
         assert!(err.contains("HTTP 500") || err.contains("HTTP 503"), "{err}");
 
         // No hiring thread before the end: nothing, not an error.
         fx.route("/hn/search_by_date", 200, "application/json", r#"{"hits": []}"#);
-        assert!(hiring_posts(&ctx(&fx, &[]), Instant::now()).await.unwrap().is_empty());
+        assert!(hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap().items.is_empty());
     }
 
     #[tokio::test]
@@ -433,7 +573,7 @@ mod tests {
         // `search_by_date` serves both the period's stories and the thread list: give it a body that
         // is valid for both shapes (hits with a title and no hiring thread).
         let ctx = ctx(&fx, &["https://pg.example.org/19"]);
-        let items = collect(&ctx).await.unwrap();
+        let items = collect(&ctx, &HashSet::new()).await.unwrap().items;
         let urls: Vec<_> = items.iter().map(|i| i.url.as_str()).collect();
         assert_eq!(
             urls,
@@ -443,13 +583,13 @@ mod tests {
 
         // The front page fails, the rest is kept.
         fx.route("/hn/search", 500, "text/plain", "boom");
-        let items = collect(&ctx).await.unwrap();
+        let items = collect(&ctx, &HashSet::new()).await.unwrap().items;
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].url, "https://blog.example.com/rust-2");
 
         // Everything fails: an error, not an empty success.
         fx.route("/hn/search_by_date", 503, "text/plain", "down");
-        let err = collect(&ctx).await.unwrap_err().to_string();
+        let err = collect(&ctx, &HashSet::new()).await.unwrap_err().to_string();
         assert!(err.contains("HTTP 500") || err.contains("HTTP 503"), "{err}");
     }
 }

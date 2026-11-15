@@ -7,19 +7,18 @@
 # A change to the web app alone never builds Rust, and a Rust change never needs bun: the desktop
 # crate embeds `dist/` at compile time, so a placeholder is written when there is no web build.
 #
-# Usage: check.sh [--all] [--only <group>]... [--plan] [base-ref]
+# There is no CI: this script, run by the pre-push hook and `/pre-pr`, is the gate before a merge.
+#
+# Usage: check.sh [--all] [--only <group>]... [base-ref]   (base-ref defaults to origin/main, else main)
 #   --all     every group, whatever changed
 #   --only    run only these groups (still filtered by the changed paths unless --all)
-#   --plan    print `<group>=true|false` for each group (for CI's GITHUB_OUTPUT) and exit
 set -uo pipefail
 
 all=false
-plan=false
 only=()
 while (($#)); do
   case "$1" in
     --all) all=true ;;
-    --plan) plan=true ;;
     --only)
       [[ "${2:-}" =~ ^(web|rust|render)$ ]] || {
         echo "--only takes web, rust or render"
@@ -36,10 +35,17 @@ while (($#)); do
   esac
   shift
 done
-base="${1:-main}"
-
 root=$(git rev-parse --show-toplevel)
 cd "$root"
+
+# origin/main first: a local `main` is often stale and would count other merged work.
+if [[ -n ${1:-} ]]; then
+  base="$1"
+elif git rev-parse -q --verify origin/main >/dev/null; then
+  base=origin/main
+else
+  base=main
+fi
 
 changed=""
 if ! $all; then
@@ -54,8 +60,8 @@ if ! $all; then
   } | sort -u)
 fi
 
-# What each group covers. A change to this script or to the CI workflow runs everything.
-self='scripts/check\.sh$|\.github/workflows/ci\.yml$'
+# What each group covers. A change to this script runs everything.
+self='scripts/check\.sh$'
 declare -A paths=(
   [web]="^(src/|assets/fonts/|(package|tsconfig)\.json$|bun\.lock$|index\.html$|vite\.config\.ts$|biome\.jsonc?$|$self)"
   [rust]="^(Cargo\.(toml|lock)$|src-tauri/|assets/|$self)"
@@ -71,13 +77,6 @@ wanted() {
   $all || grep -qE "${paths[$group]}" <<<"$changed"
 }
 
-if $plan; then
-  for group in "${groups[@]}"; do
-    if wanted "$group"; then echo "$group=true"; else echo "$group=false"; fi
-  done
-  exit 0
-fi
-
 failed=()
 ran=()
 run() {
@@ -91,13 +90,8 @@ run() {
   fi
 }
 
-# GitHub Actions: `biome ci` annotates the diff; locally `biome check` reads the same config.
 biome_check() {
-  if [[ -n ${GITHUB_ACTIONS:-} ]]; then
-    bun x biome ci --error-on-warnings
-  else
-    bun x biome check --error-on-warnings
-  fi
+  bun x biome check --error-on-warnings
 }
 
 # The desktop crate embeds `dist/` (tauri.conf.json `frontendDist`) and does not compile without

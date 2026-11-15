@@ -28,7 +28,8 @@ pub fn typst_pdf(markup: &str) -> Vec<u8> {
 }
 
 /// An adapter context for the period 2026-W46 whose endpoints are all on `fx` (`/hn`, `/yc`, and
-/// the search APIs at the root), with no delay between requests and `known` already collected.
+/// the search APIs at the root), with no delay between requests, `known` already collected and no
+/// settled hiring thread.
 pub fn ctx(fx: &Fixtures, known: &[&str]) -> Ctx {
     let limits = CollectLimits { host_delay: Duration::ZERO, allow_private_hosts: true, ..CollectLimits::default() };
     let config = TrendConfig {

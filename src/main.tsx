@@ -3,8 +3,8 @@ import "./styles.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { App } from "./app/App";
-import { applyTheme, cachedAppearance } from "./shared/theme/theme";
+import { App } from "./App";
+import { applyTheme, cachedAppearance } from "@/lib/theme";
 
 // Colours before the first frame (the shell's saved choice replaces the cached one once it answers).
 applyTheme(cachedAppearance());

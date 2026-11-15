@@ -3,7 +3,7 @@
 //! Settings > About you shows about the user's documents and the profile read from them.
 //!
 //! The rules that only the screen needs (whether Save is on, when a "Saved" label shows and how it
-//! fades) live in the web app's `contexts/profile/domain`.
+//! fades) live in the web app's `src/lib/profile.ts`.
 
 use std::collections::HashSet;
 
