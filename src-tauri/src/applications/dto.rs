@@ -10,14 +10,14 @@ use crate::engine::apply::{self, FieldKind, Handoff, Review, UrlSource};
 use chrono::Local;
 use crate::engine::health;
 use crate::engine::pipeline::{read_jd_text, Analysis, Insight};
-use crate::engine::store::{Application, Event};
+use crate::engine::store::{Application, Event, Status};
 use crate::engine::Core;
 use serde::Serialize;
 
 use super::files::CvFiles;
 use super::rules::{
     activity_text, activity_tone, activity_when, age_label, board, card_title, current_value,
-    field_input, file_name, host, is_sent, marks_for, newest_first, next_action, next_job_offered,
+    dismissible, field_input, file_name, host, is_sent, marks_for, newest_first, next_action, next_job_offered,
     outcome_for, parse_gaps, placeholder, primary_for, requirements, review_body, review_notice,
     review_title, round_options, row_text, session_line, short_urls, source_tag, stage_for,
     status_tone, step_index, subtitle, ApplyUi, Blocker, EventStyle, Mark, Outcome, Primary, Tone,
@@ -164,7 +164,7 @@ pub fn board_dto(
         })
         .collect();
     BoardDto {
-        count: apps.len(),
+        count: apps.iter().filter(|a| a.status != Status::Dismissed).count(),
         stages,
         activity,
     }
@@ -241,6 +241,35 @@ pub struct ApplicationDto {
     pub stage: &'static str,
     /// `success` (offer) / `failed` (rejected); `None` while open.
     pub outcome: Option<&'static str>,
+    /// A plain "Dismiss" is offered: the job is in CVs and nothing runs for it.
+    pub dismissible: bool,
+    /// The job was dismissed (a plain "Restore" brings it back); `None` otherwise.
+    pub dismissed: Option<DismissalDto>,
+}
+
+/// Why and when a job was dismissed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DismissalDto {
+    /// What the user typed; `None` when they gave no reason.
+    pub reason: Option<String>,
+    /// RFC 3339; `None` when unknown.
+    pub at: Option<String>,
+}
+
+impl DismissalDto {
+    /// The dismissal of `app`, if it is dismissed.
+    pub fn of(app: &Application) -> Option<Self> {
+        (app.status == Status::Dismissed).then(|| Self {
+            reason: app
+                .dismiss_reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(str::to_string),
+            at: app.dismissed_at.map(|at| at.to_rfc3339()),
+        })
+    }
 }
 
 /// A manual marker: `interview` ("Got an interview") / `offer` / `rejected`.
@@ -307,6 +336,7 @@ pub fn application_dto(
         .as_deref()
         .and_then(|j| serde_json::from_str::<Analysis>(j).ok());
     let primary = primary_of(core, app, &job, &apply_ui);
+    let can_dismiss = dismissible(app.status, job.label.is_some(), &apply_ui);
     let show_next_job = primary.is_none() && next_job_offered(app.status, &apply_ui);
     ApplicationDto {
         id: app.id,
@@ -331,6 +361,8 @@ pub fn application_dto(
         marks: marks_for(app.status).into_iter().map(MarkDto::from).collect(),
         stage: stage_for(app.status).key(),
         outcome: outcome_for(app.status).map(Outcome::key),
+        dismissible: can_dismiss,
+        dismissed: DismissalDto::of(app),
     }
 }
 
@@ -395,7 +427,7 @@ pub struct CvDto {
     pub guard_clean: bool,
     /// What the posting asks for, checked against the profile; empty when the CV has no gap list yet.
     pub requirements: Vec<RequirementDto>,
-    /// The tailoring step reported gaps: offer to add to the profile (Settings > About you).
+    /// The tailoring step reported gaps: offer to add to the profile (Profile > About you).
     pub has_gaps: bool,
 }
 
@@ -859,6 +891,9 @@ mod tests {
             updated_at: moment,
             insight_json: None,
             interview_round: None,
+            dismissed_from: None,
+            dismiss_reason: None,
+            dismissed_at: None,
         }
     }
 
@@ -1218,5 +1253,28 @@ mod tests {
         let draft = application_dto(&core, &app(4, Status::Draft), none(), ApplyUi::Idle);
         assert!(draft.marks.is_empty());
         assert_eq!((draft.stage, draft.outcome), ("cv", None));
+        assert!(draft.dismissible && draft.dismissed.is_none());
+        assert!(!applied.dismissible, "a sent application cannot be dismissed");
+        let running = JobView { label: Some("Writing".into()), ..none() };
+        assert!(!application_dto(&core, &app(4, Status::Draft), running, ApplyUi::Idle).dismissible);
+
+        let mut gone = app(5, Status::Dismissed);
+        gone.dismiss_reason = Some(" ".into());
+        gone.dismissed_at = Some(Utc.with_ymd_and_hms(2026, 11, 14, 9, 30, 0).unwrap());
+        let dto = application_dto(&core, &gone, none(), ApplyUi::Idle);
+        assert!(dto.primary.is_none() && !dto.dismissible && !dto.show_next_job);
+        assert_eq!(
+            dto.dismissed,
+            Some(DismissalDto { reason: None, at: Some("2026-11-14T09:30:00+00:00".into()) })
+        );
+        assert_eq!(dto.status.key, "dismissed");
+    }
+
+    #[test]
+    fn the_board_counts_no_dismissed_application() {
+        let apps = vec![app(1, Status::Draft), app(2, Status::Dismissed)];
+        let dto = board_dto(&apps, &[], &Default::default(), &|_| false);
+        assert_eq!(dto.count, 1);
+        assert!(dto.stages.iter().all(|s| s.cards.iter().all(|c| c.id != 2)));
     }
 }

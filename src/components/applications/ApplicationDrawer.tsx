@@ -1,6 +1,7 @@
 // The drawer of an application on the Jobs page: status and round, the ONE primary action (the same
-// as the full view's), the steps, the interview round and what the company answered, the timeline,
-// and the job description in a dialog. "Open full view" opens the Application screen.
+// as the full view's) with a plain "Dismiss" while the job is in CVs, the steps, the interview round
+// and what the company answered, the timeline, and the job description in a dialog. A dismissed job
+// shows why, with a plain "Restore", and no primary. "Open full view" opens the Application screen.
 
 import { FileText, Inbox, Maximize2, Settings } from "lucide-react";
 import { useState } from "react";
@@ -19,7 +20,7 @@ import {
 } from "@/components/ui/kit";
 import { LoadError } from "@/components/ProblemHelp";
 import { useErrorToast } from "@/hooks/useErrorToast";
-import { useNav, type SettingsSection } from "@/stores/nav";
+import { sectionPlace, useNav } from "@/stores/nav";
 import type { Action } from "@/hooks/useAsync";
 
 import type { ApplicationHeader, MarkKey } from "@/types/applications";
@@ -29,7 +30,9 @@ import {
   type ApplicationDrawerModel,
   type ApplicationMarks,
 } from "@/hooks/applications/useApplicationDrawer";
+import { useDismissJob } from "@/hooks/applications/useDismissJob";
 import { useJobFailureToast } from "@/hooks/applications/useFailureToast";
+import { DismissedNotice, DismissJobDialog } from "./DismissJob";
 import { JdTab } from "./JdTab";
 import { TimelineTab } from "./TimelineTab";
 
@@ -194,11 +197,14 @@ function JobDescription({ id }: { id: number }) {
 }
 
 function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel; header: ApplicationHeader }) {
-  const openSettings = useNav((s) => s.openSettings);
+  const openSection = useNav((s) => s.openSection);
   const marks = useApplicationMarks(id);
+  const dismissJob = useDismissJob(id);
+  const [dismissing, setDismissing] = useState(false);
   const { head } = model;
   const primary = head.primary;
   const showNextJob = header.showNextJob && primary === null;
+  const canDismiss = header.dismissible && header.dismissed === null;
   useJobFailureToast(id, head);
   return (
     <>
@@ -215,7 +221,8 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
           </span>
         )}
       </div>
-      {(primary !== null || showNextJob) && (
+      {header.dismissed !== null && <DismissedNotice dismissal={header.dismissed} restore={dismissJob.restore} />}
+      {(primary !== null || showNextJob || canDismiss) && (
         <div className="flex flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
             {primary !== null && (
@@ -230,12 +237,8 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
               </Button>
             )}
             {primary?.settings != null && (
-              <Button
-                id="primary-settings"
-                icon={Settings}
-                onClick={() => openSettings(primary.settings as SettingsSection)}
-              >
-                Open Settings &gt; {primary.settings}
+              <Button id="primary-settings" icon={Settings} onClick={() => openSection(primary.settings ?? "")}>
+                Open {sectionPlace(primary.settings)} &gt; {primary.settings}
               </Button>
             )}
             {showNextJob && (
@@ -243,9 +246,27 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
                 Next job
               </Button>
             )}
+            {canDismiss && (
+              <Button id="app-dismiss-open" disabled={dismissing} onClick={() => setDismissing(true)}>
+                Dismiss
+              </Button>
+            )}
           </div>
           {primary?.hint != null && <Caption>{primary.hint}</Caption>}
         </div>
+      )}
+      {canDismiss && (
+        <DismissJobDialog
+          header={header}
+          open={dismissing}
+          dismiss={dismissJob.dismiss}
+          onClose={() => setDismissing(false)}
+          onDone={() => {
+            // The job left CVs (a toast says so): the drawer closes.
+            setDismissing(false);
+            model.close();
+          }}
+        />
       )}
       <Stepper steps={header.steps} current={header.stepIndex} />
       {header.status.key === "interview" && <RoundPicker header={header} setRound={marks.setRound} />}

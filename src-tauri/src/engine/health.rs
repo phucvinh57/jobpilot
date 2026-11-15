@@ -58,7 +58,8 @@ pub enum Problem {
 }
 
 impl Problem {
-    /// The Settings section that fixes this problem, if there is one.
+    /// The section that fixes this problem, if there is one: a Settings section, or "About you"
+    /// (the web app shows that one on the Profile page).
     pub fn settings_section(self) -> Option<&'static str> {
         match self {
             Problem::NoProvider => Some("AI providers"),
@@ -72,7 +73,7 @@ impl Problem {
     pub fn advice(self) -> Option<String> {
         match self {
             Problem::NoProvider => Some("Add an AI provider in Settings > AI providers and make it the default.".into()),
-            Problem::NoProfile => Some("Add your CV or describe your work in Settings > About you.".into()),
+            Problem::NoProfile => Some("Add your CV or describe your work in Profile > About you.".into()),
             Problem::NoChrome => {
                 Some("Install Chrome or Chromium, or download a browser in Settings > Browser sessions.".into())
             }
@@ -199,6 +200,7 @@ mod tests {
             ("OpenAI: HTTP 503 Service Unavailable", Problem::Network),
             ("OpenAI: HTTP 401 Unauthorized: invalid api key", Problem::Other),
             ("typst failed:\nerror: unknown variable", Problem::Other),
+            (crate::engine::profile::NO_PROFILE, Problem::NoProfile),
         ];
         for (message, expected) in cases {
             assert_eq!(classify(message), expected, "{message}");
@@ -206,6 +208,10 @@ mod tests {
         assert!(Problem::Network.retryable() && !Problem::NoProvider.retryable());
         assert!(Problem::NoTypst.advice().unwrap().contains("cargo install --locked typst-cli"));
         assert_eq!(Problem::NoChrome.settings_section(), Some("Browser sessions"));
+        // The web app opens "About you" on the Profile page; the message and advice say so too.
+        assert_eq!(Problem::NoProfile.settings_section(), Some("About you"));
+        assert!(Problem::NoProfile.advice().unwrap().contains("Profile > About you"));
+        assert!(crate::engine::profile::NO_PROFILE.contains("Profile > About you"));
     }
 
     #[test]

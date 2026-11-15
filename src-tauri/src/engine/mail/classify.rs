@@ -352,6 +352,9 @@ mod tests {
             updated_at: Utc::now(),
             insight_json: None,
             interview_round: None,
+            dismissed_from: None,
+            dismiss_reason: None,
+            dismissed_at: None,
         }
     }
 

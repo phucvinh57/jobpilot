@@ -415,21 +415,32 @@ impl Core {
             bail!("this lead is already {}", lead.state.as_str());
         }
         let reason = reason.trim();
-        {
-            // Held while the lead is dismissed: a "Prepare CV" cannot slip in between the check
-            // and the change.
-            let busy = busy();
-            if busy.contains_key(&(self.paths.db.clone(), lead_id)) {
-                bail!("its CV is being prepared: wait for it to finish first");
-            }
-            self.store.dismiss_lead(lead_id, reason)?;
-        }
+        self.refuse_while_preparing(Some(lead_id), || self.store.dismiss_lead(lead_id, reason))?;
         let company = lead.company.trim();
         let exclusion = exclude_company && !company.is_empty();
         tracing::info!(lead = lead_id, exclusion, "lead dismissed");
         if !exclusion {
             return Ok(Dismissed::default());
         }
+        self.exclude_company_and_sweep(company).await
+    }
+
+    /// Run `change` unless "Prepare CV" is queued or running for `lead_id` (an error then), as
+    /// [`unless_preparing`](Self::unless_preparing) does; without a lead, just run it.
+    pub(super) fn refuse_while_preparing<T>(&self, lead_id: Option<i64>, change: impl FnOnce() -> Result<T>) -> Result<T> {
+        match lead_id {
+            Some(id) => self
+                .unless_preparing(id, change)
+                .unwrap_or_else(|| Err(anyhow!("its CV is being prepared: wait for it to finish first"))),
+            None => change(),
+        }
+    }
+
+    /// "Don't show this company again", after a dismiss: `company` is added to the preferences'
+    /// `exclude_companies` (later runs filter it out before any model call), and its other leads in
+    /// the queue are dismissed with it, except those whose CV is queued or being written
+    /// ([`Dismissed::kept`]). If the exclusion cannot be saved, [`Dismissed::not_excluded`] says why.
+    pub(super) async fn exclude_company_and_sweep(&self, company: &str) -> Result<Dismissed> {
         // Through the preferences edit lock ([`Core::edit_preferences`]): a chip click or a notes
         // read that is in the middle of its own read-change-write must not write the old list back
         // over the exclusion.
@@ -445,7 +456,7 @@ impl Core {
         let prefs = match saved {
             Ok(prefs) => prefs,
             Err(e) => {
-                tracing::warn!(lead = lead_id, "excluding a company failed: {e:#}");
+                tracing::warn!("excluding a company failed: {e:#}");
                 return Ok(Dismissed { not_excluded: Some(format!("{e:#}")), ..Dismissed::default() });
             }
         };
@@ -460,6 +471,7 @@ impl Core {
                 out.also += 1;
             }
         }
+        tracing::info!(also = out.also, kept = out.kept, "company excluded");
         Ok(out)
     }
 }

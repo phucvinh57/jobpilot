@@ -9,6 +9,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { Toaster } from "@/components/layout/Toaster";
 import { ApplicationPage } from "@/pages/ApplicationPage";
 import { JobsPage } from "@/pages/JobsPage";
+import { ProfilePage } from "@/pages/ProfilePage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { TrendsPage } from "@/pages/TrendsPage";
 import { useNav, type Screen } from "@/stores/nav";
@@ -22,6 +23,8 @@ function CurrentScreen({ screen }: { screen: Screen }) {
       return <ApplicationPage />;
     case "trends":
       return <TrendsPage />;
+    case "profile":
+      return <ProfilePage />;
     case "settings":
       return <SettingsPage />;
   }

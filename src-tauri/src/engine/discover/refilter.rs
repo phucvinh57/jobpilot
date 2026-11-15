@@ -57,11 +57,7 @@ impl Core {
         let mut out = Refiltered::default();
         for lead in self.store.list_leads(LeadState::New)?.into_iter().filter(|l| l.source_id.is_some()) {
             checked += 1;
-            let jd = lead.jd_path.as_deref().map(posting_text).unwrap_or_default();
-            let reason = hard_filter(&prefs, &candidate_of(&lead), &jd).or_else(|| {
-                let scored: Scored = serde_json::from_str(lead.score_json.as_deref()?).ok()?;
-                ineligible_reason(&prefs, &scored)
-            });
+            let reason = filtered_reason(&prefs, &lead);
             if reason == lead.filtered_reason {
                 continue;
             }
@@ -90,6 +86,16 @@ impl Core {
             tracing::warn!("filtering the leads again after a preferences change failed: {e:#}");
         }
     }
+}
+
+/// Why the saved preferences hide `lead` from the queue, if they do: the hard filters on company,
+/// role, location and the saved posting text, then the stored score's eligibility answer.
+pub(super) fn filtered_reason(prefs: &Preferences, lead: &Lead) -> Option<String> {
+    let jd = lead.jd_path.as_deref().map(posting_text).unwrap_or_default();
+    hard_filter(prefs, &candidate_of(lead), &jd).or_else(|| {
+        let scored: Scored = serde_json::from_str(lead.score_json.as_deref()?).ok()?;
+        ineligible_reason(prefs, &scored)
+    })
 }
 
 fn candidate_of(lead: &Lead) -> Candidate {

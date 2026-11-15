@@ -48,6 +48,8 @@ export function header(over: Partial<ApplicationHeader> = {}): ApplicationHeader
     marks: [],
     stage: "cv",
     outcome: null,
+    dismissible: true,
+    dismissed: null,
     ...over,
   };
 }

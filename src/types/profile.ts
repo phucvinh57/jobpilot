@@ -1,4 +1,4 @@
-// What the "Profile & preferences" card shows (the shell's `ProfileDto`).
+// What Profile > Preferences shows (the shell's `ProfileDto`).
 
 export type FieldKey = "work_from" | "locations" | "domains" | "skills";
 
@@ -45,7 +45,7 @@ export interface NotesReadResult {
   line: string | null;
 }
 
-// What Settings > About you shows (the shell's `AboutDto`).
+// What Profile > About you shows (the shell's `AboutDto`).
 
 /** One document. Never its text. */
 export interface Source {

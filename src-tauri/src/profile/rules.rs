@@ -1,6 +1,6 @@
 //! Pure rules of this context, unit-tested here: when a topic may be added to a preference list
 //! (entry cleaning is in `shared::topics`), what the line under the notes says, and what
-//! Settings > About you shows about the user's documents and the profile read from them.
+//! Profile > About you shows about the user's documents and the profile read from them.
 //!
 //! The rules that only the screen needs (whether Save is on, when a "Saved" label shows and how it
 //! fades) live in the web app's `src/lib/profile.ts`.
@@ -279,7 +279,7 @@ pub fn notes_status(read: NotesRead) -> NotesStatus {
 
 // ------------------------------------------------------------------ About you
 
-/// What Settings > About you says about the documents and the profile read from them.
+/// What Profile > About you says about the documents and the profile read from them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AboutStatus {
     /// No documents.
@@ -393,7 +393,7 @@ pub fn about_summary(cv: &Cv) -> AboutSummaryDto {
     }
 }
 
-/// Settings > About you: the documents (never their text), where the reading stands, and what
+/// Profile > About you: the documents (never their text), where the reading stands, and what
 /// was understood.
 pub fn about(sources: &[ProfileSource], profile: Option<&Profile>) -> AboutDto {
     let status = AboutStatus::of(!sources.is_empty(), profile);

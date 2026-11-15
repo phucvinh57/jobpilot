@@ -105,6 +105,8 @@ export interface Queue {
   lastRun: RunSummary | null;
   /** A search is running right now (started here or by the daily timer). */
   searching: boolean;
+  /** How many jobs the "Dismissed" filter lists. */
+  dismissed: number;
 }
 
 export interface AddedLead {
@@ -113,13 +115,25 @@ export interface AddedLead {
   applicationId: number | null;
 }
 
-export interface Dismissed {
-  /** Other leads of the company dismissed with it. */
-  also: number;
-  /** Other leads of the company kept because their CV is queued or being written. */
-  kept: number;
-  /** "Never this company" was asked for but could not be saved (why). */
-  notExcluded: string | null;
+export type { Dismissed, Restored } from "./dismiss";
+
+/** What a dismissed job was: a lead in the queue, or a job in the CVs stage. */
+export type DismissedKind = "lead" | "application";
+
+/** One row of the "Dismissed" list: a lead the user dismissed or the preferences filtered out, or a
+ *  job dismissed from the CVs stage. */
+export interface DismissedJob {
+  kind: DismissedKind;
+  /** The lead's or the application's id, after `kind`. */
+  id: number;
+  company: string;
+  role: string;
+  /** The posting's address; not a web link for a job added from a file or pasted text. */
+  url: string | null;
+  /** Why, as the user typed it or the filter said; `null` without a reason. */
+  reason: string | null;
+  /** RFC 3339. */
+  dismissedAt: string;
 }
 
 /** How one lead's "Prepare CV" ended. */

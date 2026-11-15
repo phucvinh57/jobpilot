@@ -21,10 +21,10 @@ cargo run -p jobpilot --release
 
 Throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory cargo run -p jobpilot`. Sample data: `JOBPILOT_DEMO=1`.
 
-## Setup (Settings)
+## Setup (Settings and Profile)
 
 1. **AI providers**: add a provider (OpenAI-compatible or Anthropic) with base URL, model and API key, then press Test.
-2. **About you**: add your CV (.pdf, .md or .txt), a LinkedIn export, or notes. JobPilot reads them into your profile and shows what it understood and what it left out because no document states it. To fix something, change a document and press Re-read.
+2. **About you** (Profile > About you): add your CV (.pdf, .md or .txt), a LinkedIn export, or notes. JobPilot reads them into your profile and shows what it understood and what it left out because no document states it. To fix something, change a document and press Re-read.
 3. **Browser sessions**: New session, give a name and login URL, Open browser, sign in by hand, Done. JobPilot reuses that browser profile for the site.
 4. **Gmail** (optional): create a Desktop OAuth client in Google Cloud Console with the Gmail API enabled (read-only scope), paste the client ID (and secret), then Connect Gmail. The refresh token goes to the keyring.
 
@@ -34,7 +34,7 @@ Throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory cargo run -p
 - **Leads** (Jobs > Leads): **Search now** runs every enabled source. Known postings and those failing your hard filters are dropped; the rest are scored against your profile and preferences, best match first. A lead shows its score breakdown and a **job insight** (domain, company facts, skills, interview process), each only when a page states it.
 - **Prepare CV** turns a lead into an application with a CV for that posting. Nothing is written automatically. **Dismiss** removes a lead (optionally the whole company).
 - **When a site stops the search** (login, captcha, block page), JobPilot never tries to get past it: the source pauses, you get a notification, **Open browser** shows the page so you can deal with it, then **Continue** or **Skip**. Other sources keep going.
-- **Preferences** (Settings > Profile & preferences): a chat that asks what you want and saves it; every field can also be edited directly.
+- **Preferences** (Profile > Preferences): a chat that asks what you want and saves it; every field can also be edited directly.
 - **Trends**: a digest of market signals from sources you add, every statement linked to its source.
 
 ## Package

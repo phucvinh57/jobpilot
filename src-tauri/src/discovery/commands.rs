@@ -8,16 +8,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::engine::discover::DismissedKind;
 use crate::engine::Core;
 use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
 
 use super::dto::{
-    AddedLeadDto, BoardHintDto, DismissedDto, JobSourcesDto, LeadInput, PrepareOutcomeDto, QueueDto,
+    AddedLeadDto, BoardHintDto, DismissedJobDto, JobSourcesDto, LeadInput, PrepareOutcomeDto, QueueDto,
     RunSummaryDto, SessionOptionDto, SourceDto, SourceKindDto,
 };
 use super::rules;
-use crate::shared::{events, run, run_sync, CommandResult};
+use crate::shared::events::Scope;
+use crate::shared::{events, run, run_sync, CommandError, CommandResult, DismissedDto, RestoredDto};
 
 /// One lead's "Prepare CV" ended: payload `PrepareOutcomeDto`.
 pub const PREPARED: &str = "discovery:prepared";
@@ -132,6 +134,36 @@ pub async fn discovery_dismiss_lead(
         ))
     })
     .await
+}
+
+/// The "Dismissed" list: every dismissed job (leads the user dismissed, postings the preferences
+/// filtered out, jobs dismissed from the CVs stage), most recently dismissed first.
+#[tauri::command]
+pub async fn discovery_dismissed(core: State<'_, Arc<Core>>) -> CommandResult<Vec<DismissedJobDto>> {
+    let core = core.inner().clone();
+    run_sync(move || Ok(core.dismissed_jobs()?.iter().map(DismissedJobDto::from).collect())).await
+}
+
+/// "Restore" a dismissed job: a lead (`kind` `lead`) goes back to the queue (hidden while the
+/// saved preferences filter it out: `hidden` says why), an application (`application`) back to the
+/// status it had. An excluded company stays excluded.
+#[tauri::command]
+pub async fn discovery_restore(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    kind: String,
+    id: i64,
+) -> CommandResult<RestoredDto> {
+    let Some(kind) = DismissedKind::parse(&kind) else {
+        return Err(CommandError::new(format!("unknown kind `{kind}`")));
+    };
+    let core = core.inner().clone();
+    let out = run_sync(move || core.restore_dismissed(kind, id)).await?;
+    events::data_changed(&app, Scope::Leads);
+    if kind == DismissedKind::Application {
+        events::data_changed(&app, Scope::Applications);
+    }
+    Ok(RestoredDto::from(out))
 }
 
 // ------------------------------------------------------------------ Leads: searching
@@ -289,6 +321,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         discovery_prepare_cvs,
         discovery_forget_failure,
         discovery_dismiss_lead,
+        discovery_dismissed,
+        discovery_restore,
         discovery_search_now,
         discovery_open_browser,
         discovery_resume,

@@ -8,6 +8,7 @@ import { useNav } from "@/stores/nav";
 import * as api from "@/api/discovery";
 import { FAILED, INSIGHT, lead, queue, SOURCE, WAITING } from "@/test/fixtures/discovery";
 import { renderWithToasts } from "@/test/render";
+import type { DismissedJob } from "@/types/discovery";
 import { resetToday } from "@/stores/today";
 import { LeadDrawer } from "./LeadDrawer";
 import { LeadsHeaderLine, SearchNowButton, SourcesLine } from "./JobsHeader";
@@ -51,6 +52,7 @@ beforeEach(() => {
   });
   mocked.readQueue.mockResolvedValue(queue());
   mocked.readProfileSkills.mockResolvedValue(["Rust", "Kubernetes (EKS)"]);
+  mocked.readDismissed.mockResolvedValue([]);
   mocked.onChanged.mockReturnValue(() => undefined);
   mocked.onProgress.mockReturnValue(() => undefined);
   mocked.onPrepared.mockReturnValue(() => undefined);
@@ -536,5 +538,111 @@ describe("several sources", () => {
     expect(screen.getByText("1 of 2 shown")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "All" }));
     expect(screen.getByText("2 of 2 shown")).toBeTruthy();
+  });
+});
+
+describe("dismissed jobs", () => {
+  const LEAD: DismissedJob = {
+    kind: "lead",
+    id: 9,
+    company: "Initech",
+    role: "Platform Engineer",
+    url: "https://initech.test/jobs/9",
+    reason: "excluded company: Initech",
+    dismissedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+  };
+  const CV: DismissedJob = {
+    kind: "application",
+    id: 31,
+    company: "Globex",
+    role: "SRE",
+    url: null,
+    reason: null,
+    dismissedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+  };
+
+  beforeEach(() => {
+    mocked.readQueue.mockResolvedValue(queue({ dismissed: 2 }));
+    mocked.readDismissed.mockResolvedValue([LEAD, CV]);
+  });
+
+  it("lists every dismissed job, newest first, without the lead filters", async () => {
+    const user = userEvent.setup();
+    await showList();
+    expect(screen.getByRole("button", { name: "Open" }).getAttribute("aria-pressed")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "Dismissed 2" }));
+    const table = await screen.findByRole("table", { name: "Dismissed jobs" });
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual([
+      "Initech: Platform Engineer, dismissed lead",
+      "Globex: SRE, dismissed CV",
+    ]);
+    expect(within(rows[0]!).getByText("Lead")).toBeTruthy();
+    expect(within(rows[0]!).getByText("excluded company: Initech")).toBeTruthy();
+    expect(within(rows[0]!).getByText("5 min ago")).toBeTruthy();
+    expect(within(rows[1]!).getByText("CV")).toBeTruthy();
+    expect(within(rows[1]!).getByText("No reason given")).toBeTruthy();
+    expect(within(rows[0]!).getByRole("button", { name: "Open posting: Initech: Platform Engineer" })).toBeTruthy();
+    expect(within(rows[1]!).queryByRole("button", { name: /Open posting/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "70+" })).toBeNull();
+    expect(screen.queryByRole("table", { name: "Leads" })).toBeNull();
+    expect(primaryButtons()).toHaveLength(0);
+  });
+
+  it("searches the dismissed jobs by company or role", async () => {
+    const user = userEvent.setup();
+    await showList();
+    await user.click(screen.getByRole("button", { name: "Dismissed 2" }));
+    await screen.findByRole("table", { name: "Dismissed jobs" });
+    const search = screen.getByRole("textbox", { name: "Company or role contains" });
+    await user.type(search, "sre");
+    expect(screen.getByText("1 of 2 shown")).toBeTruthy();
+    await user.clear(search);
+    await user.type(search, "nobody");
+    expect(screen.getByText("No dismissed job matches the search")).toBeTruthy();
+  });
+
+  it("restores a job and says where it went", async () => {
+    const user = userEvent.setup();
+    mocked.restore.mockResolvedValue({ hidden: null, excluded: true });
+    await showList();
+    await user.click(screen.getByRole("button", { name: "Dismissed 2" }));
+    await screen.findByRole("table", { name: "Dismissed jobs" });
+    await user.click(screen.getByRole("button", { name: "Restore Initech: Platform Engineer" }));
+    expect(mocked.restore).toHaveBeenCalledWith("lead", 9);
+    expect(await screen.findByText(/is back in Leads\. The company is still excluded/)).toBeTruthy();
+  });
+
+  it("drops the ticks when Dismissed is picked, and offers them again on Open", async () => {
+    const user = userEvent.setup();
+    await showList();
+    await user.click(screen.getByRole("checkbox", { name: "Select Acme: Backend Engineer 1" }));
+    expect(screen.getByRole("group", { name: "1 selected" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Dismissed 2" }));
+    await screen.findByRole("table", { name: "Dismissed jobs" });
+    expect(screen.queryByRole("group", { name: "1 selected" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    expect(screen.queryByRole("group", { name: "1 selected" })).toBeNull();
+    expect(
+      (screen.getByRole("checkbox", { name: "Select Acme: Backend Engineer 1" }) as HTMLInputElement).checked,
+    ).toBe(false);
+  });
+
+  it("opens a dismissed CV in the application drawer, on the Leads stage", async () => {
+    const user = userEvent.setup();
+    await showList();
+    await user.click(screen.getByRole("button", { name: "Dismissed 2" }));
+    const table = await screen.findByRole("table", { name: "Dismissed jobs" });
+    await user.click(within(table).getByRole("row", { name: "Globex: SRE, dismissed CV" }));
+    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 31 });
+    expect(useNav.getState().stage).toBe("leads");
+  });
+
+  it("offers the dismissed jobs when no lead is left", async () => {
+    const user = userEvent.setup();
+    mocked.readQueue.mockResolvedValue(queue({ items: [], dismissed: 2 }));
+    renderWithToasts(<JobsPage />);
+    await user.click(await screen.findByRole("button", { name: "Dismissed 2" }));
+    expect(await screen.findByRole("table", { name: "Dismissed jobs" })).toBeTruthy();
   });
 });

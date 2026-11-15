@@ -5,7 +5,7 @@ import { useNav } from "./nav";
 import { useToasts } from "./toast";
 
 import * as api from "@/api/discovery";
-import type { AddedLead, Lead, PrepareOutcome, Queue } from "@/types/discovery";
+import type { AddedLead, DismissedJob, Lead, PrepareOutcome, Queue, Restored } from "@/types/discovery";
 import {
   addDropped,
   addInput,
@@ -14,16 +14,20 @@ import {
   continueSource,
   enter,
   forgetFailure,
+  onChanged,
   onProgress,
   onSearchFinished,
   openBrowser,
   openedLeadId,
   prepare,
+  reload,
+  restoreJob,
   resetToday,
   searchNow,
   selectLead,
   setChecked,
   setFilter,
+  setShow,
   skipSource,
   submitLink,
   useTodayStore,
@@ -71,6 +75,7 @@ function queue(extra: Partial<Queue> = {}): Queue {
     waiting: [],
     lastRun: null,
     searching: false,
+    dismissed: 0,
     ...extra,
   };
 }
@@ -120,6 +125,7 @@ beforeEach(() => {
   });
   mocked.readQueue.mockResolvedValue(queue());
   mocked.readProfileSkills.mockResolvedValue(["Rust"]);
+  mocked.readDismissed.mockResolvedValue([]);
   mocked.onChanged.mockReturnValue(() => undefined);
   mocked.onProgress.mockReturnValue(() => undefined);
   mocked.onPrepared.mockReturnValue(() => undefined);
@@ -371,7 +377,7 @@ describe("the link box", () => {
   it("reads a posting and opens the new lead whatever the filters were", async () => {
     enter();
     await settle();
-    setFilter({ minScore: 99, location: "Mars" });
+    setFilter({ show: "dismissed", search: "x", minScore: 99, location: "Mars" });
     mocked.parseInput.mockResolvedValue(url);
     const read = deferred<AddedLead>();
     mocked.addLead.mockReturnValue(read.promise);
@@ -382,7 +388,7 @@ describe("the link box", () => {
     await settle();
     const s = useTodayStore.getState();
     expect(s.adding).toBeUndefined();
-    expect(s.filter).toEqual({ sourceId: null, minScore: null, location: "" });
+    expect(s.filter).toEqual({ show: "open", search: "", sourceId: null, minScore: null, location: "" });
     expect(useNav.getState().drawer).toEqual({ kind: "lead", id: 3 });
   });
 
@@ -467,7 +473,7 @@ describe("the link box", () => {
     addInput(url);
     await settle();
     expect(toasts()).toEqual([
-      { kind: "info", title: "Not added", body: "You dismissed this job before, so it is not in the list." },
+      { kind: "info", title: "Not added", body: "You dismissed this job before: find it under Show: Dismissed." },
     ]);
 
     mocked.addLead.mockResolvedValueOnce({ leadId: 9, state: "promoted", applicationId: 21 });
@@ -611,6 +617,94 @@ describe("Dismiss", () => {
     afterDismissed(1, { also: 0, kept: 0, notExcluded: "disk full" });
     expect(toasts()).toEqual([
       { kind: "error", title: "Lead dismissed, but the company could not be excluded", body: "disk full" },
+    ]);
+  });
+});
+
+describe("the dismissed jobs", () => {
+  const job: DismissedJob = {
+    kind: "application",
+    id: 31,
+    company: "Globex",
+    role: "SRE",
+    url: null,
+    reason: null,
+    dismissedAt: "2026-11-14T09:00:00+00:00",
+  };
+
+  it("are read when picked, and the open lead's drawer closes", async () => {
+    mocked.readDismissed.mockResolvedValue([job]);
+    enter();
+    await settle();
+    selectLead(1);
+    setShow("dismissed");
+    await settle();
+    expect(useTodayStore.getState().filter.show).toBe("dismissed");
+    expect(useTodayStore.getState().dismissed).toEqual([job]);
+    expect(useNav.getState().drawer).toBeUndefined();
+    // A read of the queue (each step of a search) leaves them alone; a change of leads or
+    // applications reads them again while they are shown.
+    reload();
+    await settle();
+    expect(mocked.readDismissed).toHaveBeenCalledTimes(1);
+    onChanged("sources");
+    await settle();
+    expect(mocked.readDismissed).toHaveBeenCalledTimes(1);
+    onChanged("applications");
+    await settle();
+    expect(mocked.readDismissed).toHaveBeenCalledTimes(2);
+    setShow("open");
+    onChanged("leads");
+    await settle();
+    expect(mocked.readDismissed).toHaveBeenCalledTimes(2);
+  });
+
+  it("drop the ticks, so the bulk bar never holds the primary there", () => {
+    setChecked(1, true);
+    setChecked(2, true);
+    setShow("dismissed");
+    expect(useTodayStore.getState().checked).toEqual([]);
+  });
+
+  it("keep why they could not be read", async () => {
+    mocked.readDismissed.mockRejectedValue(new CommandError("database is locked"));
+    setShow("dismissed");
+    await settle();
+    expect(useTodayStore.getState().dismissedError?.message).toBe("database is locked");
+  });
+
+  it("are restored one at a time, with a toast that says where the job went", async () => {
+    const restore = deferred<Restored>();
+    mocked.restore.mockReturnValue(restore.promise);
+    const first = restoreJob(job);
+    expect(useTodayStore.getState().restoring).toEqual(["application-31"]);
+    await restoreJob(job);
+    expect(mocked.restore).toHaveBeenCalledTimes(1);
+    restore.resolve({ hidden: null, excluded: false });
+    await first;
+    expect(useTodayStore.getState().restoring).toEqual([]);
+    expect(toasts()).toEqual([{ kind: "ok", title: "Job restored", body: "Globex — SRE is back in CVs." }]);
+    // The shell's data-changed reads the lists again, not the restore itself.
+    expect(mocked.readQueue).not.toHaveBeenCalled();
+  });
+
+  it("say when a restored lead stays hidden by the preferences", async () => {
+    mocked.restore.mockResolvedValue({ hidden: "location: hires in United States", excluded: false });
+    await restoreJob({ ...job, kind: "lead", id: 9 });
+    expect(toasts()).toEqual([
+      {
+        kind: "info",
+        title: "Restored, but hidden",
+        body: "Globex — SRE is restored, but your preferences hide it (location: hires in United States). It shows in Leads once they let it pass.",
+      },
+    ]);
+  });
+
+  it("say why a restore failed", async () => {
+    mocked.restore.mockRejectedValue(new CommandError("lead 9 not found or not dismissed"));
+    await restoreJob({ ...job, kind: "lead", id: 9 });
+    expect(toasts()).toEqual([
+      { kind: "error", title: "The job could not be restored", body: "lead 9 not found or not dismissed" },
     ]);
   });
 });

@@ -9,7 +9,7 @@
 //! A saved change may hide leads or show them again (a job that only hires outside "Can work from",
 //! an excluded company), so every command that edits the preferences tells the Leads list to re-read.
 //!
-//! Settings > About you (`profile_about`, `profile_add_*`, `profile_remove_source`, `profile_read`):
+//! Profile > About you (`profile_about`, `profile_add_*`, `profile_remove_source`, `profile_read`):
 //! the documents the profile is read from. Each answers with the whole section ([`AboutDto`]).
 
 use std::path::{Path, PathBuf};
@@ -269,7 +269,7 @@ pub async fn profile_undo(app: AppHandle, core: CoreState<'_>) -> CommandResult<
     leads_may_have_changed(&app, result)
 }
 
-/// Settings > About you: the documents, where the reading stands, what was understood.
+/// Profile > About you: the documents, where the reading stands, what was understood.
 #[tauri::command]
 pub async fn profile_about(core: CoreState<'_>) -> CommandResult<AboutDto> {
     let core = core.inner().clone();

@@ -1,4 +1,4 @@
-// The use-cases of the "Profile & preferences" card.
+// The use-cases of Profile > Preferences.
 //
 // Every change is saved at once through the shell (which edits the whole document under the
 // core's one lock), and the answer is the document as it is after that edit: that is what the card

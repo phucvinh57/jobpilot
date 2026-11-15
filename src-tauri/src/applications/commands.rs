@@ -24,10 +24,10 @@ use super::dto::{
     JdDto, PrimaryDto, ProgressDto, RenderedDto, TimelineDto, ACTIVITY_ROWS,
 };
 use super::files::{self, generate_plan, GeneratePlan};
-use super::rules::{marks_for, ApplyUi, Mark};
+use super::rules::{dismissible, marks_for, ApplyUi, Mark};
 use super::state::{Applications, Confirm, Job, Phase};
 use crate::shared::events::{data_changed, emit, Scope};
-use crate::shared::{run, run_sync, CommandError, CommandResult};
+use crate::shared::{run, run_sync, CommandError, CommandResult, DismissedDto, RestoredDto};
 
 /// `applications:progress`.
 pub const PROGRESS: &str = "applications:progress";
@@ -153,6 +153,59 @@ pub async fn applications_mark(
     })
     .await?;
     data_changed(&app, Scope::Applications);
+    Ok(dto)
+}
+
+/// "Dismiss" a job in the CVs stage, with an optional reason; `exclude_company` also keeps the company
+/// out of later searches (and dismisses its leads in the queue). Refused while a job runs for it or its
+/// form is being filled or reviewed (`rules::dismissible`). The application is kept as `Dismissed`:
+/// the Leads stage's "Dismissed" list shows it, and Restore brings it back.
+#[tauri::command]
+pub async fn applications_dismiss(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    state: State<'_, Applications>,
+    id: i64,
+    reason: String,
+    exclude_company: bool,
+) -> CommandResult<DismissedDto> {
+    let (core, state) = handles(&core, &state);
+    let out = run(async move {
+        // Held until the job is dismissed: no generate / revise starts in between. The engine holds
+        // the apply gate and the "Prepare CV" gate the same way while the status changes.
+        let Some(_slot) = state.hold_slot(id) else {
+            bail!("the CV is still being written: wait for it to finish");
+        };
+        let current = require_application(&core, id)?.status;
+        let apply_ui = state.with_apply(id, |v| v.ui(&|| live_ui(&core, id)));
+        if !dismissible(current, false, &apply_ui) {
+            if !current.can_advance_to(Status::Dismissed) {
+                bail!("an application in {} cannot be dismissed", current.label());
+            }
+            bail!("its application form is open: close it first");
+        }
+        Ok(DismissedDto::from(
+            core.dismiss_application(id, &reason, exclude_company).await?,
+        ))
+    })
+    .await?;
+    data_changed(&app, Scope::Applications);
+    data_changed(&app, Scope::Leads);
+    Ok(out)
+}
+
+/// "Restore" a dismissed job from its drawer: back at the status it had before (the header is read
+/// again on `shared:data-changed`). Says whether its company is still excluded.
+#[tauri::command]
+pub async fn applications_restore(
+    app: AppHandle,
+    core: State<'_, Arc<Core>>,
+    id: i64,
+) -> CommandResult<RestoredDto> {
+    let core = core.inner().clone();
+    let dto = run_sync(move || Ok(RestoredDto::from(core.restore_application(id)?))).await?;
+    data_changed(&app, Scope::Applications);
+    data_changed(&app, Scope::Leads);
     Ok(dto)
 }
 
@@ -322,7 +375,11 @@ async fn approve_cv(core: Arc<Core>, state: Applications, id: i64) -> CommandRes
         ));
     }
     let kept = state.clone();
-    let result = run_sync(move || core.store.set_status(id, Status::CvReady, "CV approved")).await;
+    let result = run_sync(move || {
+        pipeline::require_open(&core, id)?;
+        core.store.set_status(id, Status::CvReady, "CV approved")
+    })
+    .await;
     kept.approval_ended(id, result.as_ref().err().map(|e| e.message.clone()));
     result
 }
@@ -661,6 +718,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         applications_get,
         applications_set_round,
         applications_mark,
+        applications_dismiss,
+        applications_restore,
         applications_generate,
         applications_revise,
         applications_retry,

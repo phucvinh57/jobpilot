@@ -115,13 +115,13 @@ describe("the CV tab", () => {
     expect(screen.queryByRole("group", { name: "Every fact traced to your profile" })).toBeNull();
   });
 
-  it("sends the user to Settings > About you when the tailoring step reported gaps", async () => {
+  it("sends the user to Profile > About you when the tailoring step reported gaps", async () => {
     const user = userEvent.setup();
-    useNav.setState({ screen: "application", settingsFocus: undefined });
+    useNav.setState({ screen: "application", profileFocus: undefined });
     show();
     await user.click(await screen.findByRole("button", { name: "Add to your profile" }));
-    expect(useNav.getState().screen).toBe("settings");
-    expect(useNav.getState().settingsFocus).toBe("About you");
+    expect(useNav.getState().screen).toBe("profile");
+    expect(useNav.getState().profileFocus).toBe("About you");
   });
 
   it("renders a CV whose previews are missing or out of date, once", async () => {
@@ -130,6 +130,18 @@ describe("the CV tab", () => {
     await waitFor(() => expect(mocked.saveCv).toHaveBeenCalledWith(7, "name: Ada\nrole: Engineer\n"));
     expect(mocked.saveCv).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(mocked.readCvPage).toHaveBeenCalledWith(7, 0));
+  });
+
+  it("keeps the CV of a dismissed job as it is: no edit, no render, no Ask AI", async () => {
+    mocked.readCv.mockResolvedValue(cv({ stale: true }));
+    render(<CvTab id={7} cvEpoch={0} busy={false} readOnly revise={revise} />);
+    const box = (await screen.findByRole("textbox", { name: "cv.yaml" })) as HTMLTextAreaElement;
+    expect(box.readOnly).toBe(true);
+    expect(screen.getByText("Dismissed: restore the job to edit its CV.")).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "Ask AI" }) as HTMLInputElement).disabled).toBe(true);
+    await edit("a: 1\n");
+    expect(mocked.saveCv).not.toHaveBeenCalled();
+    expect(revise).not.toHaveBeenCalled();
   });
 });
 
@@ -205,6 +217,24 @@ describe("editing", () => {
     expect(document.getElementById("cv-yaml")?.contains(problem), "with the editor").toBe(true);
     expect(screen.queryByRole("group", { name: "The CV does not compile" }), "no banner").toBeNull();
     expect(screen.queryByRole("group", { name: "Every fact traced to your profile" })).toBeNull();
+  });
+
+  it("sends a missing profile to Profile > About you, not Settings", async () => {
+    const user = userEvent.setup();
+    mocked.saveCv.mockRejectedValue(
+      new CommandError("no profile yet: add your CV or describe your work in Profile > About you", {
+        kind: "noProfile",
+        challenge: null,
+        advice: "Add your CV or describe your work in Profile > About you.",
+        settingsSection: "About you",
+        retryable: false,
+      }),
+    );
+    useNav.setState({ screen: "application", profileFocus: undefined });
+    show();
+    await edit("a: 1\n");
+    await user.click(await screen.findByRole("button", { name: "Open Profile > About you" }));
+    expect(useNav.getState()).toMatchObject({ screen: "profile", profileFocus: "About you" });
   });
 
   it("reads the CV again when something rewrote it, and replaces the text", async () => {

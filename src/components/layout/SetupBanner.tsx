@@ -29,9 +29,9 @@ function Line({ id, title, children }: { id: string; title: string; children: Re
 export function SetupBanner() {
   const status = useShell((s) => s.status);
   const screen = useNav((s) => s.screen);
-  const openSettings = useNav((s) => s.openSettings);
-  // Settings is where the user fixes these; no need to nag there.
-  if (!status || screen === "settings") {
+  const openProfile = useNav((s) => s.openProfile);
+  // Settings and Profile are where the user fixes these; no need to nag there.
+  if (!status || screen === "settings" || screen === "profile") {
     return null;
   }
   if (status.blockers.length === 0 && status.profileReady && status.prefsSaved) {
@@ -46,14 +46,14 @@ export function SetupBanner() {
       ))}
       {!status.profileReady && (
         <Line id="setup-profile" title="Tell JobPilot about your work.">
-          <Button id="setup-profile" size="compact" icon={FilePlus} onClick={() => openSettings("About you")}>
+          <Button id="setup-profile" size="compact" icon={FilePlus} onClick={() => openProfile("About you")}>
             Add your CV
           </Button>
         </Line>
       )}
       {!status.prefsSaved && (
         <Line id="setup-preferences" title="Tell JobPilot what job you are looking for.">
-          <Button size="compact" icon={Settings2} onClick={() => openSettings("Profile & preferences")}>
+          <Button size="compact" icon={Settings2} onClick={() => openProfile("Preferences")}>
             Set your preferences
           </Button>
         </Line>

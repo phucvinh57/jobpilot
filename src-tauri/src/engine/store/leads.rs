@@ -76,6 +76,9 @@ pub struct Lead {
     /// `None` when it is shown. Unlike a dismissal it is undone when the preferences change back
     /// (see `discover::refilter`).
     pub filtered_reason: Option<String>,
+    /// When it was dismissed (by the user or a filter); `None` for a lead that is not dismissed,
+    /// or one dismissed before this was recorded (its `found_at` is the best guess then).
+    pub dismissed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -96,7 +99,7 @@ pub struct NewLead {
 }
 
 const COLS: &str = "id, source_id, url, dedup_key, company, role, location, jd_path, score, score_json, \
-                    insight_json, state, dismiss_reason, app_id, found_at, filtered_reason";
+                    insight_json, state, dismiss_reason, app_id, found_at, filtered_reason, dismissed_at";
 
 impl Lead {
     fn from_row(r: &Row) -> rusqlite::Result<Self> {
@@ -120,6 +123,7 @@ impl Lead {
             app_id: r.get(13)?,
             found_at: r.get(14)?,
             filtered_reason: r.get(15)?,
+            dismissed_at: r.get(16)?,
         })
     }
 }
@@ -131,8 +135,9 @@ impl Store {
             .with_conn(|c| {
                 c.execute(
                     "INSERT INTO leads (source_id, url, dedup_key, company, role, location, jd_path, score,
-                                        score_json, insight_json, state, dismiss_reason, found_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                        score_json, insight_json, state, dismiss_reason, found_at, dismissed_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                             CASE WHEN ?11 = 'dismissed' THEN ?13 END)",
                     params![
                         new.source_id,
                         new.url,
@@ -170,6 +175,14 @@ impl Store {
                 Lead::from_row,
             )
             .optional()?)
+        })
+    }
+
+    /// The lead application `app_id` was prepared from, if it came from one.
+    pub fn lead_of_application(&self, app_id: i64) -> Result<Option<Lead>> {
+        self.with_conn(|c| {
+            Ok(c.query_row(&format!("SELECT {COLS} FROM leads WHERE app_id = ?1 ORDER BY id LIMIT 1"), [app_id], Lead::from_row)
+                .optional()?)
         })
     }
 
@@ -241,7 +254,51 @@ impl Store {
     /// The user (or a filter) rejected the lead; `reason` may be empty. Only a lead in the queue
     /// can be dismissed (see [`Lead::in_queue`]): states move forward only.
     pub fn dismiss_lead(&self, id: i64, reason: &str) -> Result<()> {
-        self.update_lead("state = 'dismissed', dismiss_reason = ?1", params![reason, id], id, &format!(" AND {IN_QUEUE}"))
+        self.update_lead(
+            "state = 'dismissed', dismiss_reason = ?1, dismissed_at = ?2",
+            params![reason, now(), id],
+            id,
+            &format!(" AND {IN_QUEUE}"),
+        )
+    }
+
+    /// "Restore" a dismissed lead (by the user or a filter): `new` again, its reason and time
+    /// forgotten, and in one write hidden with `filtered_reason` when the saved preferences still
+    /// filter it out (`None`: shown; see [`Lead::filtered_reason`]). Only a dismissed lead can be
+    /// restored.
+    pub fn restore_lead(&self, id: i64, filtered_reason: Option<&str>) -> Result<()> {
+        self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE leads SET state = 'new', dismiss_reason = NULL, dismissed_at = NULL, filtered_reason = ?2
+                 WHERE id = ?1 AND state = 'dismissed'",
+                params![id, filtered_reason],
+            )?;
+            anyhow::ensure!(n == 1, "lead {id} not found or not dismissed");
+            Ok(())
+        })
+    }
+
+    /// The dismissed leads (by the user or a filter) without an application, most recently
+    /// dismissed first (a lead dismissed before that was recorded counts from when it was found).
+    /// A `new` lead the preferences only hide ([`Lead::filtered_reason`]) is not dismissed.
+    pub fn list_dismissed_leads(&self) -> Result<Vec<Lead>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(&format!(
+                "SELECT {COLS} FROM leads WHERE state = 'dismissed' AND app_id IS NULL
+                 ORDER BY COALESCE(dismissed_at, found_at) DESC, id DESC"
+            ))?;
+            let rows = stmt.query_map([], Lead::from_row)?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// How many leads [`Store::list_dismissed_leads`] lists, without reading them.
+    pub fn count_dismissed_leads(&self) -> Result<usize> {
+        self.with_conn(|c| {
+            let n: i64 =
+                c.query_row("SELECT COUNT(*) FROM leads WHERE state = 'dismissed' AND app_id IS NULL", [], |r| r.get(0))?;
+            Ok(usize::try_from(n).unwrap_or(0))
+        })
     }
 
     /// The lead became application `app_id`. Only a lead in the queue can be promoted.
@@ -450,6 +507,47 @@ mod tests {
         store.dismiss_lead(shown.id, "no").unwrap();
         assert!(!store.set_lead_filtered(shown.id, None).unwrap(), "a dismissed lead stays dismissed");
         assert!(!store.set_lead_filtered(999, None).unwrap());
+    }
+
+    #[test]
+    fn dismissed_leads_are_listed_newest_first_and_restored_to_the_queue() {
+        let store = Store::open_in_memory().unwrap();
+        let filtered = store
+            .add_lead(&NewLead {
+                state: LeadState::Dismissed,
+                dismiss_reason: Some("excluded company".into()),
+                ..new("https://a.test/1", "a-1", None)
+            })
+            .unwrap();
+        assert!(filtered.dismissed_at.is_some(), "a filtered lead is dismissed when stored");
+        let lead = store.add_lead(&new("https://a.test/2", "a-2", Some(80.0))).unwrap();
+        assert_eq!(lead.dismissed_at, None);
+        // Hidden by the preferences first, then dismissed by the user.
+        store.set_lead_filtered(lead.id, Some("location: hires in United States")).unwrap();
+        store.dismiss_lead(lead.id, "too junior").unwrap();
+        // A lead the preferences only hide is not dismissed: it is neither listed nor counted.
+        let hidden = store.add_lead(&new("https://a.test/3", "a-3", Some(60.0))).unwrap();
+        store.set_lead_filtered(hidden.id, Some("location: hires in United States")).unwrap();
+        let got = store.get_lead(lead.id).unwrap().unwrap();
+        assert!(got.dismissed_at.is_some_and(|at| at >= filtered.dismissed_at.unwrap()));
+
+        let ids = |leads: Vec<Lead>| leads.into_iter().map(|l| l.id).collect::<Vec<_>>();
+        assert_eq!(ids(store.list_dismissed_leads().unwrap()), [lead.id, filtered.id]);
+        assert_eq!(store.count_dismissed_leads().unwrap(), 2);
+
+        store.restore_lead(lead.id, None).unwrap();
+        let back = store.get_lead(lead.id).unwrap().unwrap();
+        assert_eq!((back.state, back.dismiss_reason, back.dismissed_at), (LeadState::New, None, None));
+        assert_eq!(back.filtered_reason, None, "shown: the preferences let it pass");
+        assert_eq!(ids(store.list_queue_leads().unwrap()), [lead.id]);
+        assert!(store.restore_lead(lead.id, None).is_err(), "only a dismissed lead is restored");
+        assert!(store.restore_lead(999, None).is_err());
+
+        // A filtered posting can be restored too, hidden in the same write when it is filtered still.
+        store.restore_lead(filtered.id, Some("excluded company")).unwrap();
+        assert_eq!(store.get_lead(filtered.id).unwrap().unwrap().filtered_reason.as_deref(), Some("excluded company"));
+        assert_eq!(store.count_dismissed_leads().unwrap(), 0);
+        assert_eq!(store.list_queue_leads().unwrap().len(), 1, "the filtered one is hidden");
     }
 
     #[test]

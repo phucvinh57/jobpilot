@@ -3,10 +3,10 @@
 //! Nothing secret travels here: leads, sources, run summaries and session names only. Posting and
 //! brief text is data for the web app to show as text.
 
-use crate::engine::discover::promote::{Dismissed, FailedPrepare};
+use crate::engine::discover::promote::FailedPrepare;
 use crate::engine::discover::queue::{criteria_rows, QueueItem, QueueSnapshot};
 use crate::engine::discover::source::BoardHint;
-use crate::engine::discover::{RunSummary, WaitingSource};
+use crate::engine::discover::{DismissedJob, RunSummary, WaitingSource};
 use crate::engine::graph::WaitReason;
 use crate::engine::health;
 use crate::engine::pipeline::JdInput;
@@ -281,6 +281,8 @@ pub struct QueueDto {
     /// A search (or a source being continued) is running right now, started from here or by the
     /// daily timer.
     pub searching: bool,
+    /// How many jobs the "Dismissed" filter lists.
+    pub dismissed: usize,
 }
 
 impl QueueDto {
@@ -292,30 +294,43 @@ impl QueueDto {
             waiting: snapshot.waiting.iter().map(WaitingDto::from).collect(),
             last_run: snapshot.last_run.as_ref().map(RunSummaryDto::from),
             searching,
+            dismissed: snapshot.dismissed,
         }
     }
 }
 
 // ------------------------------------------------------------------ actions
 
-/// What "Dismiss" did (the web app words it).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+
+/// One row of the Leads stage's "Dismissed" list: a lead the user dismissed or the preferences
+/// filtered out, or a job dismissed from the CVs stage.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DismissedDto {
-    /// Other leads of the company dismissed with it.
-    pub also: usize,
-    /// Other leads of the company kept because their CV is queued or being written.
-    pub kept: usize,
-    /// "Never this company" was asked for but could not be saved (why).
-    pub not_excluded: Option<String>,
+pub struct DismissedJobDto {
+    /// `lead` / `application`.
+    pub kind: &'static str,
+    /// The lead's or the application's id, after `kind`.
+    pub id: i64,
+    pub company: String,
+    pub role: String,
+    /// The posting's address (not a web link for a job added from a file or pasted text).
+    pub url: Option<String>,
+    /// Why, as the user typed it or the filter said; `None` without a reason.
+    pub reason: Option<String>,
+    /// RFC 3339.
+    pub dismissed_at: String,
 }
 
-impl From<Dismissed> for DismissedDto {
-    fn from(d: Dismissed) -> Self {
+impl From<&DismissedJob> for DismissedJobDto {
+    fn from(job: &DismissedJob) -> Self {
         Self {
-            also: d.also,
-            kept: d.kept,
-            not_excluded: d.not_excluded,
+            kind: job.kind.as_str(),
+            id: job.id,
+            company: job.company.clone(),
+            role: job.role.clone(),
+            url: job.url.clone(),
+            reason: job.reason.clone(),
+            dismissed_at: job.dismissed_at.to_rfc3339(),
         }
     }
 }
@@ -476,6 +491,7 @@ mod tests {
             app_id: None,
             found_at: Utc.with_ymd_and_hms(2026, 11, 14, 9, 30, 0).unwrap(),
             filtered_reason: None,
+            dismissed_at: None,
         }
     }
 

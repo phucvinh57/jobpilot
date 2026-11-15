@@ -103,7 +103,21 @@ export interface ApplicationHeader {
   /** The stage of the Jobs page the application is in. */
   stage: StageKey;
   outcome: Outcome | null;
+  /** A plain "Dismiss" is offered: the job is in CVs and nothing runs for it. */
+  dismissible: boolean;
+  /** The job was dismissed (a plain "Restore" brings it back); `null` otherwise. */
+  dismissed: Dismissal | null;
 }
+
+/** Why and when a job was dismissed. */
+export interface Dismissal {
+  /** What the user typed; `null` without a reason. */
+  reason: string | null;
+  /** RFC 3339; `null` when unknown. */
+  at: string | null;
+}
+
+export type { Dismissed, Restored } from "./dismiss";
 
 export type MarkKey = "interview" | "offer" | "rejected";
 
@@ -144,7 +158,7 @@ export interface Cv {
   /** The fact guard ran on this CV and found nothing. */
   guardClean: boolean;
   requirements: Requirement[];
-  /** The tailoring step reported gaps: offer to add to the profile (Settings > About you). */
+  /** The tailoring step reported gaps: offer to add to the profile (Profile > About you). */
   hasGaps: boolean;
 }
 

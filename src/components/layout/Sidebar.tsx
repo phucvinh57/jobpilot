@@ -1,10 +1,10 @@
-// Left column: the logo, navigation (Jobs, Trends), Settings and the health line.
+// Left column: the logo, navigation (Jobs, Trends, Profile), Settings and the health line.
 
 import clsx from "clsx";
-import { ArrowUpRight, ChartPie, Inbox, Settings, type LucideIcon } from "lucide-react";
+import { ArrowUpRight, ChartPie, Inbox, Settings, UserRound, type LucideIcon } from "lucide-react";
 
 import { Heading, HealthDot } from "@/components/ui/kit";
-import { useNav, type Screen, type SettingsSection } from "@/stores/nav";
+import { useNav, type Screen } from "@/stores/nav";
 import { useShell } from "@/stores/shell";
 import { jobsBadge, navScreen, spokenBadge, type NavBadge } from "@/stores/nav";
 
@@ -57,11 +57,11 @@ function NavItem({
   );
 }
 
-/** The health line: a dot and a few words. When something is missing and Settings has a section
- *  that fixes it, pressing the line opens that section. */
+/** The health line: a dot and a few words. When something is missing and Settings or Profile has
+ *  a section that fixes it, pressing the line opens that section. */
 function HealthLine() {
   const health = useShell((s) => s.status?.health);
-  const openSettings = useNav((s) => s.openSettings);
+  const openSection = useNav((s) => s.openSection);
   const text = health?.text ?? "Checking setup";
   const body = (
     <>
@@ -83,7 +83,7 @@ function HealthLine() {
       id="health"
       type="button"
       aria-label={text}
-      onClick={() => openSettings(focus as SettingsSection)}
+      onClick={() => openSection(focus)}
       className={clsx(base, "cursor-pointer hover:text-ink")}
     >
       {body}
@@ -116,6 +116,7 @@ export function Sidebar() {
           {...entry("jobs")}
         />
         <NavItem id="nav-trends" icon={ChartPie} label="Trends" {...entry("trends")} />
+        <NavItem id="nav-profile" icon={UserRound} label="Profile" {...entry("profile")} />
       </nav>
       <div className="flex-1" />
       <NavItem id="open-settings" icon={Settings} label="Settings" {...entry("settings")} />

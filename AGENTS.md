@@ -38,7 +38,8 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
              `Core::profile` / `require_profile` (NoProfile) is the one way to read it
   discover   `source/` (ATS APIs: greenhouse, lever, ashby, smartrecruiters, recruitee, personio, workday; hn_hiring, yc, career_page with
              JSON-LD, sitemap and board detection), `run` (graphs `discovery`, `source_run`), `score`, `dedup`, `handoff`, `sources`,
-             `queue`, `promote` (graph `prepare_cv`, dismiss), `manual` (`Core::add_lead`: pasted link/file -> scored lead)
+             `queue`, `promote` (graph `prepare_cv`, dismiss), `dismissed` (dismiss a CV, list dismissed jobs, Restore),
+             `manual` (`Core::add_lead`: pasted link/file -> scored lead)
   trends     collection (hackernews, yc, rss, page, `report_search` with a keyring key; graph `trends` -> `trend_items`),
              `frame` (MarketFrame: background + place, never wishes; decides what is collected and counted),
              `digest/` (extract, count, synthesize, cite: every point cites stored items)
@@ -62,7 +63,8 @@ lefthook.yml           git hooks: pre-commit Biome on staged files, pre-push `sc
 src/                   React + Vite + TypeScript + Tailwind; feature folders (applications, discovery, integrations, profile, trends) inside each kind
   main.tsx, App.tsx    entry and screen switch (file drop)
   pages/               JobsPage (header, stage bar Leads | CVs | Applied | In progress | Done, the stage's list, right-side drawer for the
-                       open lead or application), ApplicationPage (the drawer's "Open full view"), TrendsPage, SettingsPage
+                       open lead or application), ApplicationPage (the drawer's "Open full view"), TrendsPage, ProfilePage (About you +
+                       Preferences), SettingsPage (Connections, Job sources, Appearance)
   components/          `ui/kit.tsx` (design kit: Page, Card, Section, Banner, Button, Chip, Tag, Segmented, Tabs, StageBar, DataTable,
                        Drawer, Dialog, Combobox, FormMessage, ToastCard, ScoreBadge, Stepper, ...), `ui/primitives/` (shadcn/ui, square:
                        no rounded corners; only the kit imports them, Biome enforces it), `layout/` (Sidebar, SetupBanner, Toaster),
@@ -163,6 +165,6 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 ## Ownership (parallel work)
 
 - Engine: add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
-- Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and that feature's web files: every path under `src/` named after it (`<feature>/` folders, `<feature>.ts`; integrations also `api/{gmail,providers,sessions}.ts`), plus its page or store (applications: `pages/ApplicationPage.tsx`; discovery: `stores/today.ts`; trends: `pages/TrendsPage.tsx`).
+- Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and that feature's web files: every path under `src/` named after it (`<feature>/` folders, `<feature>.ts`; integrations also `api/{gmail,providers,sessions}.ts`), plus its page or store (applications: `pages/ApplicationPage.tsx`; discovery: `stores/today.ts`; trends: `pages/TrendsPage.tsx`; profile: `pages/ProfilePage.tsx`).
 - The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`) and every other web file under `src/` (the kit, layout, nav and shell stores, `api/{bridge,events,shell}.ts`, shared hooks, `lib/`, `types/`, the Jobs and Settings pages) change only for something every context needs.
 - Prompts under `assets/prompts/` are High risk (a human reads the diff).

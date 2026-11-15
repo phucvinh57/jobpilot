@@ -30,7 +30,7 @@ pub mod tailor;
 pub use analyze::Analysis;
 pub use cv::Cv;
 pub use generate::{
-    generate, generate_into, read_jd_text, regenerate, rerender, revise, GuardFailed, Pipeline, Progress,
+    generate, generate_into, read_jd_text, regenerate, require_open, rerender, revise, GuardFailed, Pipeline, Progress,
     RerenderOutcome, Stage, MAX_PAGES_KEY,
 };
 pub use guard::{guard, Violation};

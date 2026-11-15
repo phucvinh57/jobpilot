@@ -6,7 +6,9 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use super::{now, Store};
 use anyhow::{bail, Context, Result};
 
-/// `Draft -> CvReady -> Submitting -> Applied -> {Interview | Rejected | Offer}`, plus `Failed`.
+/// `Draft -> CvReady -> Submitting -> Applied -> {Interview | Rejected | Offer}`, plus `Failed` and
+/// `Dismissed` (the user is no longer interested in a job whose CV was prepared; only Restore,
+/// through [`Store::force_status`], takes it back).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Status {
     Draft,
@@ -17,10 +19,11 @@ pub enum Status {
     Rejected,
     Offer,
     Failed,
+    Dismissed,
 }
 
 impl Status {
-    pub const ALL: [Status; 8] = [
+    pub const ALL: [Status; 9] = [
         Status::Draft,
         Status::CvReady,
         Status::Submitting,
@@ -29,6 +32,7 @@ impl Status {
         Status::Rejected,
         Status::Offer,
         Status::Failed,
+        Status::Dismissed,
     ];
 
     /// Stable identifier stored in the database.
@@ -42,6 +46,7 @@ impl Status {
             Status::Rejected => "rejected",
             Status::Offer => "offer",
             Status::Failed => "failed",
+            Status::Dismissed => "dismissed",
         }
     }
 
@@ -60,13 +65,15 @@ impl Status {
             Status::Rejected => "Rejected",
             Status::Offer => "Offer",
             Status::Failed => "Failed",
+            Status::Dismissed => "Dismissed",
         }
     }
 
-    /// Position on the forward-only ladder. `Failed` is off the ladder (rank 0 like `Draft`).
+    /// Position on the forward-only ladder. `Failed` and `Dismissed` are off the ladder (rank 0
+    /// like `Draft`).
     pub fn rank(self) -> u8 {
         match self {
-            Status::Draft | Status::Failed => 0,
+            Status::Draft | Status::Failed | Status::Dismissed => 0,
             Status::CvReady => 1,
             Status::Submitting => 2,
             Status::Applied => 3,
@@ -77,10 +84,13 @@ impl Status {
     }
 
     /// Forward-only rule. `Failed` may go back to `CvReady`/`Submitting` and is reachable
-    /// from `Draft`/`CvReady`/`Submitting` only. Everything else must strictly increase in rank
-    /// (so `Offer -> Rejected` is refused).
+    /// from `Draft`/`CvReady`/`Submitting` only. `Dismissed` is reachable from `Draft`/`CvReady`/
+    /// `Failed` only (never while a submit is in flight) and is left only by force (Restore).
+    /// Everything else must strictly increase in rank (so `Offer -> Rejected` is refused).
     pub fn can_advance_to(self, next: Status) -> bool {
         match (self, next) {
+            (Status::Dismissed, _) => false,
+            (s, Status::Dismissed) => matches!(s, Status::Draft | Status::CvReady | Status::Failed),
             (Status::Failed, n) => matches!(n, Status::CvReady | Status::Submitting),
             (s, Status::Failed) => matches!(s, Status::Draft | Status::CvReady | Status::Submitting),
             (s, n) => n.rank() > s.rank(),
@@ -127,28 +137,55 @@ impl Store {
     }
 
     fn change_status(&self, app_id: i64, to: Status, message: &str, force: bool) -> Result<()> {
-        self.with_tx(|tx| {
-            let from: Status = tx
-                .query_row("SELECT status FROM applications WHERE id = ?1", [app_id], |r| r.get(0))
-                .with_context(|| format!("application {app_id} not found"))?;
-            if from == to {
-                return Ok(());
-            }
-            if !force && !from.can_advance_to(to) {
-                bail!("cannot move application {app_id} from {from} to {to}");
-            }
-            let at = now();
-            tx.execute(
-                "UPDATE applications SET status = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![to, at, app_id],
-            )?;
-            let text = if message.is_empty() {
-                format!("{from} -> {to}")
-            } else {
-                format!("{from} -> {to}: {message}")
-            };
-            super::events::insert_event(tx, app_id, "status", &text)?;
-            Ok(())
-        })
+        self.with_tx(|tx| change_status_in(tx, app_id, to, message, force).map(|_| ()))
+    }
+}
+
+/// The status change of [`Store::set_status`] / [`Store::force_status`] inside the caller's
+/// transaction. Returns the status the application had.
+pub(super) fn change_status_in(
+    tx: &rusqlite::Transaction,
+    app_id: i64,
+    to: Status,
+    message: &str,
+    force: bool,
+) -> Result<Status> {
+    let from: Status = tx
+        .query_row("SELECT status FROM applications WHERE id = ?1", [app_id], |r| r.get(0))
+        .with_context(|| format!("application {app_id} not found"))?;
+    if from == to {
+        return Ok(from);
+    }
+    if !force && !from.can_advance_to(to) {
+        bail!("cannot move application {app_id} from {from} to {to}");
+    }
+    let at = now();
+    tx.execute(
+        "UPDATE applications SET status = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params![to, at, app_id],
+    )?;
+    let text = if message.is_empty() {
+        format!("{from} -> {to}")
+    } else {
+        format!("{from} -> {to}: {message}")
+    };
+    super::events::insert_event(tx, app_id, "status", &text)?;
+    Ok(from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Status;
+
+    #[test]
+    fn dismissed_is_reached_only_before_a_submit_and_left_only_by_force() {
+        for from in Status::ALL {
+            let allowed = matches!(from, Status::Draft | Status::CvReady | Status::Failed);
+            assert_eq!(from.can_advance_to(Status::Dismissed), allowed, "{from:?} -> Dismissed");
+            assert!(!Status::Dismissed.can_advance_to(from), "Dismissed -> {from:?}");
+        }
+        assert_eq!(Status::parse("dismissed"), Some(Status::Dismissed));
+        assert_eq!(Status::Dismissed.label(), "Dismissed");
+        assert!(Status::ALL.contains(&Status::Dismissed));
     }
 }

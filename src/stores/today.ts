@@ -31,10 +31,20 @@ import {
   openLeadId,
   STOPPED,
   type QueueFilter,
+  type QueueShow,
   type SessionFailure,
 } from "@/lib/discovery/queue";
-import { dismissedDetail, summaryLine } from "@/lib/discovery/text";
-import type { Dismissed, Job, Lead, LeadInput, PrepareOutcome, Queue, SearchFinished } from "@/types/discovery";
+import { dismissedDetail, restoredNote, summaryLine } from "@/lib/discovery/text";
+import type {
+  Dismissed,
+  DismissedJob,
+  Job,
+  Lead,
+  LeadInput,
+  PrepareOutcome,
+  Queue,
+  SearchFinished,
+} from "@/types/discovery";
 
 /** A CV that was written: the way into the application. */
 export interface Prepared {
@@ -70,6 +80,11 @@ export interface TodayState {
   continuing: string[];
   /** Threads whose browser window is being opened. */
   opening: string[];
+  /** The dismissed jobs as last read (read while "Show: Dismissed" is picked); `undefined` until then. */
+  dismissed: DismissedJob[] | undefined;
+  dismissedError: CommandError | undefined;
+  /** Dismissed jobs being restored, by `dismissedKey`. */
+  restoring: string[];
 }
 
 const INITIAL: TodayState = {
@@ -88,6 +103,9 @@ const INITIAL: TodayState = {
   linkNote: undefined,
   continuing: [],
   opening: [],
+  dismissed: undefined,
+  dismissedError: undefined,
+  restoring: [],
 };
 
 export const useTodayStore = create<TodayState>(() => INITIAL);
@@ -95,6 +113,7 @@ export const useTodayStore = create<TodayState>(() => INITIAL);
 /** Back to the start (tests). */
 export function resetToday(): void {
   reads = 0;
+  dismissedReads = 0;
   latestRead = Promise.resolve();
   jobBatch.clear();
   useTodayStore.setState(INITIAL, true);
@@ -177,6 +196,30 @@ function load(): Promise<void> {
   return done;
 }
 
+let dismissedReads = 0;
+
+/** Read the dismissed jobs (off the UI thread). Only the latest answer is kept. */
+function loadDismissed(): Promise<void> {
+  const read = ++dismissedReads;
+  return api.readDismissed().then(
+    (dismissed) => {
+      if (read === dismissedReads) {
+        set({ dismissed, dismissedError: undefined });
+      }
+    },
+    (thrown: unknown) => {
+      if (read === dismissedReads) {
+        set({ dismissedError: toCommandError(thrown) });
+      }
+    },
+  );
+}
+
+/** Read the dismissed jobs again (a failed read has a Retry). */
+export function reloadDismissed(): void {
+  void loadDismissed();
+}
+
 /** The profile changes only when the user reads their documents again, so its skills are read when
  *  the Jobs page is shown, not on every refresh. */
 function loadSkills(): void {
@@ -202,6 +245,54 @@ export function enter(): void {
 
 export function setFilter(patch: Partial<QueueFilter>): void {
   set({ filter: { ...get().filter, ...patch } });
+}
+
+/** "Show: Open | Dismissed". The dismissed jobs are read each time they are picked (and again when
+ *  leads or applications change while they are shown); the open lead's drawer closes and the ticks
+ *  go (neither is in that list, and the bulk bar must not hold the primary button there). */
+export function setShow(show: QueueShow): void {
+  if (show === get().filter.show) {
+    return;
+  }
+  setFilter({ show });
+  if (show === "dismissed") {
+    set({ checked: [] });
+    if (useNav.getState().drawer?.kind === "lead") {
+      useNav.getState().closeDrawer();
+    }
+    void loadDismissed();
+  }
+}
+
+/** The key of a dismissed job in `restoring` (and of its Restore button). */
+export function dismissedKey(job: Pick<DismissedJob, "kind" | "id">): string {
+  return `${job.kind}-${job.id}`;
+}
+
+/** "Restore" a dismissed job: a lead goes back to the list, a job from CVs back to the status it had.
+ *  A toast says where it went. */
+export async function restoreJob(job: DismissedJob): Promise<void> {
+  const key = dismissedKey(job);
+  if (get().restoring.includes(key)) {
+    return;
+  }
+  set({ restoring: [...get().restoring, key] });
+  try {
+    // The shell says leads and applications changed: the queue and this list are read again then.
+    const out = await api.restore(job.kind, job.id);
+    if (out.hidden === null) {
+      toast.ok("Job restored", restoredNote(job, out));
+    } else {
+      toast.info("Restored, but hidden", restoredNote(job, out));
+    }
+  } catch (thrown) {
+    toast.error(toCommandError(thrown), {
+      title: "The job could not be restored",
+      onRetry: () => void restoreJob(job),
+    });
+  } finally {
+    set({ restoring: without(get().restoring, key) });
+  }
 }
 
 export function setChecked(id: number, on: boolean): void {
@@ -283,7 +374,7 @@ function startAdd(input: LeadInput): void {
         // moves the page to its stage).
         useNav.getState().openAppDrawer(added.applicationId);
       } else if (added.state === "dismissed") {
-        toast.info("Not added", "You dismissed this job before, so it is not in the list.");
+        toast.info("Not added", "You dismissed this job before: find it under Show: Dismissed.");
       } else {
         // Show the new lead, whatever the filters were, once the list holds it (the drawer closes
         // on a lead that is not listed).
@@ -548,6 +639,19 @@ function syncNeedsYou(): void {
   useNav.getState().setNeedsYou(needsYouCount(s.queue, rows, s.prepared.length));
 }
 
+/** Stored data changed (any screen): what the Leads stage shows is read again. */
+export function onChanged(scope: api.Scope): void {
+  // The sidebar badge follows every change the list has, shown or not.
+  if (scope === "leads" || scope === "sources" || scope === "applications") {
+    load();
+  }
+  // The dismissed jobs only change with leads and applications, and are read only while shown
+  // (not on every queue read, such as each step of a search).
+  if ((scope === "leads" || scope === "applications") && get().filter.show === "dismissed") {
+    void loadDismissed();
+  }
+}
+
 let watching = false;
 
 /** Follow the shell for as long as the app runs, whether or not the Jobs page is shown: the badge, the CVs
@@ -557,12 +661,7 @@ export function startWatching(): void {
     return;
   }
   watching = true;
-  api.onChanged((scope) => {
-    // The sidebar badge follows every change the list has, shown or not.
-    if (scope === "leads" || scope === "sources" || scope === "applications") {
-      load();
-    }
-  });
+  api.onChanged(onChanged);
   api.onProgress(onProgress);
   api.onPrepared(applyPrepared);
   api.onSearchFinished(onSearchFinished);

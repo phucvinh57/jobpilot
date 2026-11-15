@@ -258,6 +258,17 @@ impl Drop for Busy {
     }
 }
 
+/// Run `change` while no apply run is open or starting for `app_id`: the same gate as opening,
+/// submitting and finishing a form holds while `change` runs, so none can start in between. An error
+/// when a form is being opened or submitted, or is open (a review or a hand-off).
+pub fn while_no_run<T>(core: &Core, app_id: i64, change: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _busy = Busy::acquire(core, app_id)?;
+    if entry(core, app_id).is_some() {
+        bail!("its application form is open: close it first");
+    }
+    change()
+}
+
 /// What the UI should show for `app_id` (cheap, never blocks on the browser).
 pub fn live(core: &Core, app_id: i64) -> Live {
     match entry(core, app_id) {
@@ -600,6 +611,9 @@ pub(crate) async fn prepare_with(
 ) -> Result<Prepared> {
     let _busy = Busy::acquire(core, app_id)?;
     let app = core.store.get_application(app_id)?.with_context(|| format!("application {app_id} not found"))?;
+    if app.status == Status::Dismissed {
+        bail!("this job was dismissed: restore it first");
+    }
     discard_run(core, app_id).await;
 
     let info = apply_info(core, &app);
@@ -1156,6 +1170,10 @@ async fn refill(run: &mut Run, page: &Page) -> Result<()> {
 /// The user finished (or gave up) in the visible browser: record the result and close everything.
 pub async fn finish_manually(core: &Core, app_id: i64, applied: bool) -> Result<()> {
     let _busy = Busy::acquire(core, app_id)?;
+    // A dismissed job has no form open (dismissing needs that); never move it by force.
+    if core.store.get_application(app_id)?.is_some_and(|a| a.status == Status::Dismissed) {
+        bail!("this job was dismissed: restore it first");
+    }
     discard_run(core, app_id).await;
     if applied {
         core.store.force_status(app_id, Status::Applied, "marked as applied after finishing manually")?;

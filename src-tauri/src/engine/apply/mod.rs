@@ -45,7 +45,7 @@ pub use ats::{detect_ats, Ats};
 pub use fields::{Answer, FieldKind, FormField, Source};
 pub use flow::{
     advance, close_all, discard, finish_manually, latest_proof, live, open_visible, prepare, submit, Edit, Handoff,
-    Live, Prepared, Review, Row, Stage, Submitted,
+    Live, Prepared, Review, Row, Stage, Submitted, while_no_run,
 };
 
 use crate::engine::browser::SessionStatus;
@@ -270,6 +270,9 @@ mod tests {
             updated_at: Utc::now(),
             insight_json: None,
             interview_round: None,
+            dismissed_from: None,
+            dismiss_reason: None,
+            dismissed_at: None,
         };
         assert_eq!(resolve_apply_url(&app), None);
         app.analysis_json = Some(r#"{"apply_url": "https://jobs.lever.co/acme/1"}"#.into());

@@ -41,7 +41,7 @@ function RequirementRow({ requirement }: { requirement: Requirement }) {
 
 export function CvTab(input: CvTabInput) {
   const cv = useCvTab(input);
-  const openSettings = useNav((s) => s.openSettings);
+  const openProfile = useNav((s) => s.openProfile);
   const [instruction, setInstruction] = useState("");
   const data = cv.cv;
 
@@ -79,7 +79,7 @@ export function CvTab(input: CvTabInput) {
                     variant="ghost"
                     size="compact"
                     icon={FilePlus}
-                    onClick={() => openSettings("About you")}
+                    onClick={() => openProfile("About you")}
                   >
                     Add to your profile
                   </Button>
@@ -152,7 +152,7 @@ export function CvTab(input: CvTabInput) {
         aria-label="Ask AI"
         placeholder={ASK_PLACEHOLDER}
         value={instruction}
-        disabled={input.busy || !cv.hasCv}
+        disabled={input.busy || !cv.hasCv || input.readOnly === true}
         onChange={(e) => setInstruction(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && cv.ask(instruction)) {

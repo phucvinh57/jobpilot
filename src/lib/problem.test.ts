@@ -27,7 +27,7 @@ describe("problemActions", () => {
     ]);
   });
 
-  it("sends a missing profile to Settings > About you", () => {
+  it("sends a missing profile to Profile > About you", () => {
     expect(problemActions(problem({ kind: "noProfile", settingsSection: "About you" }), true)).toEqual(["settings"]);
   });
 

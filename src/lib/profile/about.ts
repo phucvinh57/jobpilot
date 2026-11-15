@@ -1,4 +1,4 @@
-// What Settings > About you shows (the shell's `AboutDto`) and the rules only the screen needs:
+// What Profile > About you shows (the shell's `AboutDto`) and the rules only the screen needs:
 // the status line, document sizes, the summary lines, when a note can be saved. The profile is
 // read-only here: the user changes a document and reads again.
 

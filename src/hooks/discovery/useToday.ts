@@ -8,6 +8,7 @@ import { useNav } from "@/stores/nav";
 
 import {
   failureRows,
+  filterDismissed,
   filterItems,
   needsYouCount,
   openLeadId,
@@ -18,7 +19,7 @@ import {
   type PrimaryPlace,
   type QueuePrimary,
 } from "@/lib/discovery/queue";
-import type { Lead, Source, Waiting } from "@/types/discovery";
+import type { DismissedJob, Lead, Source, Waiting } from "@/types/discovery";
 import { addDropped, enter, requestedLead, useTodayStore, type TodayState } from "@/stores/today";
 
 export interface TodayView extends TodayState {
@@ -48,11 +49,18 @@ export interface TodayView extends TodayState {
   sources: Source[];
   /** The source that found `lead`, by name. */
   sourceOf: (lead: Lead) => Source | undefined;
+  /** How many jobs are dismissed (the "Dismissed" chip). */
+  dismissedCount: number;
+  /** The dismissed jobs as read (`[]` until "Dismissed" is picked). */
+  dismissedItems: DismissedJob[];
+  /** The dismissed jobs that pass the search. */
+  dismissedShown: DismissedJob[];
 }
 
 const NO_ITEMS: Lead[] = [];
 const NO_SOURCES: Source[] = [];
 const NO_WAITING: Waiting[] = [];
+const NO_DISMISSED: DismissedJob[] = [];
 
 /** Read the store and the drawer. Reads only: `useLeadsLifecycle` starts the reading. */
 export function useToday(): TodayView {
@@ -86,6 +94,8 @@ export function useToday(): TodayView {
     idleTargets: open === undefined || jobs[open.id] !== undefined ? 0 : 1,
   });
   const appDrawerOpen = drawer?.kind === "app";
+  const dismissedItems = state.dismissed ?? NO_DISMISSED;
+  const dismissedShown = useMemo(() => filterDismissed(dismissedItems, filter.search), [dismissedItems, filter.search]);
 
   return {
     ...state,
@@ -100,7 +110,8 @@ export function useToday(): TodayView {
       primaryPlace({
         drawerOpen: open !== undefined,
         otherDrawerOpen: otherDrawerOpen || appDrawerOpen,
-        checked: checked.length,
+        // The Dismissed view has no ticks: the bulk bar is not there.
+        checked: filter.show === "dismissed" ? 0 : checked.length,
         empty: items.length === 0,
       }),
     appDrawerOpen,
@@ -110,6 +121,9 @@ export function useToday(): TodayView {
     needsYou: needsYouCount(queue, rows, prepared.length),
     sources,
     sourceOf: (lead) => sources.find((s) => s.id === lead.sourceId),
+    dismissedCount: queue?.dismissed ?? 0,
+    dismissedItems,
+    dismissedShown,
   };
 }
 

@@ -273,6 +273,9 @@ pub async fn generate_with_browser(
     input: JdInput,
     progress: impl Fn(Progress) + Send + Sync,
 ) -> Result<Application> {
+    if let Some(app_id) = existing {
+        crate::engine::pipeline::require_open(core, app_id)?;
+    }
     let llm = shared_llm(core)?;
     let paths = core.paths.clone();
     let pipeline = Pipeline::new(core, &*llm).with_insight(llm.clone());

@@ -59,10 +59,11 @@ impl Stage {
 
 /// The stage a status belongs in. Every status has one: until the application is sent it is about
 /// its CV (a failed submit too: the primary button there is "Review & Submit" again); an interview
-/// is in progress; an answer (offer or rejection) is done.
+/// is in progress; an answer (offer or rejection) is done. A dismissed job was dismissed from the CVs
+/// stage, but [`board`] leaves it out: it is listed under the Leads stage's "Dismissed" filter.
 pub fn stage_for(status: Status) -> Stage {
     match status {
-        Status::Draft | Status::CvReady | Status::Submitting | Status::Failed => Stage::Cv,
+        Status::Draft | Status::CvReady | Status::Submitting | Status::Failed | Status::Dismissed => Stage::Cv,
         Status::Applied => Stage::Applied,
         Status::Interview => Stage::InProgress,
         Status::Offer | Status::Rejected => Stage::Done,
@@ -70,12 +71,26 @@ pub fn stage_for(status: Status) -> Stage {
 }
 
 /// All stages in order (empty ones too), each with its applications in the order of `apps`
-/// (the store lists the most recently updated first).
+/// (the store lists the most recently updated first). Dismissed applications are on no stage.
 pub fn board(apps: &[Application]) -> Vec<(Stage, Vec<&Application>)> {
     Stage::ALL
         .into_iter()
-        .map(|s| (s, apps.iter().filter(|a| stage_for(a.status) == s).collect()))
+        .map(|s| {
+            let rows = apps
+                .iter()
+                .filter(|a| a.status != Status::Dismissed && stage_for(a.status) == s)
+                .collect();
+            (s, rows)
+        })
         .collect()
+}
+
+/// Can the user dismiss the job ("Dismiss" in the drawer)? Only while it is in the CVs stage and not
+/// sent or being sent (`Draft`, `CvReady`, `Failed`), and nothing runs for it: no generate / revise
+/// job (`job_running`) and no apply run (a form being filled, open for review, or handed off to the
+/// user, who may still finish it by hand).
+pub fn dismissible(status: Status, job_running: bool, apply: &ApplyUi) -> bool {
+    status.can_advance_to(Status::Dismissed) && !job_running && matches!(apply, ApplyUi::Idle)
 }
 
 /// How a finished application ended: an offer is a success, a rejection a failure.
@@ -213,6 +228,7 @@ pub fn next_action(status: Status, has_cv: bool, busy: bool, round: Option<&str>
     match status {
         Status::Offer => return next("Offer", Tone::Ok),
         Status::Rejected => return next("Rejected", Tone::Danger),
+        Status::Dismissed => return next("Dismissed", Tone::Neutral),
         _ => {}
     }
     if busy {
@@ -230,6 +246,7 @@ pub fn next_action(status: Status, has_cv: bool, busy: bool, round: Option<&str>
         },
         Status::Offer => next("Offer", Tone::Ok),
         Status::Rejected => next("Rejected", Tone::Danger),
+        Status::Dismissed => next("Dismissed", Tone::Neutral),
     }
 }
 
@@ -456,6 +473,10 @@ pub fn primary_for(
     apply: &ApplyUi,
     blocker: &dyn Fn() -> Option<Blocker>,
 ) -> Option<Primary> {
+    // A dismissed job is read-only until it is restored (a plain button).
+    if status == Status::Dismissed {
+        return None;
+    }
     match apply {
         ApplyUi::Working { submitting } => {
             let action = if *submitting {
@@ -486,7 +507,7 @@ pub fn primary_for(
         ApplyUi::Idle | ApplyUi::Handoff | ApplyUi::Done => {}
     }
     match status {
-        Status::Applied | Status::Interview | Status::Rejected | Status::Offer => None,
+        Status::Applied | Status::Interview | Status::Rejected | Status::Offer | Status::Dismissed => None,
         Status::Draft if !has_cv => Some(if job_running {
             Primary::working(PrimaryAction::Generate)
         } else {
@@ -538,8 +559,8 @@ pub const STEPS: [&str; 5] = ["Lead", "CV review", "Apply", "Submitted", "Replie
 /// running submit) is at Apply; a sent application waits for replies; any answer closes the bar.
 pub fn step_index(status: Status, has_cv: bool) -> usize {
     match status {
-        Status::Draft if !has_cv => 0,
-        Status::Draft => 1,
+        Status::Draft | Status::Dismissed if !has_cv => 0,
+        Status::Draft | Status::Dismissed => 1,
         Status::CvReady | Status::Submitting | Status::Failed => 2,
         Status::Applied => 4,
         Status::Interview | Status::Offer | Status::Rejected => STEPS.len(),
@@ -549,7 +570,7 @@ pub fn step_index(status: Status, has_cv: bool) -> usize {
 /// The tag colour of a status.
 pub fn status_tone(status: Status) -> Tone {
     match status {
-        Status::Draft => Tone::Neutral,
+        Status::Draft | Status::Dismissed => Tone::Neutral,
         Status::CvReady => Tone::Accent,
         Status::Submitting => Tone::Warn,
         Status::Applied | Status::Interview | Status::Offer => Tone::Ok,
@@ -984,11 +1005,12 @@ mod tests {
             (Status::Interview, Stage::InProgress),
             (Status::Offer, Stage::Done),
             (Status::Rejected, Stage::Done),
+            (Status::Dismissed, Stage::Cv),
         ] {
             assert_eq!(stage_for(status), stage, "{status:?}");
         }
         // The table above must list every status, so a new one cannot be forgotten.
-        assert_eq!(Status::ALL.len(), 8);
+        assert_eq!(Status::ALL.len(), 9);
         for status in Status::ALL {
             assert!(Stage::ALL.contains(&stage_for(status)), "{status:?}");
         }
@@ -1096,6 +1118,9 @@ mod tests {
             updated_at: moment,
             insight_json: None,
             interview_round: None,
+            dismissed_from: None,
+            dismiss_reason: None,
+            dismissed_at: None,
         }
     }
 
@@ -1120,6 +1145,31 @@ mod tests {
     }
 
     #[test]
+    fn a_dismissed_application_is_on_no_stage() {
+        let apps = vec![app(1, Status::Draft), app(2, Status::Dismissed), app(3, Status::CvReady)];
+        let stages = board(&apps);
+        assert_eq!(stages[0].1.iter().map(|a| a.id).collect::<Vec<_>>(), [1, 3]);
+        assert!(stages.iter().all(|(_, rows)| rows.iter().all(|a| a.id != 2)));
+    }
+
+    #[test]
+    fn only_an_idle_job_in_cvs_is_dismissible() {
+        for status in Status::ALL {
+            let expected = matches!(status, Status::Draft | Status::CvReady | Status::Failed);
+            assert_eq!(dismissible(status, false, &ApplyUi::Idle), expected, "{status:?}");
+            assert!(!dismissible(status, true, &ApplyUi::Idle), "{status:?} while a job runs");
+        }
+        assert!(!dismissible(Status::CvReady, false, &ApplyUi::Working { submitting: false }));
+        assert!(!dismissible(
+            Status::CvReady,
+            false,
+            &ApplyUi::Review { complete: true, dry_run: false, missing: 0 }
+        ));
+        assert!(!dismissible(Status::Failed, false, &ApplyUi::Handoff), "a hand-off may still be finished");
+        assert!(!dismissible(Status::Failed, false, &ApplyUi::Done));
+    }
+
+    #[test]
     fn the_tag_is_the_next_action() {
         let label = |status, has_cv| next_action(status, has_cv, false, None).label;
         assert_eq!(label(Status::Draft, false), "Generate CV");
@@ -1131,6 +1181,8 @@ mod tests {
         assert_eq!(label(Status::Interview, true), "Check your email");
         assert_eq!(label(Status::Offer, true), "Offer");
         assert_eq!(label(Status::Rejected, true), "Rejected");
+        assert_eq!(label(Status::Dismissed, true), "Dismissed");
+        assert_eq!(next_action(Status::Dismissed, true, true, None).tone, Tone::Neutral);
         // Every status says something, with a tone that fits.
         for status in Status::ALL {
             assert!(!next_action(status, true, false, None).label.is_empty(), "{status:?}");
@@ -1290,9 +1342,13 @@ mod tests {
             Status::Interview,
             Status::Rejected,
             Status::Offer,
+            Status::Dismissed,
         ] {
             assert_eq!(idle(status, true), None, "{status:?} is read-only");
         }
+        // A dismissed job has no primary button, whatever the Apply tab says.
+        let review = ApplyUi::Review { complete: true, dry_run: false, missing: 0 };
+        assert_eq!(primary_for(Status::Dismissed, true, false, false, &review, &none), None);
     }
 
     #[test]

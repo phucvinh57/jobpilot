@@ -1,21 +1,25 @@
 // The Application screen (the drawer's "Open full view"): a breadcrumb back to the Jobs page, the
 // role, company and status, the ONE primary action (Generate -> Approve CV -> Review & Submit ->
-// Submit), the steps, and the tabs JD / CV / Apply / Timeline. The shell decides the primary
-// action; this view only shows it.
+// Submit) with a plain "Dismiss" while the job is in CVs, the steps, and the tabs JD / CV / Apply /
+// Timeline. The shell decides the primary action; this view only shows it. A dismissed job shows why,
+// with a plain "Restore", and no primary.
 
 import { Inbox, Settings } from "lucide-react";
+import { useState } from "react";
 
 import { Button, Caption, EmptyState, Page, Spinner, Stepper, Tabs, Tag } from "@/components/ui/kit";
 import { LoadError } from "@/components/ProblemHelp";
-import { useNav, type SettingsSection } from "@/stores/nav";
+import { sectionPlace, useNav } from "@/stores/nav";
 import { useShell } from "@/stores/shell";
 
 import { crumbFor } from "@/lib/applications/crumb";
 import { TABS, type Tab } from "@/lib/applications/tabs";
 import { useApplicationScreen } from "@/hooks/applications/useApplicationScreen";
+import { useDismissJob } from "@/hooks/applications/useDismissJob";
 import { useJobFailureToast } from "@/hooks/applications/useFailureToast";
 import { ApplyTab } from "@/components/applications/ApplyTab";
 import { CvTab } from "@/components/applications/CvTab";
+import { DismissedNotice, DismissJobDialog } from "@/components/applications/DismissJob";
 import { JdTab } from "@/components/applications/JdTab";
 import { TimelineTab } from "@/components/applications/TimelineTab";
 
@@ -59,7 +63,9 @@ function Breadcrumb({ company }: { company: string }) {
 
 function OpenApplication({ id }: { id: number }) {
   const model = useApplicationScreen(id);
-  const openSettings = useNav((s) => s.openSettings);
+  const openSection = useNav((s) => s.openSection);
+  const dismissJob = useDismissJob(id);
+  const [dismissing, setDismissing] = useState(false);
   const { head, apply, tab } = model;
   const header = head.header;
   useJobFailureToast(id, head);
@@ -81,6 +87,7 @@ function OpenApplication({ id }: { id: number }) {
 
   const primary = head.primary;
   const showNextJob = header.showNextJob && primary === null;
+  const canDismiss = header.dismissible && header.dismissed === null;
   return (
     <Page
       label="Application"
@@ -109,13 +116,14 @@ function OpenApplication({ id }: { id: number }) {
               Next job
             </Button>
           )}
+          {canDismiss && (
+            <Button id="app-dismiss-open" disabled={dismissing} onClick={() => setDismissing(true)}>
+              Dismiss
+            </Button>
+          )}
           {primary?.settings != null && (
-            <Button
-              id="primary-settings"
-              icon={Settings}
-              onClick={() => openSettings(primary.settings as SettingsSection)}
-            >
-              Open Settings &gt; {primary.settings}
+            <Button id="primary-settings" icon={Settings} onClick={() => openSection(primary.settings ?? "")}>
+              Open {sectionPlace(primary.settings)} &gt; {primary.settings}
             </Button>
           )}
           {primary !== null && (
@@ -133,10 +141,28 @@ function OpenApplication({ id }: { id: number }) {
       }
     >
       {primary?.hint != null && <p className="text-right text-small text-muted">{primary.hint}</p>}
+      {canDismiss && (
+        <DismissJobDialog
+          header={header}
+          open={dismissing}
+          dismiss={dismissJob.dismiss}
+          onClose={() => setDismissing(false)}
+          onDone={() => setDismissing(false)}
+        />
+      )}
+      {header.dismissed !== null && <DismissedNotice dismissal={header.dismissed} restore={dismissJob.restore} />}
       <Stepper steps={header.steps} current={header.stepIndex} />
       <Tabs<Tab> label="Application sections" tabs={TABS} value={tab} onChange={model.setTab} />
       {tab === "jd" && <JdTab id={id} />}
-      {tab === "cv" && <CvTab id={id} cvEpoch={head.cvEpoch} busy={head.jobLabel !== null} revise={head.revise} />}
+      {tab === "cv" && (
+        <CvTab
+          id={id}
+          cvEpoch={head.cvEpoch}
+          busy={head.jobLabel !== null}
+          readOnly={header.dismissed !== null}
+          revise={head.revise}
+        />
+      )}
       {tab === "apply" && <ApplyTab id={id} session={apply} />}
       {tab === "timeline" && <TimelineTab id={id} />}
     </Page>

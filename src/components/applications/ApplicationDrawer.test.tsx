@@ -349,3 +349,97 @@ describe("the application drawer", () => {
     expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
   });
 });
+
+describe("dismissing a job in CVs", () => {
+  const DISMISSED: Partial<ApplicationHeader> = {
+    status: { key: "dismissed", label: "Dismissed", tone: "neutral" },
+    primary: null,
+    dismissible: false,
+    dismissed: { reason: "salary too low", at: new Date(Date.now() - 3 * 3_600_000).toISOString() },
+  };
+
+  it("offers a plain Dismiss beside the primary, and dismisses with a reason and the company", async () => {
+    const user = userEvent.setup();
+    mocked.dismissApplication.mockResolvedValue({ also: 0, kept: 0, notExcluded: null });
+    const drawer = await open();
+    const dismiss = within(drawer).getByRole("button", { name: "Dismiss" });
+    expect(dismiss.classList.contains("bg-accent")).toBe(false);
+    expect(primaryButtons()).toHaveLength(1);
+    await user.click(dismiss);
+    const form = await screen.findByRole("dialog", { name: "Dismiss this job" });
+    expect(within(form).getByText("Acme — Backend Engineer")).toBeTruthy();
+    await user.type(within(form).getByRole("textbox", { name: "Why dismiss this job" }), "salary too low");
+    await user.click(within(form).getByRole("checkbox", { name: "Don't show Acme again" }));
+    await user.click(within(form).getByRole("button", { name: "Dismiss job" }));
+    expect(mocked.dismissApplication).toHaveBeenCalledWith(7, "salary too low", true);
+    expect(await screen.findByRole("status", { name: "Job dismissed" })).toBeTruthy();
+    // The job left CVs: the dialog and the drawer close.
+    await waitFor(() => expect(useNav.getState().drawer).toBeUndefined());
+    expect(screen.queryByRole("dialog", { name: "Dismiss this job" })).toBeNull();
+  });
+
+  it("cancels the dialog, and says in it why a dismissal failed", async () => {
+    const user = userEvent.setup();
+    mocked.dismissApplication.mockRejectedValue(new CommandError("its application form is open: close it first"));
+    const drawer = await open();
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
+    const form = await screen.findByRole("dialog", { name: "Dismiss this job" });
+    await user.click(within(form).getByRole("button", { name: "Dismiss job" }));
+    expect((await within(form).findByRole("alert")).textContent).toContain(
+      "Not dismissed: its application form is open",
+    );
+    expect(useNav.getState().drawer).toEqual({ kind: "app", id: 7 });
+    await user.click(within(form).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Dismiss this job" })).toBeNull());
+    // Opened again, the dialog starts afresh.
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
+    const again = await screen.findByRole("dialog", { name: "Dismiss this job" });
+    expect(within(again).queryByRole("alert")).toBeNull();
+  });
+
+  it("says in a toast when the company could not be excluded, and when a restored job's still is", async () => {
+    const user = userEvent.setup();
+    mocked.dismissApplication.mockResolvedValue({ also: 0, kept: 0, notExcluded: "disk full" });
+    const drawer = await open();
+    await user.click(within(drawer).getByRole("button", { name: "Dismiss" }));
+    const form = await screen.findByRole("dialog", { name: "Dismiss this job" });
+    await user.click(within(form).getByRole("button", { name: "Dismiss job" }));
+    const failed = await screen.findByRole("alert", { name: "Job dismissed, but the company could not be excluded" });
+    expect(within(failed).getByText("disk full")).toBeTruthy();
+
+    // Opened again from Leads > Dismissed: Restore says the company is still excluded.
+    mocked.restoreApplication.mockResolvedValue({ hidden: null, excluded: true });
+    mocked.readApplication.mockResolvedValue(header(DISMISSED));
+    act(() => useNav.setState({ drawer: { kind: "app", id: 7 } }));
+    applicationsChanged();
+    const reopened = await screen.findByRole("dialog", { name: "Acme: Backend Engineer" });
+    const notice = await within(reopened).findByRole("group", { name: "You dismissed this job" });
+    mocked.readApplication.mockResolvedValue(header());
+    await user.click(within(notice).getByRole("button", { name: "Restore" }));
+    const restored = await screen.findByRole("status", { name: "Job restored" });
+    expect(within(restored).getByText(/Its company is still excluded/)).toBeTruthy();
+  });
+
+  it("offers no Dismiss when the job is not dismissible", async () => {
+    const drawer = await open({ dismissible: false });
+    expect(within(drawer).queryByRole("button", { name: "Dismiss" })).toBeNull();
+  });
+
+  it("shows a dismissed job with its reason and a plain Restore, and no primary", async () => {
+    const user = userEvent.setup();
+    useNav.setState({ stage: "leads" });
+    mocked.restoreApplication.mockResolvedValue({ hidden: null, excluded: false });
+    mocked.readApplication.mockResolvedValue(header(DISMISSED));
+    useNav.setState({ screen: "jobs", stage: "leads", drawer: { kind: "app", id: 7 } });
+    render(<ApplicationDrawer />);
+    const drawer = await screen.findByRole("dialog", { name: "Acme: Backend Engineer" });
+    const notice = await within(drawer).findByRole("group", { name: "You dismissed this job" });
+    expect(within(notice).getByText("Dismissed 3 h ago: salary too low")).toBeTruthy();
+    expect(primaryButtons()).toHaveLength(0);
+    expect(within(drawer).queryByRole("button", { name: "Dismiss" })).toBeNull();
+    // A dismissed job is on no stage: the page stays on Leads.
+    expect(useNav.getState().stage).toBe("leads");
+    await user.click(within(notice).getByRole("button", { name: "Restore" }));
+    expect(mocked.restoreApplication).toHaveBeenCalledWith(7);
+  });
+});
