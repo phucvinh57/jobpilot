@@ -1,6 +1,6 @@
 # JobPilot
 
-Desktop app (Rust core, Tauri + React UI, Linux) that turns a job description into a CV tailored from your own `profile.yaml`, lets you edit it, fills and submits the application in a managed browser **only after you confirm**, and tracks replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider.
+Desktop app (Rust core, Tauri + React UI, Linux) that turns a job description into a CV tailored from what you tell it about your work (your old CV as a PDF, a LinkedIn export or a few notes), lets you edit it, fills and submits the application in a managed browser **only after you confirm**, and tracks replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider.
 
 Flow: paste a JD link (or file) -> Generate CV -> edit / Approve CV -> Review & Submit -> Submit -> status follows your Gmail replies.
 
@@ -12,7 +12,6 @@ It can also find the jobs for you: job sources (Greenhouse, Lever, Ashby boards,
 - [`typst`](https://typst.app) CLI: `cargo install --locked typst-cli` (the app tells you if it is missing)
 - Chrome or Chromium for browser automation (Settings > Browser sessions can also download Chrome for Testing, only when you click it)
 - Linux with Wayland or X11, WebKitGTK 4.1 (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev` to build), and a Secret Service (gnome-keyring / KWallet, libdbus) for the keyring
-- `profile.yaml`: your master profile, the only source of facts for CVs. Found by walking up from the working directory, else `<data dir>/profile.yaml`, else set its path in Settings
 
 ## Run
 
@@ -27,8 +26,9 @@ Throwaway state for trying it out: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=m
 ## First-time setup (Settings)
 
 1. **AI provider** (Settings > AI providers): add a provider (OpenAI-compatible or Anthropic), base URL, model and API key, then press Test. Until one works, the app shows a "set up a provider" banner.
-2. **Browser sessions** (Settings > Browser sessions): press New session, enter a name and the login URL (e.g. `https://www.linkedin.com/login`), press Open browser to log in, sign in by hand in the window that opens, then press Done. JobPilot keeps that browser profile and reuses it for that site (Check re-tests that you are still logged in).
-3. **Gmail** (Settings > Gmail, optional): create an OAuth client in Google Cloud Console (APIs & Services > Credentials > OAuth client ID, type Desktop app; enable the Gmail API, read-only scope). Paste the client ID (and secret) into Settings, then Connect Gmail. The consent page opens in your browser and redirects to `http://127.0.0.1:<port>`. The refresh token goes to the keyring.
+2. **About you** (Settings > About you): add your CV (.pdf, .md or .txt), a LinkedIn export, or type a few notes about your work; add as many as you like. JobPilot reads them into your profile and shows what it understood (roles, education, skills) and anything it left out because no document states it. To fix something, change or add a document and press Re-read. There is no file to edit.
+3. **Browser sessions** (Settings > Browser sessions): press New session, enter a name and the login URL (e.g. `https://www.linkedin.com/login`), press Open browser to log in, sign in by hand in the window that opens, then press Done. JobPilot keeps that browser profile and reuses it for that site (Check re-tests that you are still logged in).
+4. **Gmail** (Settings > Gmail, optional): create an OAuth client in Google Cloud Console (APIs & Services > Credentials > OAuth client ID, type Desktop app; enable the Gmail API, read-only scope). Paste the client ID (and secret) into Settings, then Connect Gmail. The consent page opens in your browser and redirects to `http://127.0.0.1:<port>`. The refresh token goes to the keyring.
 
 ## Finding jobs
 
@@ -42,7 +42,7 @@ Throwaway state for trying it out: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=m
 
 **When a site stops the search.** If a source meets a login, a captcha or a block page, JobPilot never tries to get past it. That source pauses, you get a desktop notification and a "needs you" line in the Queue. **Open browser** shows the page in a visible window (in the source's session, if it has one); log in or solve the check yourself, then press **Continue** (or **Skip** to leave the source for the next run). The other sources keep going meanwhile, and a paused source survives restarting the app. Three stops in a row rest that source for the day.
 
-**Preferences** is a chat that asks what you want (it can read an uploaded CV for context, without changing your profile) and saves it; you can also edit every field directly. Discovery scores leads with these preferences. **Trends** builds a digest of market signals from sources you add, with every statement linked to its source; "Add to preferences" puts a suggestion in the Preferences chat for you to send.
+**Preferences** is a chat that asks what you want (it sees your profile for context) and saves it; you can also edit every field directly. Discovery scores leads with these preferences. **Trends** builds a digest of market signals from sources you add, with every statement linked to its source; "Add to preferences" puts a suggestion in the Preferences chat for you to send.
 
 ## Package
 
@@ -73,7 +73,7 @@ Other env vars: `JOBPILOT_CHROME` (Chrome path), `JOBPILOT_TYPST` (typst path), 
 ## Privacy
 
 - No telemetry. The app talks only to: your AI provider, the job sites you apply on, the job sources you add (and, for the job insight, the company's own site when the posting you give is on it), Google (if you connect Gmail), and the Chrome-for-Testing index if you press Download.
-- The JD text and the parts of `profile.yaml` needed for the CV are sent to your AI provider. Scoring a found posting sends the posting text, your preferences and a compact profile (headline, summary, skills, roles and degrees; no name or contact details).
+- The documents you add in Settings > About you are sent to your AI provider when they are read into your profile; they stay in the local database. The JD text and your profile are sent when a CV is written. Scoring a found posting sends the posting text, your preferences and a compact profile (headline, summary, skills, roles and degrees; no name or contact details).
 - Logs go to stderr and `logs/`, and pass through a redaction layer (API keys, bearer tokens, OAuth codes/tokens, and every secret the app has read from the keyring are masked). Page, JD and email bodies are not logged.
 
 ## Safety
@@ -82,7 +82,7 @@ Other env vars: `JOBPILOT_CHROME` (Chrome path), `JOBPILOT_TYPST` (typst path), 
 - **Dry run** fills the form and never submits; `JOBPILOT_DRY_RUN=1` forces it everywhere.
 - The LLM only supplies values for known field ids. It never picks actions or URLs, and page/JD/email text is treated as untrusted.
 - Job discovery is read-only and polite (a delay per site, a cap on pages per run). Every request to a third-party address, from the app or from the discovery browser, is refused when it targets this machine or a private network. The discovery browser does not hide that it is automated, and a login, captcha or block page is always handed to you.
-- CVs only contain facts from `profile.yaml`.
+- CVs only contain facts from your documents: a fact the reader cannot find in a document is left out of your profile (Settings > About you lists it), and every CV is checked against the profile.
 
 ## Develop
 

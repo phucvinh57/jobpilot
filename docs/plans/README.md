@@ -74,7 +74,7 @@ Phase 3   end-to-end run on demo data + fake LLM, update CLAUDE.md / README (Hig
 
 - **No bypassing anti-bot measures.** Captcha, login and block pages are detected, the run for that source pauses, the user is notified and solves it in the visible managed browser. No solver services, no fingerprint spoofing.
 - **Untrusted text.** Job pages, HN comments and reports are data. Code decides which URLs are visited (source adapters, search results restricted to http/https, read-only). The LLM only extracts, scores and summarises into fixed schemas.
-- **Facts only from `profile.yaml`.** An uploaded CV is chat context; it never becomes CV facts by itself (see decision 4).
+- **Facts only from the user's documents.** The profile is read from the files and notes the user adds in Settings > About you; a fact no document states is left out (see decision 4).
 - **Forward-only statuses stay as they are.** A found job is a `lead` (own table), not a new application status; it becomes an application when a CV is prepared.
 - **Flows are graphs.** Each plan lists its graph (nodes, edges, interrupts, thread id). Edges are Rust code over the state; a paused or failed run resumes from its checkpoint.
 - **Cost is bounded.** Discovery scores and summarises each lead (two LLM calls); a CV is written only when the user asks for it (decision 2).
@@ -84,7 +84,7 @@ Phase 3   end-to-end run on demo data + fake LLM, update CLAUDE.md / README (Hig
 1. **Job sources for the first version (confirmed).** Public ATS boards (Greenhouse, Lever, Ashby), HN "Who is hiring", YC Work at a Startup, plus user-added career-page URLs. Login-walled boards (LinkedIn, ITviec, TopDev) in a second step through managed sessions.
 2. **When a CV is written (confirmed).** Only on demand: the queue shows score and summary, "Prepare CV" writes the CV.
 3. **Apply (confirmed).** Keep the current flow (app fills the form, user reviews answers and presses Submit; manual hand-off when it cannot).
-4. **Uploaded CV (default, not yet confirmed).** context for the chat only; a separate, explicit "Import into profile" action shows a diff the user approves before `profile.yaml` changes.
+4. **Documents replace `profile.yaml` (decided).** The user adds files (.pdf/.md/.txt) and notes; the model reads them into the profile (`engine/profile`), a trace check keeps only facts found in them, and Settings > About you shows a read-only summary and what was left out. To change the profile the user changes a document.
 5. **When discovery runs (default, not yet confirmed).** a "Search now" button plus an optional daily run while the app is open.
 6. **Market reports search (confirmed).** Fixed APIs first (HN Algolia, YC directory, RSS, user URLs); general web search through an optional search API key (Brave / Tavily) rather than driving a search engine in the browser, which triggers captchas.
 7. **Graph runtime (confirmed).** Every new flow is an `adk-graph` graph behind the `core/graph` facade, with checkpoints in the app's SQLite file. See [graph-libraries.md](graph-libraries.md).

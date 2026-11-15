@@ -1,22 +1,22 @@
 # JobPilot
 
-Rust desktop app (Tauri v2 shell + React web UI): JD link/file -> tailored CV (from `profile.yaml`) -> review -> managed-browser apply -> status from Gmail.
+Rust desktop app (Tauri v2 shell + React web UI): JD link/file -> tailored CV (from the profile read from the user's documents) -> review -> managed-browser apply -> status from Gmail.
 
 ## Layout
 
 ```
 Cargo.toml                 workspace
-profile.yaml               master profile, source of truth for every fact (never modify it from code except the `application:` section, P5)
 assets/cv.typ              Typst renderer: typst compile --root <dir> --input data=<file>.yaml cv.typ out.pdf
-assets/prompts/            tailor.md (system prompt), example-cv.yaml (few-shot)
+assets/prompts/            tailor.md (system prompt), example-cv.yaml (few-shot), profile.md (reads the user's documents into the profile)
 assets/jobpilot.desktop    desktop entry (StartupWMClass=jobpilot, same as the window app id)
 assets/icons/              app icon (svg + png), used by the deb / AppImage
 assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) bundled by the web app (`src/styles.css`)
 scripts/package.sh         release .deb + AppImage (Tauri bundler) -> release/
 src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri; the shell's contexts call it, never the reverse
-  paths      data dir ($XDG_DATA_HOME/jobpilot, override JOBPILOT_DATA_DIR), profile path, logs_dir
+  paths      data dir ($XDG_DATA_HOME/jobpilot, override JOBPILOT_DATA_DIR), logs_dir
   runtime    global tokio runtime; spawn(fut) -> oneshot::Receiver
-  store/     SQLite (rusqlite), one file per table: applications, events, providers, sessions, emails, kv, status, sources, leads, preferences, chat, trends, graph
+  store/     SQLite (rusqlite), one file per table: applications, events, providers, sessions, emails, kv, status, sources, leads, preferences, chat, trends, graph,
+             profile (the user's documents + the profile read from them), answers (remembered application answers)
   secrets    OS keyring wrapper (JOBPILOT_SECRETS=memory for tests); every value read/written is registered with redact
   redact     mask secrets in any text (key shapes, bearer/OAuth tokens, exact registered values)
   logging    tracing: stderr + rolling <data_dir>/logs/jobpilot.log.<date> (14 kept), both through redact
@@ -33,6 +33,9 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
   net        P8/P10   `net::http`: the one safe HTTP client for third-party data (public hosts only, per-host delay, size cap, hop-by-hop redirects)
   notify     P8   desktop notifications (best effort)
   prefs      P8/P9   `Preferences` model + `Core::preferences/save_preferences`; P9 `chat` + `chat_graph` (graph `prefs_chat`), `cv_upload` (context only), `undo`, `suggest` (chips for the preference form), `appearance` (light/dark, kv `ui.appearance`)
+  profile    the user's profile: `sources` (uploaded .pdf/.md/.txt files and typed notes, kept in SQLite), `extract` (`Core::read_profile_sources`:
+                  one `complete_json` -> the CV schema `Cv`), `trace` (keep only facts found in the documents; the rest is `left_out`),
+                  `typst` (escape markup fields); `Core::profile` / `require_profile` (NoProfile) is the one way to read it
   discover   P10/P12   `source/` (greenhouse, lever, ashby, hn_hiring, yc, career_page), `run` (graphs `discovery` and `source_run`), `score`, `dedup`, `handoff`,
                   `sources`, `queue` (QueueSnapshot), `promote` (graph `prepare_cv`, dismiss), `manual` (`Core::add_lead`: pasted link/file -> scored lead)
   trends     P13a collection: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`;
@@ -40,7 +43,7 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
                   P13b `digest/` (extract, count, synthesize, cite: every point must cite stored items)
 src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |
-             profile (profile.yaml, preferences) | integrations (AI Providers, Gmail, browser Sessions) | trends (Digest, trend sources)
+             profile (About you: the documents the profile is read from; preferences) | integrations (AI Providers, Gmail, browser Sessions) | trends (Digest, trend sources)
   tauri.conf.json, capabilities/default.json   one window `main`; permissions: core + the file picker only; strict CSP (no remote origin)
   src/main.rs          only calls `jobpilot_lib::run()`
   src/lib.rs           composition root: logging, `Core`, demo seed, mail autostart, the window (app id `jobpilot`), `apply::close_all` on exit;
@@ -80,10 +83,10 @@ src/                   React + Vite + TypeScript + Tailwind
 - Web checks: `bun run check` (tsc, Biome lint + format with the context-boundary rules, vitest); `bun run format` applies Biome's fixes.
 - Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace` (the engine shares the `jobpilot` crate with Tauri: even engine-only tests need a `dist/` (`scripts/check.sh` writes a placeholder when there is none) and the Linux libs below)
 - Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
-- End-to-end without real services: `cargo test -p jobpilot --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
+- End-to-end without real services: `cargo test -p jobpilot --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: a text document -> profile, source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
 - Package: `scripts/package.sh` -> `release/`
 - Needs: Rust, Node + bun, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
-- Pre-PR checks: `scripts/check.sh [--all] [--only web|rust|render]` runs the groups the paths changed since main touch: `web` (typecheck, Biome, vitest, vite build), `rust` (clippy + test; a placeholder `dist/` when there is no web build, so a UI change never builds Rust), `render` (typst). CI runs each group as its own parallel job (`--plan` decides which) with `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps), restoring the caches saved by main. `bun install` installs the lefthook hooks (pre-commit: Biome on staged files; pre-push: `check.sh`); a clone that set `core.hooksPath` before: `git config --unset core.hooksPath && bunx lefthook install`.
+- Pre-PR checks: `scripts/check.sh [--all] [--only web|rust|render]` runs the groups the paths changed since main touch: `web` (typecheck, Biome, vitest, vite build), `rust` (clippy + test; a placeholder `dist/` when there is no web build, so a UI change never builds Rust), `render` (typst on `assets/prompts/example-cv.yaml`). CI runs each group as its own parallel job (`--plan` decides which) with `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps), restoring the caches saved by main. `bun install` installs the lefthook hooks (pre-commit: Biome on staged files; pre-push: `check.sh`); a clone that set `core.hooksPath` before: `git config --unset core.hooksPath && bunx lefthook install`.
 - Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_lib::engine=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
 
 ## Check the UI visually
@@ -126,7 +129,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 
 ## Rules
 
-- Never add facts to a CV that are not in `profile.yaml` (employers, titles, dates, institutions, numbers, technologies).
+- Never add facts to a CV that are not in the user's documents (employers, titles, dates, institutions, numbers, technologies). The profile is read from them (`engine::profile`), every fact must trace back to a document (`profile::trace`), and every CV is checked against the profile (`pipeline::guard`). Code never writes a fact into the profile; the user changes a document and reads again.
 - Secrets (API keys, OAuth tokens) only in the OS keyring via `engine::secrets`; never in the DB, logs or files. Logs are redacted as a second line of defence: still never put a secret in a log call, an error message or a `Debug` dump.
 - The UI never blocks and never owns I/O: a command calls the engine through `shared::run(fut)` / `shared::run_sync(f)` (the engine runtime); long work streams progress as events and the command returns the final result.
 - The shell reads/writes through `Core` only; no SQL or HTTP in `src-tauri` outside `engine/`. The web app talks to the shell only through `src/shared/bridge`, and only from a context's `api/` layer.
