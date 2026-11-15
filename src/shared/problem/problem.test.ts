@@ -27,6 +27,10 @@ describe("problemActions", () => {
     ]);
   });
 
+  it("sends a missing profile to Settings > About you", () => {
+    expect(problemActions(problem({ kind: "noProfile", settingsSection: "About you" }), true)).toEqual(["settings"]);
+  });
+
   it("offers Check again for a missing typst", () => {
     expect(problemActions(problem({ kind: "noTypst" }), false)).toEqual(["recheck"]);
   });
@@ -47,6 +51,7 @@ describe("needsRecheck", () => {
   it("is true for a missing prerequisite", () => {
     expect(needsRecheck(problem({ kind: "noProvider" }))).toBe(true);
     expect(needsRecheck(problem({ kind: "noChrome" }))).toBe(true);
+    expect(needsRecheck(problem({ kind: "noProfile" }))).toBe(true);
     expect(needsRecheck(problem({ kind: "network" }))).toBe(false);
   });
 });

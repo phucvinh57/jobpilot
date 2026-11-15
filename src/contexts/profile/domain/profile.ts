@@ -15,13 +15,6 @@ export interface ListField {
   suggestions: string[];
 }
 
-/** The CV attached for suggestions (context only: never copied into a CV). */
-export interface Cv {
-  name: string;
-  chars: number;
-  truncated: boolean;
-}
-
 export interface Limits {
   maxListItems: number;
   maxItemChars: number;
@@ -30,13 +23,10 @@ export interface Limits {
 
 /** Everything the card shows, read in one go. */
 export interface Profile {
-  /** The master profile (`profile.yaml`) the CVs are written from. */
-  profilePath: string;
   jobType: JobType;
   fields: ListField[];
   /** The user's own words, as saved. */
   notes: string;
-  cv: Cv | null;
   canUndo: boolean;
   limits: Limits;
 }

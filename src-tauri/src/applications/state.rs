@@ -44,7 +44,7 @@ pub struct ApplyView {
     pub review: Option<Review>,
     /// What the user typed (field id -> value); rows without an entry keep the value they were filled with.
     pub typed: HashMap<String, String>,
-    /// Rows whose answer is saved to `profile.yaml`'s `application:` section.
+    /// Rows whose answer is remembered for the next applications.
     pub remember: HashSet<String>,
     /// Bumped when a new review arrives, so the web app starts its editors from it once.
     pub generation: u64,

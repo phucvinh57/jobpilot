@@ -1,10 +1,22 @@
 // The CV tab: what the posting asks for (checked against the profile), the fact check, `cv.yaml` in
 // an editor, the CV on paper, and "Ask AI". The CV and the posting are untrusted text: shown as text.
 
-import { Check, ExternalLink, Minus } from "lucide-react";
+import { Check, FilePlus, Minus } from "lucide-react";
 import { useState } from "react";
 
-import { Banner, Button, Caption, Card, ErrorBanner, Heading, Section, Tag, TextInput, TONE_CLASS } from "@/shared";
+import {
+  Banner,
+  Button,
+  Caption,
+  Card,
+  ErrorBanner,
+  Heading,
+  Section,
+  Tag,
+  TextInput,
+  TONE_CLASS,
+  useNav,
+} from "@/shared";
 
 import { ASK_PLACEHOLDER, emptyEditorText, previewPlaceholder, requirementLabel, showTraced } from "../domain/cv";
 import type { Requirement } from "../domain/types";
@@ -32,6 +44,7 @@ function RequirementRow({ requirement }: { requirement: Requirement }) {
 
 export function CvTab(input: CvTabInput) {
   const cv = useCvTab(input);
+  const openSettings = useNav((s) => s.openSettings);
   const [instruction, setInstruction] = useState("");
   const data = cv.cv;
 
@@ -64,12 +77,17 @@ export function CvTab(input: CvTabInput) {
               </ul>
               {data.hasGaps && (
                 <div className="flex">
-                  <Button id="open-profile" variant="ghost" size="compact" icon={ExternalLink} onClick={cv.openProfile}>
-                    Open profile.yaml
+                  <Button
+                    id="add-to-profile"
+                    variant="ghost"
+                    size="compact"
+                    icon={FilePlus}
+                    onClick={() => openSettings("About you")}
+                  >
+                    Add to your profile
                   </Button>
                 </div>
               )}
-              {cv.openError && <p className="text-small text-danger-fg">{cv.openError.message}</p>}
             </Section>
           )}
           {traced && (
@@ -77,7 +95,7 @@ export function CvTab(input: CvTabInput) {
               id="cv-traced"
               tone="ok"
               title="Every fact traced to your profile"
-              body="Employers, titles, dates and technologies all match profile.yaml."
+              body="Employers, titles, dates and technologies all match your documents."
             />
           )}
           {cv.problem && <ErrorBanner id="cv-problem" error={cv.problem} title="The CV does not compile" />}
@@ -85,7 +103,7 @@ export function CvTab(input: CvTabInput) {
             <Banner
               id="cv-warnings"
               tone="warn"
-              title="Not backed by profile.yaml (kept, check before approving):"
+              title="Not backed by your documents (kept, check before approving):"
               body={
                 <ul className="flex max-h-[120px] flex-col gap-1 overflow-y-auto font-mono">
                   {cv.warnings.map((warning) => (

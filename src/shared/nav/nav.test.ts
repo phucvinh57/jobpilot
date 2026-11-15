@@ -27,6 +27,8 @@ describe("settings sections", () => {
   it("a call to action finds its card", () => {
     expect(sectionId("AI providers")).toBe("settings-ai-providers");
     expect(sectionId("Profile & preferences")).toBe("settings-profile-preferences");
+    expect(sectionId("About you")).toBe("settings-about-you");
+    expect(SETTINGS_SECTIONS[0]).toBe("About you");
     expect(new Set(SETTINGS_SECTIONS.map(sectionId)).size).toBe(SETTINGS_SECTIONS.length);
   });
 });

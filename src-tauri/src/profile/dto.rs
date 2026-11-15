@@ -1,9 +1,7 @@
 //! Read models of this context (serde, camelCase). Core types stay free of serde and Tauri.
 
-use std::path::Path;
-
 use crate::engine::prefs::chat::{MAX_LIST_ITEMS, MAX_NOTES_CHARS};
-use crate::engine::prefs::{PrefSuggestions, Preferences, UploadedCv};
+use crate::engine::prefs::{PrefSuggestions, Preferences};
 use serde::Serialize;
 
 use super::rules::{job_type_key, visible_suggestions, Field, MAX_ITEM_CHARS};
@@ -21,25 +19,6 @@ pub struct ListFieldDto {
     pub suggestions: Vec<String>,
 }
 
-/// The CV attached for suggestions (context only: it is never copied into a CV).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CvDto {
-    pub name: String,
-    pub chars: usize,
-    pub truncated: bool,
-}
-
-impl From<&UploadedCv> for CvDto {
-    fn from(cv: &UploadedCv) -> Self {
-        Self {
-            name: cv.name.clone(),
-            chars: cv.chars,
-            truncated: cv.truncated,
-        }
-    }
-}
-
 /// Limits the screen needs to decide what can be saved (the core enforces them again).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,27 +32,18 @@ pub struct LimitsDto {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileDto {
-    /// The master profile (`profile.yaml`) the CVs are written from.
-    pub profile_path: String,
     /// `any` / `remote` / `hybrid` / `onsite`.
     pub job_type: &'static str,
     pub fields: Vec<ListFieldDto>,
     /// The user's own words, as saved.
     pub notes: String,
-    pub cv: Option<CvDto>,
     pub can_undo: bool,
     pub limits: LimitsDto,
 }
 
 impl ProfileDto {
     /// The card around `prefs`.
-    pub fn from_parts(
-        profile_path: &Path,
-        prefs: &Preferences,
-        suggestions: &PrefSuggestions,
-        cv: Option<&UploadedCv>,
-        can_undo: bool,
-    ) -> Self {
+    pub fn from_parts(prefs: &Preferences, suggestions: &PrefSuggestions, can_undo: bool) -> Self {
         let fields = Field::ALL
             .iter()
             .map(|&field| ListFieldDto {
@@ -85,11 +55,9 @@ impl ProfileDto {
             })
             .collect();
         Self {
-            profile_path: profile_path.display().to_string(),
             job_type: job_type_key(prefs.remote),
             fields,
             notes: prefs.notes.clone(),
-            cv: cv.map(CvDto::from),
             can_undo,
             limits: LimitsDto {
                 max_list_items: MAX_LIST_ITEMS,
@@ -98,6 +66,86 @@ impl ProfileDto {
             },
         }
     }
+}
+
+// ------------------------------------------------------------------ About you
+
+/// One document the profile is read from. Never its text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AboutSourceDto {
+    pub id: i64,
+    /// File name or the note's title.
+    pub name: String,
+    /// `file` / `text`.
+    pub kind: String,
+    /// Characters kept.
+    pub chars: usize,
+    /// The file had more text than was kept.
+    pub truncated: bool,
+}
+
+/// One role of the summary: "Position — Company · dates".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AboutRoleDto {
+    pub position: String,
+    pub company: String,
+    /// `start – end`, one side, or empty.
+    pub dates: String,
+}
+
+/// One degree of the summary.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AboutEducationDto {
+    pub degree: String,
+    pub institution: String,
+    pub dates: String,
+}
+
+/// What was understood from the documents, read-only.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AboutSummaryDto {
+    pub name: String,
+    pub headline: String,
+    pub roles: Vec<AboutRoleDto>,
+    pub education: Vec<AboutEducationDto>,
+    /// Every skill once, in profile order.
+    pub skills: Vec<String>,
+    /// `Language (fluency)`.
+    pub languages: Vec<String>,
+    /// Project names.
+    pub projects: Vec<String>,
+    /// Certification names.
+    pub certifications: Vec<String>,
+}
+
+/// Size limits of the documents (the core enforces them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AboutLimitsDto {
+    /// Per document.
+    pub max_chars: usize,
+    /// All documents together.
+    pub max_total_chars: usize,
+}
+
+/// Settings > About you: the documents, where the reading stands and what was understood.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AboutDto {
+    pub sources: Vec<AboutSourceDto>,
+    /// `empty` (no documents) / `unread` (documents, no profile yet) / `stale` (the documents
+    /// changed since the read) / `ready`.
+    pub status: &'static str,
+    pub summary: Option<AboutSummaryDto>,
+    /// Facts found in the documents that could not be traced, so left out.
+    pub left_out: Vec<String>,
+    /// When the profile was read (RFC 3339).
+    pub built_at: Option<String>,
+    pub limits: AboutLimitsDto,
 }
 
 /// The answer of an add: the card, and why nothing was added when the user should be told.
@@ -119,9 +167,7 @@ pub struct NotesReadDto {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use crate::engine::prefs::{PrefSuggestions, Preferences, Remote, UploadedCv};
+    use crate::engine::prefs::{PrefSuggestions, Preferences, Remote};
 
     use super::ProfileDto;
 
@@ -140,29 +186,11 @@ mod tests {
             locations: vec!["Hanoi".into(), "Remote".into()],
             domains: vec![],
         };
-        let cv = UploadedCv {
-            name: "cv.pdf".into(),
-            chars: 1200,
-            truncated: true,
-        };
-        let dto = ProfileDto::from_parts(
-            Path::new("/home/me/profile.yaml"),
-            &prefs,
-            &suggestions,
-            Some(&cv),
-            true,
-        );
+        let dto = ProfileDto::from_parts(&prefs, &suggestions, true);
 
-        assert_eq!(dto.profile_path, "/home/me/profile.yaml");
         assert_eq!(dto.job_type, "hybrid");
         assert_eq!(dto.notes, "Senior only");
         assert!(dto.can_undo);
-        assert_eq!(
-            dto.cv
-                .as_ref()
-                .map(|c| (c.name.as_str(), c.chars, c.truncated)),
-            Some(("cv.pdf", 1200, true))
-        );
 
         let keys: Vec<_> = dto.fields.iter().map(|f| f.key).collect();
         assert_eq!(
@@ -185,18 +213,11 @@ mod tests {
 
     #[test]
     fn the_card_serializes_in_camel_case() {
-        let dto = ProfileDto::from_parts(
-            Path::new("p.yaml"),
-            &Preferences::default(),
-            &PrefSuggestions::default(),
-            None,
-            false,
-        );
+        let dto = ProfileDto::from_parts(&Preferences::default(), &PrefSuggestions::default(), false);
         let json = serde_json::to_value(&dto).unwrap_or_default();
-        assert_eq!(json["profilePath"], "p.yaml");
+        assert!(json.get("profilePath").is_none() && json.get("cv").is_none());
         assert_eq!(json["jobType"], "any");
         assert_eq!(json["canUndo"], false);
-        assert!(json["cv"].is_null());
         assert_eq!(json["fields"][2]["key"], "skills");
         assert!(json["limits"]["maxNotesChars"]
             .as_u64()

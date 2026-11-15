@@ -688,7 +688,7 @@ impl Requirement {
     pub fn note(&self) -> Option<String> {
         self.gap.as_ref().map(|g| {
             if g.eq_ignore_ascii_case(&self.text) {
-                "Nothing in profile.yaml shows it".to_string()
+                "Nothing in your documents shows it".to_string()
             } else {
                 g.clone()
             }
@@ -1697,7 +1697,7 @@ mod tests {
         };
         assert_eq!(
             same.note().as_deref(),
-            Some("Nothing in profile.yaml shows it")
+            Some("Nothing in your documents shows it")
         );
         let other = Requirement {
             text: "Kafka".into(),

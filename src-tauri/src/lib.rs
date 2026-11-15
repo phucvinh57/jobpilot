@@ -36,6 +36,8 @@ pub fn run() -> anyhow::Result<()> {
     );
 
     let core = Arc::new(Core::open_at(paths, Secrets::from_env())?);
+    // The documents in Settings > About you replaced the preference chat's CV upload.
+    core.forget_old_cv_upload();
     // Sample data for UI work: `JOBPILOT_DEMO=1 cargo run -p jobpilot` (never on by default).
     if std::env::var_os("JOBPILOT_DEMO").is_some() {
         demo::seed(&core)?;

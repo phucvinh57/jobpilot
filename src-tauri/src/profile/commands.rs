@@ -5,21 +5,24 @@
 //! under the core's one lock, which a notes read holds too), so a click never overwrites a field that
 //! changed elsewhere (a Trends "add", a dismissed company, the model's merge). The edit hands back the
 //! document as it is after it, which is what the card shows.
+//!
+//! Settings > About you (`profile_about`, `profile_add_*`, `profile_remove_source`, `profile_read`):
+//! the documents the profile is read from. Each answers with the whole section ([`AboutDto`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use crate::engine::pipeline::Cv;
-use crate::engine::prefs::{clean_notes, cv_upload, PrefSuggestions, Preferences};
+use anyhow::{anyhow, ensure, Result};
+use crate::engine::prefs::{clean_notes, PrefSuggestions, Preferences};
+use crate::engine::profile::sources::is_supported;
 use crate::engine::Core;
 use tauri::ipc::Invoke;
 use tauri::State;
 
-use super::dto::{AddDto, NotesReadDto, ProfileDto};
+use super::dto::{AboutDto, AddDto, NotesReadDto, ProfileDto};
 use super::rules::{
-    add_check, is_profile_file_name, notes_status, parse_job_type, unread_notes_message,
-    without_item, AddCheck, Field, NotesStatus, Presence,
+    about, add_check, notes_status, parse_job_type, unread_notes_message, without_item, AddCheck,
+    Field, NotesStatus, Presence,
 };
 use crate::shared::{run, run_sync, CommandResult};
 
@@ -34,12 +37,9 @@ fn snapshot_of(core: &Core, prefs: Preferences) -> Result<ProfileDto> {
         tracing::warn!("preference suggestions: {e:#}");
         PrefSuggestions::default()
     });
-    let cv = cv_upload::stored(core)?.map(|(cv, _)| cv);
     Ok(ProfileDto::from_parts(
-        &core.profile_path(),
         &prefs,
         &suggestions,
-        cv.as_ref(),
         core.can_undo_preferences()?,
     ))
 }
@@ -144,29 +144,36 @@ async fn undo(core: &Core) -> Result<ProfileDto> {
     snapshot_of(core, prefs)
 }
 
-async fn import_cv(core: &Core, path: &Path) -> Result<ProfileDto> {
-    if !cv_upload::is_supported(path) {
-        bail!("Use a .pdf, .md or .txt file.");
-    }
-    cv_upload::import(core, path).await?;
-    read_snapshot(core)
+// ------------------------------------------------------------------ About you
+
+/// The About you section as it is now.
+fn about_of(core: &Core) -> Result<AboutDto> {
+    Ok(about(&core.profile_sources()?, core.profile()?.as_ref()))
 }
 
-fn remove_cv(core: &Core) -> Result<ProfileDto> {
-    cv_upload::remove(core)?;
-    read_snapshot(core)
+/// The message for a file that cannot be a document.
+const UNSUPPORTED_FILE: &str = "Use a .pdf, .md or .txt file.";
+
+async fn add_file(core: &Core, path: &Path) -> Result<AboutDto> {
+    ensure!(is_supported(path), UNSUPPORTED_FILE);
+    core.add_profile_file(path).await?;
+    about_of(core)
 }
 
-/// Use `path` as the master profile. It must be a YAML file that reads as a profile.
-fn set_profile_file(core: &Core, path: &Path) -> Result<ProfileDto> {
-    ensure!(is_profile_file_name(path), "Choose a .yaml or .yml file.");
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    ensure!(!text.trim().is_empty(), "That file is empty.");
-    Cv::parse(&text).context("That file is not a valid profile")?;
-    core.set_profile_path(path)?;
-    tracing::info!("profile: the master profile file was changed");
-    read_snapshot(core)
+fn add_text(core: &Core, name: &str, text: &str) -> Result<AboutDto> {
+    core.add_profile_text(name, text)?;
+    about_of(core)
+}
+
+fn remove_source(core: &Core, id: i64) -> Result<AboutDto> {
+    core.remove_profile_source(id)?;
+    about_of(core)
+}
+
+/// Read the documents into the profile (one model call). Without documents it clears the profile.
+async fn read_sources(core: &Core) -> Result<AboutDto> {
+    core.read_profile_sources().await?;
+    about_of(core)
 }
 
 // ------------------------------------------------------------------ commands
@@ -232,25 +239,43 @@ pub async fn profile_undo(core: CoreState<'_>) -> CommandResult<ProfileDto> {
     run(async move { undo(&core).await }).await
 }
 
-/// Attach the CV at `path` (context for suggestions only).
+/// Settings > About you: the documents, where the reading stands, what was understood.
 #[tauri::command]
-pub async fn profile_import_cv(core: CoreState<'_>, path: String) -> CommandResult<ProfileDto> {
+pub async fn profile_about(core: CoreState<'_>) -> CommandResult<AboutDto> {
     let core = core.inner().clone();
-    run(async move { import_cv(&core, &PathBuf::from(path)).await }).await
+    run_sync(move || about_of(&core)).await
 }
 
-/// Forget the attached CV.
+/// Keep the file at `path` (.pdf, .md, .txt) as a document. Does not read the profile again.
 #[tauri::command]
-pub async fn profile_remove_cv(core: CoreState<'_>) -> CommandResult<ProfileDto> {
+pub async fn profile_add_file(core: CoreState<'_>, path: String) -> CommandResult<AboutDto> {
     let core = core.inner().clone();
-    run_sync(move || remove_cv(&core)).await
+    run(async move { add_file(&core, &PathBuf::from(path)).await }).await
 }
 
-/// Use another file as the master profile.
+/// Keep a note the user typed as a document. Does not read the profile again.
 #[tauri::command]
-pub async fn profile_set_path(core: CoreState<'_>, path: String) -> CommandResult<ProfileDto> {
+pub async fn profile_add_text(
+    core: CoreState<'_>,
+    name: String,
+    text: String,
+) -> CommandResult<AboutDto> {
     let core = core.inner().clone();
-    run_sync(move || set_profile_file(&core, &PathBuf::from(path))).await
+    run_sync(move || add_text(&core, &name, &text)).await
+}
+
+/// Forget a document (the last one takes the profile with it).
+#[tauri::command]
+pub async fn profile_remove_source(core: CoreState<'_>, id: i64) -> CommandResult<AboutDto> {
+    let core = core.inner().clone();
+    run_sync(move || remove_source(&core, id)).await
+}
+
+/// Read the documents into the profile: one model call, up to a minute.
+#[tauri::command]
+pub async fn profile_read(core: CoreState<'_>) -> CommandResult<AboutDto> {
+    let core = core.inner().clone();
+    run(async move { read_sources(&core).await }).await
 }
 
 /// This context's commands; `main.rs` routes every `profile_*` call here.
@@ -263,9 +288,11 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         profile_save_notes,
         profile_read_notes,
         profile_undo,
-        profile_import_cv,
-        profile_remove_cv,
-        profile_set_path
+        profile_about,
+        profile_add_file,
+        profile_add_text,
+        profile_remove_source,
+        profile_read
     ]
 }
 
@@ -277,7 +304,8 @@ mod tests {
     use crate::engine::{runtime, Core, Paths, Secrets};
 
     use super::{
-        add_item, field_named, remove_item, save_notes, set_job_type, set_profile_file, undo,
+        about_of, add_file, add_item, add_text, field_named, read_sources, remove_item,
+        remove_source, save_notes, set_job_type, undo, UNSUPPORTED_FILE,
     };
 
     fn core() -> (tempfile::TempDir, Arc<Core>) {
@@ -412,31 +440,61 @@ mod tests {
     }
 
     #[test]
-    fn only_a_yaml_file_that_reads_as_a_profile_becomes_the_master_profile() {
+    fn documents_are_added_listed_and_removed_and_the_last_one_takes_the_profile() {
         let (dir, core) = core();
-        let write = |name: &str, text: &str| {
-            let path = dir.path().join(name);
-            std::fs::write(&path, text).unwrap_or_else(|e| panic!("write: {e}"));
-            path
-        };
-        assert!(
-            set_profile_file(&core, &write("p.json", "{}")).is_err(),
-            "not YAML by name"
-        );
-        assert!(
-            set_profile_file(&core, &write("empty.yaml", "  \n")).is_err(),
-            "nothing to read"
-        );
-        assert!(
-            set_profile_file(&core, &write("bad.yaml", "basics: [unclosed")).is_err(),
-            "not valid YAML"
-        );
-        assert!(set_profile_file(&core, &dir.path().join("missing.yaml")).is_err());
-        let default_path = core.profile_path();
+        let empty = about_of(&core).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!((empty.status, empty.sources.len()), ("empty", 0));
 
-        let good = write("good.yaml", "basics:\n  name: Test Person\n");
-        let dto = set_profile_file(&core, &good).unwrap_or_else(|e| panic!("{e:#}"));
-        assert_eq!(dto.profile_path, good.display().to_string());
-        assert_ne!(core.profile_path(), default_path);
+        runtime::block_on(async {
+            let docx = dir.path().join("cv.docx");
+            std::fs::write(&docx, "x").unwrap_or_else(|e| panic!("write: {e}"));
+            let err = add_file(&core, &docx).await.err().map(|e| e.to_string());
+            assert_eq!(err.as_deref(), Some(UNSUPPORTED_FILE));
+
+            let md = dir.path().join("cv.md");
+            std::fs::write(&md, "Backend engineer, Rust.").unwrap_or_else(|e| panic!("write: {e}"));
+            let added = add_file(&core, &md).await.unwrap_or_else(|e| panic!("{e:#}"));
+            assert_eq!(added.status, "unread");
+            assert_eq!(
+                (added.sources[0].name.as_str(), added.sources[0].kind.as_str()),
+                ("cv.md", "file")
+            );
+        });
+
+        let note = add_text(&core, "On-call", "I ran the on-call rota.")
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(note.sources.len(), 2);
+        assert!(add_text(&core, "Empty", "   ").is_err());
+
+        crate::engine::profile::set_test_profile(&core, crate::engine::profile::TEST_PROFILE);
+        let ready = about_of(&core).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(ready.status, "ready");
+        assert!(ready.summary.is_some_and(|s| !s.name.is_empty() && !s.roles.is_empty()));
+
+        let ids: Vec<i64> = ready.sources.iter().map(|s| s.id).collect();
+        let after_one = remove_source(&core, ids[0]).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(after_one.status, "stale", "the documents changed since the read");
+        let mut last = after_one;
+        for id in &ids[1..] {
+            last = remove_source(&core, *id).unwrap_or_else(|e| panic!("{e:#}"));
+        }
+        assert_eq!((last.status, last.summary.is_none()), ("empty", true));
+        assert!(core.profile().unwrap_or_else(|e| panic!("{e:#}")).is_none());
+        assert!(remove_source(&core, ids[0]).is_err(), "already gone");
+    }
+
+    #[test]
+    fn reading_without_a_provider_says_so() {
+        let (_dir, core) = core();
+        add_text(&core, "Note", "Rust developer").unwrap_or_else(|e| panic!("{e:#}"));
+        let err = runtime::block_on(read_sources(&core))
+            .err()
+            .map(|e| format!("{e:#}"))
+            .unwrap_or_default();
+        assert_eq!(
+            crate::engine::health::classify(&err),
+            crate::engine::health::Problem::NoProvider,
+            "{err}"
+        );
     }
 }

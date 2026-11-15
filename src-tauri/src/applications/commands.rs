@@ -384,13 +384,6 @@ pub async fn applications_cv_page(
     Ok(Response::new(bytes))
 }
 
-/// Hand `profile.yaml` to the user's default editor.
-#[tauri::command]
-pub async fn applications_open_profile(core: State<'_, Arc<Core>>) -> CommandResult<()> {
-    let core = core.inner().clone();
-    run_sync(move || files::open_path(&core.profile_path())).await
-}
-
 // ------------------------------------------------------------------ Timeline tab
 
 /// The events (newest first) and the emails waiting for an accept / dismiss.
@@ -677,7 +670,6 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         applications_cv,
         applications_cv_save,
         applications_cv_page,
-        applications_open_profile,
         applications_timeline,
         applications_resolve_email,
         applications_apply_state,

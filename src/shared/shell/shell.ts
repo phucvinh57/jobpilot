@@ -25,6 +25,8 @@ export interface ShellStatus {
   health: HealthLine;
   blockers: Blocker[];
   prefsSaved: boolean;
+  /** A profile was read from the user's documents (Settings > About you). */
+  profileReady: boolean;
   newLeads: number;
   applications: number;
 }

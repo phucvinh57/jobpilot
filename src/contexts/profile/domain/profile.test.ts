@@ -4,7 +4,6 @@ import { changed, cleanNotes, fade, followNotes, saveShortcut, savePlan, type Pr
 
 function profile(patch: Partial<Profile> = {}): Profile {
   return {
-    profilePath: "/home/me/profile.yaml",
     jobType: "any",
     fields: [
       { key: "locations", label: "Work locations", placeholder: "Add a city or country", items: [], suggestions: [] },
@@ -18,7 +17,6 @@ function profile(patch: Partial<Profile> = {}): Profile {
       { key: "skills", label: "Skills", placeholder: "Add a skill", items: ["Rust"], suggestions: [] },
     ],
     notes: "",
-    cv: null,
     canUndo: false,
     limits: { maxListItems: 30, maxItemChars: 80, maxNotesChars: 2000 },
     ...patch,

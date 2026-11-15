@@ -1,4 +1,4 @@
-// Settings: one scrolling page of cards, in this order: Profile & preferences, Connections (AI
+// Settings: one scrolling page of cards, in this order: About you, Profile & preferences, Connections (AI
 // providers, Gmail, Browser sessions), Job sources, Appearance. Each card belongs to its context;
 // this file only composes them and scrolls to the one a call to action names.
 
@@ -6,7 +6,7 @@ import { useEffect, type ReactNode } from "react";
 
 import { JobSourcesSection } from "@/contexts/discovery";
 import { GmailSection, ProvidersSection, SessionsSection } from "@/contexts/integrations";
-import { ProfileSection } from "@/contexts/profile";
+import { AboutYouSection, ProfileSection } from "@/contexts/profile";
 import {
   APPEARANCES,
   Caption,
@@ -69,6 +69,9 @@ export function SettingsScreen() {
 
   return (
     <Page label="Settings" title="Settings">
+      <Slot section="About you">
+        <AboutYouSection />
+      </Slot>
       <Slot section="Profile & preferences">
         <ProfileSection />
       </Slot>
