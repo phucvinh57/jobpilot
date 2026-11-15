@@ -7,7 +7,7 @@ Rust desktop app (Tauri v2 shell + React web UI): JD link/file -> tailored CV (f
 ```
 Cargo.toml                 workspace
 assets/cv.typ              Typst renderer: typst compile --root <dir> --input data=<file>.yaml cv.typ out.pdf
-assets/prompts/            tailor.md (system prompt), example-cv.yaml (few-shot), profile.md (reads the user's documents into the profile)
+assets/prompts/            tailor.md (CV system prompt), example-cv.yaml (few-shot), profile.md (documents -> profile), preferences.md, trends.md
 assets/jobpilot.desktop    desktop entry (StartupWMClass=jobpilot, same as the window app id)
 assets/icons/              app icon (svg + png), used by the deb / AppImage
 assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) bundled by the web app (`src/styles.css`)
@@ -22,25 +22,26 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
   logging    tracing: stderr + rolling <data_dir>/logs/jobpilot.log.<date> (14 kept), both through redact
   health     startup checks (typst, provider, Chrome) -> Health/Problem; classify(error text) -> Problem kind (network, no provider, ...)
   facade     Core { paths, store, secrets }, Core::open()
-  llm        P1   (`complete_json`, `chat_json` for multi-turn)
-  pipeline   P2   analyze -> tailor -> guard -> render; `insight` (P11) = per-job brief: domain, company facts, skills, interview process
-  browser    P4   managed Chrome sessions; P10 adds `challenge` (detect login/captcha/block, never solve), `render` (discovery pages, visible window for the user),
-                  `guard` (local forward proxy: discovery browsers cannot reach private hosts), `gate` (one use of a session profile at a time)
-  apply      P5   review -> confirm -> submit, dry run, manual hand-off
-  mail       P6   Gmail sync, reply classification
-  graph      P8   flows as graphs (`GraphDef` facade over adk-graph, the only code that names it): run/resume/cancel/waiting/subscribe,
-                  SQLite checkpoints, `nodes::challenge` interrupt shared by discovery and trends
-  net        P8/P10   `net::http`: the one safe HTTP client for third-party data (public hosts only, per-host delay, size cap, hop-by-hop redirects)
-  notify     P8   desktop notifications (best effort)
-  prefs      P8/P9   `Preferences` model + `Core::preferences/save_preferences`; P9 `chat` + `chat_graph` (graph `prefs_chat`), `undo`, `suggest` (chips for the preference form), `appearance` (light/dark, kv `ui.appearance`)
-  profile    the user's profile: `sources` (uploaded .pdf/.md/.txt files and typed notes, kept in SQLite), `extract` (`Core::read_profile_sources`:
-                  one `complete_json` -> the CV schema `Cv`), `trace` (keep only facts found in the documents; the rest is `left_out`),
-                  `typst` (escape markup fields); `Core::profile` / `require_profile` (NoProfile) is the one way to read it
-  discover   P10/P12   `source/` (greenhouse, lever, ashby, hn_hiring, yc, career_page), `run` (graphs `discovery` and `source_run`), `score`, `dedup`, `handoff`,
-                  `sources`, `queue` (QueueSnapshot), `promote` (graph `prepare_cv`, dismiss), `manual` (`Core::add_lead`: pasted link/file -> scored lead)
-  trends     P13a collection: sources (hackernews, yc, rss, page), `report_search` with a keyring key, graph `trends` -> `trend_items`;
-                  P15 `frame` (MarketFrame: background + place, never wishes, decides what is collected and counted);
-                  P13b `digest/` (extract, count, synthesize, cite: every point must cite stored items)
+  llm        AI providers: `complete_json`, `chat_json` (multi-turn)
+  pipeline   analyze -> tailor -> guard -> render; `insight`: per-job brief (domain, company facts, skills, interview process)
+  browser    managed Chrome sessions; `challenge` (detect login/captcha/block, never solve), `render` (discovery pages, visible window),
+             `guard` (local forward proxy: discovery browsers cannot reach private hosts), `gate` (one use of a session profile at a time)
+  apply      review -> confirm -> submit, dry run, manual hand-off
+  mail       Gmail sync, reply classification
+  graph      flows as graphs (`GraphDef` facade over adk-graph, the only code that names it): run/resume/cancel/waiting/subscribe,
+             SQLite checkpoints, `nodes::challenge` interrupt shared by discovery and trends
+  net        `net::http`: the one safe HTTP client for third-party data (public hosts only, per-host delay, size cap, hop-by-hop redirects)
+  notify     desktop notifications (best effort)
+  prefs      `Preferences` model, `chat` + `chat_graph` (graph `prefs_chat`), `undo`, `suggest` (chips), `appearance` (kv `ui.appearance`)
+  profile    `sources` (uploaded .pdf/.md/.txt files and typed notes), `extract` (`Core::read_profile_sources`: documents -> CV schema `Cv`),
+             `trace` (keep only facts found in the documents; the rest is `left_out`), `typst` (escape markup);
+             `Core::profile` / `require_profile` (NoProfile) is the one way to read it
+  discover   `source/` (ATS APIs: greenhouse, lever, ashby, smartrecruiters, recruitee, personio, workday; hn_hiring, yc, career_page with
+             JSON-LD, sitemap and board detection), `run` (graphs `discovery`, `source_run`), `score`, `dedup`, `handoff`, `sources`,
+             `queue`, `promote` (graph `prepare_cv`, dismiss), `manual` (`Core::add_lead`: pasted link/file -> scored lead)
+  trends     collection (hackernews, yc, rss, page, `report_search` with a keyring key; graph `trends` -> `trend_items`),
+             `frame` (MarketFrame: background + place, never wishes; decides what is collected and counted),
+             `digest/` (extract, count, synthesize, cite: every point cites stored items)
 src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |
              profile (About you: the documents the profile is read from; preferences) | integrations (AI Providers, Gmail, browser Sessions) | trends (Digest, trend sources)
@@ -83,12 +84,13 @@ src/                   React + Vite + TypeScript + Tailwind; feature folders (ap
 - Web app first (the shell embeds `dist/` at compile time): `bun install`, then `bun run build`.
 - Run: `cargo run -p jobpilot` (the built web app; sample data: `JOBPILOT_DEMO=1`; throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory`). With hot reload: `bun run tauri dev`.
 - Web checks: `bun run check` (tsc, Biome lint + format with the import rules, vitest); `bun run format` applies Biome's fixes.
-- Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace` (the engine shares the `jobpilot` crate with Tauri: even engine-only tests need a `dist/` (`scripts/check.sh` writes a placeholder when there is none) and the Linux libs below)
+- Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace`. The engine shares the `jobpilot` crate with Tauri, so even engine-only tests need a `dist/` (`scripts/check.sh` writes a placeholder) and the Linux libs below.
 - Chrome tests (`#[ignore]`, start a real Chrome, local fixture pages only): `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored` (set `JOBPILOT_CHROME` for a non-system Chrome; one test opens a visible window, one downloads Chrome for Testing only with `JOBPILOT_TEST_DOWNLOAD` set)
 - End-to-end without real services: `cargo test -p jobpilot --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: a text document -> profile, source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
 - Package: `scripts/package.sh` -> `release/`
 - Needs: Rust, Node + bun, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
-- Pre-PR checks: `scripts/check.sh [--all] [--only web|rust|render]` runs the groups the paths changed since main touch: `web` (typecheck, Biome, vitest, vite build), `rust` (clippy + test; a placeholder `dist/` when there is no web build, so a UI change never builds Rust), `render` (typst on `assets/prompts/example-cv.yaml`). There is no CI (no GitHub Actions): `check.sh` (pre-push hook and `/pre-pr`) is the gate; `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps) makes a cold run faster. `scripts/risk.sh [--label <tier>]` prints the risk tier the changed paths require (`docs/REVIEW.md`). `bun install` installs the lefthook hooks (pre-commit: Biome on staged files; pre-push: `check.sh`); a clone that set `core.hooksPath` before: `git config --unset core.hooksPath && bunx lefthook install`.
+- Pre-PR checks (there is no CI; this is the gate, run by the pre-push hook and `/pre-pr`): `scripts/check.sh [--all] [--only web|rust|render]` runs the groups touched since main: `web` (typecheck, Biome, vitest, vite build), `rust` (clippy + test), `render` (typst on `assets/prompts/example-cv.yaml`). `CARGO_PROFILE_ARG="--profile ci"` makes a cold run faster. `scripts/risk.sh [--label <tier>]` prints the risk tier the changed paths require (`docs/REVIEW.md`).
+- Hooks: `bun install` installs lefthook (pre-commit: Biome on staged files; pre-push: `check.sh`). If `core.hooksPath` was set before: `git config --unset core.hooksPath && bunx lefthook install`.
 - Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_lib::engine=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
 
 ## Check the UI visually
@@ -155,17 +157,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 
 ## Ownership (parallel work)
 
-Engine (`src-tauri/src/engine`): each sub-plan edits only its own modules: `llm/` P1; `pipeline/` P2; `browser/` P4; `apply/` P5; `mail/` P6; `health`, `logging`, `redact`, packaging and docs P7. Add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
-
-Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and that feature's web files: every path under `src/` named after it (`<feature>/` folders, `<feature>.ts`; integrations also `api/{gmail,providers,sessions}.ts`), plus its page or store (applications: `pages/ApplicationPage.tsx`; discovery: `stores/today.ts`; trends: `pages/TrendsPage.tsx`). Features: discovery (P10 sources, P12 queue), applications (P2/P3/P5 screens), profile (P9), integrations (P1 providers, P4 sessions, P6 Gmail), trends (P13). The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`) and every other web file under `src/` (the kit, layout, nav and shell stores, `api/{bridge,events,shell}.ts`, the shared hooks, `lib/` and `types/` files, the Jobs and Settings pages) change only for something every context needs.
-
-The product plans (`docs/plans/`, status table in `docs/plans/README.md`):
-
-- P8 foundation: `engine/graph/`, the new `store/` files and migrations, `notify.rs`, `Llm::chat_json`, `Problem::NeedsHuman`.
-- P9 preference chat: `engine/prefs/` (chat), the desktop `profile` context, `assets/prompts/preferences.md`.
-- P10 discovery: `engine/discover/` except `promote.rs` and `queue.rs`, `engine/net/`, `browser/{challenge,render,guard,gate}.rs`, Job sources in the desktop `discovery` context.
-- P11 job insight: `pipeline/insight*`, the company brief (`shared/insight`).
-- P12 queue: the Leads stage of the Jobs page in the desktop `discovery` context, `engine/discover/{promote,queue}.rs`.
-- P13 trends: `engine/trends/`, the desktop `trends` context, `assets/prompts/trends.md`.
-
-Prompts under `assets/prompts/` are High risk (a human reads the diff).
+- Engine: add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
+- Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and that feature's web files: every path under `src/` named after it (`<feature>/` folders, `<feature>.ts`; integrations also `api/{gmail,providers,sessions}.ts`), plus its page or store (applications: `pages/ApplicationPage.tsx`; discovery: `stores/today.ts`; trends: `pages/TrendsPage.tsx`).
+- The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`) and every other web file under `src/` (the kit, layout, nav and shell stores, `api/{bridge,events,shell}.ts`, shared hooks, `lib/`, `types/`, the Jobs and Settings pages) change only for something every context needs.
+- Prompts under `assets/prompts/` are High risk (a human reads the diff).

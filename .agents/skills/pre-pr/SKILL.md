@@ -19,7 +19,7 @@ There is no CI (no GitHub Actions): this skill is the review and the checks, and
 
 ## 2. Verify
 
-- Run `scripts/check.sh` (cargo build/test/clippy for Rust changes, a Typst render for `profile.yaml`/`assets/`), fix failures and keep its output for the PR body.
+- Run `scripts/check.sh` (Rust: clippy + test; web: tsc, Biome, vitest, build; `assets/`: a Typst render), fix failures and keep its output for the PR body.
 - For a UI change, check it visually (AGENTS.md, "Check the UI visually").
 
 ## 3. Review
@@ -27,7 +27,7 @@ There is no CI (no GitHub Actions): this skill is the review and the checks, and
 Review with fresh context against `docs/REVIEW.md`. In a stack, review each layer against its parent.
 
 - Run `code-review` at the tier's level (`low` / `medium` / `high`). For the High tier, also run `security-review`.
-- For a change to CV generation (`assets/prompts/`, `pipeline/`), check that no fact can come from outside `profile.yaml`.
+- For a change to CV generation (`assets/prompts/`, `pipeline/`), check that no fact can come from outside the user's documents (the profile).
 - Fix every Important finding. Fix each other finding, or give a one-line reason not to.
 - Repeat steps 2–3 on the new changes only, up to 3 rounds. If findings persist after that, question the approach with the user.
 - If the same kind of finding recurs, propose a fix at the source: an `AGENTS.md` rule, a `REVIEW.md` line or a check in `scripts/check.sh`.
@@ -41,7 +41,7 @@ Review with fresh context against `docs/REVIEW.md`. In a stack, review each laye
   - **What changed:** the content, not the file list.
   - **Testing:** the commands actually run and their results.
   - **Risk:** the tier and what could break.
-  - **How to revert:** `git revert` is enough unless `profile.yaml` facts were removed. Then say what to restore.
+  - **How to revert:** `git revert` is enough unless data was removed. Then say what to restore.
   - Any findings left open, with their reasons.
   - End with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 
