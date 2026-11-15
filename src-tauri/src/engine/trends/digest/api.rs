@@ -83,7 +83,7 @@ impl Core {
 
     /// [`build_trends_digest`](Self::build_trends_digest) with an explicit model and limits.
     pub async fn build_trends_digest_with(&self, period: Period, digest: DigestConfig) -> Result<Outcome<TrendRun>> {
-        let graph = digest_graph(self.store.clone(), self.secrets.clone(), digest);
+        let graph = digest_graph(self.store.clone(), self.secrets.clone(), self.with_profile(digest));
         let mut input = TrendRun::new(period);
         input.digest.enabled = true;
         self.start_trends_thread(&graph, &digest_thread_id(&period), input).await
@@ -96,7 +96,7 @@ impl Core {
     }
 
     pub async fn resume_trends_digest_with(&self, period: Period, digest: DigestConfig) -> Result<Outcome<TrendRun>> {
-        let graph = digest_graph(self.store.clone(), self.secrets.clone(), digest);
+        let graph = digest_graph(self.store.clone(), self.secrets.clone(), self.with_profile(digest));
         self.graphs.resume(&graph, &digest_thread_id(&period), |_| {}).await
     }
 
@@ -171,6 +171,14 @@ impl Core {
         self.graphs.run(graph, thread, input).await
     }
 
+    /// `digest` with the master profile, so the market frame knows the user's background.
+    pub(crate) fn with_profile(&self, mut digest: DigestConfig) -> DigestConfig {
+        if digest.profile.is_none() {
+            digest.profile = Some(self.profile_path());
+        }
+        digest
+    }
+
     /// Shared by [`collect_trends_with`](Self::collect_trends_with) and the digest variant.
     pub(crate) async fn run_trends(
         &self,
@@ -179,7 +187,7 @@ impl Core {
         digest: DigestConfig,
         with_digest: bool,
     ) -> Result<Outcome<TrendRun>> {
-        let graph = collect::graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config, digest)?;
+        let graph = collect::graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config, self.with_profile(digest))?;
         let mut input = TrendRun::new(period);
         input.digest.enabled = with_digest;
         self.start_trends_thread(&graph, &thread_id(&period), input).await

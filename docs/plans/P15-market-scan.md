@@ -32,7 +32,7 @@ Before P15, the user's wishes shaped the digest at every step:
    - Code labels a skill rising, falling, steady or unclear by comparing its share in the second half of the window with the first half.
    - A label needs at least 30 postings in each half and 5 mentions. Otherwise it is "unclear", and the digest says there is too little data.
 4. **Open vocabulary.**
-   - Skills are counted from the built-in list, the profile's skills and the wished skills. Wished skills are counted so they can be checked later; they get no extra weight.
+   - The market lists and the gap count the built-in list and the profile's skills. Wished skills are measured with a separate vocabulary, for the wishes table only: a wished skill outside the built-in list never enters the market lists or the gap, so two runs that differ only in wishes give the same market numbers. A built-in skill you wish for is still counted, and marked as wished.
    - Topics that the extraction finds in at least 3 items but that are not in the list are shown as "terms not in the list".
 5. **Gap against background.**
    - The gap is judged on the local scope when it has enough postings, otherwise on the global one, and only on postings in the user's field (the role words of the profile).

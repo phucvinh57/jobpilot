@@ -1,5 +1,6 @@
 //! Hacker News through the Algolia API: the front page, the period's most upvoted stories, and the
-//! newest "Ask HN: Who is hiring?" thread (one item per posting).
+//! newest "Ask HN: Who is hiring?" threads before the period's end (one item per posting; several
+//! monthly threads, so the digest's skill window is full from the first run).
 //!
 //! A story's item is the story itself (its link, or the HN thread for text posts): the title and
 //! the numbers are the text; the linked article is not fetched.
@@ -117,27 +118,72 @@ fn story_item(hit: Hit) -> Option<Item> {
     Some(Item { url, title, published_at: timestamp(hit.created_at_i), text })
 }
 
-/// The newest "Who is hiring" thread that started before the period ended, one item per posting.
+/// The newest "Who is hiring" threads that started before the period ended (at most
+/// [`CollectLimits::hiring_threads`](crate::engine::trends::CollectLimits), newest first), one item
+/// per posting. Reading several monthly threads fills the skill window on the first run; postings
+/// already stored are skipped (`take_new`), so a later run reads only what is new. At most
+/// `hiring_posts` new postings per thread. A thread that cannot be read is left out; this part
+/// fails only when every thread did.
 async fn hiring_posts(ctx: &Ctx) -> Result<Vec<Item>> {
-    let list = api_url(ctx, "search_by_date", &[("tags", "story,author_whoishiring"), ("hitsPerPage", "12")])?;
-    let threads: Search = ctx.http.get(&list, &[]).await?.json("Hacker News")?;
+    let l = ctx.limits();
     let end = ctx.period.end().timestamp();
-    let Some(thread) = threads
-        .hits
+    // The bot posts three threads a month ("Who is hiring", "Who wants to be hired", "Freelancer"):
+    // ask for enough to see `hiring_threads` hiring ones, only threads that started before the end.
+    let hits = l.hiring_threads.saturating_mul(3).saturating_add(3).clamp(12, 100).to_string();
+    let before_end = format!("created_at_i<{end}");
+    let list = api_url(
+        ctx,
+        "search_by_date",
+        &[("tags", "story,author_whoishiring"), ("numericFilters", &before_end), ("hitsPerPage", &hits)],
+    )?;
+    let threads: Search = ctx.http.get(&list, &[]).await?.json("Hacker News")?;
+    let threads = hiring_threads(threads.hits, end, l.hiring_threads);
+
+    let mut items = Vec::new();
+    let (mut read, mut first_error) = (0usize, None);
+    for thread in &threads {
+        match thread_posts(ctx, thread).await {
+            Ok(found) => {
+                read += 1;
+                items.extend(found);
+            }
+            Err(e) => {
+                tracing::warn!(thread = %thread.object_id, "a hiring thread could not be read and is left out");
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+    tracing::info!(threads = threads.len(), read, postings = items.len(), "hiring threads read");
+    match first_error {
+        Some(e) if read == 0 => Err(e),
+        _ => Ok(items),
+    }
+}
+
+/// The "Who is hiring" threads among `hits` that started before `end`, newest first, at most `max`.
+fn hiring_threads(hits: Vec<Hit>, end: i64, max: usize) -> Vec<Hit> {
+    let mut threads: Vec<Hit> = hits
         .into_iter()
         .filter(|h| h.title.as_deref().is_some_and(|t| t.to_lowercase().contains("who is hiring")))
         .filter(|h| h.created_at_i.is_some_and(|t| t < end))
-        .max_by_key(|h| h.created_at_i)
-    else {
-        return Ok(Vec::new());
-    };
-    let title = thread.title.unwrap_or_default();
+        .collect();
+    threads.sort_by_key(|h| std::cmp::Reverse(h.created_at_i));
+    let mut seen = std::collections::HashSet::new();
+    threads.retain(|h| seen.insert(h.object_id.clone()));
+    threads.truncate(max);
+    threads
+}
+
+/// The new postings of one thread (at most `hiring_posts`). Each keeps the thread's title in its
+/// text header (`# Hacker News, <title>`): the digest recognises hiring postings by it.
+async fn thread_posts(ctx: &Ctx, thread: &Hit) -> Result<Vec<Item>> {
+    let title = thread.title.clone().unwrap_or_default();
     let full: Thread = ctx
         .http
         .get(&join(&ctx.endpoints().hackernews, &format!("items/{}", thread.object_id)), &[])
         .await?
         .json("Hacker News")
-        .context("reading the hiring thread")?;
+        .context("reading a hiring thread")?;
 
     let postings = full.children.into_iter().filter_map(|c| {
         let text = html_to_text(c.text.as_deref()?);
@@ -187,8 +233,10 @@ mod tests {
     const THREADS: &str = r#"{"hits": [
         {"objectID": "900", "title": "Ask HN: Who wants to be hired? (November 2026)", "created_at_i": 1793635297},
         {"objectID": "901", "title": "Ask HN: Who is hiring? (December 2026)", "created_at_i": 1796300000},
+        {"objectID": "904", "title": "Ask HN: Who is hiring? (September 2026)", "created_at_i": 1788274800},
         {"objectID": "902", "title": "Ask HN: Who is hiring? (November 2026)", "created_at_i": 1793635297},
-        {"objectID": "903", "title": "Ask HN: Who is hiring? (October 2026)", "created_at_i": 1790866927}
+        {"objectID": "903", "title": "Ask HN: Who is hiring? (October 2026)", "created_at_i": 1790866927},
+        {"objectID": "902", "title": "Ask HN: Who is hiring? (November 2026)", "created_at_i": 1793635297}
     ]}"#;
 
     const THREAD: &str = r#"{"id": 902, "title": "Ask HN: Who is hiring? (November 2026)", "children": [
@@ -197,6 +245,37 @@ mod tests {
         {"id": 7004, "created_at_i": 1793635500, "text": null, "children": []},
         {"id": 7005, "created_at_i": 1793635600, "text": "Globex | Data Engineer | Berlin, ONSITE | Python, Spark, Kafka, dbt, Airflow, Snowflake", "children": []}
     ]}"#;
+
+    const THREAD_OCT: &str = r#"{"id": 903, "children": [
+        {"id": 8001, "created_at_i": 1790867000, "text": "Initech | Platform Engineer | Singapore, ONSITE | Kubernetes, Terraform, Go", "children": []},
+        {"id": 8002, "created_at_i": 1790867100, "text": "Hooli | ML Engineer | REMOTE (US) | Python, PyTorch, Ray, Kubernetes", "children": []}
+    ]}"#;
+
+    const THREAD_SEP: &str = r#"{"id": 904, "children": [
+        {"id": 9001, "created_at_i": 1788275000, "text": "Umbrella | Backend Engineer | Ho Chi Minh City | Java, Spring, Postgres, Kafka", "children": []}
+    ]}"#;
+
+    /// The thread list and every thread. The list and the period's stories share /search_by_date:
+    /// tests of `hiring_posts` alone serve the list there.
+    fn hiring_fixtures(fx: &Fixtures) {
+        fx.route("/hn/search_by_date", 200, "application/json", THREADS);
+        fx.route("/hn/items/902", 200, "application/json", THREAD);
+        fx.route("/hn/items/903", 200, "application/json", THREAD_OCT);
+        fx.route("/hn/items/904", 200, "application/json", THREAD_SEP);
+    }
+
+    /// An adapter context with `known` already collected and the hiring limits changed by `limits`.
+    fn ctx_with(fx: &Fixtures, known: &[&str], limits: impl FnOnce(&mut crate::engine::trends::CollectLimits)) -> Ctx {
+        let mut c = ctx(fx, known);
+        let mut config = (*c.config).clone();
+        limits(&mut config.limits);
+        c.config = Arc::new(config);
+        c
+    }
+
+    fn urls(items: &[Item]) -> Vec<&str> {
+        items.iter().map(|i| i.url.as_str()).collect()
+    }
 
     fn fixtures(fx: &Fixtures) {
         fx.route("/hn/search", 200, "application/json", FRONT);
@@ -231,35 +310,97 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hiring_picks_the_thread_before_the_period_end_and_one_item_per_posting() {
+    async fn hiring_reads_the_newest_threads_before_the_period_end_one_item_per_posting() {
         let fx = Fixtures::start().await;
-        // The thread list and the period's stories share /search_by_date: answer by tag in one route.
-        fx.route("/hn/search_by_date", 200, "application/json", THREADS);
-        fx.route("/hn/items/902", 200, "application/json", THREAD);
+        hiring_fixtures(&fx);
         let ctx = ctx(&fx, &[]);
 
         let posts = hiring_posts(&ctx).await.unwrap();
-        // December's thread starts after 2026-W46 and "Who wants to be hired" is another thread.
-        assert!(fx.hits_on("/hn/items/902").len() == 1 && fx.hits_on("/hn/items/901").is_empty());
-        assert_eq!(posts.len(), 2, "replies, empty and deleted comments are not postings");
-        assert_eq!(posts[0].url, "https://news.ycombinator.com/item?id=7001");
+        // Newest thread first; December's thread starts after 2026-W46, "Who wants to be hired" is
+        // another thread, and a thread listed twice is read once.
+        assert_eq!(
+            urls(&posts),
+            [
+                "https://news.ycombinator.com/item?id=7001",
+                "https://news.ycombinator.com/item?id=7005",
+                "https://news.ycombinator.com/item?id=8001",
+                "https://news.ycombinator.com/item?id=8002",
+                "https://news.ycombinator.com/item?id=9001",
+            ],
+            "replies, empty and deleted comments are not postings"
+        );
+        for id in ["902", "903", "904"] {
+            assert_eq!(fx.hits_on(&format!("/hn/items/{id}")).len(), 1, "thread {id}");
+        }
+        assert!(fx.hits_on("/hn/items/901").is_empty() && fx.hits_on("/hn/items/900").is_empty());
+        let list = &fx.hits_on("/hn/search_by_date")[0];
+        assert!(list.target.contains("tags=story%2Cauthor_whoishiring"), "{}", list.target);
+        assert!(list.target.contains("numericFilters=created_at_i%3C1794787200"), "only threads before the end: {}", list.target);
+        assert!(list.target.contains("hitsPerPage=21"), "three threads a month, six months, and slack: {}", list.target);
+
         assert_eq!(posts[0].title, "Acme | Senior Rust Engineer | REMOTE | $150k");
         assert!(posts[0].text.starts_with("# Hacker News, Ask HN: Who is hiring? (November 2026)\n\nAcme |"), "{}", posts[0].text);
         assert!(posts[0].text.contains("We build robots in Rust & Go. Apply at https://acme.test/jobs"), "{}", posts[0].text);
-        assert_eq!(posts[1].url, "https://news.ycombinator.com/item?id=7005");
-
-        // Known postings are skipped, and the cap counts only new ones.
-        let known = ctx_with_known(&fx, &["https://news.ycombinator.com/item?id=7001"], 1);
-        let posts = hiring_posts(&known).await.unwrap();
-        assert_eq!(posts.iter().map(|p| p.url.as_str()).collect::<Vec<_>>(), ["https://news.ycombinator.com/item?id=7005"]);
+        assert_eq!(posts[0].published_at.unwrap().timestamp(), 1793635303);
+        assert!(posts[2].text.starts_with("# Hacker News, Ask HN: Who is hiring? (October 2026)\n\nInitech |"), "{}", posts[2].text);
+        assert!(posts[4].text.starts_with("# Hacker News, Ask HN: Who is hiring? (September 2026)\n\n"), "{}", posts[4].text);
     }
 
-    fn ctx_with_known(fx: &Fixtures, known: &[&str], hiring_posts: usize) -> Ctx {
-        let mut c = ctx(fx, known);
-        let mut config = (*c.config).clone();
-        config.limits.hiring_posts = hiring_posts;
-        c.config = Arc::new(config);
-        c
+    #[tokio::test]
+    async fn hiring_threads_and_postings_per_thread_are_capped() {
+        let fx = Fixtures::start().await;
+        hiring_fixtures(&fx);
+
+        let two = ctx_with(&fx, &[], |l| l.hiring_threads = 2);
+        let posts = hiring_posts(&two).await.unwrap();
+        assert_eq!(posts.len(), 4);
+        assert!(fx.hits_on("/hn/items/904").is_empty(), "the third newest thread is not read");
+
+        // The cap is per thread, and it counts only new postings.
+        let one = ctx_with(&fx, &["https://news.ycombinator.com/item?id=7001"], |l| l.hiring_posts = 1);
+        let posts = hiring_posts(&one).await.unwrap();
+        assert_eq!(
+            urls(&posts),
+            ["https://news.ycombinator.com/item?id=7005", "https://news.ycombinator.com/item?id=8001", "https://news.ycombinator.com/item?id=9001"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_run_reads_nothing_new() {
+        let fx = Fixtures::start().await;
+        hiring_fixtures(&fx);
+        let first = hiring_posts(&ctx(&fx, &[])).await.unwrap();
+        assert_eq!(first.len(), 5);
+
+        let known: Vec<&str> = urls(&first);
+        let again = hiring_posts(&ctx(&fx, &known)).await.unwrap();
+        assert!(again.is_empty(), "every posting is already stored: {:?}", urls(&again));
+
+        // A new posting in the newest thread is all a later run adds.
+        fx.route("/hn/items/902", 200, "application/json", THREAD.replace(
+            r#"{"id": 7003, "created_at_i": 1793635400, "text": "short reply""#,
+            r#"{"id": 7006, "created_at_i": 1793700000, "text": "Vandelay | Rust Engineer | Singapore | Rust, Tokio, Postgres""#,
+        ));
+        let later = hiring_posts(&ctx(&fx, &known)).await.unwrap();
+        assert_eq!(urls(&later), ["https://news.ycombinator.com/item?id=7006"]);
+    }
+
+    #[tokio::test]
+    async fn a_thread_that_fails_is_left_out_and_all_failing_is_an_error() {
+        let fx = Fixtures::start().await;
+        hiring_fixtures(&fx);
+        fx.route("/hn/items/903", 500, "text/plain", "boom");
+        let posts = hiring_posts(&ctx(&fx, &[])).await.unwrap();
+        assert_eq!(posts.len(), 3, "November and September are kept: {:?}", urls(&posts));
+
+        fx.route("/hn/items/902", 500, "text/plain", "boom");
+        fx.route("/hn/items/904", 503, "text/plain", "down");
+        let err = hiring_posts(&ctx(&fx, &[])).await.unwrap_err().to_string();
+        assert!(err.contains("HTTP 500") || err.contains("HTTP 503"), "{err}");
+
+        // No hiring thread before the end: nothing, not an error.
+        fx.route("/hn/search_by_date", 200, "application/json", r#"{"hits": []}"#);
+        assert!(hiring_posts(&ctx(&fx, &[])).await.unwrap().is_empty());
     }
 
     #[tokio::test]

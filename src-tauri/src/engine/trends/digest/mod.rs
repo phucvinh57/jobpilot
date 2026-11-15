@@ -61,6 +61,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use super::collect::TrendRun;
@@ -112,14 +113,23 @@ pub enum Section {
     Domains,
     Funding,
     Hiring,
-    /// What it means for this user's preferences.
+    /// The gap: what the market means for this user's background (build on, learn next, at risk).
     ForYou,
+    /// The user's wishes against the market, applied last.
+    WishesCheck,
 }
 
 impl Section {
     /// In display order.
-    pub const ALL: [Section; 6] =
-        [Section::RisingSkills, Section::FallingSkills, Section::Domains, Section::Funding, Section::Hiring, Section::ForYou];
+    pub const ALL: [Section; 7] = [
+        Section::RisingSkills,
+        Section::FallingSkills,
+        Section::Domains,
+        Section::Funding,
+        Section::Hiring,
+        Section::ForYou,
+        Section::WishesCheck,
+    ];
 
     /// As the model and the stored JSON spell it.
     pub fn as_str(self) -> &'static str {
@@ -130,6 +140,7 @@ impl Section {
             Section::Funding => "funding",
             Section::Hiring => "hiring",
             Section::ForYou => "for_you",
+            Section::WishesCheck => "wishes_check",
         }
     }
 
@@ -145,7 +156,8 @@ impl Section {
             Section::Domains => "Active domains",
             Section::Funding => "Funding and launches",
             Section::Hiring => "Hiring signals",
-            Section::ForYou => "What it means for you",
+            Section::ForYou => "Your gap: build on, learn next, at risk",
+            Section::WishesCheck => "Your wishes vs the market",
         }
     }
 
@@ -170,25 +182,141 @@ pub struct Point {
     pub citations: Vec<i64>,
 }
 
+/// Where a skill's share of the postings is going over the window, decided in code
+/// (`count::direction`): the share in the second half of the months against the first half.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    /// Too few documents or mentions to tell.
+    #[default]
+    Unclear,
+    Rising,
+    Steady,
+    Falling,
+}
+
+/// Where a skill stands for this user: the market's direction against their background (the
+/// profile's skills), decided in code (`count::gap_bucket`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GapBucket {
+    /// In the profile, and rising or steadily asked for.
+    BuildOn,
+    /// Not in the profile, and rising or often asked for in the user's field.
+    LearnNext,
+    /// In the profile, and falling.
+    AtRisk,
+}
+
 /// One skill's frequency over the window of months.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillCount {
     pub skill: String,
     /// Documents mentioning the skill, aligned with [`SkillCounts::months`].
     pub by_month: Vec<u32>,
     pub total: u32,
+    /// Where its share is going (reports saved before P15: `Unclear`).
+    #[serde(default)]
+    pub direction: Direction,
+    /// The skill is in the user's profile.
+    #[serde(default)]
+    pub in_profile: bool,
+    /// The skill is one the user wishes for (wanted, nice to have or avoided): measured like any
+    /// other, never favoured.
+    #[serde(default)]
+    pub wished: bool,
 }
 
-/// Skill frequency across leads and hiring-thread postings per month (counted in code).
+/// The counts of one slice of the market's postings, aligned with [`SkillCounts::months`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScopeCounts {
+    /// Documents read per month.
+    pub documents: Vec<u32>,
+    /// Most mentioned first, ties by name; only skills that appear at all.
+    pub skills: Vec<SkillCount>,
+}
+
+/// Which slice of the market the gap was judged on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GapScope {
+    #[default]
+    Global,
+    Local,
+}
+
+/// One skill of the gap: background against the market.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GapSkill {
+    pub skill: String,
+    pub bucket: GapBucket,
+    pub direction: Direction,
+    /// Share of the field's postings naming the skill over the whole window, in per mille.
+    pub share_permille: u32,
+}
+
+/// A term the extraction found in several items that the skill vocabulary does not know: a
+/// possible new skill the fixed list would hide.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TermCount {
+    pub term: String,
+    /// Items of the digest whose topics name it.
+    pub items: u32,
+}
+
+/// What a wish is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WishKind {
+    Skill,
+    Domain,
+}
+
+/// One of the user's wishes, measured against the market (the lens applied last).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WishSignal {
+    pub wish: String,
+    pub kind: WishKind,
+    /// The user wants to avoid it (an avoided skill or domain) rather than have it.
+    #[serde(default)]
+    pub avoided: bool,
+    /// Its direction in the gap's scope.
+    pub direction: Direction,
+    /// Postings of the gap's scope naming it over the window; 0 means no data.
+    pub mentions: u32,
+}
+
+/// Skill frequency in the market's hiring postings per month, counted in code. The top-level
+/// `documents` and `skills` are the global scope (every hiring posting); leads, which discovery
+/// found through the user's own filters, are never mixed in (they are `pipeline`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkillCounts {
     /// `2026-06` ... `2026-11`, oldest first; the last one is the period's month.
     pub months: Vec<String>,
-    /// Documents (postings and leads) read per month, aligned with `months`.
+    /// Hiring postings read per month, aligned with `months` (reports saved before P15 also
+    /// counted leads here).
     pub documents: Vec<u32>,
     /// Most mentioned first, ties by name; only skills that appear at all.
     pub skills: Vec<SkillCount>,
+    /// The postings of the user's place (a preferred location, or remote when the work mode
+    /// allows it); `None` without a place.
+    pub local: Option<ScopeCounts>,
+    /// How the place reads: "Ho Chi Minh City, Singapore or remote".
+    pub place: String,
+    /// The role words of the user's field, from the profile ("backend", "engineer").
+    pub field: Vec<String>,
+    /// The user's own leads, for comparison only; `None` when there are none.
+    pub pipeline: Option<ScopeCounts>,
+    /// The scope the gap and the wishes were judged on: local when it has enough postings.
+    pub gap_scope: GapScope,
+    /// The gap, by bucket then share.
+    pub gap: Vec<GapSkill>,
+    /// Frequent extracted topics outside the vocabulary, most items first.
+    pub uncatalogued: Vec<TermCount>,
+    /// The user's wishes against the market, in the order the preferences list them.
+    pub wishes: Vec<WishSignal>,
 }
 
 /// An item a point cites, kept with the digest so the citation opens even if the item is gone.
@@ -265,11 +393,18 @@ pub struct DigestConfig {
     /// The model. `None`: the default AI provider, looked up when a node needs it (tests pass a fake).
     pub llm: Option<Arc<dyn Llm>>,
     pub limits: DigestLimits,
+    /// The master profile the market frame reads the user's background from (`Core` fills it in
+    /// with `Core::profile_path`). `None`: no background (tests).
+    pub profile: Option<std::path::PathBuf>,
 }
 
 impl fmt::Debug for DigestConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DigestConfig").field("llm", &self.llm.as_ref().map(|_| "..")).field("limits", &self.limits).finish()
+        f.debug_struct("DigestConfig")
+            .field("llm", &self.llm.as_ref().map(|_| ".."))
+            .field("limits", &self.limits)
+            .field("profile", &self.profile)
+            .finish()
     }
 }
 
@@ -338,9 +473,18 @@ pub fn digest_graph(store: Store, secrets: Secrets, config: DigestConfig) -> Gra
 
 // ---------------------------------------------------------------- the items of a period
 
+/// Item headers read at once when looking for hiring postings.
+const HEADER_READS: usize = 16;
+/// Bytes of an item's text read to recognise a hiring posting by its header line.
+const HEADER_BYTES: u64 = 512;
+
 /// The items the digest of `period` is about: published or fetched inside it, spread over the
-/// sources (one after the other, newest first) up to `max`, then newest first.
-pub(crate) fn period_items(store: &Store, period: &Period, max: usize) -> Result<Vec<TrendItem>> {
+/// sources (one after the other, newest first) up to `max`, then newest first. "Who is hiring"
+/// postings come last and only fill the room the other items leave: `count` counts them all, and
+/// one backfilled Hacker News source holds thousands of them, which would crowd the stories, the
+/// directory and the feeds out of what `extract` reads. Recognising a posting reads the first
+/// bytes of the text of each Hacker News item of the period (no other item's).
+pub(crate) async fn period_items(store: &Store, period: &Period, max: usize) -> Result<Vec<TrendItem>> {
     let (start, end) = (period.start(), period.end());
     let inside = |t: DateTime<Utc>| t >= start && t < end;
     let found: Vec<TrendItem> = store
@@ -348,7 +492,34 @@ pub(crate) fn period_items(store: &Store, period: &Period, max: usize) -> Result
         .into_iter()
         .filter(|i| i.published_at.is_some_and(inside) || inside(i.fetched_at))
         .collect();
-    Ok(spread(found, max))
+    let checked: Vec<(TrendItem, bool)> = futures::stream::iter(found)
+        .map(|item| async move {
+            let posting = is_posting_item(&item).await;
+            (item, posting)
+        })
+        .buffered(HEADER_READS)
+        .collect()
+        .await;
+    let (postings, others): (Vec<_>, Vec<_>) = checked.into_iter().partition(|(_, posting)| *posting);
+    let mut picked = spread(others.into_iter().map(|(item, _)| item).collect(), max);
+    let room = max.saturating_sub(picked.len());
+    let postings = spread(postings.into_iter().map(|(item, _)| item).collect(), room);
+    tracing::debug!(items = picked.len(), postings = postings.len(), "items of the period picked");
+    picked.extend(postings);
+    Ok(picked)
+}
+
+/// Is the item a "Who is hiring" posting: a Hacker News item whose text starts with the thread's
+/// header ([`is_hiring_posting`])? Only the first [`HEADER_BYTES`] are read.
+async fn is_posting_item(item: &TrendItem) -> bool {
+    use tokio::io::AsyncReadExt;
+    let Some(path) = item.text_path.as_ref().filter(|_| item.url.starts_with(count::HN_ITEM_PREFIX)) else { return false };
+    let Ok(file) = tokio::fs::File::open(path).await else { return false };
+    let mut head = Vec::new();
+    if file.take(HEADER_BYTES).read_to_end(&mut head).await.is_err() {
+        return false;
+    }
+    is_hiring_posting(&String::from_utf8_lossy(&head))
 }
 
 /// Take items round-robin over their sources (the input is newest first) until `max`, then order

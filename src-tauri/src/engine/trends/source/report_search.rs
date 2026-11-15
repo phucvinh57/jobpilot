@@ -2,7 +2,8 @@
 //! instead of driving a search engine in the browser, which triggers captchas).
 //!
 //! Enabled only while a key is saved in the OS keyring (see [`SearchProvider::secret_name`]). The
-//! queries are built here from the preferences and the period; the API's results are data: only
+//! queries are built here from the market frame (the user's background and place, never their
+//! wishes, see [`MarketFrame`]) and the period; the API's results are data: only
 //! http(s) addresses on public hosts are read, with GET, and what a page says never leads to
 //! another request. PDFs are read through `pdf-extract`.
 
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::page::{fetch_text, make_item};
 use super::{join, normalize_url, Ctx, Item};
-use crate::engine::prefs::Preferences;
+use crate::engine::trends::frame::MarketFrame;
 use crate::engine::trends::http::public_http_url;
 use crate::engine::trends::period::Period;
 use crate::engine::trends::text::truncate;
@@ -50,34 +51,41 @@ pub struct Found {
     pub url: String,
 }
 
-/// Search queries for annual and quarterly reports, from what the user cares about: per domain
-/// "<domain> industry annual report <year>" and "<domain> market outlook <year> <quarter> report",
-/// per role "<role> hiring market trends <year> report" and "<role> salary survey <year>". Without
-/// domains or roles, general technology queries. At most `max`, interleaved so that every subject
-/// gets its first query before any gets a second.
-pub fn build_queries(prefs: &Preferences, period: &Period, max: usize) -> Vec<String> {
+/// Locations and role phrases of the frame that get queries.
+const MAX_SUBJECTS: usize = 2;
+
+/// Search queries for annual and quarterly reports on the user's market: where they want to work
+/// and what their background makes them. Per location "<location> technology job market report
+/// <year>" and "<location> <first role> salary survey <year>" ("<location> tech salary survey
+/// <year>" without a role); per role phrase of the profile "<role> hiring trends <year> report" and
+/// "<role> skills demand <year> <quarter>". At most two locations and two roles. Without either,
+/// general technology queries. Wished skills, wished domains and target roles are not in the frame,
+/// so they never steer what is searched. Deduplicated (ignoring case), at most `max`, interleaved
+/// so that every subject gets its first query before any gets a second.
+pub fn build_queries(frame: &MarketFrame, period: &Period, max: usize) -> Vec<String> {
     let (year, quarter) = (period.year(), period.quarter_label());
-    let subjects = |list: &[String], n: usize| -> Vec<String> { list.iter().map(|s| subject(s)).filter(|s| !s.is_empty()).take(n).collect() };
-    let domains = subjects(&prefs.domains, 3);
-    let roles = subjects(&prefs.roles, 2);
+    let subjects = |list: &[String]| -> Vec<String> { list.iter().map(|s| subject(s)).filter(|s| !s.is_empty()).take(MAX_SUBJECTS).collect() };
+    let locations = subjects(&frame.locations);
+    let roles = subjects(&frame.roles);
 
     let mut queries = Vec::new();
-    if domains.is_empty() && roles.is_empty() {
+    if locations.is_empty() && roles.is_empty() {
         queries.push(format!("software engineering hiring trends report {year}"));
         queries.push(format!("technology industry outlook {year} {quarter} report"));
         queries.push(format!("developer survey results {year}"));
     }
     for round in 0..2 {
-        for domain in &domains {
-            queries.push(match round {
-                0 => format!("{domain} industry annual report {year}"),
-                _ => format!("{domain} market outlook {year} {quarter} report"),
+        for location in &locations {
+            queries.push(match (round, roles.first()) {
+                (0, _) => format!("{location} technology job market report {year}"),
+                (_, Some(role)) => format!("{location} {role} salary survey {year}"),
+                (_, None) => format!("{location} tech salary survey {year}"),
             });
         }
         for role in &roles {
             queries.push(match round {
-                0 => format!("{role} hiring market trends {year} report"),
-                _ => format!("{role} salary survey {year}"),
+                0 => format!("{role} hiring trends {year} report"),
+                _ => format!("{role} skills demand {year} {quarter}"),
             });
         }
     }
@@ -87,7 +95,7 @@ pub fn build_queries(prefs: &Preferences, period: &Period, max: usize) -> Vec<St
     queries
 }
 
-/// One preference entry as a query term: single spaces, no control characters, bounded length.
+/// One location or role as a query term: single spaces, no control characters, bounded length.
 fn subject(raw: &str) -> String {
     let flat: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     truncate(&flat.split_whitespace().collect::<Vec<_>>().join(" "), 60)
@@ -205,50 +213,107 @@ mod tests {
     use super::*;
     use crate::engine::trends::testutil::{ctx, typst_pdf, Fixtures};
 
-    fn prefs(domains: &[&str], roles: &[&str]) -> Preferences {
-        Preferences {
-            domains: domains.iter().map(|s| s.to_string()).collect(),
+    use crate::engine::pipeline::cv::{Cv, Experience};
+    use crate::engine::prefs::{Preferences, Remote};
+
+    fn w46() -> Period {
+        Period::parse("2026-W46").unwrap()
+    }
+
+    /// A frame with these locations and role phrases (as the profile would give them).
+    fn frame(locations: &[&str], roles: &[&str]) -> MarketFrame {
+        MarketFrame {
+            locations: locations.iter().map(|s| s.to_string()).collect(),
             roles: roles.iter().map(|s| s.to_string()).collect(),
-            ..Preferences::default()
+            ..MarketFrame::default()
+        }
+    }
+
+    fn cv() -> Cv {
+        let mut cv = Cv::default();
+        cv.basics.headline = "Backend engineer".into();
+        cv.experience = vec![Experience { position: "Software Engineer".into(), company: "Acme".into(), ..Experience::default() }];
+        cv
+    }
+
+    #[test]
+    fn queries_come_from_locations_roles_year_and_quarter() {
+        let q = build_queries(&frame(&["Ho Chi Minh City", "Singapore"], &["Software Engineer", "Backend engineer"]), &w46(), 10);
+        assert_eq!(
+            q,
+            [
+                "Ho Chi Minh City technology job market report 2026",
+                "Singapore technology job market report 2026",
+                "Software Engineer hiring trends 2026 report",
+                "Backend engineer hiring trends 2026 report",
+                "Ho Chi Minh City Software Engineer salary survey 2026",
+                "Singapore Software Engineer salary survey 2026",
+                "Software Engineer skills demand 2026 Q4",
+                "Backend engineer skills demand 2026 Q4",
+            ]
+        );
+        let q2 = build_queries(&frame(&[], &["Data Analyst"]), &Period::parse("2026-Q2").unwrap(), 10);
+        assert_eq!(q2, ["Data Analyst hiring trends 2026 report", "Data Analyst skills demand 2026 Q2"]);
+        let no_role = build_queries(&frame(&["Berlin"], &[]), &w46(), 10);
+        assert_eq!(no_role, ["Berlin technology job market report 2026", "Berlin tech salary survey 2026"]);
+    }
+
+    #[test]
+    fn at_most_two_subjects_of_each_kind_and_every_subject_first_under_the_cap() {
+        let big = frame(&["Hanoi", "Singapore", "Tokyo"], &["SRE", "Data Analyst", "Backend Engineer"]);
+        let all = build_queries(&big, &w46(), 20);
+        assert_eq!(all.len(), 8, "two locations and two roles, two queries each: {all:?}");
+        assert!(!all.iter().any(|q| q.contains("Tokyo") || q.contains("Backend Engineer")), "{all:?}");
+        assert_eq!(build_queries(&big, &w46(), 4), [
+            "Hanoi technology job market report 2026",
+            "Singapore technology job market report 2026",
+            "SRE hiring trends 2026 report",
+            "Data Analyst hiring trends 2026 report",
+        ]);
+        assert!(build_queries(&big, &w46(), 0).is_empty());
+    }
+
+    #[test]
+    fn without_a_place_or_a_background_the_queries_are_general() {
+        let generic = build_queries(&MarketFrame::default(), &w46(), 10);
+        assert_eq!(generic.len(), 3);
+        assert!(generic[0].contains("hiring trends report 2026"), "{generic:?}");
+        assert!(generic[1].contains("2026 Q4"), "{generic:?}");
+        assert_eq!(build_queries(&MarketFrame::default(), &w46(), 2).len(), 2);
+    }
+
+    #[test]
+    fn wishes_never_change_the_queries() {
+        let place = Preferences { locations: vec!["Singapore".into()], remote: Remote::Hybrid, ..Preferences::default() };
+        let wishes = Preferences {
+            must_skills: vec!["Kotlin".into()],
+            nice_skills: vec!["Elixir".into()],
+            avoid_skills: vec!["PHP".into()],
+            domains: vec!["fintech".into(), "robotics".into()],
+            avoid_domains: vec!["gambling".into()],
+            roles: vec!["Product Manager".into()],
+            salary_min: Some(150_000),
+            currency: Some("SGD".into()),
+            seniority: vec!["Staff".into()],
+            ..place.clone()
+        };
+        let plain = build_queries(&MarketFrame::new(Some(&cv()), &place), &w46(), 20);
+        let wished = build_queries(&MarketFrame::new(Some(&cv()), &wishes), &w46(), 20);
+        assert_eq!(plain, wished);
+        assert_eq!(plain[0], "Singapore technology job market report 2026");
+        assert!(plain.contains(&"Software Engineer hiring trends 2026 report".to_string()), "{plain:?}");
+        let all = plain.join(" ").to_lowercase();
+        for wish in ["kotlin", "elixir", "php", "fintech", "robotics", "gambling", "product manager", "150", "sgd", "staff"] {
+            assert!(!all.contains(wish), "{wish} in {plain:?}");
         }
     }
 
     #[test]
-    fn queries_come_from_domains_roles_year_and_quarter() {
-        let w46 = Period::parse("2026-W46").unwrap();
-        let q = build_queries(&prefs(&["fintech", "robotics"], &["Backend Engineer"]), &w46, 10);
-        assert_eq!(
-            q,
-            [
-                "fintech industry annual report 2026",
-                "robotics industry annual report 2026",
-                "Backend Engineer hiring market trends 2026 report",
-                "fintech market outlook 2026 Q4 report",
-                "robotics market outlook 2026 Q4 report",
-                "Backend Engineer salary survey 2026",
-            ]
-        );
-        // The cap keeps the first query of every subject before any second one.
-        assert_eq!(build_queries(&prefs(&["fintech", "robotics"], &["SRE"]), &w46, 3), [
-            "fintech industry annual report 2026",
-            "robotics industry annual report 2026",
-            "SRE hiring market trends 2026 report",
-        ]);
-        let q2 = build_queries(&prefs(&["health"], &[]), &Period::parse("2026-Q2").unwrap(), 10);
-        assert_eq!(q2[1], "health market outlook 2026 Q2 report");
-
-        let generic = build_queries(&Preferences::default(), &w46, 10);
-        assert_eq!(generic.len(), 3);
-        assert!(generic[0].contains("hiring trends report 2026"), "{generic:?}");
-    }
-
-    #[test]
     fn subjects_are_sanitised_and_deduplicated() {
-        let q = build_queries(&prefs(&["  fin\ttech\n", "FinTech", "", &"x".repeat(200)], &[]), &Period::parse("2026-Q1").unwrap(), 20);
-        assert_eq!(q[0], "fin tech industry annual report 2026");
-        assert_eq!(q.iter().filter(|s| s.to_lowercase().starts_with("fin")).count(), 4, "FinTech differs from `fin tech`: two queries each: {q:?}");
-        assert!(q.iter().all(|s| s.chars().count() < 120 && !s.contains('\n')), "{q:?}");
-        let dup = build_queries(&prefs(&["AI", "ai"], &[]), &Period::parse("2026-Q1").unwrap(), 20);
+        let q = build_queries(&frame(&["  Ho Chi\tMinh\n", "", &"x".repeat(200)], &[]), &Period::parse("2026-Q1").unwrap(), 20);
+        assert_eq!(q[0], "Ho Chi Minh technology job market report 2026");
+        assert!(q.iter().all(|s| s.chars().count() < 120 && !s.contains('\n') && !s.contains('\t')), "{q:?}");
+        let dup = build_queries(&frame(&["Singapore", "singapore"], &[]), &Period::parse("2026-Q1").unwrap(), 20);
         assert_eq!(dup.len(), 2, "case-insensitive duplicates collapse: {dup:?}");
     }
 

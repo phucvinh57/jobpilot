@@ -25,6 +25,7 @@
 pub mod collect;
 pub mod config;
 pub mod digest;
+pub mod frame;
 pub use crate::engine::net::http;
 pub mod period;
 pub mod source;
@@ -174,7 +175,7 @@ impl Core {
         config: TrendConfig,
         digest: DigestConfig,
     ) -> Result<Outcome<TrendRun>> {
-        let graph = graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config, digest)?;
+        let graph = graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config, self.with_profile(digest))?;
         self.graphs.resume(&graph, &thread_id(&period), |s| s.challenge = None).await
     }
 }

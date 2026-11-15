@@ -6,7 +6,7 @@ import { CommandError, type GraphProgress } from "@/shared";
 
 import type { RunResult } from "../domain/types";
 import { useRuns } from "../hooks";
-import { ACME, challengeFixture, deferred, GLOBEX, overviewFixture } from "../testing";
+import { ACME, chartFixture, challengeFixture, deferred, GLOBEX, globalScope, localScope, oldChartFixture, overviewFixture } from "../testing";
 import { TrendsScreen } from "./TrendsScreen";
 
 const mocks = vi.hoisted(() => ({
@@ -96,21 +96,89 @@ describe("the Trends screen", () => {
     expect(screen.getByText("Rust shows up in more postings and in engineering write-ups about latency.")).toBeTruthy();
     expect(screen.getByText("“cut tail latency in half with Rust”")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Source 1" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: `Open source: ${GLOBEX}` })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: `Open source: ${GLOBEX}` })).toHaveLength(3);
     expect(screen.getByText("Every point links to the stored items it came from.")).toBeTruthy();
-    expect(screen.getByText("1 point(s) were left out: no valid source, or a quote that is not in the source.")).toBeTruthy();
+    expect(screen.getByText("1 point(s) were left out: no valid source, a quote that is not in the source, or a claim against the app's numbers.")).toBeTruthy();
 
-    // The skill chart: three rows, the one in the preferences marked, the legend.
+    // The skill chart: the local market first (the gap's scope), three rows with share, direction and marks.
     const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
-    expect(chart.getAllByRole("listitem")).toHaveLength(3);
-    expect(chart.getByRole("listitem", { name: /^Rust: 52 in total/ })).toBeTruthy();
-    expect(chart.getByText("In your preferences")).toBeTruthy();
-    expect(chart.getByText(/2026-06 to 2026-11 \(398 read\)/)).toBeTruthy();
+    const rows = within(chart.getByRole("list", { name: "Skill share, Local" }));
+    expect(rows.getAllByRole("listitem")).toHaveLength(3);
+    expect(rows.getByRole("listitem", { name: /^Rust: 9\.4% · rising · in your profile · in your wishes · 56 in total/ })).toBeTruthy();
+    expect(rows.getAllByText("rising")).toHaveLength(2);
+    expect(chart.getByText("In your profile")).toBeTruthy();
+    expect(chart.getByText("In your wishes")).toBeTruthy();
+    expect(chart.getByText(/^Local market: Ho Chi Minh City, Singapore or remote, 593 hiring postings, 2026-06 to 2026-11/)).toBeTruthy();
+    expect(chart.getByRole("listitem", { name: "2026-06: 92 postings" })).toBeTruthy();
+    expect(chart.getByText(/^Your own leads, for comparison: 26 over the window/)).toBeTruthy();
+
+    // The gap as the app sorted it, next to the model's point; the wishes; the unknown terms.
+    const gap = within(screen.getByRole("region", { name: "Your gap: build on, learn next, at risk" }));
+    expect(gap.getByText(/^Judged by the app on postings in Ho Chi Minh City/)).toBeTruthy();
+    expect(within(gap.getByRole("group", { name: "Build on" })).getByRole("listitem", { name: "Rust: 9.4% of postings, rising" })).toBeTruthy();
+    expect(within(gap.getByRole("group", { name: "Learn next" })).getByText("Kubernetes")).toBeTruthy();
+    expect(within(gap.getByRole("group", { name: "At risk" })).getByText("No skill of your profile is falling.")).toBeTruthy();
+    expect(gap.getByText("Kubernetes is the skill platform roles ask for most next to Rust and Go.")).toBeTruthy();
+    const wishes = within(screen.getByRole("list", { name: "Your wishes, measured" }));
+    expect(wishes.getByRole("listitem", { name: "PHP (skill, avoided): falling, 29 postings" })).toBeTruthy();
+    expect(wishes.getByText("skill you avoid")).toBeTruthy();
+    expect(wishes.getByRole("listitem", { name: "climate tech (domain): no data, no posting names it" })).toBeTruthy();
+    expect(screen.getByText("Temporal (5 items), dbt (4 items)")).toBeTruthy();
 
     // Sources and report search.
     expect(screen.getByRole("switch", { name: "Collect from Hacker News" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByRole("switch", { name: "Collect from Example engineering blog" }).getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText("Report search is on.")).toBeTruthy();
+  });
+
+  it("switches the chart between the local and the global market", async () => {
+    const user = await shown();
+    const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
+    const local = chart.getByRole("button", { name: "Market scope: Local" });
+    const global = chart.getByRole("button", { name: "Market scope: Global" });
+    expect(local.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector("#trends-scope")).toBeTruthy();
+
+    await user.click(global);
+    expect(global.getAttribute("aria-pressed")).toBe("true");
+    const rows = within(chart.getByRole("list", { name: "Skill share, Global" }));
+    expect(rows.getAllByRole("listitem")).toHaveLength(2);
+    expect(rows.getByRole("listitem", { name: /^PHP: 4\.6% · falling · in your profile · in your wishes/ })).toBeTruthy();
+    expect(chart.getByText(/^Global market: every posting, 2106 hiring postings/)).toBeTruthy();
+    expect(chart.getByRole("listitem", { name: "2026-06: 340 postings" })).toBeTruthy();
+
+    await user.click(local);
+    expect(chart.getByRole("list", { name: "Skill share, Local" })).toBeTruthy();
+  });
+
+  it("starts on the global market when the local one was too thin, and says so on the local one", async () => {
+    mocks.api.overview.mockResolvedValue(
+      overviewFixture({
+        chart: chartFixture({
+          scope: "global",
+          scopes: [localScope({ note: "Too little local data to tell directions: your gap is judged on the global market." }), globalScope()],
+        }),
+      }),
+    );
+    const user = await shown();
+    const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
+    expect(chart.getByRole("button", { name: "Market scope: Global" }).getAttribute("aria-pressed")).toBe("true");
+    expect(chart.queryByText(/^Too little local data/)).toBeNull();
+    await user.click(chart.getByRole("button", { name: "Market scope: Local" }));
+    expect(chart.getByText(/^Too little local data/)).toBeTruthy();
+  });
+
+  it("shows a chart saved before the app knew the user's place as it always did", async () => {
+    mocks.api.overview.mockResolvedValue(overviewFixture({ chart: oldChartFixture() }));
+    await shown();
+    const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
+    expect(chart.queryByRole("group", { name: "Market scope" })).toBeNull();
+    expect(chart.getAllByRole("listitem")).toHaveLength(2);
+    expect(chart.getByRole("listitem", { name: /^Python: 29% · 117 in total/ })).toBeTruthy();
+    expect(chart.getByText("In your preferences")).toBeTruthy();
+    expect(chart.queryByText("In your wishes")).toBeNull();
+    expect(chart.queryByText("rising")).toBeNull();
+    expect(chart.getByText(/2026-06 to 2026-11 \(398 read\)/)).toBeTruthy();
   });
 
   it("has one primary action, the period choice and the caption of what a run does", async () => {

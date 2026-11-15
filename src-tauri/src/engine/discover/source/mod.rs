@@ -274,7 +274,7 @@ pub(crate) fn words(text: &str) -> Vec<String> {
 
 /// Words that say how senior or which kind of job it is, not what it is: they do not decide
 /// whether a title fits a wanted role.
-const ROLE_NOISE: &[&str] = &["senior", "junior", "staff", "principal", "lead", "head", "the", "and", "for", "intern"];
+pub(crate) const ROLE_NOISE: &[&str] = &["senior", "junior", "staff", "principal", "lead", "head", "the", "and", "for", "intern"];
 
 /// Does a job title fit one of the wanted `roles`? A title fits when it shares a meaningful word
 /// with a role (`engineer` matches `engineering`), so "Software Engineer, Payments" fits
