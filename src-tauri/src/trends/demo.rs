@@ -5,7 +5,7 @@
 use crate::engine::store::NewTrendItem;
 use crate::engine::trends::digest::{
     month_window, Direction, GapBucket, GapScope, GapSkill, ScopeCounts, TermCount, WishKind,
-    WishSignal,
+    WishSignal, MARKET_SCAN_VERSION,
 };
 use crate::engine::trends::{
     CitedItem, DigestData, Period, Point, Section, SkillCount, SkillCounts, SourceKind,
@@ -127,6 +127,7 @@ pub fn seed_demo(core: &Core) -> Result<()> {
         ),
     ];
     let counts = SkillCounts {
+        version: MARKET_SCAN_VERSION,
         months: month_window(&period, 6),
         documents: vec![340, 355, 330, 362, 371, 348],
         skills: skill_list(&GLOBAL),

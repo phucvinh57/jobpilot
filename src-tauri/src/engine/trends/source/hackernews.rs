@@ -51,6 +51,7 @@ struct Comment {
 /// Stories and hiring postings. A part that fails is left out; the adapter fails only when every
 /// part did.
 pub async fn collect(ctx: &Ctx) -> Result<Vec<Item>> {
+    let started = std::time::Instant::now();
     let mut items = Vec::new();
     let mut failures = Vec::new();
     for part in [front_page(ctx).await, period_stories(ctx).await] {
@@ -60,7 +61,7 @@ pub async fn collect(ctx: &Ctx) -> Result<Vec<Item>> {
         }
     }
     let mut items = take_new(ctx, items, ctx.limits().max_items);
-    let hiring = hiring_posts(ctx).await;
+    let hiring = hiring_posts(ctx, started).await;
     match hiring {
         Ok(found) => items.extend(found),
         Err(e) => failures.push(e),
@@ -124,8 +125,11 @@ fn story_item(hit: Hit) -> Option<Item> {
 /// already stored are skipped (`take_new`), so a later run reads only what is new. At most
 /// `hiring_posts` new postings per thread. A thread that cannot be read is left out; this part
 /// fails only when every thread did.
-async fn hiring_posts(ctx: &Ctx) -> Result<Vec<Item>> {
+async fn hiring_posts(ctx: &Ctx, started: std::time::Instant) -> Result<Vec<Item>> {
     let l = ctx.limits();
+    // The whole source runs under `source_timeout`, and a timeout loses everything it read: stop
+    // starting threads once two thirds of it are spent, and keep what is in hand.
+    let budget = l.source_timeout.mul_f64(BACKFILL_SHARE);
     let end = ctx.period.end().timestamp();
     // The bot posts three threads a month ("Who is hiring", "Who wants to be hired", "Freelancer"):
     // ask for enough to see `hiring_threads` hiring ones, only threads that started before the end.
@@ -141,7 +145,11 @@ async fn hiring_posts(ctx: &Ctx) -> Result<Vec<Item>> {
 
     let mut items = Vec::new();
     let (mut read, mut first_error) = (0usize, None);
-    for thread in &threads {
+    for (n, thread) in threads.iter().enumerate() {
+        if n > 0 && started.elapsed() >= budget {
+            tracing::warn!(left = threads.len() - n, "time is running out: the older hiring threads are left for a later run");
+            break;
+        }
         match thread_posts(ctx, thread).await {
             Ok(found) => {
                 read += 1;
@@ -159,6 +167,9 @@ async fn hiring_posts(ctx: &Ctx) -> Result<Vec<Item>> {
         _ => Ok(items),
     }
 }
+
+/// The part of the source's timeout after which no further hiring thread is started.
+const BACKFILL_SHARE: f64 = 2.0 / 3.0;
 
 /// The "Who is hiring" threads among `hits` that started before `end`, newest first, at most `max`.
 fn hiring_threads(hits: Vec<Hit>, end: i64, max: usize) -> Vec<Hit> {
@@ -214,6 +225,8 @@ fn timestamp(secs: Option<i64>) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    use std::time::{Duration, Instant};
 
     use super::*;
     use crate::engine::trends::testutil::{ctx, Fixtures};
@@ -315,7 +328,7 @@ mod tests {
         hiring_fixtures(&fx);
         let ctx = ctx(&fx, &[]);
 
-        let posts = hiring_posts(&ctx).await.unwrap();
+        let posts = hiring_posts(&ctx, Instant::now()).await.unwrap();
         // Newest thread first; December's thread starts after 2026-W46, "Who wants to be hired" is
         // another thread, and a thread listed twice is read once.
         assert_eq!(
@@ -352,13 +365,13 @@ mod tests {
         hiring_fixtures(&fx);
 
         let two = ctx_with(&fx, &[], |l| l.hiring_threads = 2);
-        let posts = hiring_posts(&two).await.unwrap();
+        let posts = hiring_posts(&two, Instant::now()).await.unwrap();
         assert_eq!(posts.len(), 4);
         assert!(fx.hits_on("/hn/items/904").is_empty(), "the third newest thread is not read");
 
         // The cap is per thread, and it counts only new postings.
         let one = ctx_with(&fx, &["https://news.ycombinator.com/item?id=7001"], |l| l.hiring_posts = 1);
-        let posts = hiring_posts(&one).await.unwrap();
+        let posts = hiring_posts(&one, Instant::now()).await.unwrap();
         assert_eq!(
             urls(&posts),
             ["https://news.ycombinator.com/item?id=7005", "https://news.ycombinator.com/item?id=8001", "https://news.ycombinator.com/item?id=9001"]
@@ -366,14 +379,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_further_thread_starts_once_the_time_is_spent() {
+        let fx = Fixtures::start().await;
+        hiring_fixtures(&fx);
+        let spent = ctx_with(&fx, &[], |l| l.source_timeout = Duration::ZERO);
+        let posts = hiring_posts(&spent, Instant::now()).await.unwrap();
+        assert!(!posts.is_empty(), "the newest thread is always read");
+        assert!(fx.hits_on("/hn/items/903").is_empty(), "the older threads are left for a later run");
+    }
+
+    #[tokio::test]
     async fn a_second_run_reads_nothing_new() {
         let fx = Fixtures::start().await;
         hiring_fixtures(&fx);
-        let first = hiring_posts(&ctx(&fx, &[])).await.unwrap();
+        let first = hiring_posts(&ctx(&fx, &[]), Instant::now()).await.unwrap();
         assert_eq!(first.len(), 5);
 
         let known: Vec<&str> = urls(&first);
-        let again = hiring_posts(&ctx(&fx, &known)).await.unwrap();
+        let again = hiring_posts(&ctx(&fx, &known), Instant::now()).await.unwrap();
         assert!(again.is_empty(), "every posting is already stored: {:?}", urls(&again));
 
         // A new posting in the newest thread is all a later run adds.
@@ -381,7 +404,7 @@ mod tests {
             r#"{"id": 7003, "created_at_i": 1793635400, "text": "short reply""#,
             r#"{"id": 7006, "created_at_i": 1793700000, "text": "Vandelay | Rust Engineer | Singapore | Rust, Tokio, Postgres""#,
         ));
-        let later = hiring_posts(&ctx(&fx, &known)).await.unwrap();
+        let later = hiring_posts(&ctx(&fx, &known), Instant::now()).await.unwrap();
         assert_eq!(urls(&later), ["https://news.ycombinator.com/item?id=7006"]);
     }
 
@@ -390,17 +413,17 @@ mod tests {
         let fx = Fixtures::start().await;
         hiring_fixtures(&fx);
         fx.route("/hn/items/903", 500, "text/plain", "boom");
-        let posts = hiring_posts(&ctx(&fx, &[])).await.unwrap();
+        let posts = hiring_posts(&ctx(&fx, &[]), Instant::now()).await.unwrap();
         assert_eq!(posts.len(), 3, "November and September are kept: {:?}", urls(&posts));
 
         fx.route("/hn/items/902", 500, "text/plain", "boom");
         fx.route("/hn/items/904", 503, "text/plain", "down");
-        let err = hiring_posts(&ctx(&fx, &[])).await.unwrap_err().to_string();
+        let err = hiring_posts(&ctx(&fx, &[]), Instant::now()).await.unwrap_err().to_string();
         assert!(err.contains("HTTP 500") || err.contains("HTTP 503"), "{err}");
 
         // No hiring thread before the end: nothing, not an error.
         fx.route("/hn/search_by_date", 200, "application/json", r#"{"hits": []}"#);
-        assert!(hiring_posts(&ctx(&fx, &[])).await.unwrap().is_empty());
+        assert!(hiring_posts(&ctx(&fx, &[]), Instant::now()).await.unwrap().is_empty());
     }
 
     #[tokio::test]

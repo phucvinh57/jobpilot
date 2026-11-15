@@ -195,6 +195,32 @@ pub enum Direction {
     Falling,
 }
 
+impl Direction {
+    /// As the prompt, the markdown and the view spell it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Direction::Unclear => "unclear",
+            Direction::Rising => "rising",
+            Direction::Steady => "steady",
+            Direction::Falling => "falling",
+        }
+    }
+}
+
+/// `part / whole` in per mille, rounded half up; 0 without a whole. The one rounding every surface
+/// (prompt, markdown, view) uses, so a share reads the same everywhere.
+pub fn permille(part: u64, whole: u64) -> u32 {
+    if whole == 0 {
+        return 0;
+    }
+    u32::try_from((part.saturating_mul(1000) + whole / 2) / whole).unwrap_or(u32::MAX)
+}
+
+/// A per mille as a percent with one decimal: `9.4%`.
+pub fn permille_text(permille: u32) -> String {
+    format!("{}.{}%", permille / 10, permille % 10)
+}
+
 /// Where a skill stands for this user: the market's direction against their background (the
 /// profile's skills), decided in code (`count::gap_bucket`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -317,7 +343,14 @@ pub struct SkillCounts {
     pub uncatalogued: Vec<TermCount>,
     /// The user's wishes against the market, in the order the preferences list them.
     pub wishes: Vec<WishSignal>,
+    /// How these counts were made: 0 for reports saved before the market scan (P15), else
+    /// [`MARKET_SCAN_VERSION`]. The view tells old reports from new ones by it, not by guessing
+    /// from which fields happen to be filled.
+    pub version: u32,
 }
+
+/// [`SkillCounts::version`] of counts made from the user's background and place.
+pub const MARKET_SCAN_VERSION: u32 = 1;
 
 /// An item a point cites, kept with the digest so the citation opens even if the item is gone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -478,6 +511,10 @@ const HEADER_READS: usize = 16;
 /// Bytes of an item's text read to recognise a hiring posting by its header line.
 const HEADER_BYTES: u64 = 512;
 
+/// How old a Hacker News item fetched in the period may be and still count as the period's:
+/// about one monthly hiring thread.
+const CURRENT_THREAD_DAYS: i64 = 31;
+
 /// The items the digest of `period` is about: published or fetched inside it, spread over the
 /// sources (one after the other, newest first) up to `max`, then newest first. "Who is hiring"
 /// postings come last and only fill the room the other items leave: `count` counts them all, and
@@ -490,7 +527,15 @@ pub(crate) async fn period_items(store: &Store, period: &Period, max: usize) -> 
     let found: Vec<TrendItem> = store
         .list_trend_items(None)?
         .into_iter()
-        .filter(|i| i.published_at.is_some_and(inside) || inside(i.fetched_at))
+        .filter(|i| match i.published_at {
+            // A Hacker News item carries its real time. Fetched in the period, it counts when it is
+            // at most a month old (this month's hiring thread); a posting backfilled from an older
+            // thread belongs to its own month, not to the run that fetched it.
+            Some(at) if i.url.starts_with(count::HN_ITEM_PREFIX) => {
+                inside(at) || (inside(i.fetched_at) && at >= end - chrono::Duration::days(CURRENT_THREAD_DAYS))
+            }
+            at => at.is_some_and(inside) || inside(i.fetched_at),
+        })
         .collect();
     let checked: Vec<(TrendItem, bool)> = futures::stream::iter(found)
         .map(|item| async move {

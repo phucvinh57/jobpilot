@@ -784,6 +784,7 @@ mod tests {
     use crate::engine::health::Problem;
     use crate::engine::trends::digest::{
         Direction, GapBucket, GapScope, GapSkill, ScopeCounts, TermCount, WishKind, WishSignal,
+        MARKET_SCAN_VERSION,
     };
     use crate::engine::trends::{
         CitedItem, Digest, DigestData, Period, Point, Section, SkillCount, SkillCounts, TrendRun,
@@ -964,6 +965,7 @@ mod tests {
         let mut local_rust = skill("Rust", &[3, 4]);
         local_rust.in_profile = true;
         let counts = SkillCounts {
+            version: MARKET_SCAN_VERSION,
             months: vec!["2026-10".into(), "2026-11".into()],
             documents: vec![200, 200],
             skills: vec![rust, php],
@@ -1046,6 +1048,7 @@ mod tests {
             items: vec![item(7, "https://a.test/1")],
             points: vec![point(Section::WishesCheck, "PHP", &[7])],
             counts: SkillCounts {
+                version: MARKET_SCAN_VERSION,
                 place: "Singapore".into(),
                 field: vec!["backend".into(), "engineer".into()],
                 gap_scope: GapScope::Local,

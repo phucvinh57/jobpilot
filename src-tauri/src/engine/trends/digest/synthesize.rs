@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use super::extract::neutralize;
-use super::{DigestEnv, Direction, Extraction, GapBucket, GapScope, Point, ScopeCounts, Section, SkillCounts, WishKind};
+use super::{DigestEnv, Extraction, GapBucket, GapScope, Point, ScopeCounts, Section, SkillCounts, WishKind};
 use crate::engine::prefs::Preferences;
 use crate::engine::trends::frame::MarketFrame;
 use crate::engine::store::TrendItem;
@@ -160,21 +160,13 @@ fn background_block(out: &mut String, frame: &MarketFrame) {
     }
 }
 
-fn direction_word(direction: Direction) -> &'static str {
-    match direction {
-        Direction::Rising => "rising",
-        Direction::Steady => "steady",
-        Direction::Falling => "falling",
-        Direction::Unclear => "unclear",
-    }
-}
 
-/// `part / whole` as a percentage with one decimal, `-` without documents.
+/// `part / whole` as a percent with one decimal, `-` without documents.
 fn percent(part: u32, whole: u32) -> String {
     if whole == 0 {
         return "-".into();
     }
-    format!("{:.1}%", f64::from(part) * 100.0 / f64::from(whole))
+    super::permille_text(super::permille(u64::from(part), u64::from(whole)))
 }
 
 /// One scope's table: postings per month, then per skill its share per month, total and direction.
@@ -192,7 +184,7 @@ fn scope_table(out: &mut String, months: &[String], scope: &ScopeCounts) {
             own(&skill.skill),
             shares.join(" "),
             skill.total,
-            direction_word(skill.direction)
+            skill.direction.as_str()
         );
     }
 }
@@ -237,7 +229,7 @@ fn market_block(out: &mut String, counts: &SkillCounts) {
             .gap
             .iter()
             .filter(|g| g.bucket == bucket)
-            .map(|g| format!("{} ({}, {:.1}%)", own(&g.skill), direction_word(g.direction), f64::from(g.share_permille) / 10.0))
+            .map(|g| format!("{} ({}, {})", own(&g.skill), g.direction.as_str(), super::permille_text(g.share_permille)))
             .collect();
         let list = if skills.is_empty() { "none".to_string() } else { skills.join(", ") };
         let _ = writeln!(out, "- {label}: {list}");
@@ -263,7 +255,7 @@ fn wishes_block(out: &mut String, counts: &SkillCounts) {
         let signal = if wish.mentions == 0 {
             "no data".to_string()
         } else {
-            format!("{}, named in {} postings", direction_word(wish.direction), wish.mentions)
+            format!("{}, named in {} postings", wish.direction.as_str(), wish.mentions)
         };
         let _ = writeln!(out, "- {kind} \"{}\" ({stance}): {signal}", own(&wish.wish));
     }
@@ -371,7 +363,7 @@ mod tests {
     use super::*;
     use crate::engine::pipeline::cv::{Cv, Experience, SkillGroup};
     use crate::engine::prefs::Remote;
-    use crate::engine::trends::digest::{Claim, GapSkill, SkillCount, TermCount, WishSignal};
+    use crate::engine::trends::digest::{Claim, Direction, GapSkill, SkillCount, TermCount, WishSignal};
 
     fn item(id: i64, title: &str, url: &str) -> TrendItem {
         let at = Utc.with_ymd_and_hms(2026, 11, 10, 12, 0, 0).unwrap();
@@ -419,6 +411,7 @@ mod tests {
                 WishSignal { wish: "Kotlin".into(), kind: WishKind::Skill, avoided: false, direction: Direction::Steady, mentions: 6 },
                 WishSignal { wish: "fintech".into(), kind: WishKind::Domain, avoided: true, direction: Direction::Unclear, mentions: 0 },
             ],
+            version: super::super::MARKET_SCAN_VERSION,
         }
     }
 

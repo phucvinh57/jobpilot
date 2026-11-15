@@ -83,8 +83,9 @@ impl Searchable {
 /// What the app counted that a point must not contradict. Topics are matched ignoring case, and a
 /// skill also by the name the vocabulary gives it ("golang" is Go).
 struct CodeFacts {
-    /// The direction of each skill in the scope the gap was judged on (lower-case name).
-    directions: HashMap<String, Direction>,
+    /// The direction of each skill (lower-case name), one map per scope the prompt showed (global,
+    /// and local when there is one): a point may rest on either table.
+    directions: Vec<HashMap<String, Direction>>,
     /// The skills of the gap (lower case).
     gap: HashSet<String>,
     /// The wishes (lower case).
@@ -94,12 +95,9 @@ struct CodeFacts {
 
 impl CodeFacts {
     fn new(counts: &SkillCounts) -> Self {
-        let skills = match (counts.gap_scope, &counts.local) {
-            (GapScope::Local, Some(local)) => &local.skills,
-            _ => &counts.skills,
-        };
+        let scopes = std::iter::once(&counts.skills).chain(counts.local.as_ref().map(|l| &l.skills));
         Self {
-            directions: skills.iter().map(|s| (key(&s.skill), s.direction)).collect(),
+            directions: scopes.map(|skills| skills.iter().map(|s| (key(&s.skill), s.direction)).collect()).collect(),
             gap: counts.gap.iter().map(|g| key(&g.skill)).collect(),
             wishes: counts.wishes.iter().map(|w| key(&w.wish)).collect(),
             vocab: Vocabulary::new(&[]),
@@ -115,17 +113,26 @@ impl CodeFacts {
         keys
     }
 
-    fn direction(&self, topic: &str) -> Option<Direction> {
-        self.keys(topic).iter().find_map(|k| self.directions.get(k).copied())
+    /// The skill's direction in each scope that counted it.
+    fn directions(&self, topic: &str) -> Vec<Direction> {
+        let keys = self.keys(topic);
+        self.directions.iter().filter_map(|scope| keys.iter().find_map(|k| scope.get(k).copied())).collect()
     }
 
-    /// Does the point agree with the counts? A skill whose direction is unclear or that was not
-    /// counted keeps its rising or falling point: it rests on its cited evidence alone.
+    /// Is a rising (or falling) point against the counts: every scope that counted the skill gives
+    /// it a clear direction other than `claimed`? A skill that was not counted, or is unclear or
+    /// `claimed` in one scope, keeps its point: it rests on that table or on its cited evidence.
+    fn contradicts(&self, topic: &str, claimed: Direction) -> bool {
+        let found = self.directions(topic);
+        !found.is_empty() && found.iter().all(|&d| d != claimed && d != Direction::Unclear)
+    }
+
+    /// Does the point agree with the counts?
     fn agree(&self, point: &Point) -> bool {
         let topic = point.topic.as_str();
         match point.section {
-            Section::RisingSkills => !matches!(self.direction(topic), Some(Direction::Falling | Direction::Steady)),
-            Section::FallingSkills => !matches!(self.direction(topic), Some(Direction::Rising | Direction::Steady)),
+            Section::RisingSkills => !self.contradicts(topic, Direction::Rising),
+            Section::FallingSkills => !self.contradicts(topic, Direction::Falling),
             Section::ForYou => topic.is_empty() || self.keys(topic).iter().any(|k| self.gap.contains(k)),
             Section::WishesCheck => self.wishes.contains(&key(topic)),
             Section::Domains | Section::Funding | Section::Hiring => true,
@@ -403,19 +410,7 @@ pub fn render_markdown(period: &Period, data: &DigestData) -> String {
     md
 }
 
-fn direction_word(direction: Direction) -> &'static str {
-    match direction {
-        Direction::Rising => "rising",
-        Direction::Steady => "steady",
-        Direction::Falling => "falling",
-        Direction::Unclear => "unclear",
-    }
-}
 
-/// Per mille as a percentage with one decimal: `125` is `12.5%`.
-fn permille_text(permille: u32) -> String {
-    format!("{}.{}%", permille / 10, permille % 10)
-}
 
 /// The parts of `body_md` computed for the user, from the counts alone (reports saved before they
 /// existed have none of them, and render as before).
@@ -431,7 +426,7 @@ fn render_lens(md: &mut String, counts: &SkillCounts) {
                 .gap
                 .iter()
                 .filter(|g| g.bucket == bucket)
-                .map(|g| format!("{} ({}, {})", escape_md(&g.skill), direction_word(g.direction), permille_text(g.share_permille)))
+                .map(|g| format!("{} ({}, {})", escape_md(&g.skill), g.direction.as_str(), super::permille_text(g.share_permille)))
                 .collect();
             if !skills.is_empty() {
                 let _ = writeln!(md, "- {label}: {}", skills.join(", "));
@@ -446,7 +441,7 @@ fn render_lens(md: &mut String, counts: &SkillCounts) {
                 WishKind::Skill => "skill",
                 WishKind::Domain => "domain",
             };
-            let direction = if wish.mentions == 0 { "no data" } else { direction_word(wish.direction) };
+            let direction = if wish.mentions == 0 { "no data" } else { wish.direction.as_str() };
             let avoid = if wish.avoided { "yes" } else { "no" };
             let _ = writeln!(md, "| {} | {kind} | {avoid} | {direction} | {} |", escape_md(&wish.wish), wish.mentions);
         }

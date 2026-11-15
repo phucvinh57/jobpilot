@@ -202,7 +202,9 @@ pub struct Vocabulary {
 impl Vocabulary {
     /// The built-in skills plus `extra` (the user's skills). An extra skill the vocabulary already
     /// knows adds nothing: "golang" or "Spring Boot" in a profile stand for the built-in Go and
-    /// Spring, not for skills of their own.
+    /// Spring, not for skills of their own. An extra skill of one or two letters or digits ("C",
+    /// "R") is not counted: it would match "Series C" or "R&D" in every other posting, so its share
+    /// would say nothing (`C#` and `C++` are fine).
     pub fn new(extra: &[String]) -> Self {
         let mut vocab = Vocabulary { names: Vec::new(), by_first_word: HashMap::new() };
         for (name, aliases) in BUILT_IN {
@@ -210,7 +212,8 @@ impl Vocabulary {
         }
         for skill in extra {
             let skill = skill.split_whitespace().collect::<Vec<_>>().join(" ");
-            if !skill.is_empty() && vocab.find(&skill).is_empty() {
+            let ambiguous = skill.chars().count() <= 2 && skill.chars().all(char::is_alphanumeric);
+            if !skill.is_empty() && !ambiguous && vocab.find(&skill).is_empty() {
                 vocab.add(&skill, &[&skill.to_lowercase()]);
             }
         }
@@ -456,13 +459,6 @@ fn bucket_rank(bucket: GapBucket) -> u8 {
     }
 }
 
-/// `part` of `whole` in per mille (0 when `whole` is 0).
-fn permille(part: u32, whole: u64) -> u32 {
-    if whole == 0 {
-        return 0;
-    }
-    u32::try_from(u64::from(part) * 1000 / whole).unwrap_or(u32::MAX)
-}
 
 /// The gap over the field's postings: every skill of the vocabulary that falls in a bucket, by
 /// bucket (build on, learn next, at risk), then share, then name; at most [`MAX_PER_BUCKET`] each.
@@ -470,7 +466,7 @@ fn gap_list(field: &Tally, vocab: &Vocabulary, marks: &Marks) -> Vec<GapSkill> {
     let documents: u64 = field.documents.iter().map(|&n| u64::from(n)).sum();
     let mut gap: Vec<GapSkill> = (0..vocab.names.len())
         .filter_map(|i| {
-            let (direction, share_permille) = (field.direction(i), permille(field.total(i), documents));
+            let (direction, share_permille) = (field.direction(i), super::permille(u64::from(field.total(i)), documents));
             let bucket = gap_bucket(direction, marks.profile.contains(&i), share_permille)?;
             Some(GapSkill { skill: vocab.names[i].clone(), bucket, direction, share_permille })
         })
@@ -598,6 +594,7 @@ pub(super) fn market_counts(
     let pipeline = (!leads.is_empty()).then(|| Tally::new(leads, &vocab, months).scope(&vocab, &marks));
 
     SkillCounts {
+        version: super::MARKET_SCAN_VERSION,
         months: months.to_vec(),
         documents: global.documents,
         skills: global.skills,
@@ -756,6 +753,17 @@ mod tests {
         assert_eq!(counts.skills.iter().filter(|s| s.skill.eq_ignore_ascii_case("rust")).count(), 1, "no duplicate of a built-in");
         assert_eq!(total(&counts, "Go"), Some(vec![0, 0, 1]), "golang is the built-in Go");
         assert_eq!(total(&counts, "Golang"), None, "not a skill of its own");
+    }
+
+    #[test]
+    fn a_skill_of_one_or_two_letters_is_not_counted() {
+        let docs = [doc("2026-11", "Series C startup, strong R&D team, we use C# and C++")];
+        let vocab = Vocabulary::new(&["C".into(), "R".into(), "C#".into(), "C++".into()]);
+        let counts = count_skills(&docs, &vocab, &months());
+        assert_eq!(total(&counts, "C"), None, "Series C is not the language");
+        assert_eq!(total(&counts, "R"), None, "R&D is not the language");
+        assert_eq!(total(&counts, "C#"), Some(vec![0, 0, 1]));
+        assert_eq!(total(&counts, "C++"), Some(vec![0, 0, 1]));
     }
 
     #[test]

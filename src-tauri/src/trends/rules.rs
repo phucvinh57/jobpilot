@@ -7,7 +7,7 @@ use crate::engine::graph::nodes::ChallengeKind;
 use crate::engine::prefs::Preferences;
 use crate::engine::store::{Report, Source};
 use crate::engine::trends::digest::{
-    Direction, GapBucket, GapScope, ScopeCounts, WishKind, WishSignal,
+    Direction, GapBucket, GapScope, ScopeCounts, WishKind, WishSignal, MARKET_SCAN_VERSION,
 };
 use crate::engine::trends::{
     Digest, Period, Section, SkillCount, SkillCounts, SourceKind, SourceStatus, TrendRun,
@@ -153,11 +153,7 @@ pub fn describe(skill: &SkillCount, documents: &[u32], latest_partial: bool) -> 
 
 /// `part` of `whole` in per mille, rounded (0 when there is no whole).
 pub fn permille(part: u32, whole: u32) -> u32 {
-    if whole == 0 {
-        return 0;
-    }
-    let value = (u64::from(part) * 1000 + u64::from(whole) / 2) / u64::from(whole);
-    u32::try_from(value).unwrap_or(u32::MAX)
+    crate::engine::trends::digest::permille(u64::from(part), u64::from(whole))
 }
 
 /// A per mille as a whole percent, rounded half up: what a bar is drawn and labelled with.
@@ -175,19 +171,10 @@ pub fn percent_text(permille: u32) -> String {
 }
 
 /// Does the report know the user's background and place (P15 and later)? A report saved before
-/// has none of it: the screen then shows no direction, mark, scope, gap or wish.
+/// has none of it: the screen then shows no direction, mark, scope, gap or wish. Told by the
+/// counts' version, so a new report with thin data is not taken for an old one.
 pub fn knows_background(counts: &SkillCounts) -> bool {
-    counts.local.is_some()
-        || counts.pipeline.is_some()
-        || !counts.place.is_empty()
-        || !counts.field.is_empty()
-        || !counts.gap.is_empty()
-        || !counts.wishes.is_empty()
-        || !counts.uncatalogued.is_empty()
-        || counts
-            .skills
-            .iter()
-            .any(|s| s.in_profile || s.wished || s.direction != Direction::Unclear)
+    counts.version >= MARKET_SCAN_VERSION
 }
 
 /// How a direction reads on its tag, and the tag's tone.
@@ -563,6 +550,7 @@ mod tests {
 
     use crate::engine::trends::digest::{
         Direction, GapBucket, GapScope, ScopeCounts, SkillCounts, WishKind, WishSignal,
+        MARKET_SCAN_VERSION,
     };
 
     use super::{
@@ -814,11 +802,19 @@ mod tests {
             ..SkillCounts::default()
         };
         assert!(!knows_background(&counts), "a report saved before P15");
+        let thin = SkillCounts {
+            version: MARKET_SCAN_VERSION,
+            ..SkillCounts::default()
+        };
+        assert!(
+            knows_background(&thin),
+            "a new report with thin data is still new"
+        );
         assert_eq!(
             section_title(crate::engine::trends::Section::ForYou, false),
             "What it means for you"
         );
-        counts.skills[0].direction = Direction::Steady;
+        counts.version = MARKET_SCAN_VERSION;
         assert!(knows_background(&counts));
         assert_eq!(
             section_title(crate::engine::trends::Section::ForYou, true),
@@ -828,7 +824,10 @@ mod tests {
             local: Some(ScopeCounts::default()),
             ..SkillCounts::default()
         };
-        assert!(knows_background(&placed));
+        assert!(
+            !knows_background(&placed),
+            "the version decides, not the fields"
+        );
     }
 
     #[test]

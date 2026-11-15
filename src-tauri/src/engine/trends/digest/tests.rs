@@ -746,7 +746,7 @@ async fn enforce_citations_drops_points_against_the_counts() {
     let mut state = TrendRun::new(period());
     state.digest.items = vec![a];
     state.digest.counts = Some(SkillCounts {
-        // The global scope says otherwise: the gap's scope (local) decides.
+        // The two scopes disagree on Rust and Python: a point that one table supports is kept.
         skills: vec![skill("Python", Direction::Rising), skill("Rust", Direction::Falling)],
         local: Some(ScopeCounts {
             documents: vec![80],
@@ -789,17 +789,19 @@ async fn enforce_citations_drops_points_against_the_counts() {
         kept,
         [
             (RisingSkills, "Rust"),
+            (RisingSkills, "python"),
             (RisingSkills, "Zig"),
             (RisingSkills, "Mojo"),
             (FallingSkills, "Python"),
+            (FallingSkills, "Rust"),
             (Domains, "fintech"),
             (ForYou, ""),
             (ForYou, "golang"),
             (WishesCheck, "KOTLIN"),
         ],
-        "unclear and uncounted skills rest on their evidence; golang is Go, a gap skill; wishes ignore case"
+        "either table supports Rust and Python; unclear and uncounted skills rest on their evidence; golang is Go, a gap skill; wishes ignore case"
     );
-    assert_eq!(state.digest.dropped, 7, "python and Kafka rising, Rust and Kafka falling, Kafka for you, two wishes");
+    assert_eq!(state.digest.dropped, 5, "Kafka rising and falling (steady in the only table that counts it), Kafka for you, two wishes");
 }
 
 #[test]
@@ -877,6 +879,9 @@ async fn hiring_postings_only_fill_the_room_the_other_items_leave() {
     let story = stored_item(&store, dir.path(), "https://news.ycombinator.com/item?id=7", "Ask HN: Is anyone hiring SREs?", "# Ask HN: Is anyone hiring SREs?\n\n12 points", Some(now - Span::hours(1)));
     let feed = stored_item(&store, dir.path(), "https://blog.test/1", "A post", "# A post\n\nWho is hiring? We are.", Some(now - Span::hours(2)));
     let page = stored_item(&store, dir.path(), "https://page.test/", "A page", "# A page", Some(now - Span::hours(3)));
+    // A posting of an older thread, backfilled (fetched) now: it belongs to its own month.
+    let old_text = "# Hacker News, Ask HN: Who is hiring? (two months ago)\n\nOldCo | Go";
+    let old = stored_item(&store, dir.path(), "https://news.ycombinator.com/item?id=50", "OldCo | Go", old_text, Some(now - Span::days(60)));
 
     let ids = |items: Vec<TrendItem>| items.into_iter().map(|i| i.id).collect::<Vec<_>>();
     let picked = ids(period_items(&store, &period(), 4).await.unwrap());
@@ -886,6 +891,7 @@ async fn hiring_postings_only_fill_the_room_the_other_items_leave() {
 
     let all = ids(period_items(&store, &period(), 100).await.unwrap());
     assert_eq!(all.len(), 8, "with room, the postings are read too");
+    assert!(!all.contains(&old), "a backfilled posting is not evidence for this period");
     assert_eq!(all[..3], [story, feed, page]);
     assert_eq!(ids(period_items(&store, &period(), 2).await.unwrap()), [story, feed], "no room: no posting");
 }

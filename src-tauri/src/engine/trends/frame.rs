@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::engine::discover::score::compact_profile;
-use crate::engine::discover::source::{mentions_lowered, words, ROLE_NOISE};
+use crate::engine::discover::source::{mentions_lowered, title_fits_roles, words, ROLE_NOISE};
 use crate::engine::pipeline::cv::Cv;
 use crate::engine::prefs::{Preferences, Remote};
 
@@ -16,6 +16,11 @@ use crate::engine::prefs::{Preferences, Remote};
 const MAX_ROLES: usize = 3;
 /// Longest role phrase kept.
 const MAX_ROLE_CHARS: usize = 60;
+/// Words that say a posting offers remote work.
+const REMOTE_WORDS: &[&str] = &["remote", "work from home", "wfh"];
+/// Phrases that say it does not, though they name the word ("Berlin | ONSITE, no remote").
+const NOT_REMOTE: &[&str] =
+    &["no remote", "not remote", "non-remote", "non remote", "remote: no", "remote no", "no wfh", "onsite only", "on-site only", "in-office only"];
 
 /// The part of the market a run is about.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -86,11 +91,11 @@ impl MarketFrame {
     }
 
     /// Does a posting (lower case) belong to the user's place: it names a preferred location, or
-    /// it offers remote work and the work mode allows it? Without locations and with remote not
-    /// allowed nothing is local.
+    /// it offers remote work and the work mode allows it? A posting that names remote only to rule
+    /// it out ("no remote") does not offer it. Without locations and with remote not allowed
+    /// nothing is local.
     pub fn is_local(&self, lowered: &str) -> bool {
-        self.locations.iter().any(|l| mentions_lowered(lowered, l))
-            || (self.remote_ok && ["remote", "work from home", "wfh"].iter().any(|k| mentions_lowered(lowered, k)))
+        self.locations.iter().any(|l| mentions_lowered(lowered, l)) || (self.remote_ok && offers_remote(lowered))
     }
 
     /// Is there a place to scope by?
@@ -98,10 +103,11 @@ impl MarketFrame {
         !self.locations.is_empty() || self.remote_ok
     }
 
-    /// Does a posting (lower case) belong to the user's field: it names one of the role words? No
-    /// role words means every posting does.
-    pub fn in_field(&self, lowered: &str) -> bool {
-        self.role_words.is_empty() || self.role_words.iter().any(|w| mentions_lowered(lowered, w))
+    /// Does a posting belong to the user's field: it shares a meaningful word with a role phrase,
+    /// with the same rule discovery uses for titles (`engineer` also matches `engineers` and
+    /// `engineering`)? No roles means every posting does.
+    pub fn in_field(&self, text: &str) -> bool {
+        title_fits_roles(text, &self.roles)
     }
 
     /// Is `skill` one of the profile's skills (ignoring case)?
@@ -121,6 +127,11 @@ impl MarketFrame {
             n => format!("{} or {}", parts[..n - 1].join(", "), parts[n - 1]),
         }
     }
+}
+
+/// Does a posting (lower case) offer remote work?
+fn offers_remote(lowered: &str) -> bool {
+    REMOTE_WORDS.iter().any(|k| mentions_lowered(lowered, k)) && !NOT_REMOTE.iter().any(|k| mentions_lowered(lowered, k))
 }
 
 /// The words of a role phrase that say what the job is (not how senior it is).
@@ -191,7 +202,11 @@ mod tests {
         assert!(frame.is_local("acme | backend | singapore | onsite"));
         assert!(frame.is_local("acme | remote (apac)"));
         assert!(!frame.is_local("acme | berlin | onsite"));
+        assert!(!frame.is_local("acme | berlin | onsite, no remote"), "remote ruled out");
+        assert!(!frame.is_local("acme | berlin | remote: no"));
         assert!(frame.in_field("hiring a software engineer"));
+        assert!(frame.in_field("we're hiring engineers"), "plural");
+        assert!(frame.in_field("engineering roles: platform, infra"), "derived form");
         assert!(!frame.in_field("hiring an account executive"));
         assert!(frame.has_skill(" rust"));
         assert!(!frame.has_skill("Perl"));
