@@ -121,7 +121,7 @@ export function useApplySession(id: number, onPrimary: (primary: Primary | null)
   // form (`ReviewPanel`). Retry only re-opens and re-fills the form (never submits); a failed submit is
   // retried with the Submit button itself.
   const failed = apply?.phase === "idle" || apply?.phase === "handoff" ? apply.error : null;
-  useKeptFailureToast(failed, {
+  useKeptFailureToast(`apply:${id}`, failed, {
     title: "The application step failed",
     onRetry: apply?.canRetry ? () => void prepareAction.run() : undefined,
   });

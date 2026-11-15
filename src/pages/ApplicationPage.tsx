@@ -62,7 +62,7 @@ function OpenApplication({ id }: { id: number }) {
   const openSettings = useNav((s) => s.openSettings);
   const { head, apply, tab } = model;
   const header = head.header;
-  useJobFailureToast(head);
+  useJobFailureToast(id, head);
 
   if (header === undefined) {
     return (

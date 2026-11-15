@@ -176,16 +176,26 @@ describe("ProvidersSection", () => {
     expect(model.value).toBe("mistral");
   });
 
-  it("lists the models again when the address changes", async () => {
+  it("lists the models again once the edited address is left, without the saved key", async () => {
     vi.mocked(api.listModels).mockResolvedValue(["llama3"]);
     render();
     const dialog = await openLocal();
     await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(1));
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "Base URL" }), {
-      target: { value: "http://localhost:8080/v1" },
-    });
+    const address = within(dialog).getByRole("textbox", { name: "Base URL" });
+    fireEvent.change(address, { target: { value: "http://localhost:8080/v1" } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(api.listModels, "nothing goes to a half-typed address").toHaveBeenCalledTimes(1);
+
+    fireEvent.blur(address);
     await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2));
-    expect(vi.mocked(api.listModels).mock.calls[1]?.[0]).toMatchObject({ baseUrl: "http://localhost:8080/v1" });
+    expect(vi.mocked(api.listModels).mock.calls[1]?.[0], "a new address: not with the saved key").toMatchObject({
+      id: 0,
+      baseUrl: "http://localhost:8080/v1",
+      apiKey: null,
+    });
+    fireEvent.blur(address);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(api.listModels, "unchanged: not listed again").toHaveBeenCalledTimes(2);
   });
 
   it("makes another provider the default from its row", async () => {

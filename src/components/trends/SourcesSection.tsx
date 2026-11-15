@@ -75,6 +75,7 @@ export function SourcesSection({ sources, kinds }: { sources: readonly Source[];
       <Dialog
         id="trends-source-dialog"
         open={open !== undefined}
+        busy={editing.busy}
         title={open ? `Add ${open.label}` : "Add a source"}
         onClose={editing.cancel}
         onSubmit={() => open && !editing.busy && void editing.submit(open)}

@@ -149,6 +149,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 - Log key steps at `info!` with ids/counts only (no page, JD, email or CV text); failures at `warn!`/`error!`.
 - Views use the design kit (`src/components/ui/kit.tsx`) and the theme classes (`bg-surface`, `text-ink`, ...) for colours and widgets: no hard-coded colours (Tailwind's stock palette is removed), no local copies of kit components.
 - Add/edit flows open a kit `Dialog` (Save closes it and says so in a toast), not a form that expands inside a card.
+  A modal dialog is its own screen: its main button is its one primary (the screen behind is inert while it is open).
 - Errors outside a form are toasts: `useErrorToast` for a failed action, `LoadError` for a failed read. Red text is only a
   form's own error under its fields (`FormError` / `FormMessage`, also inside a dialog).
 - Exactly one primary button at a time (`applications/rules.rs::primary_for`, unit-tested; the web app renders what the DTO says); it is disabled while work runs. Secondary actions are plain buttons.

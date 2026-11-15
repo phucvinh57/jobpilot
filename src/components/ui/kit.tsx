@@ -430,7 +430,8 @@ export function Combobox({
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (!expanded) {
-        show(false);
+        // Nothing matches what is typed: the whole list.
+        show(shown.length === 0);
         return;
       }
       const step = e.key === "ArrowDown" ? 1 : -1;
@@ -471,7 +472,7 @@ export function Combobox({
               setActive(-1);
               setOpen(true);
             }}
-            onClick={() => !open && show(true)}
+            onClick={() => !expanded && show(true)}
             onBlur={() => setOpen(false)}
             onKeyDown={onKeyDown}
             className="pr-16"
@@ -963,11 +964,13 @@ export function DataTable<T>({
 
 /** A modal dialog for a short task: a title, the body, and its buttons in the footer. Closed by
  *  Esc, its ✕ or a Cancel in the footer, never by a click outside (what was typed stays). With
- *  `onSubmit` the body is a form, so Enter in a field submits. */
+ *  `onSubmit` the body is a form, so Enter in a field submits. While `busy` (its submit runs) it
+ *  stays open, so the outcome is seen. */
 export function Dialog({
   open,
   title,
   description,
+  busy = false,
   onClose,
   onSubmit,
   footer,
@@ -978,6 +981,7 @@ export function Dialog({
   open: boolean;
   title: string;
   description?: ReactNode;
+  busy?: boolean;
   onClose: () => void;
   onSubmit?: () => void;
   /** The buttons; the main one last. */
@@ -1005,6 +1009,7 @@ export function Dialog({
           size="compact"
           aria-label="Close"
           icon={X}
+          disabled={busy}
           onClick={onClose}
           className="-mr-2 px-2"
         />
@@ -1018,7 +1023,7 @@ export function Dialog({
     </>
   );
   return (
-    <DialogRoot open={open} onOpenChange={(next) => !next && onClose()}>
+    <DialogRoot open={open} onOpenChange={(next) => !next && !busy && onClose()}>
       <DialogContent
         id={id}
         // Without a description Radix wants an explicit "none".
@@ -1092,7 +1097,9 @@ export function ToastCard({
   );
 }
 
-/** Where toasts stack: bottom right, above dialogs, still clickable while one is open. */
+/** Where toasts stack: bottom right, above dialogs and still clickable while one is open (a modal
+ *  dialog keeps the keyboard and screen readers inside itself, so a dialog's own failures are form
+ *  errors, not toasts). */
 export function ToastRegion({ children }: { children: ReactNode }) {
   return (
     <section

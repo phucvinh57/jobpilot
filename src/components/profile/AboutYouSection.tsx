@@ -64,6 +64,7 @@ function NoteDialog({ card }: { card: AboutCard }) {
     <Dialog
       id="about-text-dialog"
       open={card.noteOpen}
+      busy={card.savingNote}
       title="Add a note"
       description="Facts only: they may appear on a CV."
       onClose={card.closeNote}

@@ -13,6 +13,8 @@ export interface ErrorToastOptions {
   onRetry?: () => void;
   /** Open the visible browser of a paused run (a `needsHuman` problem). */
   onOpenBrowser?: () => void;
+  /** The toast went away (closed, timed out or acted on): forget the failure where it is kept. */
+  onDismiss?: () => void;
 }
 
 export type Toast =
@@ -64,7 +66,11 @@ export const toast = {
   },
 };
 
-/** How long a toast stays (the pointer on it pauses the clock). */
-export function toastDuration(item: Toast): number {
-  return item.kind === "error" ? 10_000 : 4_000;
+/** How long a toast stays (the pointer on it pauses the clock); `null`: until it is closed. A
+ *  failure that offers Retry stays, so it is not missed while the user looks elsewhere. */
+export function toastDuration(item: Toast): number | null {
+  if (item.kind !== "error") {
+    return 4_000;
+  }
+  return item.onRetry ? null : 10_000;
 }

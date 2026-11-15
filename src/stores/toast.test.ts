@@ -40,9 +40,10 @@ describe("toast", () => {
     expect(titles()).toEqual(["Deleted"]);
   });
 
-  it("keeps an error longer than a success", () => {
+  it("keeps an error longer than a success, and one with Retry until it is closed", () => {
     const ok = { id: 1, kind: "ok", title: "Saved" } as const;
     const error = { id: 2, kind: "error", title: "Failed", error: new CommandError("x") } as const;
-    expect(toastDuration(error)).toBeGreaterThan(toastDuration(ok));
+    expect(toastDuration(error) ?? 0).toBeGreaterThan(toastDuration(ok) ?? 0);
+    expect(toastDuration({ ...error, onRetry: () => undefined })).toBeNull();
   });
 });

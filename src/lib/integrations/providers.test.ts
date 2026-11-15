@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { deleteLabel, draftOf, inputOf, keyLabel, modelsHint, providersStatus, switchKind } from "./providers";
+import {
+  deleteLabel,
+  draftOf,
+  inputOf,
+  keyLabel,
+  modelsHint,
+  modelsInputOf,
+  modelsSignature,
+  providersStatus,
+  switchKind,
+} from "./providers";
 import type { KindDefaults, Provider } from "@/types/integrations";
 
 const KINDS: KindDefaults[] = [
@@ -123,5 +133,34 @@ describe("the card", () => {
     expect(modelsHint(false, 0)).toBe("Type the model id.");
     expect(modelsHint(false, 1)).toBe("1 model available: pick one or type an id.");
     expect(modelsHint(false, 12)).toBe("12 models available: pick one or type an id.");
+  });
+
+  it("sends the saved key only to the address it was saved with when listing the models", () => {
+    const saved = draftOf(
+      {
+        id: 4,
+        name: "OpenAI",
+        kind: "openai",
+        kindLabel: "OpenAI-compatible",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o",
+        jsonObject: false,
+        isDefault: true,
+      },
+      KINDS,
+      true,
+    );
+    expect(modelsInputOf(saved).id, "same address: the saved key").toBe(4);
+    const moved = { ...saved, baseUrl: "https://api.openai.co/v1" };
+    expect(modelsInputOf(moved).id, "edited address: no saved key").toBe(0);
+    expect(modelsInputOf({ ...moved, apiKey: "sk-typed" })).toMatchObject({ id: 4, apiKey: "sk-typed" });
+    expect(modelsInputOf({ ...saved, baseUrl: " https://api.openai.com/v1 " }).id, "spaces do not count").toBe(4);
+  });
+
+  it("lists the models again only when the id, kind, address or key change", () => {
+    const a = inputOf(draftOf(undefined, KINDS));
+    expect(modelsSignature({ ...a, name: "Other", model: "x" })).toBe(modelsSignature(a));
+    expect(modelsSignature({ ...a, baseUrl: "http://localhost:1/v1" })).not.toBe(modelsSignature(a));
+    expect(modelsSignature({ ...a, apiKey: "sk" })).not.toBe(modelsSignature(a));
   });
 });

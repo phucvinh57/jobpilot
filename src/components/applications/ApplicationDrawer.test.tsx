@@ -200,10 +200,10 @@ describe("the application drawer", () => {
     });
     const toast = await screen.findByRole("alert", { name: "The last job failed" });
     expect(within(toast).getByText("connection refused")).toBeTruthy();
-    await waitFor(() => expect(mocked.dismissError).toHaveBeenCalledWith(7));
     expect(document.getElementById("job-error")).toBeNull();
-    await user.click(within(toast).getByRole("button", { name: "Retry" }));
-    expect(mocked.retry).toHaveBeenCalledWith(7);
+    expect(mocked.dismissError, "kept until the toast is closed").not.toHaveBeenCalled();
+    await user.click(within(toast).getByRole("button", { name: "Dismiss" }));
+    expect(mocked.dismissError).toHaveBeenCalledWith(7);
   });
 
   it("shows a round the user typed as a selected chip", async () => {

@@ -87,7 +87,9 @@ describe("the Timeline tab", () => {
   it("reports an email that could not be handled in a toast, each time", async () => {
     const user = userEvent.setup();
     mocked.readTimeline.mockResolvedValue(timeline({ reviews: [REVIEW] }));
-    mocked.resolveEmail.mockRejectedValue(new CommandError("the email is gone"));
+    mocked.resolveEmail.mockImplementation(async () => {
+      throw new CommandError("the email is gone");
+    });
     renderWithToasts(<TimelineTab id={7} />);
     await user.click(await screen.findByRole("button", { name: "Accept" }));
     const toast = await screen.findByRole("alert", { name: "That email could not be handled" });

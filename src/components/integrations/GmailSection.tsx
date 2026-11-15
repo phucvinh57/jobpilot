@@ -38,9 +38,7 @@ function SignedOut({ gmail, card }: { gmail: Gmail; card: GmailCard }) {
           onChange={(e) => card.setClientSecret(e.target.value)}
         />
       </Field>
-      {connection.error && (
-        <FormError id="gmail-error" error={connection.error} title={connection.errorTitle} onRetry={connection.retry} />
-      )}
+      {connection.error && <FormError id="gmail-error" error={connection.error} title={connection.errorTitle} />}
       <div className="flex items-center gap-2">
         <Button
           id="gmail-connect"

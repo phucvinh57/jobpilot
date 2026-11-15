@@ -85,6 +85,7 @@ function NewSessionDialog({ card }: { card: SessionsCard }) {
     <Dialog
       id="session-dialog"
       open={card.formOpen}
+      busy={creating}
       title="New session"
       description="A browser opens on the login address; log in there, then press Done."
       onClose={card.closeForm}

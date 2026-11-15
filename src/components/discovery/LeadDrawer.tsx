@@ -88,6 +88,7 @@ function DismissDialog({ lead, open, onClose }: { lead: Lead; open: boolean; onC
     <Dialog
       id="queue-dismiss"
       open={open}
+      busy={dismiss.busy}
       title="Dismiss this lead"
       description={leadTitle(lead.company, lead.role)}
       width="sm"

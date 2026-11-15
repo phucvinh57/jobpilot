@@ -7,7 +7,7 @@ import type { ProvidersCard } from "@/hooks/integrations/useProviders";
 
 /** The dialog that adds a provider (`id == 0`) or edits one. The key box is a password field: a
  *  saved key is never shown, only "saved". The model box suggests the provider's models, listed
- *  on their own from the address and key. */
+ *  on opening and again after the address or key is edited (on leaving the box). */
 export function ProviderDialog({ card }: { card: ProvidersCard }) {
   const { draft, runner, kinds } = card;
   const idle = runner.busy === undefined;
@@ -17,6 +17,7 @@ export function ProviderDialog({ card }: { card: ProvidersCard }) {
     <Dialog
       id="provider-dialog"
       open={draft !== undefined}
+      busy={runner.busy === "saving"}
       title={draft && draft.id !== 0 ? `Edit ${draft.name || "provider"}` : "Add provider"}
       onClose={card.close}
       onSubmit={() => idle && card.save()}
@@ -71,6 +72,7 @@ export function ProviderDialog({ card }: { card: ProvidersCard }) {
               placeholder="Base URL"
               value={draft.baseUrl}
               onChange={(e) => card.edit({ baseUrl: e.target.value })}
+              onBlur={card.listModels}
             />
           </Field>
           <Field label={keyLabel(draft)} hint={draft.hasKey ? "A key is saved in your system keyring." : undefined}>
@@ -82,6 +84,7 @@ export function ProviderDialog({ card }: { card: ProvidersCard }) {
               placeholder="API key (optional for local servers)"
               value={draft.apiKey}
               onChange={(e) => card.edit({ apiKey: e.target.value })}
+              onBlur={card.listModels}
             />
           </Field>
           <Field label="Model" hint={modelsHint(card.modelsLoading, draft.models.length)}>
@@ -104,9 +107,7 @@ export function ProviderDialog({ card }: { card: ProvidersCard }) {
             />
           )}
           {runner.notice && <FormMessage tone="ok">{runner.notice}</FormMessage>}
-          {runner.error && (
-            <FormError id="providers-error" error={runner.error} title={runner.errorTitle} onRetry={runner.retry} />
-          )}
+          {runner.error && <FormError id="providers-error" error={runner.error} title={runner.errorTitle} />}
         </>
       )}
     </Dialog>

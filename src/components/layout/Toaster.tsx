@@ -1,5 +1,5 @@
-// The toasts of the app (`stores/toast`), bottom right. Each one leaves after its time; the
-// pointer or the focus on it holds it.
+// The toasts of the app (`stores/toast`), bottom right. Each one leaves after its time (a failure
+// with Retry stays until it is closed); the pointer or the focus on it holds it.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -14,14 +14,16 @@ function ToastView({ item, onClose }: { item: Toast; onClose: () => void }) {
   close.current = onClose;
 
   useEffect(() => {
-    if (paused) {
+    if (paused || left.current === null) {
       return;
     }
     const started = Date.now();
     const timer = setTimeout(() => close.current(), left.current);
     return () => {
       clearTimeout(timer);
-      left.current -= Date.now() - started;
+      if (left.current !== null) {
+        left.current -= Date.now() - started;
+      }
     };
   }, [paused]);
 
@@ -70,7 +72,16 @@ export function Toaster() {
   return (
     <ToastRegion>
       {toasts.map((item) => (
-        <ToastView key={item.id} item={item} onClose={() => dismiss(item.id)} />
+        <ToastView
+          key={item.id}
+          item={item}
+          onClose={() => {
+            dismiss(item.id);
+            if (item.kind === "error") {
+              item.onDismiss?.();
+            }
+          }}
+        />
       ))}
     </ToastRegion>
   );

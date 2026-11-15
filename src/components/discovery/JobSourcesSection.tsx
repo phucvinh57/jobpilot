@@ -127,6 +127,7 @@ function AddSourceDialog({
     <Dialog
       id="source-dialog"
       open={open}
+      busy={adding}
       title="Add source"
       onClose={onClose}
       onSubmit={() => !adding && onAdd(kind, name, url)}

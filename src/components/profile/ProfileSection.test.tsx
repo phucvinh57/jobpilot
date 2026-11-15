@@ -214,7 +214,9 @@ describe("ProfileSection", () => {
   });
 
   it("toasts a failed change, each time it fails", async () => {
-    vi.mocked(api.setJobType).mockRejectedValue(new CommandError("the preferences could not be saved"));
+    vi.mocked(api.setJobType).mockImplementation(async () => {
+      throw new CommandError("the preferences could not be saved");
+    });
     render(<ProfileSection />);
     fireEvent.click(await screen.findByRole("button", { name: "Job type: Remote" }));
     const toast = await screen.findByRole("alert", { name: "Not saved" });

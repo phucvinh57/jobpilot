@@ -1,6 +1,6 @@
 // The use-cases of Settings > AI providers: the list, the dialog that adds or edits one (save, test,
-// delete), and making one the default. The models of the provider are listed on their own while
-// the dialog is open, so the model box can suggest them. A key typed here lives in this
+// delete), and making one the default. The models of the provider are listed on their own (see
+// `useModels`), so the model box can suggest them. A key typed here lives in this
 // component's state until the shell has taken it to the keyring, and is never read back.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -8,13 +8,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAction, useQuery, type Action, type Query } from "@/hooks/useAsync";
 
 import * as api from "@/api/providers";
-import { draftOf, inputOf, switchKind, type Draft } from "@/lib/integrations/providers";
+import { draftOf, inputOf, modelsInputOf, modelsSignature, switchKind, type Draft } from "@/lib/integrations/providers";
 import { toast } from "@/stores/toast";
 import type { KindDefaults, Provider, ProviderKind, Providers } from "@/types/integrations";
 import { useRunner, type Runner } from "./useRunner";
-
-/** Wait this long after the last keystroke in the address or key before listing the models. */
-export const MODELS_DELAY_MS = 500;
 
 export interface ProvidersCard {
   query: Query<Providers>;
@@ -23,6 +20,8 @@ export interface ProvidersCard {
   draft: Draft | undefined;
   /** The models of the provider in the dialog are being listed. */
   modelsLoading: boolean;
+  /** List the models again if the address, key or kind changed (on leaving their box). */
+  listModels: () => void;
   runner: Runner;
   open: (provider: Provider | undefined) => void;
   close: () => void;
@@ -36,48 +35,57 @@ export interface ProvidersCard {
   makeDefault: Action<[Provider], boolean>;
 }
 
-/** The models of the provider in the dialog, listed again when its kind, address or typed key
- *  change. A failure only leaves the list empty: the model id can always be typed. */
-function useModels(draft: Draft | undefined, setModels: (models: string[]) => void): boolean {
+/** The models of the provider in the dialog. They are listed when the dialog opens, when the kind
+ *  changes and when the user leaves the address or key box (`list`), never while typing, so nothing
+ *  goes to a half-typed address; and only when what they depend on changed. A failure only leaves
+ *  the list empty: the model id can always be typed. */
+function useModels(
+  draft: Draft | undefined,
+  setModels: (models: string[]) => void,
+): { loading: boolean; list: () => void } {
   const [loading, setLoading] = useState(false);
+  const [asked, setAsked] = useState(0);
   const reads = useRef(0);
-  const open = draft !== undefined;
-  const id = draft?.id ?? 0;
-  const kind = draft?.kind;
-  const baseUrl = draft?.baseUrl.trim() ?? "";
-  const apiKey = draft?.apiKey.trim() ?? "";
+  const listed = useRef<string | undefined>(undefined);
   const latest = useRef(draft);
   latest.current = draft;
+  const open = draft !== undefined;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the list depends on `id`, `kind`, `baseUrl` and `apiKey` (read through `latest`), not on the rest of the form
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `asked` is the request to list again (the form is read through `latest`)
   useEffect(() => {
-    const read = ++reads.current;
     const form = latest.current;
-    if (!open || !form || baseUrl === "") {
+    if (!open || !form) {
+      reads.current += 1;
+      listed.current = undefined;
       setLoading(false);
       return;
     }
+    const input = modelsInputOf(form);
+    const signature = modelsSignature(input);
+    if (input.baseUrl === "" || signature === listed.current) {
+      return;
+    }
+    listed.current = signature;
+    const read = ++reads.current;
     setLoading(true);
-    const timer = setTimeout(() => {
-      api
-        .listModels(inputOf(form))
-        .then(
-          (models) => read === reads.current && setModels(models),
-          () => read === reads.current && setModels([]),
-        )
-        .finally(() => read === reads.current && setLoading(false));
-    }, MODELS_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [open, id, kind, baseUrl, apiKey, setModels]);
+    api
+      .listModels(input)
+      .then(
+        (models) => read === reads.current && setModels(models),
+        () => read === reads.current && setModels([]),
+      )
+      .finally(() => read === reads.current && setLoading(false));
+  }, [open, asked, setModels]);
 
-  // Answers after the dialog closed are dropped.
+  // Answers after the dialog is gone are dropped.
   useEffect(
     () => () => {
       reads.current += 1;
     },
     [],
   );
-  return loading;
+  const list = useCallback(() => setAsked((n) => n + 1), []);
+  return { loading, list };
 }
 
 export function useProviders(): ProvidersCard {
@@ -90,7 +98,7 @@ export function useProviders(): ProvidersCard {
 
   const edit = useCallback((patch: Partial<Draft>) => setDraft((d) => d && { ...d, ...patch }), []);
   const setModels = useCallback((models: string[]) => edit({ models }), [edit]);
-  const modelsLoading = useModels(draft, setModels);
+  const { loading: modelsLoading, list: listModels } = useModels(draft, setModels);
 
   const open = useCallback(
     (provider: Provider | undefined) => {
@@ -116,8 +124,9 @@ export function useProviders(): ProvidersCard {
     (kind: ProviderKind) => {
       reset();
       setDraft((d) => d && switchKind(d, kind, kinds));
+      listModels();
     },
-    [kinds, reset],
+    [kinds, reset, listModels],
   );
 
   /** Run `call` with a form that is not armed for deletion any more. */
@@ -182,5 +191,20 @@ export function useProviders(): ProvidersCard {
     return true;
   });
 
-  return { query, kinds, draft, modelsLoading, runner, open, close, edit, setKind, save, test, remove, makeDefault };
+  return {
+    query,
+    kinds,
+    draft,
+    modelsLoading,
+    listModels,
+    runner,
+    open,
+    close,
+    edit,
+    setKind,
+    save,
+    test,
+    remove,
+    makeDefault,
+  };
 }

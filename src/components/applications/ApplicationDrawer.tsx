@@ -199,7 +199,7 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
   const { head } = model;
   const primary = head.primary;
   const showNextJob = header.showNextJob && primary === null;
-  useJobFailureToast(head);
+  useJobFailureToast(id, head);
   return (
     <>
       <div className="flex flex-col gap-1.5">

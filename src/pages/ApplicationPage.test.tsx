@@ -205,7 +205,7 @@ describe("the primary action", () => {
 });
 
 describe("the failure of a job", () => {
-  it("reports it once in a toast with Retry, then dismisses it in the shell", async () => {
+  it("reports it in a toast with Retry that stays, and dismisses it in the shell when it is closed", async () => {
     const user = userEvent.setup();
     open({
       error: new CommandError("connection refused", {
@@ -219,11 +219,12 @@ describe("the failure of a job", () => {
     const toast = await screen.findByRole("alert", { name: "The last job failed" });
     expect(within(toast).getByText("connection refused")).toBeTruthy();
     expect(within(toast).getByText("The connection failed. Check your network and try again.")).toBeTruthy();
-    // Reported: the shell forgets it, so it is not reported again on the next read.
-    await waitFor(() => expect(mocked.dismissError).toHaveBeenCalledWith(7));
     expect(document.getElementById("job-error"), "no banner on the page").toBeNull();
+    expect(mocked.dismissError, "kept in the shell while the toast is shown").not.toHaveBeenCalled();
     await user.click(within(toast).getByRole("button", { name: "Retry" }));
     expect(mocked.retry).toHaveBeenCalledWith(7);
+    // Closed: the shell forgets it, so it is not reported again on the next read.
+    expect(mocked.dismissError).toHaveBeenCalledWith(7);
     expect(screen.queryByRole("alert", { name: "The last job failed" }), "Retry closes the toast").toBeNull();
   });
 });
