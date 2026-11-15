@@ -19,8 +19,10 @@ on:
 permissions:
   contents: read
 
+# A PR keeps only its latest run. Every push to main runs on its own (per commit): each one checks
+# only its own diff, so a queued run must not be replaced by the next push's.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
