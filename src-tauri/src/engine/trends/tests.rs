@@ -403,7 +403,7 @@ fn the_state_round_trips_and_the_thread_is_named_by_period() {
     assert_eq!(thread_id(&period()), "trends:2026-W46");
     assert_eq!(thread_id(&Period::parse("2026-Q4").unwrap()), "trends:2026-Q4");
     let mut state = TrendRun::new(period());
-    state.hn_settled.push("903".into());
+    state.hn_settled.push("903@1".into());
     state.outcomes.push(SourceOutcome { source_id: Some(3), kind: "page".into(), status: SourceStatus::NeedsHuman { kind: ChallengeKind::Login }, items: 0 });
     state.outcomes.push(SourceOutcome { source_id: None, kind: "report_search".into(), status: SourceStatus::Skipped { reason: "no search API key saved".into() }, items: 0 });
     let json = serde_json::to_string(&state).unwrap();
@@ -450,8 +450,8 @@ async fn hiring_threads_read_in_full_are_not_downloaded_again() {
     let first = run(&core, &fx).await;
     assert_eq!(status_of(&first, "hackernews"), &SourceStatus::Ok);
     assert_eq!((fx.hits_on("/hn/items/902").len(), fx.hits_on("/hn/items/903").len()), (1, 1), "the first run reads every thread");
-    assert_eq!(first.hn_settled, ["903"]);
-    assert_eq!(settled_kv(&core), Some(vec!["903".to_string()]), "the older thread, its postings stored; not the newest");
+    assert_eq!(first.hn_settled, ["903@1"]);
+    assert_eq!(settled_kv(&core), Some(vec!["903@1".to_string()]), "the older thread, its postings stored; not the newest");
 
     // A new posting in the newest thread.
     let posting = r#"}, {"id": 7009, "created_at_i": 1793700000, "text": "Vandelay | Rust Engineer | Singapore | Rust, Tokio, Postgres"}]}"#;
@@ -463,7 +463,7 @@ async fn hiring_threads_read_in_full_are_not_downloaded_again() {
     let stored = core.store.list_trend_items(None).unwrap();
     assert!(stored.iter().any(|i| i.url == "https://news.ycombinator.com/item?id=7009"), "the new posting is stored");
     assert!(second.hn_settled.is_empty());
-    assert_eq!(settled_kv(&core), Some(vec!["903".to_string()]));
+    assert_eq!(settled_kv(&core), Some(vec!["903@1".to_string()]));
 }
 
 #[tokio::test]
@@ -475,17 +475,28 @@ async fn the_settled_threads_keep_the_newest_ids_and_a_bad_value_is_ignored() {
     core.store.kv_set(collect::HN_SETTLED_KEY, "not json").unwrap();
     run(&core, &fx).await;
     assert_eq!(fx.hits_on("/hn/items/903").len(), 1);
-    assert_eq!(settled_kv(&core), Some(vec!["903".to_string()]));
+    assert_eq!(settled_kv(&core), Some(vec!["903@1".to_string()]));
 
-    // 30 older ids and one that is not a number: the 24 newest are kept, newest first.
-    let mut saved: Vec<String> = (1..=30).map(|n| n.to_string()).collect();
-    saved.push("abc".into());
+    // 30 older threads, October with an old count, and keys that are not settled keys: one key per
+    // thread (the new count), the 24 newest threads, newest first.
+    let mut saved: Vec<String> = (1..=30).map(|n| format!("{n}@5")).collect();
+    saved.extend(["903@0".into(), "abc@1".into(), "17".into()]);
     core.store.kv_set(collect::HN_SETTLED_KEY, &serde_json::to_string(&saved).unwrap()).unwrap();
     run(&core, &fx).await;
-    assert_eq!(fx.hits_on("/hn/items/903").len(), 2, "October is not in the saved list");
+    assert_eq!(fx.hits_on("/hn/items/903").len(), 2, "October's count changed: read again");
     let kept = settled_kv(&core).unwrap();
-    let expected: Vec<String> = std::iter::once("903".to_string()).chain((8..=30).rev().map(|n| n.to_string())).collect();
+    let expected: Vec<String> = std::iter::once("903@1".to_string()).chain((8..=30).rev().map(|n| format!("{n}@5"))).collect();
     assert_eq!(kept, expected);
+
+    // Nothing new settles: October is skipped, and kv is not rewritten (a rewrite would sort it).
+    let reversed: Vec<String> = kept.iter().rev().cloned().collect();
+    core.store.kv_set(collect::HN_SETTLED_KEY, &serde_json::to_string(&reversed).unwrap()).unwrap();
+    run(&core, &fx).await;
+    assert_eq!(fx.hits_on("/hn/items/903").len(), 2, "October is not read again");
+    assert_eq!(settled_kv(&core).unwrap(), reversed);
+    // A key that is already saved changes nothing either.
+    collect::record_settled(&core.store, &["903@1".to_string()]).unwrap();
+    assert_eq!(settled_kv(&core).unwrap(), reversed);
 }
 
 #[tokio::test]
@@ -505,5 +516,5 @@ async fn a_run_that_fails_before_its_items_are_stored_records_no_thread() {
     core.store.with_conn(|c| Ok(c.execute_batch("DROP TRIGGER refuse_items;")?)).unwrap();
     let Outcome::Done(state) = core.resume_trends_collection(period(), config(&fx)).await.unwrap() else { panic!("the retry finishes") };
     assert!(state.stored.new > 0);
-    assert_eq!(settled_kv(&core), Some(vec!["903".to_string()]));
+    assert_eq!(settled_kv(&core), Some(vec!["903@1".to_string()]));
 }

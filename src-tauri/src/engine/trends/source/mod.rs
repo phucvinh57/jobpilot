@@ -86,10 +86,6 @@ pub struct Ctx {
     /// URLs already in `trend_items`: not fetched or collected again.
     pub known: Arc<HashSet<String>>,
     pub period: Period,
-    /// Hacker News "Who is hiring" threads (ids) read in full by an earlier run, their postings
-    /// stored: not downloaded again, except the newest thread (see [`hackernews::collect`]).
-    /// Empty for every other adapter.
-    pub settled_threads: Arc<HashSet<String>>,
 }
 
 impl Ctx {

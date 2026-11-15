@@ -24,7 +24,7 @@ Before P15, the user's wishes shaped the digest at every step:
    - The frame reads nothing else from the preferences. Wished skills, avoided skills, wished domains and target roles never decide what is collected or counted. A test asserts this.
 2. **Sample the market, not the user's search.**
    - Market numbers come only from HN "Who is hiring" postings.
-   - The first run reads the last 6 monthly threads. Threads read in full are not downloaded again; the newest thread is read on every run.
+   - The first run reads the last 6 monthly threads. Threads read in full are not downloaded again while their comment count stays the same (people still post to last month's thread); the newest thread is read on every run.
    - Leads are shown as the user's *pipeline*, for comparison, and never counted as market.
    - Report searches are built from place and role phrases.
 3. **Two scopes, shares.**

@@ -46,6 +46,5 @@ pub fn ctx(fx: &Fixtures, known: &[&str]) -> Ctx {
         config: Arc::new(config),
         known: Arc::new(known.iter().map(|s| s.to_string()).collect::<HashSet<_>>()),
         period: Period::parse("2026-W46").expect("period"),
-        settled_threads: Arc::default(),
     }
 }

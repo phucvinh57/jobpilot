@@ -71,10 +71,11 @@ pub const GRAPH: &str = "trends";
 /// Slack the library's per-node timeout gets on top of a collector's own budget.
 const NODE_MARGIN: Duration = Duration::from_secs(30);
 /// kv key of the Hacker News "Who is hiring" threads read in full, their postings stored: a JSON
-/// array of thread ids (strings), newest first. `hackernews::collect` does not download them again
-/// (except the newest thread); only `store_items` writes it.
+/// array of `hackernews::settled_key`s (`"903@412"`: id and comment count), newest thread first,
+/// one per thread. `hackernews::collect` does not download them again while the count is the same
+/// (and always reads the newest thread); only `store_items` writes it.
 pub const HN_SETTLED_KEY: &str = "trends.hn_settled_threads";
-/// How many settled thread ids kv keeps (the newest): two years of monthly threads, more than any
+/// How many settled threads kv keeps (the newest): two years of monthly threads, more than any
 /// `hiring_threads` window.
 const HN_SETTLED_KEEP: usize = 24;
 
@@ -214,7 +215,7 @@ struct Env {
 
 impl Env {
     fn ctx(&self, known: &Arc<HashSet<String>>, period: Period) -> Ctx {
-        Ctx { http: self.http.clone(), config: self.config.clone(), known: known.clone(), period, settled_threads: Arc::default() }
+        Ctx { http: self.http.clone(), config: self.config.clone(), known: known.clone(), period }
     }
 }
 
@@ -321,6 +322,7 @@ async fn group(env: Arc<Env>, mut s: TrendRun, group: SourceKind) -> Result<Tren
     let deadline = Instant::now() + env.config.limits.collector_budget;
     let known = Arc::new(known_urls(&env.store)?);
     let ctx = env.ctx(&known, s.period);
+    let saved_settled = if group == SourceKind::HackerNews { settled_threads(&env.store) } else { HashSet::new() };
     for id in ids {
         // Deleted since the plan, or not of this group any more: nothing to do.
         let Some(source) = env.store.get_source(id)?.filter(|src| src.enabled) else { continue };
@@ -330,8 +332,7 @@ async fn group(env: Arc<Env>, mut s: TrendRun, group: SourceKind) -> Result<Tren
         let work = async {
             match kind {
                 SourceKind::HackerNews => {
-                    let ctx = Ctx { settled_threads: Arc::new(settled_threads(&env.store)), ..ctx.clone() };
-                    hackernews::collect(&ctx).await.map(|hn| {
+                    hackernews::collect(&ctx, &saved_settled).await.map(|hn| {
                         settled = hn.settled;
                         hn.items
                     })
@@ -354,20 +355,24 @@ async fn group(env: Arc<Env>, mut s: TrendRun, group: SourceKind) -> Result<Tren
 /// The settled hiring threads saved in kv [`HN_SETTLED_KEY`]. Unreadable or invalid: a warning,
 /// and none (every thread in the window is read).
 fn settled_threads(store: &Store) -> HashSet<String> {
-    load_settled(store).unwrap_or_else(|_| {
-        tracing::warn!("the settled hiring threads could not be read; every hiring thread is read");
-        HashSet::new()
-    })
+    match load_settled(store) {
+        Ok(keys) => keys.into_iter().collect(),
+        Err(_) => {
+            tracing::warn!("the settled hiring threads could not be read; every hiring thread is read");
+            HashSet::new()
+        }
+    }
 }
 
-/// [`settled_threads`], with a store error as an error; an invalid value is a warning and none.
-fn load_settled(store: &Store) -> Result<HashSet<String>> {
-    let Some(json) = store.kv_get(HN_SETTLED_KEY)? else { return Ok(HashSet::new()) };
+/// The saved keys in their saved order (newest thread first), with a store error as an error; a
+/// value that is not a list of strings is a warning and none.
+fn load_settled(store: &Store) -> Result<Vec<String>> {
+    let Some(json) = store.kv_get(HN_SETTLED_KEY)? else { return Ok(Vec::new()) };
     match serde_json::from_str::<Vec<String>>(&json) {
-        Ok(ids) => Ok(ids.into_iter().collect()),
+        Ok(keys) => Ok(keys),
         Err(_) => {
-            tracing::warn!("the saved settled hiring threads are not a list of ids and are ignored");
-            Ok(HashSet::new())
+            tracing::warn!("the saved settled hiring threads are not a list of keys and are ignored");
+            Ok(Vec::new())
         }
     }
 }
@@ -577,20 +582,31 @@ async fn store_items(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
     Ok(s)
 }
 
-/// Merge `new` into kv [`HN_SETTLED_KEY`] and keep the [`HN_SETTLED_KEEP`] newest ids (numeric
-/// order; an id that is not a number is dropped). Writes nothing when nothing new settled.
-fn record_settled(store: &Store, new: &[String]) -> Result<()> {
-    let saved = load_settled(store)?;
-    let added = new.iter().filter(|id| !saved.contains(*id)).collect::<HashSet<_>>().len();
-    if added == 0 {
+/// Merge `new` into kv [`HN_SETTLED_KEY`]: one key per thread (a new key replaces the saved one of
+/// its thread; among saved keys of one thread the first wins), the [`HN_SETTLED_KEEP`] newest
+/// threads (numeric order of the ids). A key that is not a `hackernews::settled_key` is dropped, at
+/// the next write. Writes only when the list changes.
+pub(super) fn record_settled(store: &Store, new: &[String]) -> Result<()> {
+    if new.is_empty() {
         return Ok(());
     }
-    let mut ids: Vec<u64> = saved.iter().chain(new).filter_map(|id| id.parse().ok()).collect();
-    ids.sort_unstable_by(|a, b| b.cmp(a));
-    ids.dedup();
-    ids.truncate(HN_SETTLED_KEEP);
-    let ids: Vec<String> = ids.iter().map(u64::to_string).collect();
-    store.kv_set(HN_SETTLED_KEY, &serde_json::to_string(&ids)?)?;
-    tracing::info!(added, kept = ids.len(), "hiring threads read in full recorded");
+    let saved = load_settled(store)?;
+    let mut by_thread: std::collections::BTreeMap<u64, &String> = std::collections::BTreeMap::new();
+    for key in &saved {
+        if let Some(thread) = hackernews::settled_thread(key) {
+            by_thread.entry(thread).or_insert(key);
+        }
+    }
+    for key in new {
+        if let Some(thread) = hackernews::settled_thread(key) {
+            by_thread.insert(thread, key);
+        }
+    }
+    let keys: Vec<String> = by_thread.into_values().rev().take(HN_SETTLED_KEEP).cloned().collect();
+    if keys.len() == saved.len() && keys.iter().all(|k| saved.contains(k)) {
+        return Ok(());
+    }
+    store.kv_set(HN_SETTLED_KEY, &serde_json::to_string(&keys)?)?;
+    tracing::info!(kept = keys.len(), "hiring threads read in full recorded");
     Ok(())
 }
