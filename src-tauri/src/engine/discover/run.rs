@@ -1,4 +1,4 @@
-//! The two discovery graphs (design: `docs/plans/P10-discovery.md`, `activity-diagram.md` 2).
+//! The two discovery graphs.
 //!
 //! ```text
 //! discovery   plan -> sources (one source_run thread per source, run_each) -> summary
@@ -435,7 +435,7 @@ async fn score_node(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> 
     Ok(s)
 }
 
-/// `insight`: the hook (P11). Optional: a failure leaves the lead without insight.
+/// `insight`: the job insight hook. Optional: a failure leaves the lead without insight.
 async fn insight_node(sh: Arc<Shared>, mut s: SourceState) -> Result<SourceState> {
     let Some(candidate) = &s.current else { return Ok(s) };
     let request = InsightRequest {

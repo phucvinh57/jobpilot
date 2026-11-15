@@ -1,4 +1,4 @@
-//! The optional daily run (decision 5): while the app is open, a timer asks [`Core::discover_due`]
+//! The optional daily run: while the app is open, a timer asks [`Core::discover_due`]
 //! and, when it says yes, the app runs the same "Search now" path. Off by default (kv `discover.daily`).
 
 use anyhow::Result;

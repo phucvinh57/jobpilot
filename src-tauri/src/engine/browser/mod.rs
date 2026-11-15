@@ -1,4 +1,4 @@
-//! P4 - managed Chrome sessions (chromiumoxide).
+//! Managed Chrome sessions (chromiumoxide).
 //!
 //! - [`chrome`]: which Chrome to run (`JOBPILOT_CHROME` -> managed Chrome-for-Testing -> system) and the
 //!   explicit "download browser" step.
@@ -17,7 +17,7 @@
 //! let rx = runtime::spawn(async move { mgr.check(id).await });
 //! ```
 //!
-//! P5 launches automation browsers with [`SessionManager::launch`] and drives the returned
+//! Auto-apply launches automation browsers with [`SessionManager::launch`] and drives the returned
 //! [`BrowserHandle`] (`new_page(url)` -> `chromiumoxide::Page`, `cookies()`, `close()`).
 
 pub mod challenge;

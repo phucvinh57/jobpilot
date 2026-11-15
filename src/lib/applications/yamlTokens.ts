@@ -1,5 +1,5 @@
 // Which parts of a YAML text the editor colours. The parser is the one of `@codemirror/lang-yaml`;
-// the colours themselves come from the `--jp-*` theme (see `ui/cvTheme.ts`), so they follow
+// the colours themselves come from the `--jp-*` theme (see `components/applications/cvTheme.ts`), so they follow
 // the appearance and never hard-code a colour.
 
 import { yamlLanguage } from "@codemirror/lang-yaml";

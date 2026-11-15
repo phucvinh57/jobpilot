@@ -288,7 +288,7 @@ mod flag_tests {
 
     #[test]
     fn the_jd_browser_is_not_disguised() {
-        // docs/plans/README.md: no fingerprint spoofing.
+        // No fingerprint spoofing.
         assert!(!FLAGS.iter().any(|a| a.contains("AutomationControlled") || a.contains("user-agent")), "{FLAGS:?}");
     }
 }

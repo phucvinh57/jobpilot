@@ -14,8 +14,8 @@ const TITLE = "Profile & preferences";
 const HINT = "What to look for. Every change is saved at once and used by the next search.";
 
 /** Settings > Profile & preferences: the job type, tag fields for locations, domains and skills,
- *  and free-text notes (what to look for; the facts about the user are in Settings > About you). There is no chat and no primary button: every change
- *  is saved at once, and Undo puts back the last one. */
+ *  and free-text notes (what to look for; facts about the user are in Settings > About you). No
+ *  primary button: every change is saved at once, and Undo puts back the last one. */
 export function ProfileSection() {
   const card = useProfile();
   const { profile } = card;

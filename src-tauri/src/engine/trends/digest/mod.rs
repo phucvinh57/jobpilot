@@ -1,7 +1,7 @@
-//! P13b - the digest: what the collected items say about where the market is going.
+//! The digest: what the collected items say about where the market is going.
 //!
 //! ```text
-//! (collection, P13a) ... store_items -> wait_human --digest?--> extract -> count -> synthesize
+//! (collection)       ... store_items -> wait_human --digest?--> extract -> count -> synthesize
 //!                                                                  -> enforce_citations -> save_report -> END
 //! START -> extract -> ... -> save_report -> END                    (the digest alone, on stored items)
 //! ```
@@ -242,7 +242,7 @@ pub struct SkillCount {
     /// Documents mentioning the skill, aligned with [`SkillCounts::months`].
     pub by_month: Vec<u32>,
     pub total: u32,
-    /// Where its share is going (reports saved before P15: `Unclear`).
+    /// Where its share is going (older reports: `Unclear`).
     #[serde(default)]
     pub direction: Direction,
     /// The skill is in the user's profile.
@@ -322,8 +322,8 @@ pub struct WishSignal {
 pub struct SkillCounts {
     /// `2026-06` ... `2026-11`, oldest first; the last one is the period's month.
     pub months: Vec<String>,
-    /// Hiring postings read per month, aligned with `months` (reports saved before P15 also
-    /// counted leads here).
+    /// Hiring postings read per month, aligned with `months` (older reports also counted leads
+    /// here).
     pub documents: Vec<u32>,
     /// Most mentioned first, ties by name; only skills that appear at all.
     pub skills: Vec<SkillCount>,
@@ -344,7 +344,7 @@ pub struct SkillCounts {
     pub uncatalogued: Vec<TermCount>,
     /// The user's wishes against the market, in the order the preferences list them.
     pub wishes: Vec<WishSignal>,
-    /// How these counts were made: 0 for reports saved before the market scan (P15), else
+    /// How these counts were made: 0 for reports saved before the market scan, else
     /// [`MARKET_SCAN_VERSION`]. The view tells old reports from new ones by it, not by guessing
     /// from which fields happen to be filled.
     pub version: u32,

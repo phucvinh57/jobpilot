@@ -1,33 +1,27 @@
-//! P11 - job insight: a short brief per job (business domain, company facts, skills, interview
+//! Job insight: a short brief per job (business domain, company facts, skills, interview
 //! process), built from the JD and the company's own pages.
 //!
 //! ```text
-//! // P10 discovery calls it for every lead; the pipeline starts it for user-added JDs:
+//! // Discovery calls it for every lead; the pipeline starts it for user-added JDs:
 //! let brief = pipeline::insight::insight(&core, llm, &jd_text, Some(&posting_url), Some(&analysis)).await?;
 //! // For a stored application (reads jd.md and the analysis, stores `applications.insight_json`):
 //! let brief = core.compute_insight(app_id, llm).await?;
 //! ```
 //!
 //! Rule: unknown stays empty and the UI says "not found"; nothing is guessed. The model only
-//! extracts from texts it is given, and the code drops what it cannot ground: a number must be a
-//! whole number of one of the texts, a stage or headquarters must be written in one of them, and
-//! sources are only pages that were read. `domain` and `business_summary` are summaries, so they
-//! are kept as written; the JD is never blank (a blank one is refused), so there is always a text
-//! they come from, and the prompt allows only what the texts state.
+//! extracts from the texts it is given, and the code drops what it cannot ground: a number must be
+//! a whole number of one of the texts, a stage or headquarters must be written in one of them, and
+//! sources are only pages that were read. `domain` and `business_summary` are summaries of the
+//! (never blank) JD, so they are kept as written.
 //!
-//! The flow is the `insight` graph: `company_urls` (derived in code) -> `fetch_pages` (plain fetch
-//! of each page, in parallel, each optional) -> `extract` (one `complete_json`). There is no
-//! interrupt: a page that needs a browser, a login or a captcha is skipped and its fields stay
-//! empty. The graph runs as a throwaway thread (its checkpoints hold page text, so they are deleted
-//! as soon as the run ends).
+//! The flow is the `insight` graph: `company_urls` -> `fetch_pages` (plain fetch, in parallel, each
+//! optional) -> `extract` (one `complete_json`). There is no interrupt: a page that needs a browser,
+//! a login or a captcha is skipped. The graph runs as a throwaway thread (its checkpoints hold page
+//! text, so they are deleted as soon as the run ends).
 //!
-//! Which pages are read is decided by code from one address only: the posting URL the user gave
-//! (an application's `source`, a lead's URL). The registrable domain of its host is the company
-//! site; an ATS board or job site (greenhouse, lever, linkedin, ...) encodes a slug, not a domain,
-//! so for those no page is read. The same goes for a site-hosting platform's own address
-//! (`vercel.app`, `github.com`, `medium.com/@acme`); a tenant on one (`acme.vercel.app`) is read on
-//! its exact host only, never on the platform's root. JD text, the analysis (`apply_url`) and the model never choose a
-//! URL. Every fetch, redirects included, follows the rules in `fetch.rs`.
+//! Which pages are read is decided by code from the posting URL the user gave (an application's
+//! `source`, a lead's URL) and nothing else: JD text, the analysis (`apply_url`) and the model never
+//! choose a URL (see `company_urls`). Every fetch, redirects included, follows `fetch.rs`.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -130,7 +124,7 @@ impl Insight {
 /// `analysis` supplies the skill lists, so the model is not asked for them.
 ///
 /// Runs the `insight` graph on a thread of its own, so it can be called from anywhere, including
-/// from a node of another graph (P10's lead scoring). Costs one model call and up to three page
+/// from a node of another graph (discovery's lead scoring). Costs one model call and up to three page
 /// fetches; the fetches are optional, so the only error is the model's (or an empty JD). `llm` is
 /// owned because graph nodes outlive the call's borrows.
 pub async fn insight(

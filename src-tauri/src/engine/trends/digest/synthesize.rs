@@ -1,10 +1,10 @@
 //! The `synthesize` node: one model call that turns the evidence and the app's market numbers into
 //! points, for the user's background. Nothing it writes is trusted yet: `enforce_citations` checks it.
 //!
-//! The prompt has three blocks before the evidence, in this order (design:
-//! `docs/plans/P15-market-scan.md`): the user's **background** (the compact profile, the role
-//! phrases and the place), the **market numbers** the app computed (shares, directions, the gap,
-//! terms not in the list: the model explains them, never changes them), and the **wishes to check**.
+//! The prompt has three blocks before the evidence, in this order: the user's **background** (the
+//! compact profile, the role phrases and the place), the **market numbers** the app computed (shares,
+//! directions, the gap, terms not in the list: the model explains them, never changes them), and the
+//! **wishes to check**.
 //! Wishes appear only in that last block, for the `wishes_check` section, so they cannot steer what
 //! the rest of the digest says.
 

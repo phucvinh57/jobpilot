@@ -1,7 +1,7 @@
-// The Application screen (the drawer's "Open full view"): a breadcrumb back to the Jobs page, the role, company and
-// status, the ONE primary action (Generate -> Approve CV -> Review & Submit -> Submit), the steps,
-// and the tabs JD / CV / Apply / Timeline. The shell owns what the primary action is; this view
-// only shows it.
+// The Application screen (the drawer's "Open full view"): a breadcrumb back to the Jobs page, the
+// role, company and status, the ONE primary action (Generate -> Approve CV -> Review & Submit ->
+// Submit), the steps, and the tabs JD / CV / Apply / Timeline. The shell decides the primary
+// action; this view only shows it.
 
 import { Inbox, Settings } from "lucide-react";
 

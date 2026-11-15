@@ -170,7 +170,7 @@ pub fn percent_text(permille: u32) -> String {
     }
 }
 
-/// Does the report know the user's background and place (P15 and later)? A report saved before
+/// Does the report know the user's background and place? A report saved before the market scan
 /// has none of it: the screen then shows no direction, mark, scope, gap or wish. Told by the
 /// counts' version, so a new report with thin data is not taken for an old one.
 pub fn knows_background(counts: &SkillCounts) -> bool {
@@ -251,7 +251,7 @@ pub fn pipeline_note(pipeline: &ScopeCounts) -> String {
     format!("Your own leads, for comparison: {documents} over the window{named}. They are not counted in the market above.")
 }
 
-/// The heading of a section. A report saved before P15 wrote its `for_you` points about the
+/// The heading of a section. A report saved before the market scan wrote its `for_you` points about the
 /// user's wishes, not the gap: it keeps the old title.
 pub fn section_title(section: Section, knows: bool) -> &'static str {
     match section {

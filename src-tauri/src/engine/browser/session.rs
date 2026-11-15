@@ -369,7 +369,7 @@ impl SessionManager {
         self.inner.store.delete_session(id)
     }
 
-    /// Launch Chrome on the session's profile (the single entry point for automation, e.g. P5).
+    /// Launch Chrome on the session's profile (the single entry point for automation, e.g. auto-apply).
     /// Fails when the profile is already open, so there is at most one live browser per profile.
     /// Close it with [`BrowserHandle::close`]; dropping every clone also kills it.
     pub async fn launch(&self, id: i64, headless: bool) -> Result<BrowserHandle> {
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn no_browser_is_disguised() {
-        // No browser hides that it is automated (docs/plans/README.md: no fingerprint spoofing).
+        // No browser hides that it is automated (no fingerprint spoofing).
         assert!(!launch_args(Flavor::Managed).iter().any(|a| a.contains("AutomationControlled") || a.contains("user-agent")));
         // Discovery adds the request guard's flags.
         let guard = vec!["--proxy-server=http://127.0.0.1:1".to_string()];

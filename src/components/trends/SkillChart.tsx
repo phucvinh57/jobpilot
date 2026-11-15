@@ -8,11 +8,10 @@ import { addAccessibleName, addTooltip, canAdd } from "@/lib/trends/preferences"
 import type { Chart, ChartScope, ChartSkill, ScopeKey } from "@/types/trends";
 import type { PreferenceAdds } from "@/hooks/trends/usePreferenceAdds";
 
-/** The share of the market's postings naming each skill, per scope: Local (the user's place) and
- *  Global (every posting), switched with `#trends-scope` when the report has a place. Bars are
- *  scaled to the most named skill; accent for what the profile names (for a report saved before
- *  the app knew the profile: what the preferences name), grey for the rest. Each row carries the
- *  direction the app worked out and a flag when the skill is one of the user's wishes. */
+/** The share of postings naming each skill, per scope (Local / Global, switched with
+ *  `#trends-scope` when the report has a place). Bars are scaled to the most named skill: accent
+ *  for skills in the profile (in older reports: the preferences), grey otherwise. Each row carries
+ *  its direction and a flag for the user's wishes. */
 export function SkillChart({ chart, adds }: { chart: Chart; adds: PreferenceAdds }) {
   const [picked, setPicked] = useState<ScopeKey | undefined>(undefined);
   const scope = pickScope(chart, picked);

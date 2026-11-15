@@ -6,7 +6,7 @@
 //! trend. The vocabulary is fixed (`BUILT_IN`) plus the skills of the user's profile, so the same
 //! postings and the same profile always give the same numbers; the model has no part in it.
 //!
-//! What is counted (design: `docs/plans/P15-market-scan.md`):
+//! What is counted:
 //!
 //! - **global**: every posting of the window; **local**: the postings of the user's place (a
 //!   preferred location, or remote when the work mode allows it), when there is a place.

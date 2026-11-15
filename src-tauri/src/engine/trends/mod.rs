@@ -1,7 +1,7 @@
-//! P13 - market trends. Part A, collection: sources the user adds (Hacker News, the YC directory,
-//! feeds, pages) and, with a search API key, annual and quarterly reports, all collected into
-//! `trend_items` by the `trends` graph ([`collect`]). Part B, the digest ([`digest`]): what the
-//! items say, with skill counts and checked citations, saved as a report.
+//! Market trends. Collection: sources the user adds (Hacker News, the YC directory, feeds, pages)
+//! and, with a search API key, annual and quarterly reports, all collected into `trend_items` by
+//! the `trends` graph ([`collect`]). The digest ([`digest`]): what the items say, with skill counts
+//! and checked citations, saved as a report.
 //!
 //! ```text
 //! core.add_trend_source(SourceKind::HackerNews, "", "")?;

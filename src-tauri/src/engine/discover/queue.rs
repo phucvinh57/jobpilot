@@ -1,4 +1,4 @@
-//! P12 - what the queue screen shows: the `new` leads best match first, with their score
+//! What the queue screen shows: the `new` leads best match first, with their score
 //! breakdown and brief, the filters, the sources' state and what needs the user.
 //!
 //! ```text

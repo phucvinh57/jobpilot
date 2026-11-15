@@ -1,4 +1,4 @@
-// Reading the graph runs Today follows: "Prepare CV" (one thread per lead, `lead:<id>`), the whole
+// Reading the graph runs the Leads stage follows: "Prepare CV" (one thread per lead, `lead:<id>`), the whole
 // search (`discovery`) and each source's search (`source_run`).
 
 import type { GraphProgress } from "@/api/events";
@@ -30,7 +30,7 @@ export function prepareLabel(p: GraphProgress): string | undefined {
   return undefined;
 }
 
-/** Does this step change what Today shows? A source that ended, paused or failed has saved its
+/** Does this step change what the Leads stage shows? A source that ended, paused or failed has saved its
  *  leads by then; a whole search starting or ending moves the "searching" line. */
 export function movesTheQueue(p: GraphProgress): boolean {
   if (p.graph === SOURCE_GRAPH) {

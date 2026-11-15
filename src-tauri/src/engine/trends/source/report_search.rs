@@ -1,5 +1,5 @@
-//! Annual and quarterly reports found through a search API (decision 6 of the plans: an API key
-//! instead of driving a search engine in the browser, which triggers captchas).
+//! Annual and quarterly reports found through a search API (an API key instead of driving a search
+//! engine in the browser, which triggers captchas).
 //!
 //! Enabled only while a key is saved in the OS keyring (see [`SearchProvider::secret_name`]). The
 //! queries are built here from the market frame (the user's background and place, never their

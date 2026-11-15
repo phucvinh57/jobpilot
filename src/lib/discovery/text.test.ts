@@ -52,8 +52,8 @@ describe("the dismiss note", () => {
 });
 
 describe("scores and times", () => {
-  // These rules live in the design kit (the Pipeline and the Application screens use them too); the
-  // legacy Today tests are kept here so that Today's expectations stay pinned.
+  // These rules live in `@/lib/display` (shared with the application stages); pinned here for the
+  // Leads stage too.
   it("scores and tones", () => {
     expect(scoreLabel(87.6)).toBe("88");
     expect(scoreLabel(41.4)).toBe("41");

@@ -1,4 +1,4 @@
-//! P9 - job-search preferences. [`model`] is the saved document; the chat that fills it and the
+//! Job-search preferences. [`model`] is the saved document; the chat that fills it and the
 //! readers (discovery, scoring, trends) share it through [`Core::preferences`].
 //!
 //! - [`chat`]: one model turn, the patch merge and the prompt context (no I/O).

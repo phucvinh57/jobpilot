@@ -95,7 +95,7 @@ export interface RunSummary {
   failed: number;
 }
 
-/** Everything Today shows, read in one go. */
+/** Everything the Leads stage shows, read in one go. */
 export interface Queue {
   /** Leads waiting for the user, best match first. */
   items: Lead[];

@@ -2,7 +2,7 @@
 //! user's background (the stored profile: positions, headline, skills) and place (the preferred
 //! locations and work mode), never from their wishes (wanted or avoided skills, wanted domains,
 //! target roles). Wishes are checked against the market at the end of the digest, so they cannot
-//! shape what is collected or counted (design: `docs/plans/P15-market-scan.md`).
+//! shape what is collected or counted.
 
 use std::collections::HashSet;
 

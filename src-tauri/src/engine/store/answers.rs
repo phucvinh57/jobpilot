@@ -3,7 +3,7 @@ use rusqlite::params;
 
 use super::{now, Store};
 
-/// Application answers the user asked to remember (P5): question -> answer, keyed by the
+/// Application answers the user asked to remember: question -> answer, keyed by the
 /// question's loose form (`apply::answer::normalize_key`), so "Notice period?" and "notice period"
 /// are one answer.
 impl Store {

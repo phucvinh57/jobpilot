@@ -1,5 +1,5 @@
-//! P10 - job discovery: sources find candidate postings, the runner drops the known ones, fetches,
-//! filters and scores the rest and stores them as leads (design: `docs/plans/P10-discovery.md`).
+//! Job discovery: sources find candidate postings, the runner drops the known ones, fetches,
+//! filters and scores the rest and stores them as leads.
 //!
 //! ```text
 //! let summary = core.discover_now().await?;            // "Search now": every enabled job source

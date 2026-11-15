@@ -3,7 +3,7 @@
 //! Every line goes through [`crate::engine::redact::redact`] before it is written, so API keys and OAuth
 //! tokens never reach either sink, even when a library puts them in an error message.
 //! Level: `RUST_LOG` if set, else `info` for JobPilot and `warn` for everything else.
-//! `log` records (GPUI, wgpu, ...) are bridged into the same pipeline.
+//! `log` records from libraries are bridged into the same pipeline.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -21,8 +21,8 @@ use crate::engine::Paths;
 pub const LOG_FILE: &str = "jobpilot.log";
 /// Daily files kept on disk.
 const KEEP_FILES: usize = 14;
-/// Default filter: our crates at info, everything else (GPUI, wgpu, zbus) at warn. chromiumoxide is off: it
-/// logs every Chrome DevTools event it cannot parse (newer Chrome versions) as an error, which is only noise.
+/// Default filter: our crate at info, everything else at warn. chromiumoxide is off: it logs every
+/// Chrome DevTools event it cannot parse (newer Chrome versions) as an error, which is only noise.
 const DEFAULT_FILTER: &str = "warn,chromiumoxide=off,jobpilot_lib=info";
 
 /// Keep this alive for the life of the program: dropping it flushes the file writer.

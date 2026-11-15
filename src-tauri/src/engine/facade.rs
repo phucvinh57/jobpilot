@@ -6,7 +6,7 @@ use crate::engine::graph::Graphs;
 use crate::engine::{Paths, Secrets, Store};
 
 /// Shared app state. Wrap in `Arc` to share: `Arc::new(Core::open()?)`.
-/// Sub-plans add behaviour with `impl Core { .. }` in their own module.
+/// Modules add behaviour with `impl Core { .. }` in their own file.
 pub struct Core {
     pub paths: Paths,
     pub store: Store,
