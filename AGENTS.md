@@ -85,7 +85,7 @@ src/                   React + Vite + TypeScript + Tailwind; feature folders (ap
 - End-to-end without real services: `cargo test -p jobpilot --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: source -> leads with score and insight -> Prepare CV -> Approve CV); with `JOBPILOT_NO_SANDBOX=1 ... -- --ignored` it also dry-runs the apply on a local form in Chrome.
 - Package: `scripts/package.sh` -> `release/`
 - Needs: Rust, Node + bun, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium, Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
-- Pre-PR checks: `scripts/check.sh [--all] [--only web|rust|render]` runs the groups the paths changed since main touch: `web` (typecheck, Biome, vitest, vite build), `rust` (clippy + test; a placeholder `dist/` when there is no web build, so a UI change never builds Rust), `render` (typst). CI runs each group as its own parallel job (`--plan` decides which) with `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps), restoring the caches saved by main. `bun install` installs the lefthook hooks (pre-commit: Biome on staged files; pre-push: `check.sh`); a clone that set `core.hooksPath` before: `git config --unset core.hooksPath && bunx lefthook install`.
+- Pre-PR checks: `scripts/check.sh [--all] [--only web|rust|render]` runs the groups the paths changed since main touch: `web` (typecheck, Biome, vitest, vite build), `rust` (clippy + test; a placeholder `dist/` when there is no web build, so a UI change never builds Rust), `render` (typst). There is no CI (no GitHub Actions): `check.sh` (pre-push hook and `/pre-pr`) is the gate; `CARGO_PROFILE_ARG="--profile ci"` (no debuginfo, unoptimized deps) makes a cold run faster. `scripts/risk.sh [--label <tier>]` prints the risk tier the changed paths require (`docs/REVIEW.md`). `bun install` installs the lefthook hooks (pre-commit: Biome on staged files; pre-push: `check.sh`); a clone that set `core.hooksPath` before: `git config --unset core.hooksPath && bunx lefthook install`.
 - Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_lib::engine=debug` for more. Chromiumoxide is silenced by default (noisy CDP errors).
 
 ## Check the UI visually
@@ -121,10 +121,10 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 ## Workflow
 
 - **One worktree per change** (`claude -w <name>`, in `.claude/worktrees/`).
-- **Docs-only changes skip all of that.** A change that touches only `docs/` (except `docs/REVIEW.md`) is committed on `main` and pushed directly: no worktree, no PR, no `/pre-pr`. CI ignores `docs/**`.
+- **Docs-only changes skip all of that.** A change that touches only `docs/` (except `docs/REVIEW.md`) is committed on `main` and pushed directly: no worktree, no PR, no `/pre-pr`.
 - **Execute an approved plan with subagents.** Split it into independent tasks, each a `general-purpose` subagent with a self-contained brief (goal, files, steps, checks). The main session checks their results, then runs `/pre-pr`.
 - **Show the result, don't claim it.** Report the output of `scripts/check.sh`. Never use `--no-verify`.
-- **Finish with `/pre-pr` without asking.** Low and Medium PRs are merged by `/pre-pr` once `CI OK` passes. High PRs wait for a human.
+- **Finish with `/pre-pr` without asking.** Low and Medium PRs are merged by `/pre-pr` once `scripts/check.sh` and `scripts/risk.sh` pass on the PR's final commit. High PRs wait for a human.
 
 ## Rules
 
