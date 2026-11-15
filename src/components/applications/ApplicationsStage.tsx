@@ -6,7 +6,7 @@ import clsx from "clsx";
 import { useState } from "react";
 
 import { Button, Caption, Card, DataTable, Heading, Tag, type DataColumn } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
 import { TONE_CLASS } from "@/lib/tokens";
 import { useNav } from "@/stores/nav";
 import type { Query } from "@/hooks/useAsync";
@@ -124,28 +124,15 @@ export function ApplicationsStage({ stage, board }: { stage: StageKey; board: Qu
   const data = board.data;
   const label = stageLabel(stage);
 
+  const failed = (
+    <LoadError id="board-error" error={board.error} title="The applications could not be read" onRetry={board.reload} />
+  );
   if (data === undefined) {
-    return board.error ? (
-      <ErrorBanner
-        id="board-error"
-        error={board.error}
-        title="The applications could not be read"
-        onRetry={board.reload}
-      />
-    ) : (
-      <Caption>Loading the applications...</Caption>
-    );
+    return board.error ? failed : <Caption>Loading the applications...</Caption>;
   }
   return (
     <>
-      {board.error && (
-        <ErrorBanner
-          id="board-error"
-          error={board.error}
-          title="The applications could not be read"
-          onRetry={board.reload}
-        />
-      )}
+      {failed}
       <DataTable
         id={`table-${stage}`}
         label={label}

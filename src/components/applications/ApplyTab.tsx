@@ -19,7 +19,7 @@ import {
   Tag,
   TextInput,
 } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
 import { TONE_CLASS } from "@/lib/tokens";
 
 import type { Apply, ApplyDone, ApplyHandoff, ApplyIdle, ApplyWorking } from "@/types/applications";
@@ -29,22 +29,6 @@ import { Screenshots } from "./Screenshots";
 
 const READY_TEXT =
   "Press Review & Submit (top right) to open the form and fill it in. You review every answer first; nothing is sent until you press Submit.";
-
-function ApplyError({ apply, session }: { apply: Apply; session: ApplySession }) {
-  if (apply.error === null) {
-    return null;
-  }
-  // Retry only re-opens and re-fills the form (never submits); a failed submit is retried with the
-  // Submit button itself.
-  return (
-    <ErrorBanner
-      id="apply-error"
-      error={apply.error}
-      title="The application step failed"
-      onRetry={apply.canRetry ? session.prepare : undefined}
-    />
-  );
-}
 
 function UrlLine({ idle, session }: { idle: ApplyIdle; session: ApplySession }) {
   const [url, setUrl] = useState("");
@@ -99,7 +83,6 @@ function Idle({ id, idle, apply, session }: { id: number; idle: ApplyIdle; apply
         </>
       )}
       {idle.hasProof && <Screenshots id={id} kind="proof" count={1} version={apply.generation} title="Confirmation" />}
-      <ApplyError apply={apply} session={session} />
     </div>
   );
 }
@@ -176,7 +159,6 @@ function Handoff({
         </Button>
         {apply.busy !== null && <Caption>{apply.busy}</Caption>}
       </div>
-      <ApplyError apply={apply} session={session} />
       {handoff.hasScreenshot && (
         <Screenshots id={id} kind="handoff" count={1} version={apply.generation} title="What the page looked like" />
       )}
@@ -187,9 +169,7 @@ function Handoff({
 export function ApplyTab({ id, session }: { id: number; session: ApplySession }) {
   const apply = session.apply;
   if (apply === undefined) {
-    return session.loadError ? (
-      <ErrorBanner error={session.loadError} title="The apply step could not be read" />
-    ) : null;
+    return <LoadError error={session.loadError} title="The apply step could not be read" onRetry={session.reload} />;
   }
   return (
     <div id="apply-tab" className="flex flex-col gap-3">

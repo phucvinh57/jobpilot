@@ -28,6 +28,8 @@ export interface CvTabInput {
 export interface CvTabModel {
   cv: Cv | undefined;
   loadError: CommandError | undefined;
+  /** Read the CV again (Retry after a failed read). */
+  reload: () => void;
   loading: boolean;
   doc: EditorDoc | undefined;
   hasCv: boolean;
@@ -200,6 +202,7 @@ export function useCvTab({ id, cvEpoch, busy, revise }: CvTabInput): CvTabModel 
   return {
     cv: data,
     loadError: query.error,
+    reload: query.reload,
     loading: query.loading,
     doc,
     hasCv,

@@ -2,7 +2,7 @@
 // none), and the posting text. The text is untrusted: it is shown as plain text, never as markup.
 
 import { Caption, Card, Heading, LinkButton, SectionLabel, Tag } from "@/components/ui/kit";
-import { ErrorBanner } from "@/components/ProblemHelp";
+import { LoadError } from "@/components/ProblemHelp";
 import { NOT_FOUND, CompanyBlock, InterviewBlock, type Insight } from "@/components/InsightBrief";
 import { openLink } from "@/api/shell";
 
@@ -44,10 +44,10 @@ function Brief({ insight }: { insight: Insight }) {
 }
 
 export function JdTab({ id }: { id: number }) {
-  const { data, error } = useJd(id);
+  const { data, error, reload } = useJd(id);
 
   if (data === undefined) {
-    return error ? <ErrorBanner error={error} title="The job description could not be read" /> : null;
+    return <LoadError error={error} title="The job description could not be read" onRetry={reload} />;
   }
   const hasRequirements = data.mustHave.length > 0 || data.niceToHave.length > 0;
   return (
