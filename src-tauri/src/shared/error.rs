@@ -31,6 +31,7 @@ impl From<Problem> for ProblemDto {
     fn from(problem: Problem) -> Self {
         let (kind, challenge) = match problem {
             Problem::NoProvider => ("noProvider", None),
+            Problem::NoProfile => ("noProfile", None),
             Problem::NoTypst => ("noTypst", None),
             Problem::NoChrome => ("noChrome", None),
             Problem::Network => ("network", None),

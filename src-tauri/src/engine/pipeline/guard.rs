@@ -67,19 +67,19 @@ pub fn format_violations(violations: &[Violation]) -> String {
 // ---------------------------------------------------------------- normalisation
 
 /// Case and whitespace-insensitive form.
-fn norm(s: &str) -> String {
+pub(crate) fn norm(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
 /// A link without scheme, `www.` or trailing slash.
-fn norm_url(s: &str) -> String {
+pub(crate) fn norm_url(s: &str) -> String {
     let s = norm(s);
     let s = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")).unwrap_or(&s);
     let s = s.strip_prefix("www.").unwrap_or(s);
     s.trim_end_matches('/').to_string()
 }
 
-fn norm_phone(s: &str) -> String {
+pub(crate) fn norm_phone(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_digit() || *c == '+').collect()
 }
 
@@ -251,7 +251,7 @@ fn contains_word(hay: &str, needle: &str) -> bool {
     })
 }
 
-fn term_in_corpus(corpus: &str, term: &str) -> bool {
+pub(crate) fn term_in_corpus(corpus: &str, term: &str) -> bool {
     let term = norm(term);
     if term.is_empty() {
         return true;
@@ -294,7 +294,7 @@ impl Core {
 mod tests {
     use super::*;
 
-    const PROFILE: &str = include_str!("../../../../profile.yaml");
+    const PROFILE: &str = include_str!("../../../tests/fixtures/profile.yaml");
     const EXAMPLE: &str = include_str!("../../../../assets/prompts/example-cv.yaml");
 
     fn profile() -> Cv {

@@ -165,7 +165,7 @@ mod tests {
     use super::*;
     use crate::engine::llm::fake::FakeLlm;
 
-    const PROFILE: &str = include_str!("../../../../profile.yaml");
+    const PROFILE: &str = include_str!("../../../tests/fixtures/profile.yaml");
 
     #[test]
     fn system_prompt_has_rules_profile_and_example() {

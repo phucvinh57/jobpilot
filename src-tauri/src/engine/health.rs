@@ -43,6 +43,8 @@ impl Challenge {
 pub enum Problem {
     /// No default AI provider is configured.
     NoProvider,
+    /// The user has not told JobPilot about their work yet (no documents read into a profile).
+    NoProfile,
     /// The `typst` binary is missing.
     NoTypst,
     /// No Chrome/Chromium to drive.
@@ -60,6 +62,7 @@ impl Problem {
     pub fn settings_section(self) -> Option<&'static str> {
         match self {
             Problem::NoProvider => Some("AI providers"),
+            Problem::NoProfile => Some("About you"),
             Problem::NoChrome => Some("Browser sessions"),
             _ => None,
         }
@@ -69,6 +72,7 @@ impl Problem {
     pub fn advice(self) -> Option<String> {
         match self {
             Problem::NoProvider => Some("Add an AI provider in Settings > AI providers and make it the default.".into()),
+            Problem::NoProfile => Some("Add your CV or describe your work in Settings > About you.".into()),
             Problem::NoChrome => {
                 Some("Install Chrome or Chromium, or download a browser in Settings > Browser sessions.".into())
             }
@@ -102,6 +106,8 @@ pub fn classify(message: &str) -> Problem {
     let has = |needles: &[&str]| needles.iter().any(|n| m.contains(n));
     if has(&["no ai provider"]) {
         Problem::NoProvider
+    } else if has(&["no profile yet"]) {
+        Problem::NoProfile
     } else if has(&["typst was not found"]) {
         Problem::NoTypst
     } else if has(&["chrome not found", "no chrome found"]) {
