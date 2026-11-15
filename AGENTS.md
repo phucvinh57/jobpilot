@@ -32,7 +32,7 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
                   SQLite checkpoints, `nodes::challenge` interrupt shared by discovery and trends
   net        P8/P10   `net::http`: the one safe HTTP client for third-party data (public hosts only, per-host delay, size cap, hop-by-hop redirects)
   notify     P8   desktop notifications (best effort)
-  prefs      P8/P9   `Preferences` model + `Core::preferences/save_preferences`; P9 `chat` + `chat_graph` (graph `prefs_chat`), `cv_upload` (context only), `undo`, `suggest` (chips for the preference form), `appearance` (light/dark, kv `ui.appearance`)
+  prefs      P8/P9   `Preferences` model + `Core::preferences/save_preferences`; P9 `chat` + `chat_graph` (graph `prefs_chat`), `undo`, `suggest` (chips for the preference form), `appearance` (light/dark, kv `ui.appearance`)
   profile    the user's profile: `sources` (uploaded .pdf/.md/.txt files and typed notes, kept in SQLite), `extract` (`Core::read_profile_sources`:
                   one `complete_json` -> the CV schema `Cv`), `trace` (keep only facts found in the documents; the rest is `left_out`),
                   `typst` (escape markup fields); `Core::profile` / `require_profile` (NoProfile) is the one way to read it

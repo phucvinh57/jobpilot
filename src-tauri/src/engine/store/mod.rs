@@ -36,7 +36,7 @@ pub use chat::ChatMessage;
 pub use emails::Email;
 pub use events::Event;
 pub use leads::{Lead, LeadState, NewLead};
-pub use profile::{NewProfileSource, ProfileSource, StoredProfile};
+pub use profile::{sources_hash, NewProfileSource, ProfileSource, StoredProfile};
 pub use graph::{
     GraphCheckpointRow, GraphThread, GRAPH_DONE, GRAPH_FAILED, GRAPH_RUNNING, GRAPH_WAITING,
 };

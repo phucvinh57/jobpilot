@@ -120,7 +120,7 @@ pub async fn shared_status(core: State<'_, Arc<Core>>) -> CommandResult<ShellSta
             health: health_line(&health),
             blockers: blockers(&health),
             prefs_saved: core.store.has_preferences()?,
-            profile_ready: core.profile()?.is_some(),
+            profile_ready: core.store.stored_profile()?.is_some(),
             new_leads: core.new_lead_count()?,
             applications: core.store.list_applications()?.len(),
         })

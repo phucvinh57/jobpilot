@@ -73,12 +73,12 @@ impl Core {
         Ok(source)
     }
 
-    /// Forget a document. With none left, the profile is forgotten too.
+    /// Forget a document, and the profile read from it: its facts must not reach a CV, even while
+    /// the documents left are not read again yet. (Adding a document keeps the profile: every fact
+    /// in it still comes from a document the user has.)
     pub fn remove_profile_source(&self, id: i64) -> Result<()> {
         ensure!(self.store.remove_profile_source(id)?, "that document is already gone");
-        if self.store.profile_sources()?.is_empty() {
-            self.store.clear_profile()?;
-        }
+        self.store.clear_profile()?;
         tracing::info!(id, "profile: document removed");
         Ok(())
     }
@@ -128,13 +128,14 @@ mod tests {
     }
 
     #[test]
-    fn removing_the_last_document_forgets_the_profile() {
+    fn removing_a_document_forgets_the_profile_read_from_it() {
         let (_dir, core) = core();
         let a = core.add_profile_text("A", "basics: {name: Ann}").unwrap();
         let b = core.add_profile_text("B", "Rust").unwrap();
         core.save_profile_cv(&crate::engine::pipeline::cv::Cv::parse("basics: {name: Ann}").unwrap(), &[]).unwrap();
         core.remove_profile_source(b.id).unwrap();
-        assert!(core.profile().unwrap().is_some());
+        assert_eq!(core.profile().unwrap(), None);
+        core.save_profile_cv(&crate::engine::pipeline::cv::Cv::parse("basics: {name: Ann}").unwrap(), &[]).unwrap();
         core.remove_profile_source(a.id).unwrap();
         assert_eq!(core.profile().unwrap(), None);
         assert!(core.remove_profile_source(a.id).is_err());

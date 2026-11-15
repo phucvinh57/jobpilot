@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use crate::engine::pipeline::cv::Cv;
-use crate::engine::pipeline::guard::{norm, norm_phone, norm_url, number_tokens, term_in_corpus};
+use crate::engine::pipeline::guard::{contains_word, norm, norm_phone, norm_url, number_tokens, term_in_corpus};
 
 /// What the user's documents say, normalised for lookups.
 struct Corpus {
@@ -37,10 +37,10 @@ impl Corpus {
         }
     }
 
-    /// `value` (or nothing) is in the text.
+    /// `value` (or nothing) is in the text as whole words: `MIT` is not found in "submitted".
     fn has(&self, value: &str) -> bool {
         let v = norm(value);
-        v.is_empty() || self.text.contains(&v)
+        v.is_empty() || contains_word(&self.text, &v)
     }
 
     fn has_url(&self, value: &str) -> bool {
@@ -318,6 +318,14 @@ certifications:
         ] {
             assert!(left_out.iter().any(|l| l == expected), "missing {expected:?} in {left_out:#?}");
         }
+    }
+
+    #[test]
+    fn a_short_name_must_be_a_whole_word() {
+        let mut cv = extracted();
+        cv.education[1].degree.clear();
+        let (cv, _) = trace(cv, &format!("{DOCUMENT}\nI submitted 40 commits."));
+        assert!(cv.education.iter().all(|e| e.institution != "MIT"), "MIT is not in “submitted”");
     }
 
     #[test]

@@ -812,7 +812,7 @@ fn save_remembered(core: &Core, app_id: i64, remember: &[(String, String)]) {
 /// Store each `(question, answer)` under the question's loose form ([`normalize_key`]), so the
 /// same question asked again replaces the earlier answer. Returns how many were added or changed.
 fn remember_answers(core: &Core, answers: &[(String, String)]) -> Result<usize> {
-    let known: HashMap<String, String> =
+    let mut known: HashMap<String, String> =
         core.store.saved_answers()?.into_iter().map(|(q, a)| (normalize_key(&q), a)).collect();
     let mut changed = 0;
     for (question, answer) in answers {
@@ -825,6 +825,7 @@ fn remember_answers(core: &Core, answers: &[(String, String)]) -> Result<usize> 
             continue;
         }
         core.store.save_answer(&key, question, answer)?;
+        known.insert(key, answer.to_string());
         changed += 1;
     }
     tracing::info!(changed, "apply: remembered answers saved");

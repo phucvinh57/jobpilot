@@ -243,7 +243,7 @@ fn check_numbers(profile_corpus: &str, cv: &Cv, out: &mut Vec<Violation>) {
 // ---------------------------------------------------------------- skills
 
 /// Occurrence of `needle` in `hay` not touching other letters/digits (for 1-2 letter terms like `Go`).
-fn contains_word(hay: &str, needle: &str) -> bool {
+pub(crate) fn contains_word(hay: &str, needle: &str) -> bool {
     hay.match_indices(needle).any(|(i, _)| {
         let before = hay[..i].chars().next_back();
         let after = hay[i + needle.len()..].chars().next();

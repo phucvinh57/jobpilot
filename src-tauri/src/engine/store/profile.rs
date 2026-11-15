@@ -54,6 +54,18 @@ pub struct StoredProfile {
     pub built_at: DateTime<Utc>,
 }
 
+/// [`Store::profile_sources_hash`] of `sources` (all documents, oldest first).
+pub fn sources_hash(sources: &[ProfileSource]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for source in sources {
+        hasher.update(source.id.to_le_bytes());
+        hasher.update((source.text.len() as u64).to_le_bytes());
+        hasher.update(source.text.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 const SOURCE_COLUMNS: &str = "id, name, kind, text, chars, truncated, created_at";
 
 fn source_row(r: &Row<'_>) -> rusqlite::Result<ProfileSource> {
@@ -111,14 +123,7 @@ impl Store {
 
     /// A fingerprint of the documents (ids and texts): a profile read from other documents is stale.
     pub fn profile_sources_hash(&self) -> Result<String> {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        for source in self.profile_sources()? {
-            hasher.update(source.id.to_le_bytes());
-            hasher.update((source.text.len() as u64).to_le_bytes());
-            hasher.update(source.text.as_bytes());
-        }
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(sources_hash(&self.profile_sources()?))
     }
 
     /// The profile last read, if any.

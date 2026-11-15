@@ -440,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn documents_are_added_listed_and_removed_and_the_last_one_takes_the_profile() {
+    fn documents_are_added_listed_and_removed_and_a_removal_takes_the_profile() {
         let (dir, core) = core();
         let empty = about_of(&core).unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!((empty.status, empty.sources.len()), ("empty", 0));
@@ -473,7 +473,11 @@ mod tests {
 
         let ids: Vec<i64> = ready.sources.iter().map(|s| s.id).collect();
         let after_one = remove_source(&core, ids[0]).unwrap_or_else(|e| panic!("{e:#}"));
-        assert_eq!(after_one.status, "stale", "the documents changed since the read");
+        assert_eq!(
+            (after_one.status, after_one.summary.is_none()),
+            ("unread", true),
+            "a removed document takes the profile read from it"
+        );
         let mut last = after_one;
         for id in &ids[1..] {
             last = remove_source(&core, *id).unwrap_or_else(|e| panic!("{e:#}"));
