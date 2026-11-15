@@ -184,7 +184,7 @@ function LeftOut({ items }: { items: string[] }) {
   );
 }
 
-/** Settings > About you: the documents the profile is read from (files and notes), where the
+/** Profile > About you: the documents the profile is read from (files and notes), where the
  *  reading stands, and a read-only summary of what was understood. No primary button: adding a
  *  document reads them again on its own, and Re-read is a plain button. */
 export function AboutYouSection() {

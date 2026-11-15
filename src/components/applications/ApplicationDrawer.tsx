@@ -17,7 +17,7 @@ import {
   TextInput,
 } from "@/components/ui/kit";
 import { ErrorBanner } from "@/components/ProblemHelp";
-import { useNav, type SettingsSection } from "@/stores/nav";
+import { sectionPlace, useNav } from "@/stores/nav";
 import type { Action } from "@/hooks/useAsync";
 
 import type { ApplicationHeader, MarkKey } from "@/types/applications";
@@ -185,7 +185,7 @@ function JobDescription({ id }: { id: number }) {
 }
 
 function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel; header: ApplicationHeader }) {
-  const openSettings = useNav((s) => s.openSettings);
+  const openSection = useNav((s) => s.openSection);
   const marks = useApplicationMarks(id);
   const { head } = model;
   const primary = head.primary;
@@ -220,12 +220,8 @@ function Body({ id, model, header }: { id: number; model: ApplicationDrawerModel
               </Button>
             )}
             {primary?.settings != null && (
-              <Button
-                id="primary-settings"
-                icon={Settings}
-                onClick={() => openSettings(primary.settings as SettingsSection)}
-              >
-                Open Settings &gt; {primary.settings}
+              <Button id="primary-settings" icon={Settings} onClick={() => openSection(primary.settings ?? "")}>
+                Open {sectionPlace(primary.settings)} &gt; {primary.settings}
               </Button>
             )}
             {showNextJob && (

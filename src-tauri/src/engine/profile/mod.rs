@@ -20,7 +20,7 @@ use crate::engine::pipeline::cv::Cv;
 use crate::engine::Core;
 
 /// The error text when there is no profile yet; `health::classify` maps it to `Problem::NoProfile`.
-pub const NO_PROFILE: &str = "no profile yet: add your CV or describe your work in Settings > About you";
+pub const NO_PROFILE: &str = "no profile yet: add your CV or describe your work in Profile > About you";
 
 /// The profile read from the user's documents.
 #[derive(Clone, Debug, PartialEq)]

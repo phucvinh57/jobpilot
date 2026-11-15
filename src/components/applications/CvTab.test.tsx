@@ -115,13 +115,13 @@ describe("the CV tab", () => {
     expect(screen.queryByRole("group", { name: "Every fact traced to your profile" })).toBeNull();
   });
 
-  it("sends the user to Settings > About you when the tailoring step reported gaps", async () => {
+  it("sends the user to Profile > About you when the tailoring step reported gaps", async () => {
     const user = userEvent.setup();
-    useNav.setState({ screen: "application", settingsFocus: undefined });
+    useNav.setState({ screen: "application", profileFocus: undefined });
     show();
     await user.click(await screen.findByRole("button", { name: "Add to your profile" }));
-    expect(useNav.getState().screen).toBe("settings");
-    expect(useNav.getState().settingsFocus).toBe("About you");
+    expect(useNav.getState().screen).toBe("profile");
+    expect(useNav.getState().profileFocus).toBe("About you");
   });
 
   it("renders a CV whose previews are missing or out of date, once", async () => {
@@ -200,6 +200,24 @@ describe("editing", () => {
     expect(within(banner).getByText("typst: command not found")).toBeTruthy();
     expect(within(banner).getByRole("button", { name: "Check again" })).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Every fact traced to your profile" })).toBeNull();
+  });
+
+  it("sends a missing profile to Profile > About you, not Settings", async () => {
+    const user = userEvent.setup();
+    mocked.saveCv.mockRejectedValue(
+      new CommandError("no profile yet: add your CV or describe your work in Profile > About you", {
+        kind: "noProfile",
+        challenge: null,
+        advice: "Add your CV or describe your work in Profile > About you.",
+        settingsSection: "About you",
+        retryable: false,
+      }),
+    );
+    useNav.setState({ screen: "application", profileFocus: undefined });
+    show();
+    await edit("a: 1\n");
+    await user.click(await screen.findByRole("button", { name: "Open Profile > About you" }));
+    expect(useNav.getState()).toMatchObject({ screen: "profile", profileFocus: "About you" });
   });
 
   it("reads the CV again when something rewrote it, and replaces the text", async () => {

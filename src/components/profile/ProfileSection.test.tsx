@@ -59,7 +59,7 @@ afterEach(cleanup);
 describe("ProfileSection", () => {
   it("shows the job type, every tag field and the notes", async () => {
     render(<ProfileSection />);
-    expect(screen.getByRole("heading", { name: "Profile & preferences" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Preferences" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Job type: Hybrid" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Upload CV" })).toBeNull();
 

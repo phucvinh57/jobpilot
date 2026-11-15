@@ -1,4 +1,4 @@
-// The use-cases of Settings > About you: list the documents, add a file or a note, remove one, and
+// The use-cases of Profile > About you: list the documents, add a file or a note, remove one, and
 // read them into the profile.
 //
 // Every answer is the whole section as the shell has it after the call. Calls never wait for each

@@ -7,7 +7,7 @@ import { Inbox, Settings } from "lucide-react";
 
 import { Button, Caption, EmptyState, Page, Spinner, Stepper, Tabs, Tag } from "@/components/ui/kit";
 import { ErrorBanner } from "@/components/ProblemHelp";
-import { useNav, type SettingsSection } from "@/stores/nav";
+import { sectionPlace, useNav } from "@/stores/nav";
 import { useShell } from "@/stores/shell";
 
 import { crumbFor } from "@/lib/applications/crumb";
@@ -58,7 +58,7 @@ function Breadcrumb({ company }: { company: string }) {
 
 function OpenApplication({ id }: { id: number }) {
   const model = useApplicationScreen(id);
-  const openSettings = useNav((s) => s.openSettings);
+  const openSection = useNav((s) => s.openSection);
   const { head, apply, tab } = model;
   const header = head.header;
 
@@ -108,12 +108,8 @@ function OpenApplication({ id }: { id: number }) {
             </Button>
           )}
           {primary?.settings != null && (
-            <Button
-              id="primary-settings"
-              icon={Settings}
-              onClick={() => openSettings(primary.settings as SettingsSection)}
-            >
-              Open Settings &gt; {primary.settings}
+            <Button id="primary-settings" icon={Settings} onClick={() => openSection(primary.settings ?? "")}>
+              Open {sectionPlace(primary.settings)} &gt; {primary.settings}
             </Button>
           )}
           {primary !== null && (

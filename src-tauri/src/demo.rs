@@ -24,7 +24,7 @@ pub fn seed(core: &Core) -> Result<()> {
     seed_demo_queue(core)
 }
 
-/// The note the demo profile is "read" from (Settings > About you).
+/// The note the demo profile is "read" from (Profile > About you).
 const DEMO_NOTE: &str = "Minh Tran, senior backend engineer. Ho Chi Minh City, Vietnam. minh.tran@example.com\n\
 Lotus Pay (2021 to present): senior backend engineer, payment services in Rust and PostgreSQL, Docker and Nginx on Linux, CI/CD on AWS.\n\
 Saigon Market (2018 to 2021): backend engineer, PHP and Python APIs, Go workers.\n\

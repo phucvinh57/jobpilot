@@ -137,7 +137,7 @@ pub struct AboutLimitsDto {
     pub max_total_chars: usize,
 }
 
-/// Settings > About you: the documents, where the reading stands and what was understood.
+/// Profile > About you: the documents, where the reading stands and what was understood.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AboutDto {

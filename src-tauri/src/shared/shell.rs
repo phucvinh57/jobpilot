@@ -23,7 +23,8 @@ pub struct HealthLine {
     /// Green when nothing is missing, amber when something needs a look.
     pub ok: bool,
     pub text: String,
-    /// The Settings section that helps with the first problem, if there is one.
+    /// The section that helps with the first problem, if there is one (Settings, or Profile for
+    /// "About you").
     pub focus: Option<&'static str>,
 }
 
@@ -97,9 +98,10 @@ pub fn blockers(health: &Health) -> Vec<Blocker> {
 pub struct ShellStatus {
     pub health: HealthLine,
     pub blockers: Vec<Blocker>,
-    /// Job-search preferences were saved at least once (the banner points to Settings until then).
+    /// Job-search preferences were saved at least once (the banner points to Profile > Preferences
+    /// until then).
     pub prefs_saved: bool,
-    /// A profile was read from the user's documents (the banner points to Settings > About you
+    /// A profile was read from the user's documents (the banner points to Profile > About you
     /// until then).
     pub profile_ready: bool,
     /// New leads (the Jobs badge when nothing needs the user).

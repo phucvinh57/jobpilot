@@ -1,9 +1,9 @@
 // Shared "something is missing or failed" pieces: what to do about it, and the buttons that do
 // it. Every screen points the user to the same fixes.
 
-import { ExternalLink, Settings } from "lucide-react";
+import { ExternalLink, Settings, UserRound } from "lucide-react";
 
-import { useNav, type SettingsSection } from "@/stores/nav";
+import { sectionPlace, useNav } from "@/stores/nav";
 import { useShell } from "@/stores/shell";
 import { Banner, Button } from "@/components/ui/kit";
 import { problemActions, type CommandError, type Problem } from "@/lib/problem";
@@ -17,25 +17,29 @@ interface ActionsProps {
   onOpenBrowser?: () => void;
 }
 
-/** The buttons of a problem: Settings shortcut, "Check again", "Open browser", Retry. */
+/** The buttons of a problem: Settings (or Profile) shortcut, "Check again", "Open browser", Retry. */
 export function ProblemActions({ problem, onRetry, onOpenBrowser }: ActionsProps) {
   const openSettings = useNav((s) => s.openSettings);
+  const openSection = useNav((s) => s.openSection);
   const refresh = useShell((s) => s.refresh);
   return (
     <>
       {problemActions(problem, onRetry !== undefined).map((action) => {
         switch (action) {
-          case "settings":
+          case "settings": {
+            // Only offered when the problem names a section.
+            const section = problem.settingsSection ?? "";
             return (
               <Button
                 key={action}
                 size="compact"
-                icon={Settings}
-                onClick={() => openSettings(problem.settingsSection as SettingsSection)}
+                icon={sectionPlace(section) === "Profile" ? UserRound : Settings}
+                onClick={() => openSection(section)}
               >
-                Open Settings &gt; {problem.settingsSection}
+                Open {sectionPlace(section)} &gt; {section}
               </Button>
             );
+          }
           case "recheck":
             return (
               <Button key={action} size="compact" onClick={refresh}>

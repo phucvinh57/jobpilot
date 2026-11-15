@@ -10,12 +10,12 @@ import { NotesField } from "./NotesField";
 import { Row } from "./Row";
 import { TagField } from "./TagField";
 
-const TITLE = "Profile & preferences";
+const TITLE = "Preferences";
 const HINT = "What to look for. Every change is saved at once and used by the next search.";
 
-/** Settings > Profile & preferences: the job type, tag fields for the countries the user may work
+/** Profile > Preferences: the job type, tag fields for the countries the user may work
  *  from (a hard limit), locations, domains and skills,
- *  and free-text notes (what to look for; facts about the user are in Settings > About you). No
+ *  and free-text notes (what to look for; facts about the user are in Profile > About you). No
  *  primary button: every change is saved at once, and Undo puts back the last one. */
 export function ProfileSection() {
   const card = useProfile();
@@ -50,7 +50,7 @@ export function ProfileSection() {
 
   if (!profile) {
     return (
-      <Section id="settings-profile" title={TITLE} hint={HINT} actions={actions}>
+      <Section id="preferences" title={TITLE} hint={HINT} actions={actions}>
         {card.loadError ? (
           <ErrorBanner
             id="profile-error"
@@ -66,7 +66,7 @@ export function ProfileSection() {
   }
 
   return (
-    <Section id="settings-profile" title={TITLE} hint={HINT} actions={actions}>
+    <Section id="preferences" title={TITLE} hint={HINT} actions={actions}>
       <div className="flex flex-col gap-4">
         <Row label="Job type">
           <div id="profile-job-type">

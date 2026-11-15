@@ -1,4 +1,4 @@
-//! Bounded context `profile`: Settings > About you (the documents the profile is read from) and the
+//! Bounded context `profile`: Profile > About you (the documents the profile is read from) and the
 //! job-search preferences. `dto` (read models), `rules` (pure rules + tests), `commands` (application
 //! services).
 

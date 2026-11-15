@@ -144,7 +144,7 @@ export interface Cv {
   /** The fact guard ran on this CV and found nothing. */
   guardClean: boolean;
   requirements: Requirement[];
-  /** The tailoring step reported gaps: offer to add to the profile (Settings > About you). */
+  /** The tailoring step reported gaps: offer to add to the profile (Profile > About you). */
   hasGaps: boolean;
 }
 

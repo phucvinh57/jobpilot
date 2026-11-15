@@ -50,7 +50,7 @@ export function undo(): Promise<Profile> {
 
 // ------------------------------------------------------------------ About you
 
-/** Settings > About you: the documents, where the reading stands, what was understood. */
+/** Profile > About you: the documents, where the reading stands, what was understood. */
 export function readAbout(): Promise<About> {
   return invoke<About>("profile_about");
 }

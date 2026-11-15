@@ -6,7 +6,7 @@ import type { Problem } from "@/lib/problem";
 export interface HealthLine {
   ok: boolean;
   text: string;
-  /** The Settings section that helps with the first problem. */
+  /** The section that helps with the first problem (Settings, or Profile for "About you"). */
   focus: string | null;
 }
 
@@ -20,7 +20,7 @@ export interface ShellStatus {
   health: HealthLine;
   blockers: Blocker[];
   prefsSaved: boolean;
-  /** A profile was read from the user's documents (Settings > About you). */
+  /** A profile was read from the user's documents (Profile > About you). */
   profileReady: boolean;
   newLeads: number;
   applications: number;

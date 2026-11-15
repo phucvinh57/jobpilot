@@ -395,7 +395,7 @@ pub struct CvDto {
     pub guard_clean: bool,
     /// What the posting asks for, checked against the profile; empty when the CV has no gap list yet.
     pub requirements: Vec<RequirementDto>,
-    /// The tailoring step reported gaps: offer to add to the profile (Settings > About you).
+    /// The tailoring step reported gaps: offer to add to the profile (Profile > About you).
     pub has_gaps: bool,
 }
 

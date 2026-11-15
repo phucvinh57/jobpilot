@@ -1,4 +1,4 @@
-// The rules only the "Profile & preferences" card needs: when Save is on, when a "Saved" label
+// The rules only Profile > Preferences needs: when Save is on, when a "Saved" label
 // shows and how it fades, when the notes box follows the stored notes. The rules about list
 // entries (clean, compare, refuse) live in the shell.
 

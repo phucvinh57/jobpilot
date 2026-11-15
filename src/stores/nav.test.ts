@@ -1,11 +1,22 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { jobsBadge, navScreen, sectionId, SETTINGS_SECTIONS, spokenBadge, useNav } from "./nav";
+import {
+  jobsBadge,
+  navScreen,
+  PROFILE_SECTIONS,
+  profileSectionOf,
+  sectionId,
+  sectionPlace,
+  SETTINGS_SECTIONS,
+  spokenBadge,
+  useNav,
+} from "./nav";
 
 describe("navigation rules", () => {
   it("an open application highlights the Jobs page", () => {
     expect(navScreen("application")).toBe("jobs");
     expect(navScreen("trends")).toBe("trends");
+    expect(navScreen("profile")).toBe("profile");
     expect(navScreen("settings")).toBe("settings");
   });
 
@@ -23,13 +34,27 @@ describe("navigation rules", () => {
   });
 });
 
-describe("settings sections", () => {
+describe("settings and profile sections", () => {
   it("a call to action finds its card", () => {
     expect(sectionId("AI providers")).toBe("settings-ai-providers");
-    expect(sectionId("Profile & preferences")).toBe("settings-profile-preferences");
-    expect(sectionId("About you")).toBe("settings-about-you");
-    expect(SETTINGS_SECTIONS[0]).toBe("About you");
-    expect(new Set(SETTINGS_SECTIONS.map(sectionId)).size).toBe(SETTINGS_SECTIONS.length);
+    expect(sectionId("About you")).toBe("profile-about-you");
+    expect(sectionId("Preferences")).toBe("profile-preferences");
+    expect(SETTINGS_SECTIONS[0]).toBe("AI providers");
+    expect(PROFILE_SECTIONS).toEqual(["About you", "Preferences"]);
+    const ids = [...SETTINGS_SECTIONS, ...PROFILE_SECTIONS].map(sectionId);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("About you and Preferences are on Profile, the rest on Settings", () => {
+    expect(sectionPlace("About you")).toBe("Profile");
+    expect(sectionPlace("Preferences")).toBe("Profile");
+    expect(sectionPlace("Profile & preferences")).toBe("Profile");
+    expect(profileSectionOf("Profile & preferences")).toBe("Preferences");
+    for (const section of SETTINGS_SECTIONS) {
+      expect(sectionPlace(section)).toBe("Settings");
+      expect(profileSectionOf(section)).toBeUndefined();
+    }
+    expect(sectionPlace("Something new")).toBe("Settings");
   });
 });
 
@@ -62,6 +87,25 @@ describe("navigation store", () => {
   it("opens Settings at a section", () => {
     useNav.getState().openSettings("AI providers");
     expect(useNav.getState()).toMatchObject({ screen: "settings", settingsFocus: "AI providers" });
+  });
+
+  it("opens Profile at a section", () => {
+    useNav.getState().openProfile("Preferences");
+    expect(useNav.getState()).toMatchObject({ screen: "profile", profileFocus: "Preferences" });
+    useNav.getState().clearProfileFocus();
+    expect(useNav.getState().profileFocus).toBeUndefined();
+  });
+
+  it("opens the page a section is on", () => {
+    // The shell names "About you" for a missing profile (`Problem.settingsSection`).
+    useNav.getState().openSection("About you");
+    expect(useNav.getState()).toMatchObject({ screen: "profile", profileFocus: "About you" });
+    useNav.getState().openSection("Profile & preferences");
+    expect(useNav.getState()).toMatchObject({ screen: "profile", profileFocus: "Preferences" });
+    useNav.getState().openSection("Browser sessions");
+    expect(useNav.getState()).toMatchObject({ screen: "settings", settingsFocus: "Browser sessions" });
+    useNav.getState().openSection("Something new");
+    expect(useNav.getState()).toMatchObject({ screen: "settings", settingsFocus: undefined });
   });
 
   it("hands a dropped file to the Leads stage once", () => {
