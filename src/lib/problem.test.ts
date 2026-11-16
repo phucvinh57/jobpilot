@@ -50,7 +50,7 @@ describe("problemActions", () => {
 describe("needsRecheck", () => {
   it("is true for a missing prerequisite", () => {
     expect(needsRecheck(problem({ kind: "noProvider" }))).toBe(true);
-    expect(needsRecheck(problem({ kind: "noChrome" }))).toBe(true);
+    expect(needsRecheck(problem({ kind: "noBrowser" }))).toBe(true);
     expect(needsRecheck(problem({ kind: "noProfile" }))).toBe(true);
     expect(needsRecheck(problem({ kind: "network" }))).toBe(false);
   });

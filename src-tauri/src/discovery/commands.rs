@@ -285,7 +285,7 @@ pub async fn discovery_set_source_enabled(
     run_sync(move || core.set_job_source_enabled(id, enabled)).await
 }
 
-/// Bind (or with `None` unbind) the managed browser session a source is read in.
+/// Bind (or with `None` unbind) the session (a site the user is signed in to) a source is read in.
 #[tauri::command]
 pub async fn discovery_set_source_session(
     core: State<'_, Arc<Core>>,

@@ -4,13 +4,13 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use super::{now, Store};
 
-/// A managed browser session (profile dir `sessions/<id>/`).
+/// A site the user is signed in to in their own Chrome (checked through the browser extension).
 #[derive(Clone, Debug)]
 pub struct Session {
     pub id: i64,
     pub name: String,
     pub start_url: String,
-    /// JSON array of domains the session is logged in to.
+    /// JSON array of the cookie domains the last check found for the site.
     pub domains_json: String,
     /// `new`, `ok` or `expired`.
     pub status: String,
@@ -81,18 +81,6 @@ impl Store {
     pub fn update_session_domains(&self, id: i64, domains_json: &str) -> Result<()> {
         self.with_conn(|c| {
             c.execute("UPDATE sessions SET domains_json = ?1 WHERE id = ?2", params![domains_json, id])?;
-            Ok(())
-        })
-    }
-
-    /// Back to a never-logged-in session: status `new`, no domains, never verified.
-    pub fn reset_session(&self, id: i64) -> Result<()> {
-        self.with_conn(|c| {
-            let n = c.execute(
-                "UPDATE sessions SET status = 'new', domains_json = '[]', last_verified_at = NULL WHERE id = ?1",
-                [id],
-            )?;
-            anyhow::ensure!(n == 1, "session {id} not found");
             Ok(())
         })
     }

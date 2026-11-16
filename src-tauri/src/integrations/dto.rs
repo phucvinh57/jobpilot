@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use crate::engine::browser::Chrome;
+use crate::engine::browser::BridgeStatus;
 use crate::engine::llm;
 use crate::engine::mail::{GmailState, ReportSummary};
 use crate::engine::store::{Provider, ProviderKind, Session};
@@ -113,9 +113,9 @@ impl fmt::Debug for ProviderInput {
     }
 }
 
-// ------------------------------------------------------------------ sessions
+// ------------------------------------------------------------------ browser
 
-/// A managed browser profile.
+/// A site the user is signed in to in their own browser.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionDto {
@@ -126,7 +126,7 @@ pub struct SessionDto {
     pub status: &'static str,
     /// RFC 3339, `None` when it was never checked.
     pub verified_at: Option<String>,
-    /// A login window is open and waits for the user to press Done.
+    /// A login tab is open and waits for the user to press Done.
     pub login_in_progress: bool,
 }
 
@@ -143,39 +143,51 @@ impl SessionDto {
     }
 }
 
-/// The browser sessions run on.
+/// The user's browser as the Browser section shows it: whether the JobPilot extension is
+/// connected and paired. Never the pairing token (only the 6-digit code the user compares).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChromeDto {
-    pub path: String,
-    /// `JOBPILOT_CHROME` / `managed` / `system`.
-    pub source: &'static str,
+pub struct BrowserDto {
+    /// The app waits for the extension (false when its port is taken).
+    pub listening: bool,
+    pub port: u16,
+    /// A paired extension is connected.
+    pub connected: bool,
+    /// "Chrome 153", also while pairing.
+    pub browser: Option<String>,
+    pub extension_version: Option<String>,
+    /// The extension may open private (Incognito) tabs.
+    pub incognito_allowed: bool,
+    /// The code to approve while an extension waits for pairing.
+    pub pairing_code: Option<String>,
+    /// Some browser was paired before.
+    pub paired: bool,
+    /// The folder to pick in "Load unpacked" on chrome://extensions, when it is known.
+    pub extension_path: Option<String>,
 }
 
-impl From<&Chrome> for ChromeDto {
-    fn from(c: &Chrome) -> Self {
+impl BrowserDto {
+    pub fn new(status: &BridgeStatus, extension_path: Option<String>) -> Self {
         Self {
-            path: c.path.display().to_string(),
-            source: c.source.label(),
+            listening: status.listening,
+            port: status.port,
+            connected: status.connected,
+            browser: status.browser.clone(),
+            extension_version: status.extension_version.clone(),
+            incognito_allowed: status.incognito_allowed,
+            pairing_code: status.pairing_code.clone(),
+            paired: status.paired,
+            extension_path,
         }
     }
 }
 
-/// Where the browser download stands: also the payload of the `integrations:browser-download` event.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DownloadDto {
-    pub active: bool,
-    /// Percent done, when the size is known.
-    pub percent: Option<u8>,
-}
-
+/// The Browser section: the connection and the sites the user is signed in to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionsDto {
+pub struct BrowserSectionDto {
+    pub browser: BrowserDto,
     pub sessions: Vec<SessionDto>,
-    pub chrome: Option<ChromeDto>,
-    pub download: DownloadDto,
 }
 
 // ------------------------------------------------------------------ gmail
@@ -237,7 +249,9 @@ mod tests {
     use crate::engine::store::{Provider, ProviderKind, Session};
     use serde_json::Value;
 
-    use super::{GmailDto, ProviderDto, ProviderInput, ProvidersDto, SessionDto};
+    use crate::engine::browser::BridgeStatus;
+
+    use super::{BrowserDto, GmailDto, ProviderDto, ProviderInput, ProvidersDto, SessionDto};
 
     fn provider() -> Provider {
         Provider {
@@ -338,6 +352,26 @@ mod tests {
         );
         assert_eq!(json["loginInProgress"], true);
         assert!(json["verifiedAt"].is_null());
+    }
+
+    #[test]
+    fn the_browser_carries_the_pairing_code_and_no_token() {
+        let status = BridgeStatus {
+            listening: true,
+            port: 47615,
+            connected: false,
+            browser: Some("Chrome 153".into()),
+            extension_version: Some("0.1.0".into()),
+            incognito_allowed: false,
+            pairing_code: Some("123456".into()),
+            paired: true,
+        };
+        let json = serde_json::to_value(BrowserDto::new(&status, Some("/opt/jobpilot/extension".into()))).unwrap();
+        assert_no_secret_fields(&json, "browser");
+        assert_eq!(json["pairingCode"], "123456");
+        assert_eq!(json["extensionVersion"], "0.1.0");
+        assert_eq!(json["extensionPath"], "/opt/jobpilot/extension");
+        assert_eq!((json["connected"].as_bool(), json["incognitoAllowed"].as_bool()), (Some(false), Some(false)));
     }
 
     #[test]

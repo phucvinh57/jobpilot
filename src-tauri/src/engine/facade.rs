@@ -40,7 +40,7 @@ mod tests {
         let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
         assert!(core.paths.db.is_file());
         assert!(core.paths.applications_dir.is_dir());
-        assert!(core.paths.sessions_dir.is_dir());
+        assert!(!core.paths.old_sessions_dir().exists(), "no browser profiles any more");
         assert!(core.paths.shots_dir.is_dir());
     }
 

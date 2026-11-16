@@ -102,8 +102,8 @@ describe("navigation store", () => {
     expect(useNav.getState()).toMatchObject({ screen: "profile", profileFocus: "About you" });
     useNav.getState().openSection("Profile & preferences");
     expect(useNav.getState()).toMatchObject({ screen: "profile", profileFocus: "Preferences" });
-    useNav.getState().openSection("Browser sessions");
-    expect(useNav.getState()).toMatchObject({ screen: "settings", settingsFocus: "Browser sessions" });
+    useNav.getState().openSection("Browser");
+    expect(useNav.getState()).toMatchObject({ screen: "settings", settingsFocus: "Browser" });
     useNav.getState().openSection("Something new");
     expect(useNav.getState()).toMatchObject({ screen: "settings", settingsFocus: undefined });
   });

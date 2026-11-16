@@ -12,7 +12,7 @@
 //! ```
 //!
 //! - [`source`]: the adapters (`greenhouse`, `lever`, `ashby`, `smartrecruiters`, `recruitee`, `personio`,
-//!   `hn_hiring`; `yc` and `career_page`, which read web pages and use the managed browser when a
+//!   `hn_hiring`; `yc` and `career_page`, which read web pages and use the user's browser when a
 //!   page needs it) behind [`JobSource`].
 //! - [`run`]: the `discovery` graph (one thread per run) and the `source_run` graph (one thread per
 //!   source, so a paused source never holds back the others).
@@ -24,7 +24,7 @@
 //!   shown again when a later change lets it pass.
 //! - [`dedup`]: canonical URL and `slug(company)-slug(role)` against leads and applications.
 //! - [`deps`]: the replaceable pieces of a run. [`DiscoverDeps::live`] wires the text-based challenge
-//!   probe, `pipeline::insight` and the posting fetch with the managed browser as its fallback.
+//!   probe, `pipeline::insight` and the posting fetch with the user's browser as its fallback.
 //! - [`handoff`]: the login / captcha / block page hand-off: [`Core::discover_open_browser`] opens the
 //!   page visibly for the user (the app never solves a challenge), the default [`text_probe`], and
 //!   [`needs_human`] (a paused run's reason as the `Problem` to show).

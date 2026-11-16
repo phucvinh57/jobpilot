@@ -17,14 +17,17 @@ pub const DATA_CHANGED: &str = "shared:data-changed";
 pub const GRAPH_PROGRESS: &str = "shared:graph-progress";
 
 /// Which data changed, so a screen re-reads only what it shows. These are the scopes the shell
-/// itself reports (mail sync, background searches); the web app also notifies `trends`, `profile`,
-/// `integrations` and `health` after its own commands (`src/api/bridge.ts` of the web app).
+/// itself reports (mail sync, background searches, the browser extension connecting); the web app
+/// also notifies `trends`, `profile`, `integrations` and `health` after its own commands
+/// (`src/api/bridge.ts` of the web app).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Scope {
     Applications,
     Leads,
     Sources,
+    /// A connection changed (the browser extension connected, paired or went away).
+    Integrations,
 }
 
 #[derive(Clone, Debug, Serialize)]

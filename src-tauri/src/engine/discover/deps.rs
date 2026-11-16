@@ -1,7 +1,7 @@
 //! What a discovery run needs from the outside, as values the caller can replace: the model, the
 //! source adapters, the posting fetch, the challenge detection, the insight step and the
 //! notification. [`DiscoverDeps::new`] has the real defaults without a browser; [`DiscoverDeps::live`]
-//! adds the managed browser (page adapters, posting fallback) and the insight; tests swap in fakes.
+//! adds the user's browser (page adapters, posting fallback) and the insight; tests swap in fakes.
 
 use std::sync::Arc;
 
@@ -62,7 +62,7 @@ pub struct FetchRequest {
 /// through the shared safe client (`net::http`, which spaces requests to one host itself; a
 /// replacement fetcher does its own pacing) and extracts the text like `pipeline::ingest`. Its
 /// `NeedsBrowser` answer skips the posting, except in [`DiscoverDeps::live`], where the page is
-/// rendered in the managed browser and a challenge shown there (`ChallengeFound`) pauses the source.
+/// rendered in the user's browser and a challenge shown there (`ChallengeFound`) pauses the source.
 ///
 /// [`classify`]: crate::engine::health::classify
 pub type PostingFetcher = Arc<dyn Fn(FetchRequest) -> BoxFuture<'static, Result<String>> + Send + Sync>;
@@ -135,7 +135,7 @@ impl DiscoverDeps {
 
     /// The defaults for the running app: the default AI provider (`Err` with the "no AI provider"
     /// message, which the UI shows as the setup problem, when there is none), default limits, the
-    /// managed browser as the page reader of the `yc` and `career_page` sources and the fallback of the
+    /// user's browser as the page reader of the `yc` and `career_page` sources and the fallback of the
     /// posting fetch (it sees login, captcha and block pages, and the run waits for the user), and the
     /// job insight (`pipeline::insight`) as the insight hook.
     pub fn live(core: &Core) -> Result<Self> {

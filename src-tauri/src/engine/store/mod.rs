@@ -236,6 +236,11 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE applications ADD COLUMN dismiss_reason TEXT;
     ALTER TABLE applications ADD COLUMN dismissed_at TEXT;
     ",
+    // 8: sessions are sites the user is signed in to in their own Chrome; the logins of the old
+    // app-owned profiles went with those profiles, so every session starts over
+    "
+    UPDATE sessions SET status = 'new', domains_json = '[]', last_verified_at = NULL;
+    ",
 ];
 
 #[derive(Clone)]
@@ -364,6 +369,12 @@ mod tests {
             )
             .unwrap();
             conn.execute("INSERT INTO kv (key, value) VALUES ('profile_path', '/x/profile.yaml')", []).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (name, start_url, domains_json, status, last_verified_at, created_at)
+                 VALUES ('LinkedIn', 'https://www.linkedin.com/', '[\"linkedin.com\"]', 'ok', '2026-01-02T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+                [],
+            )
+            .unwrap();
         }
 
         let store = Store::open(&path).unwrap();
@@ -375,6 +386,10 @@ mod tests {
         assert_eq!(app.interview_round, None);
         // The profile is no longer a file: its old path setting is forgotten.
         assert_eq!(store.kv_get("profile_path").unwrap(), None);
+        // The logins of the old app-owned browser profiles are gone: every session starts over.
+        let session = &store.list_sessions().unwrap()[0];
+        assert_eq!((session.name.as_str(), session.status.as_str(), session.domains_json.as_str()), ("LinkedIn", "new", "[]"));
+        assert!(session.last_verified_at.is_none());
 
         // The new column and tables are usable.
         store.set_insight_json(app.id, Some(r#"{"domain": "payments"}"#)).unwrap();

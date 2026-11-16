@@ -1,14 +1,15 @@
-//! "Am I still logged in?" health probe and the helpers behind it.
+//! "Am I still signed in?": the check of a session (a site the user is signed in to in their own
+//! Chrome) and the helpers behind it (the login-page tests are shared with [`super::challenge`]).
 
-use std::collections::BTreeSet;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chromiumoxide::cdp::browser_protocol::network::Cookie;
 use regex::Regex;
 
-use super::session::BrowserHandle;
+use super::bridge::Bridge;
+use super::tab::{OpenOptions, Profile, Tab};
+use crate::engine::mail::classify::registrable_domain;
 
 /// How long a probe waits for the start page to finish loading.
 pub const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -28,7 +29,7 @@ pub struct ProbeResult {
     pub has_cookies: bool,
     pub login_url: bool,
     pub password_input: bool,
-    /// All cookie domains in the profile (sorted, no leading dot).
+    /// The browser's cookie domains for the site (sorted, no leading dot).
     pub domains: Vec<String>,
 }
 
@@ -43,28 +44,49 @@ pub fn decide(has_cookies: bool, login_url: bool, password_input: bool) -> bool 
     has_cookies && !login_url && !password_input
 }
 
-/// Visit `start_url` in the (headless) browser and judge whether the profile is logged in.
-/// Errors when the page cannot be reached at all (the caller keeps the previous status then).
-pub(crate) async fn probe(handle: &BrowserHandle, start_url: &str) -> Result<ProbeResult> {
-    let page = handle.new_page_with_timeout(start_url, LOAD_TIMEOUT).await.context("opening the start page")?;
-    tokio::time::sleep(SETTLE).await;
-
-    let final_url = page.url().await.ok().flatten().unwrap_or_default();
-    let cookies = handle.cookies().await.context("reading cookies")?;
-    let password_input = match page.evaluate_expression(PASSWORD_JS).await {
-        Ok(v) => v.into_value::<bool>().unwrap_or(false),
-        Err(_) => false,
-    };
-    let _ = page.close().await;
+/// Open `start_url` in a background tab of the user's own (signed-in) browser profile and judge
+/// whether they are signed in: the browser holds cookies for the site, and the page is not a login
+/// page. The tab is closed again. Errors when the browser or the page cannot be reached at all (the
+/// caller keeps the previous status then). Only cookie *domains* are read, never cookies.
+pub(crate) async fn probe(bridge: &Bridge, start_url: &str) -> Result<ProbeResult> {
+    let tab = bridge
+        .open(start_url, OpenOptions { profile: Profile::Signed, focus: false, guard: None })
+        .await
+        .context("opening the start page")?;
+    let seen = look(&tab).await;
+    tab.close().await;
+    let (final_url, password_input) = seen?;
 
     let host = host_of(start_url).unwrap_or_default();
+    let domains = bridge.cookie_domains(&cookie_scope(&host), false).await.context("reading the cookie domains")?;
     Ok(ProbeResult {
-        has_cookies: cookies.iter().any(|c| cookie_domain_matches(&c.domain, &host)),
+        has_cookies: !domains.is_empty(),
         login_url: looks_like_login_url(&final_url),
         password_input,
-        domains: cookie_domains(&cookies),
+        domains,
         final_url,
     })
+}
+
+/// Where the page ended up and whether it shows a password field.
+async fn look(tab: &Tab) -> Result<(String, bool)> {
+    tab.wait_loaded(LOAD_TIMEOUT).await;
+    tokio::time::sleep(SETTLE).await;
+    let final_url = tab.url().await.context("reading the page address")?;
+    let password_input = tab.eval_as::<bool>(PASSWORD_JS).await.unwrap_or(false);
+    Ok((final_url, password_input))
+}
+
+/// The domain whose cookies say the user is signed in to `host`: its registrable domain
+/// (`www.linkedin.com` -> `linkedin.com`, so a login cookie set for the parent counts), the host
+/// itself for an address literal.
+pub fn cookie_scope(host: &str) -> String {
+    let host = host.trim_start_matches('.').to_ascii_lowercase();
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if bare.parse::<std::net::IpAddr>().is_ok() {
+        return host;
+    }
+    registrable_domain(&host)
 }
 
 fn login_re() -> &'static Regex {
@@ -115,17 +137,6 @@ pub fn cookie_domain_matches(cookie_domain: &str, host: &str) -> bool {
         return false;
     }
     d == h || h.ends_with(&format!(".{d}")) || d.ends_with(&format!(".{h}"))
-}
-
-/// Sorted, de-duplicated cookie domains without the leading dot.
-pub fn cookie_domains(cookies: &[Cookie]) -> Vec<String> {
-    cookies
-        .iter()
-        .map(|c| c.domain.trim_start_matches('.').to_ascii_lowercase())
-        .filter(|d| !d.is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
 }
 
 #[cfg(test)]
@@ -185,6 +196,15 @@ mod tests {
         assert!(!decide(false, false, false), "no cookies for the domain");
         assert!(!decide(true, true, false), "redirected to a login url");
         assert!(!decide(true, false, true), "password field visible");
+    }
+
+    #[test]
+    fn the_cookie_scope_is_the_registrable_domain() {
+        assert_eq!(cookie_scope("www.linkedin.com"), "linkedin.com");
+        assert_eq!(cookie_scope("careers.acme.co.uk"), "acme.co.uk");
+        assert_eq!(cookie_scope("site.test"), "site.test");
+        assert_eq!(cookie_scope("127.0.0.1"), "127.0.0.1");
+        assert_eq!(cookie_scope("[::1]"), "[::1]");
     }
 
     #[test]

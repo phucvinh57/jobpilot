@@ -15,13 +15,13 @@ export const STAGES: readonly Stage[] = ["leads", "cv", "applied", "inProgress",
 export type DrawerTarget = { kind: "lead"; id: number | "best" } | { kind: "app"; id: number };
 
 /** The Settings sections, by the title the shell's `Problem.settingsSection` uses. */
-export type SettingsSection = "AI providers" | "Browser sessions" | "Job sources" | "Gmail" | "Appearance";
+export type SettingsSection = "AI providers" | "Browser" | "Job sources" | "Gmail" | "Appearance";
 
 /** The Settings sections in display order. */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "AI providers",
   "Gmail",
-  "Browser sessions",
+  "Browser",
   "Job sources",
   "Appearance",
 ];

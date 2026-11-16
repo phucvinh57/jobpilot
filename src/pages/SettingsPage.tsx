@@ -1,5 +1,5 @@
-// Settings: one scrolling page of cards, in this order: Connections (AI providers, Gmail, Browser
-// sessions), Job sources, Appearance. About you and Preferences are on the Profile page. Each card
+// Settings: one scrolling page of cards, in this order: Connections (AI providers, Gmail, Browser),
+// Job sources, Appearance. About you and Preferences are on the Profile page. Each card
 // belongs to its context; this file only composes them and scrolls to the one a call to action names.
 
 import { useEffect, type ReactNode } from "react";
@@ -46,7 +46,7 @@ export function SettingsPage() {
   const clearFocus = useNav((s) => s.clearSettingsFocus);
   const refresh = useShell((s) => s.refresh);
 
-  // Opened from a call to action ("Open Settings > Browser sessions"): scroll to that section.
+  // Opened from a call to action ("Open Settings > Browser"): scroll to that section.
   useEffect(() => {
     if (focus) {
       document.getElementById(sectionId(focus))?.scrollIntoView({ block: "start" });
@@ -54,7 +54,7 @@ export function SettingsPage() {
     }
   }, [focus, clearFocus]);
 
-  // Leaving Settings: a provider, Chrome or typst may have been set up meanwhile.
+  // Leaving Settings: a provider, the browser extension or typst may have been set up meanwhile.
   useEffect(() => refresh, [refresh]);
 
   return (
@@ -69,7 +69,7 @@ export function SettingsPage() {
       <Slot section="Gmail">
         <GmailSection />
       </Slot>
-      <Slot section="Browser sessions">
+      <Slot section="Browser">
         <SessionsSection />
       </Slot>
       <Slot section="Job sources">

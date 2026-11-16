@@ -1,5 +1,6 @@
 //! Sample data for UI work (`JOBPILOT_DEMO=1`): a profile read from one note, applications, job
-//! sources, scored leads, a company brief and trends. Every address is on `example.com`; nothing
+//! sources, scored leads, a company brief, trends and the sites the user is signed in to (Settings >
+//! Browser; never checked, so no browser is needed). Every address is on `example.com`; nothing
 //! is fetched.
 
 use anyhow::Result;
@@ -12,7 +13,9 @@ use crate::engine::pipeline::cv::Cv;
 use crate::engine::pipeline::insight::{CompanyFacts, Interview, Skills};
 use crate::engine::pipeline::Insight;
 use crate::engine::prefs::Weights;
-use crate::engine::store::{LeadState, NewApplication, NewLead, NewSource, SourcePurpose, Status};
+use crate::engine::store::{
+    LeadState, NewApplication, NewLead, NewSession, NewSource, SourcePurpose, Status,
+};
 use crate::engine::Core;
 
 /// Insert a few sample applications when the store is empty (`JOBPILOT_DEMO=1`).
@@ -21,7 +24,26 @@ pub fn seed(core: &Core) -> Result<()> {
     crate::engine::prefs::seed_demo(core)?;
     crate::trends::demo::seed_demo(core)?;
     seed_demo_applications(core)?;
+    seed_demo_sessions(core)?;
     seed_demo_queue(core)
+}
+
+/// Two sites the user is signed in to (Settings > Browser): one checked, one not yet.
+fn seed_demo_sessions(core: &Core) -> Result<()> {
+    if !core.store.list_sessions()?.is_empty() {
+        return Ok(());
+    }
+    let jobs = core.store.add_session(&NewSession {
+        name: "Example Jobs".into(),
+        start_url: "https://jobs.example.com/feed".into(),
+    })?;
+    core.store.update_session_domains(jobs.id, r#"["example.com","jobs.example.com"]"#)?;
+    core.store.update_session_status(jobs.id, "ok", Some(Utc::now() - Duration::hours(3)))?;
+    core.store.add_session(&NewSession {
+        name: "Example Careers".into(),
+        start_url: "https://careers.example.com/account".into(),
+    })?;
+    Ok(())
 }
 
 /// The note the demo profile is "read" from (Profile > About you).
