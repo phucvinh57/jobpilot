@@ -276,7 +276,7 @@ export interface ApplyHandoff {
   title: string;
   reason: string;
   captcha: boolean;
-  /** The visible browser is open. */
+  /** The form's tab was brought to the front for the user. */
   headed: boolean;
   hasScreenshot: boolean;
 }

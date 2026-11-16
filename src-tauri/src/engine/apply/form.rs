@@ -5,11 +5,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
-use chromiumoxide::cdp::browser_protocol::dom::SetFileInputFilesParams;
-use chromiumoxide::cdp::browser_protocol::page::{CaptureScreenshotFormat, Viewport};
-use chromiumoxide::page::ScreenshotParams;
-use chromiumoxide::Page;
+use anyhow::{bail, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::json;
@@ -18,36 +14,41 @@ use super::ats::Adapter;
 use super::detect::PageSignals;
 use super::fields::{FieldKind, FormField};
 use super::js;
+use crate::engine::browser::{Clip, Tab};
+
+/// Longest a polling script may take (the page may be navigating or busy).
+const POLL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Run a script and read its JSON result.
-pub async fn eval<T: DeserializeOwned>(page: &Page, script: String) -> Result<T> {
-    let result = page.evaluate_expression(script).await.map_err(|e| anyhow!("{e}"))?;
-    result.into_value::<T>().map_err(|e| anyhow!("unexpected script result: {e}"))
+pub async fn eval<T: DeserializeOwned>(tab: &Tab, script: String) -> Result<T> {
+    tab.eval_as(&script).await.context("unexpected script result")
+}
+
+/// [`eval`], given up after a few seconds: for loops that poll a page that may be navigating.
+pub async fn eval_quick<T: DeserializeOwned>(tab: &Tab, script: String) -> Result<T> {
+    match tokio::time::timeout(POLL_TIMEOUT, eval(tab, script)).await {
+        Ok(result) => result,
+        Err(_) => bail!("the page did not answer in time"),
+    }
 }
 
 /// Give a freshly loaded or navigated page a moment to render.
-pub async fn settle(page: &Page) {
-    for _ in 0..25 {
-        let ready: Result<String> = eval(page, "document.readyState".to_string()).await;
-        if ready.is_ok_and(|s| s == "complete") {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+pub async fn settle(tab: &Tab) {
+    tab.wait_loaded(Duration::from_secs(5)).await;
     tokio::time::sleep(Duration::from_millis(400)).await;
 }
 
 /// Tag and describe the visible fields of the current step.
-pub async fn extract(page: &Page, adapter: &Adapter, step: usize) -> Result<Vec<FormField>> {
-    eval(page, js::extract(step, adapter.root)).await.context("reading the form fields")
+pub async fn extract(tab: &Tab, adapter: &Adapter, step: usize) -> Result<Vec<FormField>> {
+    eval_quick(tab, js::extract(step, adapter.root)).await.context("reading the form fields")
 }
 
 /// Like [`extract`], but waits (a lazily rendered form) until at least one field is there.
-pub async fn extract_waiting(page: &Page, adapter: &Adapter, step: usize, wait: Duration) -> Result<Vec<FormField>> {
+pub async fn extract_waiting(tab: &Tab, adapter: &Adapter, step: usize, wait: Duration) -> Result<Vec<FormField>> {
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         // The page may be navigating: errors are retried until the deadline.
-        match extract(page, adapter, step).await {
+        match extract(tab, adapter, step).await {
             Ok(fields) if !fields.is_empty() => return Ok(fields),
             Ok(fields) if tokio::time::Instant::now() >= deadline => return Ok(fields),
             Err(e) if tokio::time::Instant::now() >= deadline => return Err(e),
@@ -56,8 +57,8 @@ pub async fn extract_waiting(page: &Page, adapter: &Adapter, step: usize, wait: 
     }
 }
 
-pub async fn signals(page: &Page, adapter: &Adapter) -> Result<PageSignals> {
-    eval(page, js::signals(adapter.root)).await.context("reading the page")
+pub async fn signals(tab: &Tab, adapter: &Adapter) -> Result<PageSignals> {
+    eval_quick(tab, js::signals(adapter.root)).await.context("reading the page")
 }
 
 /// Which button kinds the page offers right now.
@@ -86,25 +87,24 @@ struct Found {
 }
 
 /// Tag the button of `kind` if the page has one; returns its text.
-pub async fn find_button(page: &Page, adapter: &Adapter, button: Button) -> Result<Option<String>> {
+pub async fn find_button(tab: &Tab, adapter: &Adapter, button: Button) -> Result<Option<String>> {
     let (selectors, text, root): (&[&str], &str, &[&str]) = match button {
         Button::Apply => (adapter.apply_button, adapter.apply_text, &[]),
         Button::Next => (adapter.next, adapter.next_text, adapter.root),
         Button::Submit => (adapter.submit, adapter.submit_text, adapter.root),
     };
-    let found: Found = eval(page, js::find_button(button.kind(), root, selectors, text)).await?;
+    let found: Found = eval(tab, js::find_button(button.kind(), root, selectors, text)).await?;
     Ok(found.found.then_some(found.text))
 }
 
 /// Click the button tagged by [`find_button`]. A real mouse click first; a script click as the fallback
-/// (for buttons covered by overlays).
-pub async fn click_button(page: &Page, button: Button) -> Result<()> {
+/// (for buttons without a box to click, such as ones the page hides behind an overlay).
+pub async fn click_button(tab: &Tab, button: Button) -> Result<()> {
     let selector = format!("[data-jp-btn=\"{}\"]", button.kind());
-    let el = page.find_element(selector.as_str()).await.map_err(|e| anyhow!("the {} button vanished: {e}", button.kind()))?;
-    let _ = el.scroll_into_view().await;
-    if el.click().await.is_err() {
+    if let Err(e) = tab.click(&selector).await {
+        tracing::debug!("the {} button took no mouse click ({e:#}): clicking it by script", button.kind());
         let clicked: bool =
-            eval(page, format!("(() => {{ const b = document.querySelector('{selector}'); if (!b) return false; b.click(); return true; }})()")).await?;
+            eval(tab, format!("(() => {{ const b = document.querySelector('{selector}'); if (!b) return false; b.click(); return true; }})()")).await?;
         if !clicked {
             bail!("the {} button vanished", button.kind());
         }
@@ -130,9 +130,10 @@ pub struct FillResult {
     pub error: Option<String>,
 }
 
-/// Set every item. Text, selects, radios and checkboxes go through one script; file inputs use
-/// `DOM.setFileInputFiles`; type-ahead dropdowns are typed into and an option is clicked.
-pub async fn fill(page: &Page, items: &[FillItem]) -> Result<Vec<FillResult>> {
+/// Set every item. Text, selects, radios and checkboxes go through one script; file inputs get the
+/// file as if the user picked it ([`Tab::set_files`]); type-ahead dropdowns are typed into and an
+/// option is clicked.
+pub async fn fill(tab: &Tab, items: &[FillItem]) -> Result<Vec<FillResult>> {
     let mut results = Vec::with_capacity(items.len());
     let scripted: Vec<serde_json::Value> = items
         .iter()
@@ -140,12 +141,12 @@ pub async fn fill(page: &Page, items: &[FillItem]) -> Result<Vec<FillResult>> {
         .map(|i| json!({"id": i.id, "type": i.kind.as_str(), "value": i.value}))
         .collect();
     if !scripted.is_empty() {
-        results.extend(eval::<Vec<FillResult>>(page, js::fill(&json!(scripted))).await.context("filling the form")?);
+        results.extend(eval::<Vec<FillResult>>(tab, js::fill(&json!(scripted))).await.context("filling the form")?);
     }
     for item in items {
         match item.kind {
-            FieldKind::File => results.push(attach_file(page, &item.id, &item.value).await),
-            FieldKind::Combobox => results.push(fill_combobox(page, &item.id, &item.value).await),
+            FieldKind::File => results.push(attach_file(tab, &item.id, &item.value).await),
+            FieldKind::Combobox => results.push(fill_combobox(tab, &item.id, &item.value).await),
             _ => {}
         }
     }
@@ -156,22 +157,15 @@ fn selector(id: &str) -> String {
     format!("[data-jp-id=\"{id}\"]")
 }
 
-async fn attach_file(page: &Page, id: &str, path: &str) -> FillResult {
+async fn attach_file(tab: &Tab, id: &str, path: &str) -> FillResult {
     let outcome: Result<String> = async {
         let abs = std::fs::canonicalize(path).with_context(|| format!("the file {path} does not exist"))?;
-        let el = page.find_element(selector(id)).await.map_err(|e| anyhow!("file input not found: {e}"))?;
-        let params = SetFileInputFilesParams {
-            files: vec![abs.to_string_lossy().into_owned()],
-            node_id: None,
-            backend_node_id: Some(el.backend_node_id),
-            object_id: None,
-        };
-        page.execute(params).await.map_err(|e| anyhow!("attaching the file: {e}"))?;
+        tab.set_files(&selector(id), std::slice::from_ref(&abs)).await.context("attaching the file")?;
         // Upload widgets often take the file and reset the input: the page then shows the name instead.
         tokio::time::sleep(Duration::from_millis(400)).await;
         let base = abs.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let name: String = eval(
-            page,
+            tab,
             format!(
                 "(() => {{ const e = document.querySelector('{}'); if (e && e.files && e.files[0]) return e.files[0].name; \
                  return document.body && document.body.innerText.includes({}) ? {} : ''; }})()",
@@ -193,12 +187,10 @@ async fn attach_file(page: &Page, id: &str, path: &str) -> FillResult {
     }
 }
 
-async fn fill_combobox(page: &Page, id: &str, value: &str) -> FillResult {
+async fn fill_combobox(tab: &Tab, id: &str, value: &str) -> FillResult {
     let outcome: Result<bool> = async {
-        let el = page.find_element(selector(id)).await.map_err(|e| anyhow!("dropdown not found: {e}"))?;
-        let _ = el.scroll_into_view().await;
-        el.click().await.map_err(|e| anyhow!("opening the dropdown: {e}"))?;
-        el.type_str(value).await.map_err(|e| anyhow!("typing in the dropdown: {e}"))?;
+        tab.click(&selector(id)).await.context("opening the dropdown")?;
+        tab.type_text(value).await.context("typing in the dropdown")?;
         tokio::time::sleep(Duration::from_millis(500)).await;
         let pick = format!(
             "(() => {{ const v = {}.trim().toLowerCase(); \
@@ -208,10 +200,10 @@ async fn fill_combobox(page: &Page, id: &str, value: &str) -> FillResult {
               if (!o) return false; o.click(); return true; }})()",
             json!(value)
         );
-        let picked: bool = eval(page, pick).await?;
+        let picked: bool = eval(tab, pick).await?;
         if !picked {
             // Do not leave half-typed text behind.
-            let _ = el.press_key("Escape").await;
+            let _ = tab.press_key("Escape").await;
         }
         Ok(picked)
     }
@@ -229,15 +221,13 @@ const MAX_COMBOBOX_OPTIONS: usize = 60;
 /// Open each type-ahead dropdown once to read its options (they only exist while the list is open), so
 /// the answer can be chosen from, and validated against, the real list. Long lists (countries) and
 /// search-as-you-type lists stay free text.
-pub async fn enrich_comboboxes(page: &Page, fields: &mut [FormField]) {
+pub async fn enrich_comboboxes(tab: &Tab, fields: &mut [FormField]) {
     for f in fields.iter_mut().filter(|f| f.kind == FieldKind::Combobox && f.options.is_empty()) {
         let options: Result<Vec<String>> = async {
-            let el = page.find_element(selector(&f.id)).await.map_err(|e| anyhow!("{e}"))?;
-            let _ = el.scroll_into_view().await;
-            el.click().await.map_err(|e| anyhow!("{e}"))?;
+            tab.click(&selector(&f.id)).await?;
             tokio::time::sleep(Duration::from_millis(250)).await;
-            let options: Vec<String> = eval(page, js::options()).await?;
-            let _ = el.press_key("Escape").await;
+            let options: Vec<String> = eval(tab, js::options()).await?;
+            let _ = tab.press_key("Escape").await;
             Ok(options)
         }
         .await;
@@ -250,7 +240,7 @@ pub async fn enrich_comboboxes(page: &Page, fields: &mut [FormField]) {
 }
 
 /// PNG of the filled form: the form's own area when it can be found, else the whole page.
-pub async fn screenshot_form(page: &Page, adapter: &Adapter, path: &Path) -> Result<()> {
+pub async fn screenshot_form(tab: &Tab, adapter: &Adapter, path: &Path) -> Result<()> {
     #[derive(Deserialize)]
     struct Rect {
         x: f64,
@@ -258,31 +248,35 @@ pub async fn screenshot_form(page: &Page, adapter: &Adapter, path: &Path) -> Res
         w: f64,
         h: f64,
     }
-    let rect: Option<Rect> = eval(page, js::root_rect(adapter.root)).await.ok().flatten();
-    let Some(r) = rect else { return screenshot(page, path).await };
+    let rect: Option<Rect> = eval(tab, js::root_rect(adapter.root)).await.ok().flatten();
+    let Some(r) = rect else { return screenshot(tab, path).await };
     let x = (r.x - 12.0).max(0.0);
     let y = (r.y - 12.0).max(0.0);
-    let clip = Viewport { x, y, width: (r.w + 24.0).min(1600.0), height: (r.h + 24.0).min(16000.0), scale: 1.0 };
-    let params = ScreenshotParams::builder()
-        .format(CaptureScreenshotFormat::Png)
-        .clip(clip)
-        .capture_beyond_viewport(true)
-        .build();
-    match page.screenshot(params).await {
-        Ok(bytes) => {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
-        }
-        Err(_) => screenshot(page, path).await,
+    let clip = Clip { x, y, width: (r.w + 24.0).min(1600.0), height: (r.h + 24.0).min(16000.0), scale: 1.0 };
+    match tab.screenshot(Some(clip)).await {
+        Ok(bytes) => write_png(path, &bytes),
+        Err(_) => screenshot(tab, path).await,
     }
 }
 
-/// Full-page PNG of the current page.
-pub async fn screenshot(page: &Page, path: &Path) -> Result<()> {
-    let params = ScreenshotParams::builder().format(CaptureScreenshotFormat::Png).full_page(true).build();
-    let bytes = page.screenshot(params).await.map_err(|e| anyhow!("taking a screenshot: {e}"))?;
+/// PNG of the whole page (at most 4000 x 16000 px), or of what is in view when its size cannot be read.
+pub async fn screenshot(tab: &Tab, path: &Path) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Size {
+        w: f64,
+        h: f64,
+    }
+    let script = "(() => { const d = document.documentElement, b = document.body; \
+        return { w: Math.max(d ? d.scrollWidth : 0, b ? b.scrollWidth : 0), h: Math.max(d ? d.scrollHeight : 0, b ? b.scrollHeight : 0) }; })()";
+    let size: Option<Size> = eval_quick(tab, script.to_string()).await.ok();
+    let clip = size
+        .filter(|s| s.w >= 1.0 && s.h >= 1.0)
+        .map(|s| Clip { x: 0.0, y: 0.0, width: s.w.min(4000.0), height: s.h.min(16000.0), scale: 1.0 });
+    let bytes = tab.screenshot(clip).await.context("taking a screenshot")?;
+    write_png(path, &bytes)
+}
+
+fn write_png(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -290,8 +284,8 @@ pub async fn screenshot(page: &Page, path: &Path) -> Result<()> {
 }
 
 /// The URL of an embedded ATS form (Greenhouse/Lever/Ashby iframe) on a company's own careers page.
-pub async fn embedded_form_url(page: &Page) -> Option<String> {
-    eval::<Option<String>>(page, js::embedded_form()).await.ok().flatten().filter(|u| u.starts_with("http"))
+pub async fn embedded_form_url(tab: &Tab) -> Option<String> {
+    eval::<Option<String>>(tab, js::embedded_form()).await.ok().flatten().filter(|u| u.starts_with("http"))
 }
 
 /// Stable text of the field list; changes when the form moves to another step.

@@ -223,7 +223,7 @@ export function idleApply(over: Partial<Apply> = {}): Apply {
       applied: false,
       applyUrl: "https://boards.example.com/acme/1",
       urlNote: "found in the job description",
-      session: "No login needed: runs in a throwaway browser profile.",
+      session: "No login needed: runs in a private (Incognito) tab of your Chrome.",
       sessionTone: "neutral",
       dryRun: false,
       dryRunForced: false,

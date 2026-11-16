@@ -477,10 +477,6 @@ pub(crate) enum Flavor<'a> {
     Reading(&'a [String]),
 }
 
-pub(crate) fn browser_config(chrome: &Path, dir: &Path, headless: bool, start_url: Option<&str>) -> Result<BrowserConfig> {
-    browser_config_for(chrome, dir, headless, start_url, Flavor::Managed)
-}
-
 /// The launch flags of `flavor`.
 fn launch_args(flavor: Flavor<'_>) -> Vec<String> {
     let mut args: Vec<String> = LAUNCH_ARGS.iter().map(|a| a.to_string()).collect();

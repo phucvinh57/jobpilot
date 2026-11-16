@@ -464,7 +464,8 @@ pub struct Blocker {
 ///
 /// An open or running apply flow wins over the status, so the button always matches what the Apply tab
 /// shows. `Submit` stays disabled until every required field has a value; every button is disabled while
-/// work runs. `blocker` is only asked when the form could be opened (no apply URL, no session, no Chrome).
+/// work runs. `blocker` is only asked when the form could be opened (no apply URL, no session, no
+/// connected browser extension).
 pub fn primary_for(
     status: Status,
     has_cv: bool,
@@ -944,7 +945,7 @@ pub fn host(url: &str) -> String {
 pub fn session_line(session: &SessionState) -> (String, Tone) {
     let line = match session {
         SessionState::NotNeeded => {
-            "No login needed: runs in a throwaway browser profile.".to_string()
+            "No login needed: runs in a private (Incognito) tab of your Chrome.".to_string()
         }
         SessionState::Matched { name, status, .. } => match status {
             SessionStatus::Ok => format!("Session: {name} (logged in)"),
@@ -1491,7 +1492,7 @@ mod tests {
 
         let blocker = || {
             Some(Blocker {
-                message: "No Chrome found".into(),
+                message: "Connect the JobPilot extension".into(),
                 settings: Some("Browser sessions"),
             })
         };

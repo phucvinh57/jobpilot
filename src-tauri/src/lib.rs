@@ -94,7 +94,7 @@ pub fn run() -> anyhow::Result<()> {
 
     app.run(move |_, event| {
         if let RunEvent::Exit = event {
-            // The window is gone: do not leave an auto-apply Chrome running behind.
+            // The window is gone: close the tabs of the application forms.
             crate::engine::runtime::block_on(crate::engine::apply::close_all());
             // And close the tabs JobPilot opened in the user's browser.
             crate::engine::runtime::block_on(browser.close_all());

@@ -28,8 +28,10 @@ mod server;
 mod chromium_tests;
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-pub(crate) mod testkit;
+/// A real Chromium with the extension for tests (also for `tests/` with the `test-browser` feature).
+#[cfg(any(test, feature = "test-browser"))]
+#[doc(hidden)]
+pub mod testkit;
 
 use std::collections::HashMap;
 use std::fmt;

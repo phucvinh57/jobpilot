@@ -639,7 +639,7 @@ pub struct HandoffDto {
     pub title: &'static str,
     pub reason: String,
     pub captcha: bool,
-    /// The visible browser is open.
+    /// The form's tab was brought to the front for the user.
     pub headed: bool,
     pub has_screenshot: bool,
 }

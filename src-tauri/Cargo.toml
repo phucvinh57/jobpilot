@@ -50,6 +50,8 @@ encoding_rs = "0.8"
 notify-rust = "4"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry", "tracing-log"] }
 tracing-appender = "0.2.5"
+# Only with the `test-browser` feature (the browser test kit's temp dirs).
+tempfile = { version = "3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -62,6 +64,10 @@ custom-protocol = ["tauri/custom-protocol"]
 # UI checks without a person at the screen: the webview snapshots itself and runs a script
 # (`src/devtools.rs`). Never part of a release package.
 dev-tools = ["dep:webkit2gtk", "dep:gtk", "dep:cairo-rs"]
+# The browser test kit (`engine::browser::bridge::testkit`: Chromium with the built extension) for the
+# integration tests under `tests/`; never part of a release package:
+# `cargo test -p jobpilot --features test-browser --test e2e_discovery -- --ignored`.
+test-browser = ["dep:tempfile"]
 
 # The versions Tauri itself links (same `PlatformWebview::inner()` type).
 [target.'cfg(target_os = "linux")'.dependencies]

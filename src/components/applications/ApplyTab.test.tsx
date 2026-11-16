@@ -135,7 +135,7 @@ describe("before a form is open", () => {
     expect(await screen.findByRole("region", { name: "Greenhouse" })).toBeTruthy();
     expect(screen.getByText("https://boards.example.com/acme/1")).toBeTruthy();
     expect(screen.getByText("found in the job description")).toBeTruthy();
-    expect(screen.getByText("No login needed: runs in a throwaway browser profile.")).toBeTruthy();
+    expect(screen.getByText("No login needed: runs in a private (Incognito) tab of your Chrome.")).toBeTruthy();
     expect(screen.getByText(/nothing is sent until you press Submit/)).toBeTruthy();
   });
 
@@ -413,7 +413,7 @@ describe("the end of a run", () => {
     expect(mocked.readShot).toHaveBeenCalledWith(7, "done", 0);
   });
 
-  it("hands a form that stopped over to the user, who finishes in a visible browser and marks the result", async () => {
+  it("hands a form that stopped over to the user, who finishes in their Chrome and marks the result", async () => {
     const user = userEvent.setup();
     show({
       ...idleApply(),
@@ -428,9 +428,9 @@ describe("the end of a run", () => {
       },
     });
     expect(await screen.findByRole("group", { name: "A CAPTCHA is in the way" })).toBeTruthy();
-    expect(screen.getByText(/Open a visible browser on the same profile/)).toBeTruthy();
+    expect(screen.getByText(/Open the form in your Chrome to finish it by hand/)).toBeTruthy();
     expect(await screen.findByRole("img", { name: "What the page looked like" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Open visible browser" }));
+    await user.click(screen.getByRole("button", { name: "Open the form in Chrome" }));
     expect(mocked.openVisible).toHaveBeenCalledWith(7);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Mark as applied" }).hasAttribute("disabled")).toBe(false),
@@ -460,7 +460,7 @@ describe("the end of a run", () => {
     });
     expect(await screen.findByText("Saving...")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Mark as applied" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "Reopen visible browser" })).toBeTruthy();
-    expect(screen.getByText(/The visible browser is open at the form/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show the form again" })).toBeTruthy();
+    expect(screen.getByText(/The form is in front in your Chrome/)).toBeTruthy();
   });
 });

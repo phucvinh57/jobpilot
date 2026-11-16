@@ -1,5 +1,6 @@
 //! A real Chromium with the built JobPilot extension, connected to a bridge on an ephemeral port
-//! (tests only; the tests using it are `#[ignore]`d).
+//! (tests only: the crate's own tests, and integration tests under `tests/` built with the cargo
+//! feature `test-browser`; the tests using it are `#[ignore]`d).
 //!
 //! It builds nothing: the extension must already be built at `<repo>/extension/dist`
 //! (`bun run ext:build`). The browser is `JOBPILOT_CHROME` or the first Playwright Chromium under
@@ -15,12 +16,12 @@ use super::{Bridge, BridgeConfig, EXTENSION_ID};
 use crate::engine::Secrets;
 
 /// The built extension.
-pub(crate) fn extension_dist() -> PathBuf {
+pub fn extension_dist() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../extension/dist")
 }
 
 /// The Chromium to run, if any.
-pub(crate) fn chromium() -> Option<PathBuf> {
+pub fn chromium() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("JOBPILOT_CHROME") {
         return Some(PathBuf::from(path));
     }
@@ -37,8 +38,8 @@ pub(crate) fn chromium() -> Option<PathBuf> {
 }
 
 /// A browser with the extension, paired with [`bridge`](Self::bridge). Killed when dropped.
-pub(crate) struct TestBrowser {
-    pub(crate) bridge: Bridge,
+pub struct TestBrowser {
+    pub bridge: Bridge,
     child: tokio::process::Child,
     _dirs: tempfile::TempDir,
 }
@@ -49,9 +50,17 @@ impl Drop for TestBrowser {
     }
 }
 
-/// Start the bridge (auto-approving), launch Chromium with the extension and wait until it is
-/// connected. `None` (with a message) when the extension is not built or no Chromium is found.
-pub(crate) async fn launch() -> Option<TestBrowser> {
+/// [`launch_with`] on a new bridge, with the extension not allowed in Incognito (as after a plain
+/// install).
+pub async fn launch() -> Option<TestBrowser> {
+    launch_with(Bridge::new(Secrets::memory()), false).await
+}
+
+/// Start `bridge` (auto-approving, on a free port; pass `core.browser()` to drive the browser through
+/// a `Core`), launch Chromium with the extension and wait until it is connected. `incognito`: the
+/// extension is allowed in Incognito, as if the user had turned that on (private tabs work).
+/// `None` (with a message) when the extension is not built or no Chromium is found.
+pub async fn launch_with(bridge: Bridge, incognito: bool) -> Option<TestBrowser> {
     let dist = extension_dist();
     if !dist.join("manifest.json").is_file() {
         eprintln!("skipped: the extension is not built ({} has no manifest.json; run `bun run ext:build`)", dist.display());
@@ -62,7 +71,6 @@ pub(crate) async fn launch() -> Option<TestBrowser> {
         return None;
     };
 
-    let bridge = Bridge::new(Secrets::memory());
     let config = BridgeConfig { port: 0, auto_approve: true, allowed_origin: format!("chrome-extension://{EXTENSION_ID}") };
     let port = bridge.start_with(config).await.expect("start the bridge");
 
@@ -71,6 +79,12 @@ pub(crate) async fn launch() -> Option<TestBrowser> {
     copy_dir(&dist, &ext).expect("copy the extension");
     std::fs::write(ext.join("config.json"), format!("{{\"port\": {port}}}")).expect("write config.json");
     let profile = dirs.path().join("profile");
+    if incognito {
+        // What the "Allow in Incognito" switch on chrome://extensions stores.
+        let prefs = serde_json::json!({ "extensions": { "settings": { EXTENSION_ID: { "incognito": true } } } });
+        std::fs::create_dir_all(profile.join("Default")).expect("create the profile");
+        std::fs::write(profile.join("Default/Preferences"), prefs.to_string()).expect("write the preferences");
+    }
 
     let mut cmd = tokio::process::Command::new(&chrome);
     cmd.arg("--headless=new")
@@ -90,7 +104,9 @@ pub(crate) async fn launch() -> Option<TestBrowser> {
     let browser = TestBrowser { bridge, child, _dirs: dirs };
 
     for _ in 0..300 {
-        if browser.bridge.status().connected {
+        let status = browser.bridge.status();
+        if status.connected {
+            assert_eq!(status.incognito_allowed, incognito, "the extension's Incognito access: {status:?}");
             return Some(browser);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

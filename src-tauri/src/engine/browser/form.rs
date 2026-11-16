@@ -1,188 +1,129 @@
-//! Browsers for auto-apply: either a managed session (a logged-in profile, launched through the
-//! [`SessionManager`]) or a throwaway profile for ATSes that need no login (Greenhouse, Lever, Ashby).
+//! The browser tab of one application: a tab in the user's own Chrome, opened through the JobPilot
+//! extension ([`Bridge::open`]).
 //!
-//! Both are driven through the same four calls: [`FormBrowser::new_page`], [`is_alive`], [`close`] and
-//! [`is_headless`]. A throwaway profile lives in `<data_dir>/tmp/apply-<tag>/` and is deleted on close,
-//! so no cookies of an application stay behind.
+//! - an ATS that needs a login (a browser session matched it) opens in [`Profile::Signed`], the
+//!   user's normal profile where they are signed in;
+//! - every other form opens in [`Profile::Private`], the JobPilot Incognito window, so no cookies of
+//!   an application stay behind.
 //!
-//! [`is_alive`]: FormBrowser::is_alive
-//! [`close`]: FormBrowser::close
-//! [`is_headless`]: FormBrowser::is_headless
+//! The tab opens in the background JobPilot window (`focus: false`) and has no guard (apply pages
+//! are the job's own form). While JobPilot drives it, JavaScript dialogs the page opens (`alert`,
+//! `confirm`, `beforeunload` after a submit, ...) are accepted at once, since an open dialog blocks
+//! every script call; [`FormBrowser::hand_over`] stops that when the user takes the tab over.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use chromiumoxide::error::CdpError;
-use chromiumoxide::{Browser, Page};
-use futures::StreamExt;
+use anyhow::Result;
+use serde_json::json;
+use tokio::sync::broadcast::error::RecvError;
 
-use super::chrome;
-use super::session::{browser_config, prepare_profile, wait_loaded, NAVIGATE_TIMEOUT};
-use super::{BrowserHandle, SessionManager};
-use crate::engine::Paths;
+use super::bridge::{Bridge, BridgeEvent};
+use super::tab::{OpenOptions, Profile, Tab};
 
-/// A running browser for one application. Cheap to clone; all clones share the browser.
-#[derive(Clone)]
-pub enum FormBrowser {
-    /// A managed session's profile.
-    Session(BrowserHandle),
-    /// A throwaway profile.
-    Temp(TempBrowser),
+/// How long the first load of the form may take.
+const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The tab of one application. Cheap to clone; all clones share the tab.
+#[derive(Clone, Debug)]
+pub struct FormBrowser {
+    tab: Tab,
+    session_id: Option<i64>,
+    /// JobPilot answers the page's dialogs (false once the user took the tab over).
+    driving: Arc<AtomicBool>,
+    /// Chrome stopped letting JobPilot drive the tab (the user cancelled the debugging bar).
+    detached: Arc<AtomicBool>,
 }
 
 impl FormBrowser {
-    /// Launch on a managed session (fails when the profile is already open).
-    pub async fn launch_session(mgr: &SessionManager, session_id: i64, headless: bool) -> Result<Self> {
-        Ok(FormBrowser::Session(mgr.launch(session_id, headless).await?))
-    }
-
-    /// Launch on a throwaway profile named by `tag` (reusing the directory of an earlier launch with
-    /// the same tag, so a headed handoff continues in the profile the headless run used).
-    pub async fn launch_temp(paths: &Paths, tag: &str, headless: bool) -> Result<Self> {
-        Ok(FormBrowser::Temp(TempBrowser::launch(paths, tag, headless).await?))
-    }
-
-    pub fn is_headless(&self) -> bool {
-        match self {
-            FormBrowser::Session(h) => h.is_headless(),
-            FormBrowser::Temp(t) => t.inner.headless,
+    /// Open `url` in a background tab and wait (at most 30 s) for it to load: the user's signed-in
+    /// profile when `session_id` is set (a browser session covers the ATS), else the JobPilot
+    /// Incognito window. Fails with a [`BridgeError`](super::BridgeError) when the extension is not
+    /// connected or may not open Incognito tabs.
+    pub async fn open(bridge: &Bridge, url: &str, session_id: Option<i64>, focus: bool) -> Result<Self> {
+        let profile = if session_id.is_some() { Profile::Signed } else { Profile::Private };
+        // Subscribed before the tab exists, so a dialog during the first load is seen too.
+        let events = bridge.subscribe();
+        let tab = bridge.open(url, OpenOptions { profile, focus, guard: None }).await?;
+        let browser = FormBrowser {
+            tab,
+            session_id,
+            driving: Arc::new(AtomicBool::new(!focus)),
+            detached: Arc::new(AtomicBool::new(false)),
+        };
+        tokio::spawn(watch(browser.clone(), events));
+        tracing::info!(tab = browser.tab.id(), ?profile, "apply: form tab opened");
+        if !focus {
+            browser.tab.wait_loaded(LOAD_TIMEOUT).await;
         }
+        Ok(browser)
+    }
+
+    /// The tab, to drive it.
+    pub fn tab(&self) -> &Tab {
+        &self.tab
     }
 
     pub fn session_id(&self) -> Option<i64> {
-        match self {
-            FormBrowser::Session(h) => Some(h.session_id()),
-            FormBrowser::Temp(_) => None,
-        }
+        self.session_id
     }
 
-    /// Is the Chrome process still running (false after the user closed the window)?
-    pub async fn is_alive(&self) -> bool {
-        match self {
-            FormBrowser::Session(h) => h.is_alive().await,
-            FormBrowser::Temp(t) => t.is_alive().await,
-        }
+    /// Can JobPilot still drive the tab (false after the user closed it, or stopped the debugging)?
+    pub fn is_alive(&self) -> bool {
+        self.tab.is_open() && !self.detached.load(Ordering::SeqCst)
     }
 
-    /// Open `url` in a new tab and wait for it to load.
-    pub async fn new_page(&self, url: &str) -> Result<Page> {
-        match self {
-            FormBrowser::Session(h) => h.new_page(url).await,
-            FormBrowser::Temp(t) => t.new_page(url).await,
-        }
+    /// Is the tab still open (the user may finish the form there)?
+    pub fn is_open(&self) -> bool {
+        self.tab.is_open()
     }
 
-    /// Close the browser and release its profile. Idempotent.
+    /// The user takes the tab over: JobPilot no longer answers its dialogs.
+    pub fn hand_over(&self) {
+        self.driving.store(false, Ordering::SeqCst);
+    }
+
+    /// Bring the tab and its window to the front.
+    pub async fn focus(&self) -> Result<()> {
+        self.tab.focus().await
+    }
+
+    /// Close the tab. Idempotent.
     pub async fn close(&self) {
-        match self {
-            FormBrowser::Session(h) => {
-                let _ = h.close().await;
-            }
-            FormBrowser::Temp(t) => t.close().await,
-        }
+        self.hand_over();
+        self.tab.close().await;
     }
 }
 
-/// A Chrome on a throwaway profile directory.
-#[derive(Clone)]
-pub struct TempBrowser {
-    inner: Arc<TempInner>,
-}
-
-struct TempInner {
-    headless: bool,
-    dir: PathBuf,
-    browser: tokio::sync::Mutex<Option<Browser>>,
-    handler_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    closed: AtomicBool,
-}
-
-impl Drop for TempInner {
-    fn drop(&mut self) {
-        if let Some(task) = self.handler_task.get_mut().unwrap_or_else(|e| e.into_inner()).take() {
-            task.abort();
-        }
-    }
-}
-
-impl TempBrowser {
-    async fn launch(paths: &Paths, tag: &str, headless: bool) -> Result<Self> {
-        let chrome = chrome::resolve(paths)
-            .context("Chrome not found: install Chrome/Chromium or download the browser in Settings")?;
-        let tag: String = tag.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
-        let dir = paths.data_dir.join("tmp").join(format!("apply-{tag}"));
-        prepare_profile(&dir)?;
-        let dir = std::fs::canonicalize(&dir).with_context(|| format!("resolving {}", dir.display()))?;
-
-        let start_url = (!headless).then_some("about:blank");
-        let config = browser_config(&chrome.path, &dir, headless, start_url)?;
-        let (browser, mut handler) = Browser::launch(config)
-            .await
-            .with_context(|| format!("launching {}", chrome.path.display()))?;
-        let handler_task = tokio::spawn(async move {
-            while let Some(event) = handler.next().await {
-                match event {
-                    Ok(()) => {}
-                    Err(CdpError::Ws(_)) | Err(CdpError::Io(_)) => break,
-                    Err(e) => tracing::debug!("chromiumoxide: {e}"),
+/// Until the tab closes: accept the dialogs it opens while JobPilot drives it, and note when Chrome
+/// stops letting JobPilot drive it.
+async fn watch(browser: FormBrowser, mut events: tokio::sync::broadcast::Receiver<BridgeEvent>) {
+    let id = browser.tab.id();
+    loop {
+        let event = tokio::select! {
+            _ = browser.tab.closed() => return,
+            event = events.recv() => event,
+        };
+        match event {
+            Ok(BridgeEvent::Dialog { tab, kind, .. }) if tab == id => {
+                if !browser.driving.load(Ordering::SeqCst) {
+                    continue;
+                }
+                // The message is page text: never logged.
+                tracing::info!(tab, kind = kind.as_str(), "apply: accepting a page dialog");
+                let answer = json!({ "accept": true, "promptText": "" });
+                if let Err(e) = browser.tab.cdp("Page.handleJavaScriptDialog", answer).await {
+                    tracing::warn!(tab, "apply: the page dialog could not be answered: {e:#}");
                 }
             }
-        });
-        Ok(TempBrowser {
-            inner: Arc::new(TempInner {
-                headless,
-                dir,
-                browser: tokio::sync::Mutex::new(Some(browser)),
-                handler_task: Mutex::new(Some(handler_task)),
-                closed: AtomicBool::new(false),
-            }),
-        })
-    }
-
-    async fn is_alive(&self) -> bool {
-        let mut guard = self.inner.browser.lock().await;
-        match guard.as_mut() {
-            None => false,
-            Some(b) => matches!(b.try_wait(), Ok(None)),
-        }
-    }
-
-    async fn new_page(&self, url: &str) -> Result<Page> {
-        let guard = self.inner.browser.lock().await;
-        let browser = guard.as_ref().context("the browser is closed")?;
-        let page = browser.new_page("about:blank").await.context("opening a tab")?;
-        drop(guard);
-        page.goto(url).await.with_context(|| format!("navigating to {url}"))?;
-        wait_loaded(&page, NAVIGATE_TIMEOUT).await;
-        Ok(page)
-    }
-
-    async fn close(&self) {
-        let browser = self.inner.browser.lock().await.take();
-        self.inner.closed.store(true, Ordering::SeqCst);
-        if let Some(mut browser) = browser {
-            let _ = tokio::time::timeout(Duration::from_secs(5), async {
-                let _ = browser.close().await;
-                let _ = browser.wait().await;
-            })
-            .await;
-            if matches!(browser.try_wait(), Ok(None)) {
-                let _ = browser.kill().await;
+            Ok(BridgeEvent::Detached { tab, .. }) if tab == id => {
+                tracing::warn!(tab, "apply: the browser stopped letting JobPilot drive the form tab");
+                browser.detached.store(true, Ordering::SeqCst);
             }
-        }
-        if let Some(task) = self.inner.handler_task.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            task.abort();
-        }
-        // Chrome may still be flushing files for a moment.
-        for _ in 0..5 {
-            match std::fs::remove_dir_all(&self.inner.dir) {
-                Ok(()) => return,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-                Err(_) => tokio::time::sleep(Duration::from_millis(200)).await,
-            }
+            Ok(BridgeEvent::TabClosed(tab)) if tab == id => return,
+            Ok(_) | Err(RecvError::Lagged(_)) => {}
+            Err(RecvError::Closed) => return,
         }
     }
 }

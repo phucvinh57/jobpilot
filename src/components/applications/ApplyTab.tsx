@@ -1,8 +1,9 @@
 // The Apply tab: where the application goes, then review -> confirm -> submit. The form is opened and
-// filled by a managed browser; the user reads every answer first and nothing is sent until they press
-// Submit (the primary button of the screen). A form that stops (login, captcha, a field the run cannot
-// fill) is handed to the user in a visible browser. When automation fails altogether, the user saves the
-// CV as a PDF, applies on the site and marks the application as applied.
+// filled in a background tab of the user's own Chrome (through the JobPilot extension); the user reads
+// every answer first and nothing is sent until they press Submit (the primary button of the screen). A
+// form that stops (login, captcha, a field the run cannot fill) is handed to the user: its tab comes to
+// the front with the answers so far. When automation fails altogether, the user saves the CV as a PDF,
+// applies on the site and marks the application as applied.
 
 import clsx from "clsx";
 import { Check } from "lucide-react";
@@ -154,7 +155,7 @@ function Working({ working, lines }: { working: ApplyWorking; lines: string[] })
           </li>
         ))}
       </ul>
-      <Caption>A headless browser is working on the form. This can take up to a minute.</Caption>
+      <Caption>JobPilot is filling the form in a background tab of your Chrome. This can take up to a minute.</Caption>
     </Card>
   );
 }
@@ -186,12 +187,12 @@ function Handoff({
       <Banner tone="warn" title={handoff.title} body={handoff.reason} />
       <p className="text-body text-muted">
         {handoff.headed
-          ? "The visible browser is open at the form (your earlier answers were filled in again where possible). Finish and submit there, then mark the result below."
-          : "Open a visible browser on the same profile to finish by hand, then mark the result."}
+          ? "The form is in front in your Chrome, with the answers filled in so far. Finish and submit there, then mark the result below."
+          : "Open the form in your Chrome to finish it by hand, then mark the result."}
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Button id="open-visible" busy={opening} disabled={busy} onClick={session.openVisible}>
-          {handoff.headed ? "Reopen visible browser" : "Open visible browser"}
+          {handoff.headed ? "Show the form again" : "Open the form in Chrome"}
         </Button>
         <ExportCvButton apply={apply} session={session} />
         <Button id="mark-applied" disabled={busy} onClick={() => session.mark(true)}>

@@ -19,8 +19,8 @@
 //! let rx = runtime::spawn(async move { mgr.check(id).await });
 //! ```
 //!
-//! Auto-apply launches automation browsers with [`SessionManager::launch`] and drives the returned
-//! [`BrowserHandle`] (`new_page(url)` -> `chromiumoxide::Page`, `cookies()`, `close()`).
+//! Auto-apply opens one tab per application in the user's Chrome ([`form`]: [`FormBrowser`] around a
+//! [`Tab`]).
 
 pub mod bridge;
 pub mod challenge;
