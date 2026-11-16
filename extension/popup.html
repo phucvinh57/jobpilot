@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>JobPilot</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>JobPilot</h1>
+    <p id="state" role="status">Not connected</p>
+    <p id="code" class="code" aria-label="Pairing code" hidden></p>
+    <p id="reason" class="muted" hidden></p>
+    <form id="port-form">
+      <label for="port">App port</label>
+      <div class="row">
+        <input id="port" type="text" inputmode="numeric" autocomplete="off" />
+        <button id="port-save" type="submit">Save</button>
+      </div>
+      <p id="port-message" class="muted" aria-live="polite"></p>
+    </form>
+    <p id="incognito" class="hint" hidden>
+      Allow in Incognito on chrome://extensions so JobPilot can read job pages without your logins.
+    </p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

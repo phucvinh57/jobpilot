@@ -47,9 +47,13 @@ Token values never appear in logs on either side.
 `{"type":"result","id":<u64>,"result":<value>}` or
 `{"type":"error","id":<u64>,"error":{"code":"<code>","message":"<text>"}}`.
 
-Error codes: `not_owned` (a tab the extension did not open, or one already closed), `not_allowed` (a CDP
-method outside the allowlist), `incognito_not_allowed`, `bad_params`, `cdp` (Chrome refused; `message`
-is Chrome's text), `internal`.
+Error codes: `not_owned` (a tab the extension did not open), `not_allowed` (a CDP method outside the
+allowlist), `incognito_not_allowed`, `bad_params` (also an unknown method), `cdp` (Chrome refused;
+`message` is Chrome's text), `internal` (also a call before `welcome`: "not paired").
+
+Calls run concurrently in the extension. **On a guarded tab, `tab.open` and `tab.navigate` only return
+once the app has answered the `requestPaused` of the main document**, so the app must keep handling
+events and other calls while one is pending.
 
 Tabs are numbers (`chrome.tabs` ids). **The extension acts only on tabs it opened itself** (an
 owned-tab set, kept in `chrome.storage.session` so it survives a service-worker restart). It never
@@ -61,7 +65,7 @@ reads, lists or touches any other tab of the user.
 | `tab.navigate` | `{"tab", "url"}` | `{}` (or error `cdp` with Chrome's `errorText`) |
 | `tab.info` | `{"tab"}` | `{"url": string, "title": string, "loading": bool}` |
 | `tab.focus` | `{"tab"}` | `{}` |
-| `tab.close` | `{"tab"}` | `{}` (closing a tab that is already gone is not an error) |
+| `tab.close` | `{"tab"}` | `{}` (closing an owned tab that is already gone is not an error) |
 | `tab.closeAll` | `{}` | `{}` |
 | `cdp.send` | `{"tab", "method": string, "params": object, "session"?: string}` | Chrome's result object |
 | `cookies.domains` | `{"domain": string, "private": bool}` | `{"domains": [string]}` |
@@ -72,8 +76,10 @@ reads, lists or touches any other tab of the user.
    else a normal window): created with `chrome.windows.create({url:"about:blank", incognito, focused:
    focus, width:1280, height:800})` and remembered in `chrome.storage.session`. If `private` and the
    extension is not allowed in incognito: error `incognito_not_allowed`.
-2. Create the tab `about:blank` in that window (`active: true`), add it to a tab group titled
-   "JobPilot" (grey) in that window, add it to the owned set.
+2. Create the tab `about:blank` in that window (`active: true`) — or, for a window just created, use its
+   first tab — add it to a tab group titled "JobPilot" (grey) in that window, add it to the owned set.
+   If a later step fails, the tab is closed again (a `tabClosed` may arrive for an id the app never
+   saw).
 3. `chrome.debugger.attach({tabId}, "1.3")`, then send:
    `Emulation.setAutomationOverride {enabled:true}` (sites can see the page is automated:
    `navigator.webdriver` is true; JobPilot never hides automation),
@@ -84,7 +90,8 @@ reads, lists or touches any other tab of the user.
 6. If `focus`: focus the window and the tab. Return without waiting for the load; the app polls
    `document.readyState` with `Runtime.evaluate`.
 
-`url` must be `http:`, `https:` or `about:blank`; anything else is `bad_params`.
+`url` must be `http:`, `https:` or `about:blank`; anything else is `bad_params`. The same rule applies
+to `tab.navigate` and to `Page.navigate` sent through `cdp.send`.
 
 ### `tab.focus`
 
@@ -129,20 +136,22 @@ the browser.**
 
 A per-tab proxy is impossible from an extension, so for a `guard: true` tab:
 
-1. **Literal hosts, in the extension.** A `declarativeNetRequest` *session* rule scoped to `tabIds:
-   [tab]` blocks every request whose host is `localhost`, `*.localhost`, `*.local`, `*.internal`, an
+1. **Literal hosts, in the extension.** Three `declarativeNetRequest` *session* rules (ids 1–3: names,
+   IPv4, IPv6 — one regex for all is over Chrome's regex memory limit) whose `tabIds` are all guarded
+   tabs (rebuilt when one opens or closes, removed when none is left) block every request whose host is `localhost`, `*.localhost`, `local`, `*.local`, `internal`, `*.internal`, an
    IPv4 literal in `0.0.0.0/8 10/8 100.64/10 127/8 169.254/16 172.16/12 192.168/16 198.18/15 224/4
    240/4` or an IPv6 literal (`[::1]`, `[fc..]`, `[fd..]`, `[fe80..]`, `[::ffff:..]`, `[::]`). The rule
    is removed when the tab closes.
 2. **Every other request, in the app.** `Fetch.enable {patterns:[{urlPattern:"*",requestStage:"Request"}]}`
    on the tab, and `Target.setAutoAttach {autoAttach:true, waitForDebuggerOnStart:true, flatten:true}`
    so iframes in other processes and workers are attached too; on `Target.attachedToTarget` the
-   extension sends `Fetch.enable` (same patterns) to the child session, then
-   `Runtime.runIfWaitingForDebugger`. Each `Fetch.requestPaused` becomes a `requestPaused` event; the
+   extension sends `Fetch.enable` (same patterns) and `Target.setAutoAttach` (nested frames) to the child
+   session, then `Runtime.runIfWaitingForDebugger`. Each `Fetch.requestPaused` becomes a `requestPaused` event; the
    app resolves the host with the `net::http` public-host rules and answers with
    `cdp.send Fetch.continueRequest {requestId}` or `Fetch.failRequest {requestId,
-   errorReason:"BlockedByClient"}` on the same `session`. The extension sends nothing on its own:
-   an unanswered request simply stays paused.
+   errorReason:"BlockedByClient"}` on the same `session`. The extension sends nothing on its own while
+   connected: an unanswered request stays paused. A request paused while the app is not connected is
+   failed at once.
 
 The guard is weaker than the old forward proxy (Chrome resolves the name again after the app checked
 it, and a service worker that is not attached is not covered); the literal rule and Chrome's own

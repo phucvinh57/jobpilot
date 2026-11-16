@@ -1,4 +1,4 @@
-// Lint + format of the web app, and its import rules:
+// Lint + format of the web app and the Chrome extension (`extension/`), and the web app's import rules:
 //   - only `src/api/` talks to Tauri: `@tauri-apps/*` and `src/api/bridge.ts` are imported there
 //     only; everything else calls the typed functions in `src/api/<feature>.ts` and subscribes to
 //     events through `src/api/events.ts`
@@ -10,7 +10,16 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "includes": ["src/**", "*.ts", "*.json", "*.jsonc", "!src/styles.css", "!components.json"]
+    "includes": [
+      "src/**",
+      "extension/**",
+      "!extension/**/*.md",
+      "*.ts",
+      "*.json",
+      "*.jsonc",
+      "!src/styles.css",
+      "!components.json"
+    ]
   },
   "formatter": {
     "enabled": true,

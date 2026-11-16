@@ -21,7 +21,7 @@ export default defineConfig({
   build: { target: "es2022", outDir: "dist", emptyOutDir: true },
   test: {
     environment: "jsdom",
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "extension/src/**/*.test.ts"],
     setupFiles: ["src/test/setup.ts"],
     restoreMocks: true,
   },
