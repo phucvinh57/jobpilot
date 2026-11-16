@@ -3,7 +3,7 @@
 // `notifyChanged` once it ended, whether it succeeded or not (a failed job still moved the header).
 
 import { toCommandError, type CommandError, type Problem } from "@/lib/problem";
-import { invoke, listen, notifyChanged } from "./bridge";
+import { invoke, listen, notifyChanged, pickSavePath } from "./bridge";
 
 import type {
   Apply,
@@ -207,6 +207,16 @@ export function openVisible(id: number): Promise<void> {
 /** "Mark as applied / failed" after finishing by hand. */
 export function markApply(id: number, applied: boolean): Promise<void> {
   return job(() => invoke<void>("applications_apply_mark", { id, applied }));
+}
+
+/** "Save CV as PDF": the save dialog, then a copy of the rendered CV. `false` when the user cancelled. */
+export async function exportCv(id: number, fileName: string): Promise<boolean> {
+  const path = await pickSavePath("Save CV as PDF", fileName, [{ name: "PDF", extensions: ["pdf"] }]);
+  if (path === null) {
+    return false;
+  }
+  await invoke<void>("applications_cv_export", { id, path });
+  return true;
 }
 
 /** Save the apply URL the user typed. */

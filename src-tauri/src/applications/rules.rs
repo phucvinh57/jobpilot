@@ -544,6 +544,27 @@ pub fn next_job_offered(status: Status, apply: &ApplyUi) -> bool {
 }
 
 /// The application was sent: it is read-only now.
+/// The user may send the application by hand and mark it as applied: the CV is approved (or an earlier
+/// try was marked failed) and nothing was sent yet.
+pub fn can_submit_manually(status: Status) -> bool {
+    matches!(status, Status::CvReady | Status::Failed)
+}
+
+/// The file name offered when the CV is saved as a PDF: `CV - <company>.pdf`, without characters a
+/// file system may refuse.
+pub fn cv_export_name(company: &str) -> String {
+    let clean: String = company
+        .chars()
+        .map(|c| if c.is_control() || r#"/\:*?"<>|"#.contains(c) { ' ' } else { c })
+        .collect();
+    let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.is_empty() {
+        "CV.pdf".into()
+    } else {
+        format!("CV - {clean}.pdf")
+    }
+}
+
 pub fn is_sent(status: Status) -> bool {
     matches!(
         status,
@@ -2014,5 +2035,21 @@ mod tests {
             "boards.greenhouse.io"
         );
         assert_eq!(host("the site"), "the site");
+    }
+
+    #[test]
+    fn manual_submit_needs_an_approved_unsent_cv() {
+        assert!(can_submit_manually(Status::CvReady));
+        assert!(can_submit_manually(Status::Failed));
+        for s in [Status::Draft, Status::Submitting, Status::Applied, Status::Interview, Status::Dismissed] {
+            assert!(!can_submit_manually(s), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn cv_export_name_is_a_safe_file_name() {
+        assert_eq!(cv_export_name("Acme"), "CV - Acme.pdf");
+        assert_eq!(cv_export_name("A/B: \"C\""), "CV - A B C.pdf");
+        assert_eq!(cv_export_name("  "), "CV.pdf");
     }
 }

@@ -193,6 +193,26 @@ describe("before a form is open", () => {
     expect(screen.queryByRole("alert", { name: "The application step failed" })).toBeNull();
   });
 
+  it("lets the user apply by hand: save the CV as a PDF, then mark it as applied", async () => {
+    const user = userEvent.setup();
+    mocked.exportCv.mockResolvedValue(true);
+    show(idleApply());
+    await user.click(await screen.findByRole("button", { name: "Save CV as PDF" }));
+    expect(mocked.exportCv).toHaveBeenCalledWith(7, "CV - Acme.pdf");
+    expect(await screen.findByRole("status", { name: "CV saved as PDF" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open apply page" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Mark as applied" }));
+    expect(mocked.markApply).toHaveBeenCalledWith(7, true);
+  });
+
+  it("offers no manual submit before the CV is approved, nor after it was sent", async () => {
+    const base = idleApply();
+    show({ ...base, idle: base.idle && { ...base.idle, canSubmitManually: false } });
+    expect(await screen.findByRole("checkbox", { name: /Dry run/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save CV as PDF" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Mark as applied" })).toBeNull();
+  });
+
   it("offers Retry for a retryable failure", async () => {
     const user = userEvent.setup();
     const network = new CommandError("connection refused", {

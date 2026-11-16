@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAction, useQuery } from "@/hooks/useAsync";
+import { useErrorToast } from "@/hooks/useErrorToast";
+import { toast } from "@/stores/toast";
 import type { CommandError } from "@/lib/problem";
 
 import {
   confirmApply,
   discardApply,
+  exportCv,
   markApply,
   onApplyProgress,
   openVisible,
@@ -43,6 +46,9 @@ export interface ApplySession {
   discard: () => void;
   openVisible: () => void;
   mark: (applied: boolean) => void;
+  /** "Save CV as PDF": the save dialog, then a copy of the rendered CV (to send it by hand). */
+  exportCv: () => void;
+  exporting: boolean;
   saveUrl: (url: string) => void;
   setDryRun: (on: boolean) => void;
 }
@@ -110,6 +116,14 @@ export function useApplySession(id: number, onPrimary: (primary: Primary | null)
   const discardAction = useAction(() => discardApply(id));
   const visibleAction = useAction(() => openVisible(id));
   const markAction = useAction((applied: boolean) => markApply(id, applied));
+  const exportAction = useAction(async () => {
+    const fileName = apply?.cvFile;
+    if (fileName != null && (await exportCv(id, fileName))) {
+      toast.ok("CV saved as PDF", fileName);
+    }
+  });
+  useErrorToast(exportAction.error, { title: "The CV could not be saved", clear: exportAction.clearError });
+  useErrorToast(markAction.error, { title: "The application could not be marked", clear: markAction.clearError });
   const urlAction = useAction((url: string) => saveApplyUrl(id, url));
   const dryAction = useAction(async (on: boolean) => {
     await setDryRun(on);
@@ -153,6 +167,8 @@ export function useApplySession(id: number, onPrimary: (primary: Primary | null)
     discard: () => void discardAction.run(),
     openVisible: () => void visibleAction.run(),
     mark: (applied) => void markAction.run(applied),
+    exportCv: () => void exportAction.run(),
+    exporting: exportAction.busy,
     saveUrl: (url) => void urlAction.run(url),
     setDryRun: (on) => void dryAction.run(on),
   };

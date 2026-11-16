@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use super::files::CvFiles;
 use super::rules::{
-    activity_text, activity_tone, activity_when, age_label, board, card_title, current_value,
+    activity_text, activity_tone, activity_when, age_label, board, can_submit_manually, card_title, current_value, cv_export_name,
     dismissible, field_input, file_name, host, is_sent, marks_for, newest_first, next_action, next_job_offered,
     outcome_for, parse_gaps, placeholder, primary_for, requirements, review_body, review_notice,
     review_title, round_options, row_text, session_line, short_urls, source_tag, stage_for,
@@ -552,6 +552,8 @@ pub struct IdleDto {
     pub dry_run_forced: bool,
     /// A confirmation screenshot of the sent application exists.
     pub has_proof: bool,
+    /// The user may apply by hand (save the CV as a PDF, send it on the site) and mark it as applied.
+    pub can_submit_manually: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -660,6 +662,8 @@ pub struct ApplyDto {
     pub can_retry: bool,
     /// A short action is running (`Closing the browser...`).
     pub busy: Option<&'static str>,
+    /// The file name offered by "Save CV as PDF"; `None` while there is no rendered CV.
+    pub cv_file: Option<String>,
 }
 
 fn row_dto(row: &apply::Row, view: &ApplyView) -> RowDto {
@@ -765,6 +769,7 @@ pub fn apply_dto(core: &Core, app: &Application, view: &ApplyView, dry_run: bool
         error: view.error.clone().map(CommandError::new),
         can_retry: matches!(view.phase, Phase::Idle),
         busy: view.busy,
+        cv_file: super::files::pdf_is_current(app).then(|| cv_export_name(&app.company)),
     };
     match &view.phase {
         Phase::Review if view.review.is_some() => ApplyDto {
@@ -824,6 +829,7 @@ pub fn apply_dto(core: &Core, app: &Application, view: &ApplyView, dry_run: bool
                     dry_run: dry_run || info.dry_run_forced,
                     dry_run_forced: info.dry_run_forced,
                     has_proof: applied && apply::latest_proof(core, &app.slug).is_some(),
+                    can_submit_manually: can_submit_manually(app.status),
                 }),
                 ..base
             }

@@ -24,7 +24,7 @@ use super::dto::{
     JdDto, PrimaryDto, ProgressDto, RenderedDto, TimelineDto, ACTIVITY_ROWS,
 };
 use super::files::{self, generate_plan, GeneratePlan};
-use super::rules::{dismissible, marks_for, ApplyUi, Mark};
+use super::rules::{can_submit_manually, dismissible, marks_for, ApplyUi, Mark};
 use super::state::{Applications, Confirm, Job, Phase};
 use crate::shared::events::{data_changed, emit, Scope};
 use crate::shared::{run, run_sync, CommandError, CommandResult, DismissedDto, RestoredDto};
@@ -666,11 +666,47 @@ pub async fn applications_apply_mark(
     applied: bool,
 ) -> CommandResult<()> {
     let (core, state) = handles(&core, &state);
+    let handoff = state.with_apply(id, |v| matches!(v.phase, Phase::Handoff { .. }));
+    if !handoff {
+        // The user applied on the site by hand: only for an approved, unsent CV. A failure here is the
+        // mark's own (a toast without Retry), not the form run's: it never goes into the Apply view.
+        let check = core.clone();
+        let status = run_sync(move || Ok(require_application(&check, id)?.status)).await?;
+        if !can_submit_manually(status) {
+            return Err(CommandError::new("approve the CV before marking the application as sent"));
+        }
+    }
     state.with_apply(id, |v| v.busy = Some("Saving..."));
     data_changed(&app, Scope::Applications);
     let result = run(async move { apply::finish_manually(&core, id, applied).await }).await;
-    state.with_apply(id, |v| v.finish_mark(result.map_err(|e| e.message)));
-    Ok(())
+    if handoff {
+        state.with_apply(id, |v| v.finish_mark(result.map_err(|e| e.message)));
+        return Ok(());
+    }
+    state.with_apply(id, |v| v.finish_mark(Ok(())));
+    data_changed(&app, Scope::Applications);
+    result
+}
+
+/// "Save CV as PDF": copy the rendered `cv.pdf` to the path the user chose in the save dialog.
+#[tauri::command]
+pub async fn applications_cv_export(core: State<'_, Arc<Core>>, id: i64, path: String) -> CommandResult<()> {
+    let core = core.inner().clone();
+    run_sync(move || {
+        let app = require_application(&core, id)?;
+        if !files::pdf_is_current(&app) {
+            bail!("the CV PDF is missing or older than the last edit: save the CV again to render it");
+        }
+        let from = app.cv_pdf_path();
+        let mut to = std::path::PathBuf::from(path);
+        if !to.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+            to.as_mut_os_string().push(".pdf");
+        }
+        std::fs::copy(&from, &to).with_context(|| format!("saving the CV to {}", to.display()))?;
+        tracing::info!(app = id, "cv exported as pdf");
+        Ok(())
+    })
+    .await
 }
 
 /// Save the apply URL the user typed (http/https only).
@@ -718,6 +754,7 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         applications_get,
         applications_set_round,
         applications_mark,
+        applications_cv_export,
         applications_dismiss,
         applications_restore,
         applications_generate,

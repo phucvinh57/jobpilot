@@ -5,7 +5,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 
 import { toCommandError } from "@/lib/problem";
 
@@ -49,6 +49,16 @@ export interface FileFilter {
 /** The native file picker: the chosen path, or `null` when the user cancelled. */
 export async function pickFile(title: string, filters: FileFilter[] = []): Promise<string | null> {
   const picked = await openDialog({ title, filters, multiple: false, directory: false });
+  return typeof picked === "string" ? picked : null;
+}
+
+/** The native save dialog: the chosen path, or `null` when the user cancelled. */
+export async function pickSavePath(
+  title: string,
+  defaultPath: string,
+  filters: FileFilter[] = [],
+): Promise<string | null> {
+  const picked = await saveDialog({ title, defaultPath, filters });
   return typeof picked === "string" ? picked : null;
 }
 

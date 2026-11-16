@@ -1,7 +1,8 @@
 // The Apply tab: where the application goes, then review -> confirm -> submit. The form is opened and
 // filled by a managed browser; the user reads every answer first and nothing is sent until they press
 // Submit (the primary button of the screen). A form that stops (login, captcha, a field the run cannot
-// fill) is handed to the user in a visible browser.
+// fill) is handed to the user in a visible browser. When automation fails altogether, the user saves the
+// CV as a PDF, applies on the site and marks the application as applied.
 
 import clsx from "clsx";
 import { Check } from "lucide-react";
@@ -20,6 +21,7 @@ import {
   TextInput,
 } from "@/components/ui/kit";
 import { LoadError } from "@/components/ProblemHelp";
+import { openLink } from "@/api/shell";
 import { TONE_CLASS } from "@/lib/tokens";
 
 import type { Apply, ApplyDone, ApplyHandoff, ApplyIdle, ApplyWorking } from "@/types/applications";
@@ -60,6 +62,45 @@ function UrlLine({ idle, session }: { idle: ApplyIdle; session: ApplySession }) 
   );
 }
 
+/** "Save CV as PDF", disabled while there is no current rendered CV. */
+function ExportCvButton({ apply, session }: { apply: Apply; session: ApplySession }) {
+  return (
+    <Button
+      id="export-cv"
+      busy={session.exporting}
+      disabled={apply.cvFile === null || session.exporting}
+      onClick={session.exportCv}
+    >
+      Save CV as PDF
+    </Button>
+  );
+}
+
+/** Applying by hand when the managed browser cannot: save the CV, send it on the site, mark it. */
+function Manual({ idle, apply, session }: { idle: ApplyIdle; apply: Apply; session: ApplySession }) {
+  const busy = apply.busy !== null || session.busy;
+  const url = idle.applyUrl;
+  return (
+    <Section title="Submit it yourself" hint="When the form cannot be filled automatically">
+      <p className="text-body text-muted">
+        Save the CV as a PDF, send the application on the job's site, then mark it as applied so replies are tracked.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <ExportCvButton apply={apply} session={session} />
+        {url !== null && (
+          <Button id="open-apply-url" onClick={() => openLink(url)}>
+            Open apply page
+          </Button>
+        )}
+        <Button id="mark-applied" disabled={busy} onClick={() => session.mark(true)}>
+          Mark as applied
+        </Button>
+        {apply.busy !== null && <Caption>{apply.busy}</Caption>}
+      </div>
+    </Section>
+  );
+}
+
 function Idle({ id, idle, apply, session }: { id: number; idle: ApplyIdle; apply: Apply; session: ApplySession }) {
   return (
     <div className="flex flex-col gap-3">
@@ -82,6 +123,7 @@ function Idle({ id, idle, apply, session }: { id: number; idle: ApplyIdle; apply
           {idle.dryRunForced && <Caption>JOBPILOT_DRY_RUN is set: submitting is disabled.</Caption>}
         </>
       )}
+      {!idle.applied && idle.canSubmitManually && <Manual idle={idle} apply={apply} session={session} />}
       {idle.hasProof && <Screenshots id={id} kind="proof" count={1} version={apply.generation} title="Confirmation" />}
     </div>
   );
@@ -151,6 +193,7 @@ function Handoff({
         <Button id="open-visible" busy={opening} disabled={busy} onClick={session.openVisible}>
           {handoff.headed ? "Reopen visible browser" : "Open visible browser"}
         </Button>
+        <ExportCvButton apply={apply} session={session} />
         <Button id="mark-applied" disabled={busy} onClick={() => session.mark(true)}>
           Mark as applied
         </Button>

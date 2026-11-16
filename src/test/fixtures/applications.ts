@@ -228,6 +228,7 @@ export function idleApply(over: Partial<Apply> = {}): Apply {
       dryRun: false,
       dryRunForced: false,
       hasProof: false,
+      canSubmitManually: true,
     },
     working: null,
     review: null,
@@ -236,6 +237,7 @@ export function idleApply(over: Partial<Apply> = {}): Apply {
     error: null,
     canRetry: true,
     busy: null,
+    cvFile: "CV - Acme.pdf",
     ...over,
   };
 }

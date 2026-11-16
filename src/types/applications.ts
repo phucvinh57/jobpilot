@@ -204,6 +204,8 @@ export interface ApplyIdle {
   dryRun: boolean;
   dryRunForced: boolean;
   hasProof: boolean;
+  /** The user may apply by hand (save the CV as a PDF, send it on the site) and mark it as applied. */
+  canSubmitManually: boolean;
 }
 
 export interface ApplyWorking {
@@ -294,6 +296,8 @@ export interface Apply {
   canRetry: boolean;
   /** A short action is running (`Closing the browser...`). */
   busy: string | null;
+  /** The file name offered by "Save CV as PDF"; `null` while there is no rendered CV. */
+  cvFile: string | null;
 }
 
 /** Which screenshot of a run: the confirmation of a sent application, the filled form, the page a
