@@ -206,11 +206,46 @@ async fn ingest_file(path: &Path) -> Result<JdText> {
 /// `pdf-extract` panics on some malformed files; turn that into an error.
 pub(crate) fn pdf_text(bytes: &[u8]) -> Result<String> {
     let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(bytes));
-    match result {
-        Ok(Ok(text)) => Ok(text),
+    let text = match result {
+        Ok(Ok(text)) => text,
         Ok(Err(e)) => bail!("could not read the PDF: {e}"),
         Err(_) => bail!("could not read the PDF (unsupported or corrupt file)"),
+    };
+    let links = pdf_links(bytes);
+    // A PDF without readable text stays "nothing to analyse": links alone are not a document.
+    if links.is_empty() || text.trim().chars().count() < MIN_TEXT_CHARS {
+        return Ok(text);
     }
+    let list: String = links.iter().map(|l| format!("\n- {l}")).collect();
+    Ok(format!("{text}\n\nLinks in this document:{list}\n"))
+}
+
+/// Web links a PDF holds as clickable annotations (a CV often shows `phucvinh57` or a project
+/// name and keeps the URL behind it), in page order, once each. Best effort: none on any error.
+pub(crate) fn pdf_links(bytes: &[u8]) -> Vec<String> {
+    use pdf_extract::{Document, Object};
+    let found = std::panic::catch_unwind(|| {
+        let Ok(doc) = Document::load_mem(bytes) else { return Vec::new() };
+        let deref = |o: &Object| doc.dereference(o).map(|(_, o)| o.clone()).ok();
+        let mut links: Vec<String> = Vec::new();
+        for page in doc.get_pages().into_values() {
+            for annot in doc.get_page_annotations(page).unwrap_or_default() {
+                let uri = annot
+                    .get(b"A")
+                    .ok()
+                    .and_then(deref)
+                    .and_then(|a| a.as_dict().ok().and_then(|d| d.get(b"URI").ok().and_then(deref)))
+                    .and_then(|u| u.as_str().ok().map(|s| String::from_utf8_lossy(s).trim().to_string()));
+                if let Some(uri) = uri.filter(|u| u.starts_with("https://") || u.starts_with("http://")) {
+                    if !links.contains(&uri) {
+                        links.push(uri);
+                    }
+                }
+            }
+        }
+        links
+    });
+    found.unwrap_or_default()
 }
 
 // ---------------------------------------------------------------- HTML
@@ -421,5 +456,53 @@ pub(crate) mod tests {
         let url = serve(404, "text/html", "nope".into()).await;
         let err = ingest(JdInput::Url(url)).await.unwrap_err();
         assert!(err.downcast_ref::<NeedsBrowser>().is_none() && err.to_string().contains("404"), "{err}");
+    }
+
+    /// A one-page PDF with two link annotations (one repeated) and an internal (non-web) one.
+    fn pdf_with_links(uris: &[&str]) -> Vec<u8> {
+        use pdf_extract::{Dictionary, Document, Object};
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let mut annots = Vec::new();
+        for uri in uris {
+            let mut action = Dictionary::new();
+            action.set("S", Object::Name(b"URI".to_vec()));
+            action.set("URI", Object::string_literal(*uri));
+            let mut annot = Dictionary::new();
+            annot.set("Type", Object::Name(b"Annot".to_vec()));
+            annot.set("Subtype", Object::Name(b"Link".to_vec()));
+            annot.set("A", doc.add_object(action));
+            annots.push(Object::Reference(doc.add_object(annot)));
+        }
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Parent", pages_id);
+        page.set("Annots", annots);
+        let page_id = doc.add_object(page);
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Kids", vec![Object::Reference(page_id)]);
+        pages.set("Count", 1);
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", pages_id);
+        let catalog_id = doc.add_object(catalog);
+        doc.trailer.set("Root", catalog_id);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn pdf_links_reads_link_annotations_once_each() {
+        let pdf = pdf_with_links(&[
+            "https://github.com/phucvinh57",
+            "mailto:a@b.c",
+            "https://github.com/phucvinh57/biopass",
+            "https://github.com/phucvinh57",
+        ]);
+        assert_eq!(pdf_links(&pdf), ["https://github.com/phucvinh57", "https://github.com/phucvinh57/biopass"]);
+        assert!(pdf_links(b"not a pdf").is_empty());
     }
 }
