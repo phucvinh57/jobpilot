@@ -59,7 +59,7 @@ impl Core {
 
     /// Add a job source. The adapter of `kind` must accept `url` (a board name or address, a
     /// careers page, ...); an empty `name` becomes the board name, the host or the kind's title.
-    /// `session_id` binds a managed browser session to it.
+    /// `session_id` binds a session (a site the user is signed in to) to it.
     pub fn add_job_source(&self, kind: &str, name: &str, url: &str, session_id: Option<i64>) -> Result<Source> {
         let (url, default_name) = check_source(kind.trim(), url)?;
         let name = match name.trim() {

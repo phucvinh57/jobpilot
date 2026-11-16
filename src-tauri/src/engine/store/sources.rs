@@ -41,7 +41,7 @@ pub struct Source {
     pub url: String,
     pub purpose: SourcePurpose,
     pub enabled: bool,
-    /// Managed browser session used to reach a login-walled site.
+    /// Session (a site the user is signed in to) used to reach a login-walled site.
     pub session_id: Option<i64>,
     pub last_run_at: Option<DateTime<Utc>>,
     /// Free text set by the runner: `ok`, `needs_human`, `failed: ...`.

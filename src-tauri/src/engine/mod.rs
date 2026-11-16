@@ -3,7 +3,7 @@
 //!
 //! - `paths`, `runtime`, `store`, `secrets`, `redact`, `logging`, `health`, `facade`: foundation
 //! - `llm`: AI providers; `pipeline`: JD -> tailored CV -> PDF, job insight
-//! - `browser`: managed Chrome; `apply`: review -> confirm -> submit; `mail`: Gmail status
+//! - `browser`: the user's Chrome through the JobPilot extension; `apply`: review -> confirm -> submit; `mail`: Gmail status
 //! - `graph`: flows as resumable graphs; `notify`: desktop notifications
 //! - `prefs`: job-search preferences; `profile`: the user's documents and the profile read from them
 //! - `discover`: job sources -> scored leads; `trends`: market trends and the digest

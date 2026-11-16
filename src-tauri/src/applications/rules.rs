@@ -950,14 +950,14 @@ pub fn session_line(session: &SessionState) -> (String, Tone) {
         SessionState::Matched { name, status, .. } => match status {
             SessionStatus::Ok => format!("Session: {name} (logged in)"),
             SessionStatus::New => {
-                format!("Session: {name} (not verified yet: check it in Settings)")
+                format!("Session: {name} (not checked yet: check it in Settings > Browser)")
             }
             SessionStatus::Expired => {
-                format!("Session: {name} (expired: log in again in Settings)")
+                format!("Session: {name} (signed out: sign in again in Settings > Browser)")
             }
         },
         SessionState::Missing { domain } => {
-            format!("No browser session for {domain}: create one in Settings > Browser sessions.")
+            format!("Not signed in to {domain}: add the site in Settings > Browser.")
         }
     };
     let tone = match session {
@@ -1493,7 +1493,7 @@ mod tests {
         let blocker = || {
             Some(Blocker {
                 message: "Connect the JobPilot extension".into(),
-                settings: Some("Browser sessions"),
+                settings: Some("Browser"),
             })
         };
         let p = primary_for(
@@ -1509,7 +1509,7 @@ mod tests {
             Some((
                 PrimaryAction::ReviewAndSubmit,
                 false,
-                Some("Browser sessions")
+                Some("Browser")
             ))
         );
         // After a handoff the same button retries.
@@ -2005,11 +2005,11 @@ mod tests {
         assert_eq!(session_line(&matched(SessionStatus::Expired)).1, Tone::Warn);
         assert!(session_line(&matched(SessionStatus::New))
             .0
-            .contains("not verified yet"));
+            .contains("not checked yet"));
         let (line, tone) = session_line(&SessionState::Missing {
             domain: "linkedin.com".into(),
         });
-        assert!(line.contains("linkedin.com") && line.contains("Settings > Browser sessions"));
+        assert!(line.contains("linkedin.com") && line.contains("Settings > Browser"));
         assert_eq!(tone, Tone::Danger);
     }
 

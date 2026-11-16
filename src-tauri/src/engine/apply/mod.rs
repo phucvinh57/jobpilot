@@ -107,7 +107,7 @@ impl ApplyInfo {
         if self.apply_url.is_none() {
             None
         } else if matches!(self.session, SessionState::Missing { .. }) || !self.browser_connected {
-            Some("Browser sessions")
+            Some("Browser")
         } else {
             None
         }
@@ -120,13 +120,13 @@ impl ApplyInfo {
         }
         if let SessionState::Missing { domain } = &self.session {
             return Some(format!(
-                "{} needs a logged-in browser session for {domain}: create one in Settings > Browser sessions.",
+                "{} needs you signed in to {domain} in your browser: add the site in Settings > Browser.",
                 self.ats.label()
             ));
         }
         if !self.browser_connected {
             return Some(
-                "Connect the JobPilot extension: open Chrome with the extension and pair it in Settings > Browser sessions."
+                "Connect the JobPilot extension: open Chrome with the extension and pair it in Settings > Browser."
                     .into(),
             );
         }
@@ -315,7 +315,7 @@ mod tests {
         // No extension is connected to this data dir's bridge: the form cannot be opened yet.
         assert!(!info.browser_connected);
         assert!(info.blocker().is_some_and(|b| b.contains("Connect the JobPilot extension")), "{:?}", info.blocker());
-        assert_eq!(info.blocker_settings(), Some("Browser sessions"));
+        assert_eq!(info.blocker_settings(), Some("Browser"));
 
         // Connected, but not allowed in Incognito: a form that needs no login cannot open its private tab.
         let connected = ApplyInfo { browser_connected: true, ..info.clone() };

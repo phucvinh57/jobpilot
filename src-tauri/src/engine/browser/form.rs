@@ -79,6 +79,11 @@ impl FormBrowser {
         self.tab.is_open()
     }
 
+    /// Does JobPilot still drive the tab (false once it was handed to the user)?
+    pub fn is_driven(&self) -> bool {
+        self.driving.load(Ordering::SeqCst)
+    }
+
     /// The user takes the tab over: JobPilot no longer answers its dialogs.
     pub fn hand_over(&self) {
         self.driving.store(false, Ordering::SeqCst);

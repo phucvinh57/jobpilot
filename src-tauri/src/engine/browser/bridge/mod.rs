@@ -282,12 +282,17 @@ static BRIDGES: OnceLock<Mutex<HashMap<PathBuf, Bridge>>> = OnceLock::new();
 impl Core {
     /// The browser bridge (cheap to clone; share it with `runtime::spawn`).
     pub fn browser(&self) -> Bridge {
-        let mut map = BRIDGES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
-        map.entry(self.paths.data_dir.clone()).or_insert_with(|| Bridge::new(self.secrets.clone())).clone()
+        Bridge::for_data_dir(&self.paths.data_dir, &self.secrets)
     }
 }
 
 impl Bridge {
+    /// The one bridge of `data_dir` (created with `secrets` the first time).
+    pub(crate) fn for_data_dir(data_dir: &std::path::Path, secrets: &Secrets) -> Self {
+        let mut map = BRIDGES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(data_dir.to_path_buf()).or_insert_with(|| Bridge::new(secrets.clone())).clone()
+    }
+
     /// A bridge that keeps its token in `secrets`. Not started.
     pub(crate) fn new(secrets: Secrets) -> Self {
         let shared = Shared {

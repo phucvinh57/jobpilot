@@ -545,7 +545,7 @@ fn apply_sink(
     }
 }
 
-/// Open the form in the managed browser, read and answer its fields, fill it. Never submits.
+/// Open the form in a tab of the user's browser, read and answer its fields, fill it. Never submits.
 async fn prepare(
     app: AppHandle,
     core: Arc<Core>,

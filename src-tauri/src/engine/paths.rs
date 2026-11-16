@@ -16,8 +16,6 @@ pub struct Paths {
     pub db: PathBuf,
     /// `applications/<slug>/{jd.md, cv.yaml, cv.pdf, page-*.png}`.
     pub applications_dir: PathBuf,
-    /// `sessions/<id>/` browser profiles (mode 0700).
-    pub sessions_dir: PathBuf,
     /// Screenshots.
     pub shots_dir: PathBuf,
     /// `logs/jobpilot.log.<date>` (no secrets, see `logging`).
@@ -31,7 +29,6 @@ impl Paths {
         Self {
             db: data_dir.join("jobpilot.db"),
             applications_dir: data_dir.join("applications"),
-            sessions_dir: data_dir.join("sessions"),
             shots_dir: data_dir.join("shots"),
             logs_dir: data_dir.join("logs"),
             data_dir,
@@ -47,16 +44,10 @@ impl Paths {
         Ok(Self::new(base.join("jobpilot")))
     }
 
-    /// Create all directories (`sessions/` is private to the user).
+    /// Create all directories.
     pub fn ensure(&self) -> Result<()> {
-        for dir in [&self.data_dir, &self.applications_dir, &self.sessions_dir, &self.shots_dir, &self.logs_dir] {
+        for dir in [&self.data_dir, &self.applications_dir, &self.shots_dir, &self.logs_dir] {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.sessions_dir, std::fs::Permissions::from_mode(0o700))
-                .context("restricting sessions dir")?;
         }
         Ok(())
     }
@@ -65,7 +56,9 @@ impl Paths {
         self.applications_dir.join(slug)
     }
 
-    pub fn session_dir(&self, id: i64) -> PathBuf {
-        self.sessions_dir.join(id.to_string())
+    /// `sessions/`: the browser profiles of releases that ran their own Chrome (they hold cookies;
+    /// removed at startup, see `Core::remove_old_browser_profiles`).
+    pub fn old_sessions_dir(&self) -> PathBuf {
+        self.data_dir.join("sessions")
     }
 }

@@ -3,7 +3,7 @@ name = "jobpilot"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
-description = "Tailored CVs, managed-browser job applications and Gmail status tracking"
+description = "Tailored CVs, job applications in your own browser and Gmail status tracking"
 
 [lib]
 # Not `jobpilot`: a lib and a bin with the same name collide on Windows (cargo#8519).
@@ -36,8 +36,6 @@ rand = "0.8"
 dom_smoothie = "0.19"
 html2text = "0.13"
 pdf-extract = "0.12"
-chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime", "bytes"] }
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 futures = "0.3"
 adk-graph = "=2.3.0"
 async-trait = "0.1"

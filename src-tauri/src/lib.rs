@@ -46,8 +46,10 @@ pub fn run() -> anyhow::Result<()> {
     // Gmail tracking: poll for replies while the app runs (no-op unless Gmail is connected).
     mail::autostart(&core);
     // The browser bridge: the JobPilot extension in the user's Chrome connects to it.
-    let browser = core.browser();
-    browser.start();
+    core.browser().start();
+    // Older releases ran their own Chrome on profiles under `<data dir>/sessions/` (cookies of old
+    // logins): remove them. Sessions are now sites the user is signed in to in their own Chrome.
+    core.remove_old_browser_profiles();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -94,10 +96,9 @@ pub fn run() -> anyhow::Result<()> {
 
     app.run(move |_, event| {
         if let RunEvent::Exit = event {
-            // The window is gone: close the tabs of the application forms.
+            // The window is gone: close the form tabs JobPilot still drives. Tabs the user works in
+            // (a hand-off, a sign-in, a discovery page handed over) stay open in their browser.
             crate::engine::runtime::block_on(crate::engine::apply::close_all());
-            // And close the tabs JobPilot opened in the user's browser.
-            crate::engine::runtime::block_on(browser.close_all());
             tracing::info!("JobPilot closed");
         }
     });

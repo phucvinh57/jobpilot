@@ -1,6 +1,6 @@
-// Settings > Job sources: where job discovery looks, and in which browser session. What a source
-// accepts is checked by the shell when it is added; a source that needs a login is read in a managed
-// session the user logged in to under Browser sessions; a source paused at a login, captcha or block
+// Settings > Job sources: where job discovery looks, and with which signed-in site. What a source
+// accepts is checked by the shell when it is added; a source that needs a login is read in the
+// user's browser, signed in to a site under Settings > Browser; a source paused at a login, captcha or block
 // page is continued from the Jobs page.
 
 import { useState } from "react";

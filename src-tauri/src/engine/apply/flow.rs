@@ -318,11 +318,16 @@ pub fn latest_proof(core: &Core, slug: &str) -> Option<PathBuf> {
     found.pop()
 }
 
-/// Close the form tab of every run (call when the app quits so no form is left open in the browser).
+/// Close the form tabs JobPilot still drives (call when the app quits, so no half-filled form is
+/// left behind). A tab handed to the user (a hand-off, or one they brought to the front to finish by
+/// hand) stays open: they may still be working in it.
 pub async fn close_all() {
     let all: Vec<Arc<Entry>> = runs().lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, e)| e).collect();
     for e in all {
-        e.run.lock().await.close_browser().await;
+        let mut run = e.run.lock().await;
+        if run.browser.as_ref().is_some_and(FormBrowser::is_driven) {
+            run.close_browser().await;
+        }
     }
 }
 
@@ -651,7 +656,7 @@ pub(crate) async fn prepare_with(
         SessionState::NotNeeded => (Target::Temp, None),
         SessionState::Matched { id, name, .. } => (Target::Session(*id), Some(name.clone())),
         SessionState::Missing { domain } => {
-            bail!("{} needs a logged-in browser session for {domain}: create one in Settings > Browser sessions", ats.label())
+            bail!("{} needs you signed in to {domain} in your browser: add the site in Settings > Browser", ats.label())
         }
     };
     let adapter = adapter(ats);

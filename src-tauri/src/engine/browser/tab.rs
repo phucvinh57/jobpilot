@@ -1,5 +1,5 @@
 //! A tab in the user's own Chrome, opened and driven through the JobPilot extension ([`Bridge`]):
-//! the replacement for `chromiumoxide::Page`.
+//! what discovery, the session check and apply drive.
 //!
 //! Every method is a call to the extension (`tab.*`, or `cdp.send` with an allowlisted Chrome
 //! DevTools method; see `extension/PROTOCOL.md`). A failed call is an `anyhow::Error` holding a
