@@ -79,6 +79,9 @@ export function useSessions(): SessionsCard {
   const [connectionBusy, setConnectionBusy] = useState<ConnectionWork>();
   /** The pairing code the user closed the dialog of without answering. */
   const [setAside, setSetAside] = useState<string>();
+  /** The pairing code the user approved here, until that pairing ends (the extension's popup has to
+   *  say Pair too). */
+  const [approved, setApproved] = useState<string>();
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const alive = useRef(true);
@@ -96,6 +99,18 @@ export function useSessions(): SessionsCard {
   const clearError = useCallback(() => setFailure(undefined), []);
   const code = query.data?.browser.pairingCode ?? undefined;
   const pairingCode = code !== undefined && code !== setAside ? code : undefined;
+
+  // The pairing the user approved ended: paired once the extension said Pair too.
+  const browser = query.data?.browser;
+  useEffect(() => {
+    if (approved === undefined || browser === undefined || browser.pairingCode === approved) {
+      return;
+    }
+    setApproved(undefined);
+    if (browser.connected) {
+      toast.ok("Browser paired", "JobPilot can now open tabs in this browser.");
+    }
+  }, [approved, browser]);
 
   /** Run `call` for the site `key`; the section is read again whatever the outcome. A failure goes
    *  to `onError`, else it is the card's failure titled `title`. */
@@ -176,7 +191,8 @@ export function useSessions(): SessionsCard {
         "pair",
         "Could not pair the browser",
         api.approvePairing,
-        () => toast.ok("Browser paired", "JobPilot can now open tabs in this browser."),
+        // Paired once the extension's popup says Pair too (at once if it already did).
+        () => setApproved(code),
         () => setSetAside(code),
       ),
     [connection, code],

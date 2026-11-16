@@ -62,7 +62,10 @@ function InstallSteps({ browser, card }: { browser: BrowserStatus; card: Session
           </span>
         )}
       </li>
-      <li>Open the JobPilot extension's popup: it shows a 6-digit code, and JobPilot asks you to pair here.</li>
+      <li>
+        Open the JobPilot extension's popup: it shows a 6-digit code, and JobPilot asks you to pair here. Press Pair in
+        both places if they show the same code.
+      </li>
     </ol>
   );
 }
@@ -109,10 +112,13 @@ function Connection({ browser, card }: { browser: BrowserStatus; card: SessionsC
   );
 }
 
-/** "Pair this browser?": the code to compare with the extension's popup; Pair or Decline. */
+/** "Pair this browser?": the code to compare with the extension's popup; Pair or Decline. Once the
+ *  user pressed Pair here, the dialog waits for Pair in the extension's popup (both are needed). */
 function PairingDialog({ browser, card }: { browser: BrowserStatus | undefined; card: SessionsCard }) {
   const code = card.pairingCode;
   const working = card.connectionBusy === "pair" || card.connectionBusy === "decline";
+  const waiting = browser?.pairingWaitingForExtension === true;
+  const name = browser?.browser ?? "A browser";
   return (
     <Dialog
       id="pairing-dialog"
@@ -120,7 +126,11 @@ function PairingDialog({ browser, card }: { browser: BrowserStatus | undefined; 
       busy={working}
       width="sm"
       title="Pair this browser?"
-      description={`${browser?.browser ?? "A browser"} with the JobPilot extension asks to connect. Check that the code matches the code in the extension's popup.`}
+      description={
+        waiting
+          ? "Now press Pair in the extension's popup. JobPilot pairs the browser once both sides said Pair."
+          : `${name} with the JobPilot extension asks to connect. Check that the code matches the code in the extension's popup.`
+      }
       onClose={card.closePairing}
       footer={
         <>
@@ -135,11 +145,11 @@ function PairingDialog({ browser, card }: { browser: BrowserStatus | undefined; 
           <Button
             id="approve-pairing"
             variant="primary"
-            busy={card.connectionBusy === "pair"}
-            disabled={working}
+            busy={card.connectionBusy === "pair" || waiting}
+            disabled={working || waiting}
             onClick={card.approvePairing}
           >
-            Pair
+            {waiting ? "Waiting for the extension" : "Pair"}
           </Button>
         </>
       }
@@ -151,7 +161,13 @@ function PairingDialog({ browser, card }: { browser: BrowserStatus | undefined; 
       >
         {code}
       </p>
-      <Caption>Only pair a browser you opened yourself. JobPilot then opens and fills tabs in it.</Caption>
+      {waiting ? (
+        <p id="pairing-next" role="status" className="text-small text-ink">
+          Now press Pair in the extension's popup.
+        </p>
+      ) : (
+        <Caption>Only pair a browser you opened yourself. JobPilot then opens and fills tabs in it.</Caption>
+      )}
     </Dialog>
   );
 }

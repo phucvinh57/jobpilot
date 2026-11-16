@@ -77,7 +77,7 @@ pub async fn launch_incognito() -> Option<TestBrowser> {
     launch_with(Bridge::new(Secrets::memory()), true).await
 }
 
-/// Start `bridge` (auto-approving, on a free port; pass `core.browser()` to drive the browser through
+/// Start `bridge` (auto-approving, on a free port, with the extension consenting by itself; pass `core.browser()` to drive the browser through
 /// a `Core`), launch Chromium with the extension and wait until it is connected. `incognito`: the
 /// extension is allowed in Incognito, as if the user had turned that on (private tabs work).
 /// `None` (with a message) when the extension is not built or no Chromium is found.
@@ -98,7 +98,10 @@ pub async fn launch_with(bridge: Bridge, incognito: bool) -> Option<TestBrowser>
     let dirs = tempfile::tempdir().expect("a temp dir");
     let ext = dirs.path().join("extension");
     copy_dir(&dist, &ext).expect("copy the extension");
-    std::fs::write(ext.join("config.json"), format!("{{\"port\": {port}}}")).expect("write config.json");
+    // `autoConsent` (tests only, honoured only from the packaged config.json): the extension says
+    // Pair to the code itself, as the user would in its popup; the bridge approves on the app side.
+    let config = serde_json::json!({ "port": port, "autoConsent": true });
+    std::fs::write(ext.join("config.json"), config.to_string()).expect("write config.json");
     let profile = dirs.path().join("profile");
     if incognito {
         // What the "Allow in Incognito" switch on chrome://extensions stores.

@@ -4,7 +4,8 @@
 //! the extension's service worker is its only client. The contract is `extension/PROTOCOL.md`:
 //!
 //! - [`protocol`]: the messages;
-//! - [`pairing`]: the token in the keyring, the 6-digit code the user approves;
+//! - [`pairing`]: the token in the keyring, the proofs of the handshake (the token never travels
+//!   after pairing), the 6-digit code the user approves in the app and in the extension;
 //! - `server`: the socket, the handshake and the events (it also answers the guard's paused requests).
 //!
 //! Get the [`Bridge`] with [`Core::browser`] (one per data dir, cheap to clone), start it once with
@@ -135,6 +136,8 @@ pub struct BridgeStatus {
     pub incognito_allowed: bool,
     /// The code to approve, while an extension waits for pairing.
     pub pairing_code: Option<String>,
+    /// The user approved the code in the app; the extension's popup still has to say Pair.
+    pub pairing_waiting_for_extension: bool,
     /// A token is stored (some browser was paired).
     pub paired: bool,
 }
@@ -158,7 +161,8 @@ pub enum BridgeEvent {
 pub struct BridgeConfig {
     /// 0 = any free port.
     pub port: u16,
-    /// Approve every pairing request at once (tests only).
+    /// Approve every pairing request on the app side at once (tests only; the extension still has
+    /// to consent, which the testkit's extension does by itself).
     pub auto_approve: bool,
     /// The only `Origin` an upgrade is accepted from.
     pub allowed_origin: String,
@@ -205,9 +209,13 @@ impl Peer {
     }
 }
 
+/// A connection asking to be paired. It gets the token only once the user approved the code in the
+/// app (`approved`) and in the extension's popup (`consented`), in either order.
 pub(crate) struct Pairing {
     pub(crate) peer: Peer,
     pub(crate) code: String,
+    pub(crate) approved: bool,
+    pub(crate) consented: bool,
 }
 
 /// A call waiting for its answer.
@@ -243,7 +251,7 @@ pub(crate) struct State {
     pub(crate) paired: bool,
     /// The paired, welcomed connection.
     pub(crate) live: Option<Peer>,
-    /// The connection waiting for the user's approval.
+    /// The connection waiting for the user's approval (in the app and in the extension).
     pub(crate) pairing: Option<Pairing>,
     calls: HashMap<u64, Pending>,
     pub(crate) tabs: HashMap<i64, Arc<TabShared>>,
@@ -346,6 +354,7 @@ impl Bridge {
             extension_version: peer.map(|p| p.hello.extension.clone()).filter(|v| !v.is_empty()),
             incognito_allowed: peer.is_some_and(|p| p.hello.incognito_allowed),
             pairing_code: state.pairing.as_ref().map(|p| p.code.clone()),
+            pairing_waiting_for_extension: state.pairing.as_ref().is_some_and(|p| p.approved && !p.consented),
             paired: state.paired,
         }
     }
@@ -355,7 +364,8 @@ impl Bridge {
         self.shared.events.subscribe()
     }
 
-    /// The user approved the code: give the waiting extension a token and let it in.
+    /// The user approved the code in the app. The waiting extension gets a token and is let in once
+    /// the user also pressed Pair in its popup (at once if that happened first).
     pub fn approve_pairing(&self) -> anyhow::Result<()> {
         server::approve(&self.shared)
     }

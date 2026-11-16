@@ -89,6 +89,8 @@ export interface BrowserStatus {
   incognitoAllowed: boolean;
   /** The 6-digit code to approve while an extension waits for pairing. */
   pairingCode: string | null;
+  /** The user approved the code here; the extension's popup still has to say Pair. */
+  pairingWaitingForExtension: boolean;
   /** Some browser was paired before. */
   paired: boolean;
   /** The folder to pick in "Load unpacked" on chrome://extensions, when it is known. */

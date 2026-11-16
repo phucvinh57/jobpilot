@@ -1,6 +1,7 @@
 //! The WebSocket server the extension connects to: the upgrade check (path and `Origin`), the
-//! handshake and pairing, call answers, and the events (the guard's paused requests are answered
-//! here).
+//! handshake (both sides prove they hold the token, which never travels again) and pairing (the user
+//! approves the code in the app and in the extension), call answers, and the events (the guard's
+//! paused requests are answered here).
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -17,11 +18,11 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::pairing::{self, TOKEN_KEY};
-use super::protocol::{reason, Event, Hello, Incoming, Outgoing, Token, PROTOCOL};
+use super::protocol::{reason, Event, Incoming, Nonce, Outgoing, Proof, Token, PROTOCOL};
 use super::{Bridge, BridgeConfig, BridgeError, BridgeEvent, Out, Pairing, Peer, Shared, TabShared, PATH};
 use crate::engine::browser::guard::{allows, Policy};
 
-/// How long a new connection has to say hello.
+/// How long a new connection has to say hello (and then to answer the challenge).
 const HELLO_WAIT: Duration = Duration::from_secs(10);
 /// Largest message (a full-page screenshot, a file to upload).
 const MAX_MESSAGE: usize = 64 * 1024 * 1024;
@@ -128,7 +129,10 @@ async fn connection(bridge: Bridge, stream: TcpStream, origin: &str) -> Result<(
     let shared = bridge.shared.clone();
     let conn = shared.next_id();
     let hello = tokio::select! {
-        hello = tokio::time::timeout(HELLO_WAIT, first_hello(&mut incoming, &tx)) => hello.ok().flatten(),
+        hello = tokio::time::timeout(HELLO_WAIT, first(&mut incoming, &tx, |m| match m {
+            Incoming::Hello(hello) => Some(hello),
+            _ => None,
+        })) => hello.ok().flatten(),
         _ = &mut kill_rx => None,
     };
     let Some(hello) = hello else {
@@ -142,7 +146,31 @@ async fn connection(bridge: Bridge, stream: TcpStream, origin: &str) -> Result<(
         peer.close();
         return Ok(());
     }
-    admit(&shared, peer);
+
+    // A paired extension and a token here: each side proves it holds the token (PROTOCOL.md).
+    match challenge(&shared, &peer) {
+        None => start_pairing(&shared, peer),
+        Some((token, app_nonce)) => {
+            let proof = tokio::select! {
+                proof = tokio::time::timeout(HELLO_WAIT, first(&mut incoming, &tx, |m| match m {
+                    Incoming::Auth { proof } => Some(proof),
+                    _ => None,
+                })) => proof.ok().flatten(),
+                _ = &mut kill_rx => None,
+            };
+            let Some(Proof(proof)) = proof else {
+                let _ = tx.send(Out::Close);
+                return Ok(());
+            };
+            if pairing::verify_ext_proof(&token, &app_nonce, &proof) {
+                welcome(&shared, peer);
+            } else {
+                // Not the token the app holds (a stale one, or not the extension at all).
+                tracing::info!("browser bridge: the extension's proof did not match (connection {conn})");
+                start_pairing(&shared, peer);
+            }
+        }
+    }
 
     loop {
         let frame = tokio::select! {
@@ -175,7 +203,8 @@ async fn connection(bridge: Bridge, stream: TcpStream, origin: &str) -> Result<(
                     }
                 }
             }
-            Incoming::Hello(_) | Incoming::Unknown => {}
+            Incoming::Consent { code } => consent(&shared, conn, &code),
+            Incoming::Hello(_) | Incoming::Auth { .. } | Incoming::Unknown => {}
         }
     }
     gone(&shared, conn);
@@ -183,8 +212,9 @@ async fn connection(bridge: Bridge, stream: TcpStream, origin: &str) -> Result<(
     Ok(())
 }
 
-/// Wait for the `hello` (answering pings meanwhile). `None` when the connection ends first.
-async fn first_hello<S>(incoming: &mut S, tx: &mpsc::UnboundedSender<Out>) -> Option<Hello>
+/// Wait for the first message `pick` takes (answering pings meanwhile, ignoring anything else).
+/// `None` when the connection ends first.
+async fn first<S, T>(incoming: &mut S, tx: &mpsc::UnboundedSender<Out>, pick: impl Fn(Incoming) -> Option<T>) -> Option<T>
 where
     S: futures::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
@@ -195,31 +225,36 @@ where
             Ok(_) => continue,
         };
         match serde_json::from_str::<Incoming>(&text) {
-            Ok(Incoming::Hello(hello)) => return Some(hello),
             Ok(Incoming::Ping) => {
                 let _ = tx.send(Out::Msg(Outgoing::Pong));
             }
-            _ => {}
+            Ok(msg) => {
+                if let Some(picked) = pick(msg) {
+                    return Some(picked);
+                }
+            }
+            Err(_) => {}
         }
     }
     None
 }
 
-/// Let `peer` in when its token matches, else ask the user to pair it.
-fn admit(shared: &Arc<Shared>, peer: Peer) {
-    let stored = match shared.secrets.get(TOKEN_KEY) {
-        Ok(stored) => stored,
+/// When the extension says it is paired and this app holds a token: send `challenge` (the app's
+/// proof for the extension's nonce, and the app's own nonce) and return the token and that nonce
+/// to check the answer. `None`: the connection has to pair.
+fn challenge(shared: &Arc<Shared>, peer: &Peer) -> Option<(String, String)> {
+    let ext_nonce = peer.hello.nonce.as_ref().map(|n| n.0.as_str()).filter(|n| pairing::is_nonce(n));
+    let (true, Some(ext_nonce)) = (peer.hello.paired, ext_nonce) else { return None };
+    let token = match shared.secrets.get(TOKEN_KEY) {
+        Ok(stored) => stored.filter(|t| !t.is_empty())?,
         Err(e) => {
             tracing::warn!("browser bridge: reading the pairing token: {e:#}");
-            None
+            return None;
         }
     };
-    let offered = peer.hello.token.as_ref().map(|t| t.0.as_str());
-    if pairing::matches(stored.as_deref(), offered) {
-        welcome(shared, peer);
-    } else {
-        start_pairing(shared, peer);
-    }
+    let app_nonce = pairing::new_nonce();
+    peer.send(Outgoing::Challenge { proof: Proof(pairing::app_proof(&token, ext_nonce)), nonce: Nonce(app_nonce.clone()) });
+    Some((token, app_nonce))
 }
 
 /// `peer` is in: it becomes the one live connection (an older one is closed).
@@ -247,21 +282,16 @@ fn start_pairing(shared: &Arc<Shared>, peer: Peer) {
     let conn = peer.conn;
     let code = pairing::new_code();
     peer.send(Outgoing::Pair { code: code.clone() });
-    let auto_approve = {
+    {
         let mut state = shared.state();
-        if let Some(old) = state.pairing.replace(Pairing { peer, code }) {
+        // Tests only: the app side approves at once (the extension still has to consent).
+        let approved = state.auto_approve;
+        if let Some(old) = state.pairing.replace(Pairing { peer, code, approved, consented: false }) {
             old.peer.close();
         }
-        state.auto_approve
-    };
+    }
     shared.emit(BridgeEvent::StatusChanged);
     tracing::info!("browser extension asks to be paired (connection {conn})");
-    if auto_approve {
-        if let Err(e) = approve(shared) {
-            tracing::warn!("browser bridge: approving the pairing: {e:#}");
-        }
-        return;
-    }
     let shared = shared.clone();
     tokio::spawn(async move {
         tokio::time::sleep(pairing::PAIRING_TTL).await;
@@ -281,12 +311,64 @@ fn start_pairing(shared: &Arc<Shared>, peer: Peer) {
     });
 }
 
+/// The user approved the code in the app. Pairs at once when the extension already consented.
 pub(super) fn approve(shared: &Arc<Shared>) -> Result<()> {
-    let waiting = shared.state().pairing.take().ok_or_else(|| anyhow!("no browser is waiting to be paired"))?;
+    let ready = {
+        let mut state = shared.state();
+        let waiting = state.pairing.as_mut().ok_or_else(|| anyhow!("no browser is waiting to be paired"))?;
+        waiting.approved = true;
+        waiting.consented
+    };
+    shared.emit(BridgeEvent::StatusChanged);
+    if ready {
+        return finish_pairing(shared);
+    }
+    tracing::info!("browser pairing approved in the app; waiting for the extension");
+    Ok(())
+}
+
+/// The user pressed Pair in the extension's popup for `code` (on connection `conn`). Pairs at once
+/// when the app side already approved.
+fn consent(shared: &Arc<Shared>, conn: u64, code: &str) {
+    let ready = {
+        let mut state = shared.state();
+        match state.pairing.as_mut() {
+            Some(waiting) if waiting.peer.conn == conn && pairing::ct_eq(waiting.code.as_bytes(), code.as_bytes()) => {
+                waiting.consented = true;
+                waiting.approved
+            }
+            _ => {
+                tracing::info!("browser bridge: a consent for no pairing of this connection (connection {conn})");
+                return;
+            }
+        }
+    };
+    shared.emit(BridgeEvent::StatusChanged);
+    if ready {
+        if let Err(e) = finish_pairing(shared) {
+            tracing::warn!("browser bridge: pairing: {e:#}");
+        }
+    } else {
+        tracing::info!("browser pairing approved in the extension; waiting for the app (connection {conn})");
+    }
+}
+
+/// Both sides approved: make the token, give it to the extension (its only trip) and let it in.
+fn finish_pairing(shared: &Arc<Shared>) -> Result<()> {
+    let waiting = {
+        let mut state = shared.state();
+        match &state.pairing {
+            Some(p) if p.approved && p.consented => state.pairing.take(),
+            _ => None,
+        }
+    };
+    let Some(mut waiting) = waiting else { return Ok(()) };
     let token = pairing::new_token();
     if let Err(e) = shared.secrets.set(TOKEN_KEY, &token) {
-        // Still waiting: the user can try again.
+        // Still waiting: the user can approve again.
+        waiting.approved = false;
         shared.state().pairing.get_or_insert(waiting);
+        shared.emit(BridgeEvent::StatusChanged);
         return Err(e.context("saving the browser pairing"));
     }
     shared.state().paired = true;

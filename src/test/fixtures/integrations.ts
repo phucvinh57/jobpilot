@@ -11,6 +11,7 @@ export const CONNECTED: BrowserStatus = {
   extensionVersion: "0.1.0",
   incognitoAllowed: true,
   pairingCode: null,
+  pairingWaitingForExtension: false,
   paired: true,
   extensionPath: "/opt/jobpilot/extension",
 };
@@ -31,6 +32,12 @@ export const PAIRING: BrowserStatus = {
   browser: "Chrome 153",
   extensionVersion: "0.1.0",
   pairingCode: "482913",
+};
+
+/** The user approved the code in JobPilot; the extension's popup has not said Pair yet. */
+export const PAIRING_APPROVED: BrowserStatus = {
+  ...PAIRING,
+  pairingWaitingForExtension: true,
 };
 
 export function site(patch: Partial<Session> = {}): Session {

@@ -160,6 +160,8 @@ pub struct BrowserDto {
     pub incognito_allowed: bool,
     /// The code to approve while an extension waits for pairing.
     pub pairing_code: Option<String>,
+    /// The user approved the code here; the extension's popup still has to say Pair.
+    pub pairing_waiting_for_extension: bool,
     /// Some browser was paired before.
     pub paired: bool,
     /// The folder to pick in "Load unpacked" on chrome://extensions, when it is known.
@@ -176,6 +178,7 @@ impl BrowserDto {
             extension_version: status.extension_version.clone(),
             incognito_allowed: status.incognito_allowed,
             pairing_code: status.pairing_code.clone(),
+            pairing_waiting_for_extension: status.pairing_waiting_for_extension,
             paired: status.paired,
             extension_path,
         }
@@ -364,11 +367,13 @@ mod tests {
             extension_version: Some("0.1.0".into()),
             incognito_allowed: false,
             pairing_code: Some("123456".into()),
+            pairing_waiting_for_extension: true,
             paired: true,
         };
         let json = serde_json::to_value(BrowserDto::new(&status, Some("/opt/jobpilot/extension".into()))).unwrap();
         assert_no_secret_fields(&json, "browser");
         assert_eq!(json["pairingCode"], "123456");
+        assert_eq!(json["pairingWaitingForExtension"], true);
         assert_eq!(json["extensionVersion"], "0.1.0");
         assert_eq!(json["extensionPath"], "/opt/jobpilot/extension");
         assert_eq!((json["connected"].as_bool(), json["incognitoAllowed"].as_bool()), (Some(false), Some(false)));
