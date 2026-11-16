@@ -6,13 +6,18 @@
 //! `/opt/pw-browsers` (branded Google Chrome ignores `--load-extension`). It runs headless, with
 //! `--no-sandbox` when `JOBPILOT_NO_SANDBOX` is set, and maps every `*.test` name to `127.0.0.1`
 //! (fixture servers under a name the extension's literal-address rule does not block).
+//!
+//! [`launch`] leaves the extension out of Incognito, as an unpacked extension is until the user says
+//! otherwise; [`launch_incognito`] seeds the profile's preferences with "Allow in Incognito" (what the
+//! toggle on chrome://extensions stores), so `Profile::Private` tabs work. [`TestBrowser::attach`]
+//! makes `core.browser()` return the test browser's bridge, for code that takes a `Core`.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use super::{Bridge, BridgeConfig, EXTENSION_ID};
-use crate::engine::Secrets;
+use super::{Bridge, BridgeConfig, BRIDGES, EXTENSION_ID};
+use crate::engine::{Core, Secrets};
 
 /// The built extension.
 pub(crate) fn extension_dist() -> PathBuf {
@@ -43,6 +48,14 @@ pub(crate) struct TestBrowser {
     _dirs: tempfile::TempDir,
 }
 
+impl TestBrowser {
+    /// From now on `core.browser()` (for every `Core` on the same data dir) is this browser's bridge.
+    pub(crate) fn attach(&self, core: &Core) {
+        let mut map = BRIDGES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        map.insert(core.paths.data_dir.clone(), self.bridge.clone());
+    }
+}
+
 impl Drop for TestBrowser {
     fn drop(&mut self) {
         let _ = self.child.start_kill();
@@ -52,6 +65,15 @@ impl Drop for TestBrowser {
 /// Start the bridge (auto-approving), launch Chromium with the extension and wait until it is
 /// connected. `None` (with a message) when the extension is not built or no Chromium is found.
 pub(crate) async fn launch() -> Option<TestBrowser> {
+    launch_with(false).await
+}
+
+/// [`launch`] with the extension allowed in Incognito (`Profile::Private` tabs work).
+pub(crate) async fn launch_incognito() -> Option<TestBrowser> {
+    launch_with(true).await
+}
+
+async fn launch_with(incognito: bool) -> Option<TestBrowser> {
     let dist = extension_dist();
     if !dist.join("manifest.json").is_file() {
         eprintln!("skipped: the extension is not built ({} has no manifest.json; run `bun run ext:build`)", dist.display());
@@ -71,6 +93,12 @@ pub(crate) async fn launch() -> Option<TestBrowser> {
     copy_dir(&dist, &ext).expect("copy the extension");
     std::fs::write(ext.join("config.json"), format!("{{\"port\": {port}}}")).expect("write config.json");
     let profile = dirs.path().join("profile");
+    if incognito {
+        // What "Allow in Incognito" on chrome://extensions stores for the extension.
+        let prefs = serde_json::json!({ "extensions": { "settings": { EXTENSION_ID: { "incognito": true } } } });
+        std::fs::create_dir_all(profile.join("Default")).expect("create the profile");
+        std::fs::write(profile.join("Default/Preferences"), prefs.to_string()).expect("write the preferences");
+    }
 
     let mut cmd = tokio::process::Command::new(&chrome);
     cmd.arg("--headless=new")
@@ -90,7 +118,9 @@ pub(crate) async fn launch() -> Option<TestBrowser> {
     let browser = TestBrowser { bridge, child, _dirs: dirs };
 
     for _ in 0..300 {
-        if browser.bridge.status().connected {
+        let status = browser.bridge.status();
+        if status.connected {
+            assert_eq!(status.incognito_allowed, incognito, "Allow in Incognito as asked");
             return Some(browser);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

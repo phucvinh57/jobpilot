@@ -1,54 +1,39 @@
-//! Session-less page rendering for JD ingest.
+//! Rendering a page in a tab of the user's own Chrome (through the JobPilot extension, [`Bridge`]).
 //!
 //! A JS-rendered job page comes back (almost) empty from a plain HTTP fetch
-//! ([`NeedsBrowser`](crate::engine::pipeline::NeedsBrowser)). [`rendered_html`] opens it in a headless Chrome
-//! with a **throwaway** profile (no cookies, no login, deleted afterwards) and returns the DOM;
-//! [`generate_with_browser`] wires that into the generate pipeline.
+//! ([`NeedsBrowser`](crate::engine::pipeline::NeedsBrowser)). [`rendered_html`] opens it in a
+//! **private** tab (the JobPilot Incognito window: none of the user's cookies or logins), guarded so
+//! neither the page nor anything it loads reaches this machine or the private network, and returns
+//! the DOM; [`generate_with_browser`] wires that into the generate pipeline.
 //!
-//! Logged-in browsing belongs to [`SessionManager`](super::SessionManager); this never touches a session.
+//! [`render_tab`] is the one render this and discovery ([`Renderer`](super::render::Renderer)) share:
+//! open a guarded tab, load, wait for text, look for a challenge, read, and close the tab, whatever
+//! happened. The tab is not disguised: the extension leaves `navigator.webdriver` true.
 
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chromiumoxide::handler::viewport::Viewport;
-use chromiumoxide::{Browser, BrowserConfig};
-use futures::StreamExt;
 
+use super::bridge::Bridge;
 use super::challenge;
-use super::chrome;
-use super::session::NO_SANDBOX_ENV;
+use super::guard::{allows, Policy};
+use super::tab::{OpenOptions, Profile, Tab};
 use crate::engine::graph::nodes::ChallengeKind;
-use crate::engine::pipeline::ingest::MIN_PAGE_CHARS;
+use crate::engine::net::http::NotPublic;
 use crate::engine::pipeline::generate::shared_llm;
+use crate::engine::pipeline::ingest::MIN_PAGE_CHARS;
 use crate::engine::pipeline::{ingest, ingest_html, JdInput, JdText, NeedsBrowser, Pipeline, Progress, Stage};
 use crate::engine::store::Application;
-use crate::engine::{Core, Paths};
+use crate::engine::{runtime, Core};
 
-/// Longest the whole render may take (launch + load + settle).
+/// Longest a render may take once its tab is open (load + settle + read).
 pub(super) const RENDER_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long to wait for the page to reach `readyState == "complete"`.
 pub(super) const LOAD_TIMEOUT: Duration = Duration::from_secs(25);
 /// How long a client-side app may take to put readable text on the page after load.
 const TEXT_TIMEOUT: Duration = Duration::from_secs(8);
-
-/// Flags for the throwaway browser (a subset of the managed-session flags: nothing is persisted).
-const FLAGS: &[&str] = &[
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-sync",
-    "--disable-extensions",
-    "--password-store=basic",
-    "--use-mock-keychain",
-    "--disable-background-mode",
-    "--disable-breakpad",
-    "--disable-default-apps",
-    "--disable-dev-shm-usage",
-    "--force-color-profile=srgb",
-    "--lang=en-US",
-];
 
 /// Visible text length of the page, to know when a client-side app has rendered.
 const TEXT_LEN_JS: &str = "(document.body ? document.body.innerText.length : 0)";
@@ -62,29 +47,7 @@ pub struct Rendered {
     pub challenge: Option<ChallengeKind>,
 }
 
-/// A temp profile dir that is deleted when dropped.
-pub(super) struct TempProfile(PathBuf);
-
-impl TempProfile {
-    pub(super) fn create(paths: &Paths) -> Result<Self> {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-        let dir = paths.data_dir.join("tmp").join(format!("fetch-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        Ok(Self(dir))
-    }
-
-    pub(super) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempProfile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Accept only http(s) URLs (this also keeps the value from ever being parsed as a Chrome flag).
+/// Accept only http(s) URLs.
 fn checked_url(raw: &str) -> Result<String> {
     let url = url::Url::parse(raw.trim()).with_context(|| format!("`{}` is not a valid URL", raw.trim()))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
@@ -93,19 +56,21 @@ fn checked_url(raw: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
-/// Open `url` in a headless Chrome with a throwaway profile and return the rendered DOM as HTML.
+/// Open `url` in a private tab of the user's Chrome and return the rendered DOM as HTML.
 ///
-/// This is the browser fallback of **JD ingest** (a link the user pasted), with the managed browser
-/// flags. Job discovery reads pages with [`render::Renderer`](super::render::Renderer) instead, which
-/// adds the request guard. No browser hides that it is automated.
-pub async fn rendered_html(paths: &Paths, url: &str) -> Result<String> {
+/// This is the browser fallback of **JD ingest** (a link the user pasted). The tab is guarded with
+/// [`Policy::Public`]: a page on this machine or a private network is not opened. `Err` holding a
+/// [`BridgeError`](super::BridgeError) when the extension is not connected or may not open
+/// Incognito tabs.
+pub async fn rendered_html(bridge: &Bridge, url: &str) -> Result<String> {
+    rendered_html_with(bridge, url, Policy::Public).await
+}
+
+/// [`rendered_html`] under `policy` (tests read fixture pages).
+pub(crate) async fn rendered_html_with(bridge: &Bridge, url: &str, policy: Policy) -> Result<String> {
     let url = checked_url(url)?;
-    let chrome = chrome::resolve(paths)
-        .context("Chrome not found: install Chrome/Chromium or download the browser in Settings > Browser sessions")?;
-    let profile = TempProfile::create(paths)?;
-    let rendered = tokio::time::timeout(RENDER_TIMEOUT, render(&chrome.path, profile.path(), &url))
-        .await
-        .map_err(|_| anyhow!("the browser did not render {url} within {} seconds", RENDER_TIMEOUT.as_secs()))??;
+    let (rendered, _blocked) = render_tab(bridge, &url, Profile::Private, policy).await;
+    let rendered = rendered?;
     if let Some(kind) = rendered.challenge {
         bail!("{} instead of the job description: open the link in your browser and paste the text or upload the file", challenge_text(kind));
     }
@@ -121,62 +86,61 @@ fn challenge_text(kind: ChallengeKind) -> &'static str {
     }
 }
 
-async fn render(chrome: &Path, profile: &Path, url: &str) -> Result<Rendered> {
-    let mut builder = BrowserConfig::builder()
-        .chrome_executable(chrome)
-        .user_data_dir(profile)
-        .disable_default_args()
-        .args(FLAGS.iter().copied())
-        .new_headless_mode()
-        .window_size(1280, 800)
-        .viewport(Viewport { width: 1280, height: 800, ..Default::default() })
-        .launch_timeout(Duration::from_secs(30));
-    if std::env::var_os(NO_SANDBOX_ENV).is_some_and(|v| !v.is_empty()) {
-        builder = builder.no_sandbox();
+/// Closes the tab when dropped (a render whose future is dropped half way leaves no tab behind).
+struct CloseOnDrop(Tab);
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        if self.0.is_open() {
+            let tab = self.0.clone();
+            runtime::handle().spawn(async move { tab.close().await });
+        }
     }
-    let config = builder.build().map_err(|e| anyhow!(e))?;
-    let (mut browser, mut handler) =
-        Browser::launch(config).await.with_context(|| format!("launching {}", chrome.display()))?;
-    let driver = tokio::spawn(async move { while handler.next().await.is_some() {} });
-
-    let result = read_page(&browser, url).await;
-
-    let _ = browser.close().await;
-    let _ = tokio::time::timeout(Duration::from_secs(5), browser.wait()).await;
-    let _ = browser.kill().await;
-    driver.abort();
-    result
 }
 
-async fn read_page(browser: &Browser, url: &str) -> Result<Rendered> {
-    let page = browser.new_page("about:blank").await.context("opening a tab")?;
-    page.goto(url).await.with_context(|| format!("navigating to {url}"))?;
-    wait_until(LOAD_TIMEOUT, || async {
-        page.evaluate_expression("document.readyState")
-            .await
-            .ok()
-            .and_then(|v| v.into_value::<String>().ok())
-            .is_some_and(|s| s == "complete")
+/// Render `url` in a new background tab of `profile`, guarded by `policy`: load it (at most
+/// [`LOAD_TIMEOUT`]), [`finish_page`], and close the tab, also on an error or a timeout. Also returns
+/// how many requests the guard refused (the page itself, a redirect or a subresource).
+///
+/// The tab opens on `about:blank` and then navigates, so a refused page still counts as blocked.
+/// `Err` holding a [`BridgeError`](super::BridgeError) when the browser cannot be used (extension
+/// not connected, not allowed in Incognito).
+pub(super) async fn render_tab(bridge: &Bridge, url: &str, profile: Profile, policy: Policy) -> (Result<Rendered>, usize) {
+    // Refused before any tab is opened (the navigation checks it again).
+    match url::Url::parse(url) {
+        Ok(parsed) if allows(&policy, &parsed).await => {}
+        Ok(_) => return (Err(NotPublic.into()), 0),
+        Err(e) => return (Err(anyhow::Error::new(e).context("the page address is not valid")), 0),
+    }
+    let opened = bridge.open("about:blank", OpenOptions { profile, focus: false, guard: Some(policy) }).await;
+    let tab = match opened {
+        Ok(tab) => CloseOnDrop(tab),
+        Err(e) => return (Err(e.context("opening a browser tab")), 0),
+    };
+    let result = tokio::time::timeout(RENDER_TIMEOUT, async {
+        tab.0.goto(url).await.context("navigating to the page")?;
+        tab.0.wait_loaded(LOAD_TIMEOUT).await;
+        finish_page(&tab.0, url).await
     })
-    .await;
-    finish_page(&page, url).await
+    .await
+    .unwrap_or_else(|_| Err(timed_out()));
+    let blocked = tab.0.blocked();
+    tab.0.close().await;
+    (result, blocked)
+}
+
+pub(super) fn timed_out() -> anyhow::Error {
+    anyhow!("the browser did not render the page within {} seconds (timed out)", RENDER_TIMEOUT.as_secs())
 }
 
 /// The rest of a render once the page has loaded: wait (a little, never failing) for a client-side
 /// app to put readable text on it, look for a challenge, and read the DOM. `requested` is the address
 /// that was asked for.
-pub(super) async fn finish_page(page: &chromiumoxide::Page, requested: &str) -> Result<Rendered> {
-    wait_until(TEXT_TIMEOUT, || async {
-        page.evaluate_expression(TEXT_LEN_JS)
-            .await
-            .ok()
-            .and_then(|v| v.into_value::<u64>().ok())
-            .is_some_and(|n| n as usize >= MIN_PAGE_CHARS)
-    })
-    .await;
-    let challenge = challenge::detect_at(page, Some(requested)).await;
-    let url = page.url().await.ok().flatten().unwrap_or_else(|| requested.to_string());
-    let html = page.content().await.context("reading the page")?;
+pub(super) async fn finish_page(tab: &Tab, requested: &str) -> Result<Rendered> {
+    wait_until(TEXT_TIMEOUT, || async { tab.eval_as::<u64>(TEXT_LEN_JS).await.is_ok_and(|n| n as usize >= MIN_PAGE_CHARS) }).await;
+    let challenge = challenge::detect_at(tab, Some(requested)).await;
+    let url = tab.url().await.unwrap_or_else(|_| requested.to_string());
+    let html = tab.content().await.context("reading the page")?;
     Ok(Rendered { url, html, challenge })
 }
 
@@ -261,12 +225,13 @@ where
     ingest_html(&html, &needs.url)
 }
 
-/// [`ingest_with_fallback`] with headless Chrome (a throwaway profile) as the browser.
-pub async fn ingest_with_browser(paths: &Paths, input: JdInput) -> Result<JdText> {
-    ingest_with_fallback(input, |url| async move { rendered_html(paths, &url).await }).await
+/// [`ingest_with_fallback`] with a private tab of the user's Chrome ([`rendered_html`]) as the browser.
+pub async fn ingest_with_browser(bridge: &Bridge, input: JdInput) -> Result<JdText> {
+    ingest_with_fallback(input, |url| async move { rendered_html(bridge, &url).await }).await
 }
 
-/// The app's generate entry point: default AI provider, headless Chrome as the browser fallback.
+/// The app's generate entry point: default AI provider, a private tab of the user's Chrome
+/// ([`rendered_html`]) as the browser fallback.
 pub async fn generate_with_browser(
     core: &Core,
     existing: Option<i64>,
@@ -277,23 +242,12 @@ pub async fn generate_with_browser(
         crate::engine::pipeline::require_open(core, app_id)?;
     }
     let llm = shared_llm(core)?;
-    let paths = core.paths.clone();
+    let bridge = core.browser();
     let pipeline = Pipeline::new(core, &*llm).with_insight(llm.clone());
     generate_with_fallback(&pipeline, existing, input, progress, move |url| async move {
-        rendered_html(&paths, &url).await
+        rendered_html(&bridge, &url).await
     })
     .await
-}
-
-#[cfg(test)]
-mod flag_tests {
-    use super::FLAGS;
-
-    #[test]
-    fn the_jd_browser_is_not_disguised() {
-        // No fingerprint spoofing.
-        assert!(!FLAGS.iter().any(|a| a.contains("AutomationControlled") || a.contains("user-agent")), "{FLAGS:?}");
-    }
 }
 
 #[cfg(test)]
@@ -306,7 +260,6 @@ mod tests {
     use crate::engine::llm::fake::FakeLlm;
     use crate::engine::pipeline::ingest::tests::{serve, JOB_HTML};
     use crate::engine::store::Status;
-    use crate::engine::Paths;
 
     const EXAMPLE: &str = include_str!("../../../../assets/prompts/example-cv.yaml");
     const SECTIONS: &str = "sections: [summary, skills, projects, experience, education, languages]";
@@ -362,15 +315,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn temp_profile_is_removed_on_drop() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = Paths::new(dir.path());
-        let profile = TempProfile::create(&paths).unwrap();
-        let path = profile.path().to_path_buf();
-        assert!(path.is_dir());
-        drop(profile);
-        assert!(!path.exists());
+    #[tokio::test]
+    async fn the_browser_is_not_asked_for_a_private_page_and_its_errors_keep_their_kind() {
+        use crate::engine::browser::bridge::{Bridge, BridgeError};
+        let bridge = Bridge::new(crate::engine::Secrets::memory());
+        // Refused by the guard before any tab is asked for (no extension is connected here).
+        for url in ["http://127.0.0.1:9/x", "http://10.0.0.1/jobs", "http://localhost/"] {
+            let err = rendered_html(&bridge, url).await.unwrap_err();
+            assert!(err.downcast_ref::<BridgeError>().is_none(), "{url}: {err:#}");
+            assert!(format!("{err:#}").contains("private network"), "{url}: {err:#}");
+        }
+        // No extension: the error says so and stays a `BridgeError` (the UI shows what to do).
+        let err = rendered_html_with(&bridge, "http://jobs.test/1", Policy::Anything).await.unwrap_err();
+        assert_eq!(err.downcast_ref::<BridgeError>(), Some(&BridgeError::NotConnected), "{err:#}");
     }
 
     #[tokio::test]
@@ -464,21 +421,24 @@ mod tests {
         assert_eq!(core.store.list_applications().unwrap().len(), 1);
     }
 
-    #[test]
-    #[ignore = "launches Chrome"]
-    fn headless_chrome_renders_a_client_side_page() {
-        crate::engine::runtime::block_on(async {
-            let dir = tempfile::tempdir().unwrap();
-            let paths = Paths::new(dir.path().join("jp"));
-            paths.ensure().unwrap();
-            let body = format!(
-                "<html><body><div id=root></div><script>setTimeout(() => {{ document.getElementById('root').innerText = '{}'; }}, 300)</script></body></html>",
-                "Senior Rust Engineer at Acme. ".repeat(20)
-            );
-            let url = serve(200, "text/html", body).await;
-            let html = rendered_html(&paths, &url).await.unwrap();
-            assert!(html.contains("Senior Rust Engineer at Acme."), "{html}");
-            assert!(!paths.data_dir.join("tmp").read_dir().unwrap().any(|_| true), "temp profile removed");
-        });
+    /// `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored a_client_side_page` (after `bun run ext:build`).
+    #[tokio::test]
+    #[ignore = "launches Chromium with the extension"]
+    async fn a_client_side_page_is_rendered_in_a_private_tab_that_is_closed_afterwards() {
+        let Some(browser) = crate::engine::browser::bridge::testkit::launch_incognito().await else { return };
+        let body = format!(
+            "<html><body><div id=root></div><script>setTimeout(() => {{ document.getElementById('root').innerText = '{}'; }}, 300)</script></body></html>",
+            "Senior Rust Engineer at Acme. ".repeat(20)
+        );
+        // `*.test` is this machine in the test browser (the extension blocks 127.0.0.1 itself).
+        let url = serve(200, "text/html", body).await.replace("127.0.0.1", "jobs.test");
+        let html = rendered_html_with(&browser.bridge, &url, Policy::Anything).await.unwrap();
+        assert!(html.contains("Senior Rust Engineer at Acme."), "{html}");
+        assert!(browser.bridge.shared.state().tabs.is_empty(), "the tab was closed");
+
+        // A login wall instead of the posting is an error that says what to do.
+        let wall = serve(200, "text/html", "<html><head><title>Sign in</title></head><body><form><input name=u><input type=password name=p></form></body></html>".into()).await;
+        let err = rendered_html_with(&browser.bridge, &wall.replace("127.0.0.1", "jobs.test"), Policy::Anything).await.unwrap_err();
+        assert!(err.to_string().contains("asked for a login"), "{err:#}");
     }
 }

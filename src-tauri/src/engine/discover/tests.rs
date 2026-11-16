@@ -607,7 +607,7 @@ async fn a_failed_fetch_never_carries_the_posting_address_into_the_failure() {
 }
 
 #[tokio::test]
-async fn a_posting_whose_session_is_in_use_is_skipped_by_kind_and_read_again_next_run() {
+async fn a_posting_the_browser_cannot_read_right_now_is_skipped_by_kind_and_read_again_next_run() {
     let h = Harness::new();
     let core = h.open();
     let adapter = Arc::new(FakeSource {
@@ -618,14 +618,19 @@ async fn a_posting_whose_session_is_in_use_is_skipped_by_kind_and_read_again_nex
         hints: Vec::new(),
     });
     let id = h.add_source(&core, "f", adapter);
-    // What the browser read says while the user's window is open on the session.
-    *h.fetch_answer.lock().unwrap() = Err(crate::engine::browser::gate::SessionInUse::Window.to_string());
+    // What the browser read says while the extension is not connected.
+    *h.fetch_answer.lock().unwrap() = Err(crate::engine::browser::BridgeError::NotConnected.to_string());
     let summary = core.discover_now_with(h.deps()).await.unwrap();
     let result = result_of(&summary, id);
     assert_eq!((result.status, result.saved, result.skipped), (SourceStatus::Done, 0, 1), "the source did not fail");
-    assert_eq!(result.skip_kinds, BTreeMap::from([("session_in_use".to_string(), 1)]));
+    assert_eq!(result.skip_kinds, BTreeMap::from([("browser_unavailable".to_string(), 1)]));
     assert!(!core.store.lead_exists("https://f.test/jobs/1", "").unwrap(), "unknown, so the next run reads it");
-    assert_eq!(super::run::skip_kind(&anyhow::Error::new(crate::engine::browser::gate::SessionInUse::Busy)), "session_in_use");
+    use crate::engine::browser::BridgeError;
+    for kind in [BridgeError::NotConnected, BridgeError::IncognitoNotAllowed] {
+        let e = anyhow::Error::new(kind).context("opening a browser tab");
+        assert_eq!(super::run::skip_kind(&e), "browser_unavailable");
+    }
+    assert_eq!(super::run::skip_kind(&anyhow::Error::new(BridgeError::Cdp("net::ERR_FAILED".into()))), "unreadable");
 }
 
 #[test]
@@ -1239,11 +1244,11 @@ async fn open_browser_refuses_a_page_on_this_machine_or_a_private_network() {
     core.discover_cancel(&thread).unwrap();
 }
 
-/// Wait (up to 20 s) until a window has asked the fixture server for `path`, then a moment longer, so
-/// a second window would have asked too.
-async fn wait_for_hits(fx: &crate::engine::net::fixtures::Fixtures, path: &str) {
+/// Wait (up to 20 s) until a tab has asked the fixture server for `path` `n` times, then a moment
+/// longer, so a second tab would have asked too.
+async fn wait_for_hits(fx: &crate::engine::net::fixtures::Fixtures, path: &str, n: usize) {
     for _ in 0..100 {
-        if !fx.hits_on(path).is_empty() {
+        if fx.hits_on(path).len() >= n {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1251,77 +1256,108 @@ async fn wait_for_hits(fx: &crate::engine::net::fixtures::Fixtures, path: &str) 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 }
 
-/// The browser opens on the page the run paused at; "Continue" closes it. Needs a display.
-#[tokio::test]
-#[ignore = "opens a visible Chrome window"]
-async fn open_browser_shows_the_page_and_continue_closes_the_window() {
-    use crate::engine::net::fixtures::Fixtures;
-    let fx = Fixtures::start().await;
+/// A source that paused at a login wall served by `fx` (under a `*.test` name: the test browser's
+/// extension blocks address literals on guarded tabs), its thread and the deps that run it.
+async fn paused_at_fixture_wall(
+    h: &Harness,
+    core: &Core,
+    fx: &crate::engine::net::fixtures::Fixtures,
+    session: bool,
+) -> (Arc<Walled>, i64, String, DiscoverDeps) {
     fx.route("/wall", 200, "text/html", "<html><head><title>Sign in</title></head><body><h1>Sign in to continue</h1></body></html>");
+    let port = url::Url::parse(fx.base()).unwrap().port().unwrap();
+    let source = Walled::at(&format!("http://wall.test:{port}/wall"), ChallengeKind::Login, vec![cand("w.test", 1, "Acme", "Engineer")]);
+    let mut deps = h.deps();
+    let id = add_walled(core, &mut deps, source.clone());
+    if session {
+        let session = core.store.add_session(&crate::engine::store::NewSession { name: "Acme".into(), start_url: "https://acme.test/login".into() }).unwrap();
+        core.set_job_source_session(id, Some(session.id)).unwrap();
+    }
+    let summary = core.discover_now_with(deps.clone()).await.unwrap();
+    assert_eq!(result_of(&summary, id).status, SourceStatus::Waiting);
+    (source, id, source_thread(&summary.run, id), deps)
+}
+
+/// The browser opens a focused private tab on the page the run paused at; a tab the user closed is
+/// forgotten and the next "Open browser" opens a new one; "Continue" closes it.
+/// `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored open_browser_` after `bun run ext:build`.
+#[tokio::test]
+#[ignore = "launches Chromium with the extension"]
+async fn open_browser_shows_the_page_in_a_private_tab_and_continue_closes_it() {
+    let Some(browser) = crate::engine::browser::bridge::testkit::launch_incognito().await else { return };
+    let fx = crate::engine::net::fixtures::Fixtures::start().await;
     let h = Harness::new();
     let core = h.open();
-    let source = Walled::at(&format!("{}/wall", fx.base()), ChallengeKind::Login, vec![cand("w.test", 1, "Acme", "Engineer")]);
-    let mut deps = h.deps();
-    let id = add_walled(&core, &mut deps, source.clone());
-    let summary = core.discover_now_with(deps.clone()).await.unwrap();
-    let thread = source_thread(&summary.run, id);
-    assert_eq!(result_of(&summary, id).status, SourceStatus::Waiting);
+    browser.attach(&core);
+    let (source, _id, thread, deps) = paused_at_fixture_wall(&h, &core, &fx, false).await;
 
-    // No session is bound: a throwaway visible window. A double click (two calls at once) opens one
-    // window, and opening again while it is open does nothing.
+    // No session is bound: a private tab. A double click (two calls at once) opens one tab, and
+    // opening again while it is open only brings it to the front.
     let (first, second) = tokio::join!(super::handoff::open_browser(&core, &thread, true), super::handoff::open_browser(&core, &thread, true));
     first.unwrap();
     second.unwrap();
     super::handoff::open_browser(&core, &thread, true).await.unwrap();
     assert!(super::handoff::has_window(&core.paths, &thread));
-    wait_for_hits(&fx, "/wall").await;
-    assert_eq!(fx.hits_on("/wall").len(), 1, "one window loaded the page the run paused at");
+    let tab = super::handoff::tab_of(&core.paths, &thread).expect("a tab");
+    assert_eq!(tab.profile(), crate::engine::browser::Profile::Private);
+    wait_for_hits(&fx, "/wall", 1).await;
+    assert_eq!(fx.hits_on("/wall").len(), 1, "one tab loaded the page the run paused at");
+    assert_eq!(tab.eval("navigator.webdriver").await.unwrap(), json!(true), "the tab is not disguised");
 
-    // Continue closes the window and goes on.
+    // The user closes it themselves: it is forgotten, and "Open browser" opens a new one.
+    browser.bridge.call("tab.close", json!({ "tab": tab.id() })).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), tab.closed()).await.expect("the tab closed");
+    for _ in 0..50 {
+        if !super::handoff::has_window(&core.paths, &thread) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(!super::handoff::has_window(&core.paths, &thread));
+    super::handoff::open_browser(&core, &thread, true).await.unwrap();
+    wait_for_hits(&fx, "/wall", 2).await;
+    assert_eq!(fx.hits_on("/wall").len(), 2);
+    let again = super::handoff::tab_of(&core.paths, &thread).expect("a new tab");
+    assert_ne!(again.id(), tab.id());
+
+    // Continue closes the tab and goes on.
     source.solved.store(true, Ordering::SeqCst);
     let done = core.discover_resume_with(deps, &thread).await.unwrap();
     assert_eq!(done.status, SourceStatus::Done);
     assert!(!super::handoff::has_window(&core.paths, &thread));
+    assert!(!again.is_open());
 }
 
-/// With a bound session the window is that session's profile: it is locked while the window is open
-/// and free again after "Continue". Needs a display.
+/// With a bound session the tab opens in the user's signed-in profile. Reads of the source are not
+/// held back while it is open (the user's profile has no single owner), and "Skip" closes it.
 #[tokio::test]
-#[ignore = "opens a visible Chrome window"]
-async fn open_browser_uses_the_bound_session_and_continue_frees_its_profile() {
-    use crate::engine::net::fixtures::Fixtures;
-    let fx = Fixtures::start().await;
-    fx.route("/wall", 200, "text/html", "<html><head><title>Sign in</title></head><body><h1>Sign in to continue</h1></body></html>");
+#[ignore = "launches Chromium with the extension"]
+async fn open_browser_uses_the_signed_in_profile_for_a_source_with_a_session() {
+    let Some(browser) = crate::engine::browser::bridge::testkit::launch_incognito().await else { return };
+    let fx = crate::engine::net::fixtures::Fixtures::start().await;
     let h = Harness::new();
     let core = h.open();
-    let source = Walled::at(&format!("{}/wall", fx.base()), ChallengeKind::Login, vec![cand("w.test", 1, "Acme", "Engineer")]);
-    let mut deps = h.deps();
-    let id = add_walled(&core, &mut deps, source.clone());
-    let session = core.sessions().create("Acme", "https://acme.test/login").await.unwrap();
-    core.set_job_source_session(id, Some(session.id)).unwrap();
-    let summary = core.discover_now_with(deps.clone()).await.unwrap();
-    let thread = source_thread(&summary.run, id);
+    browser.attach(&core);
+    let (_source, id, thread, _deps) = paused_at_fixture_wall(&h, &core, &fx, true).await;
 
-    let (first, second) = tokio::join!(super::handoff::open_browser(&core, &thread, true), super::handoff::open_browser(&core, &thread, true));
-    first.unwrap();
-    second.unwrap();
-    assert!(core.sessions().is_open(session.id), "the window runs on the session's profile");
-    assert!(core.sessions().launch(session.id, true).await.is_err(), "a profile has one live browser");
-    wait_for_hits(&fx, "/wall").await;
+    super::handoff::open_browser(&core, &thread, true).await.unwrap();
+    let tab = super::handoff::tab_of(&core.paths, &thread).expect("a tab");
+    assert_eq!(tab.profile(), crate::engine::browser::Profile::Signed);
+    wait_for_hits(&fx, "/wall", 1).await;
     assert_eq!(fx.hits_on("/wall").len(), 1);
 
-    // A read of the session while the window is open says so, instead of failing on the profile lock.
+    // A read in the same profile while the tab is open.
+    let session_id = core.store.get_source(id).unwrap().unwrap().session_id;
     let renderer = crate::engine::browser::render::Renderer::new(&core, true);
-    let err = renderer.render(Some(session.id), &format!("{}/wall", fx.base())).await.unwrap_err();
-    assert_eq!(err.downcast_ref::<crate::engine::browser::gate::SessionInUse>(), Some(&crate::engine::browser::gate::SessionInUse::Window), "{err:#}");
-
-    source.solved.store(true, Ordering::SeqCst);
-    assert_eq!(core.discover_resume_with(deps, &thread).await.unwrap().status, SourceStatus::Done);
-    assert!(!core.sessions().is_open(session.id));
-    // The window is closed and the profile is free for the next read.
-    let page = renderer.render(Some(session.id), &format!("{}/wall", fx.base())).await.unwrap();
+    let port = url::Url::parse(fx.base()).unwrap().port().unwrap();
+    let page = renderer.render(session_id, &format!("http://wall.test:{port}/wall")).await.unwrap();
     assert!(page.html.contains("Sign in"));
-    core.sessions().launch(session.id, true).await.unwrap().close().await.unwrap();
+    assert!(tab.is_open(), "the read used its own tab");
+
+    // Skip closes the tab (in the background).
+    core.discover_cancel(&thread).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), tab.closed()).await.expect("the tab closed");
+    assert!(!super::handoff::has_window(&core.paths, &thread));
 }
 
 #[tokio::test]

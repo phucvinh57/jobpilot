@@ -8,8 +8,9 @@
 //!   profile dir `sessions/<id>/`, guarded by a lock file ([`lock`]) so at most one browser runs on it.
 //! - [`probe`]: the logged-in health check (cookies for the start domain and not on a login page).
 //! - [`challenge`]: is a login, captcha or block page in the way? (detection only; the user deals with it)
-//! - [`render`]: render a page headless for discovery (throwaway profile or a session's) and run that check;
-//!   `guard` keeps those browsers off the local network and `gate` orders the uses of a session.
+//! - [`render`]: render a page for discovery in a tab of the user's Chrome (a private tab, or their
+//!   signed-in profile for a source with a session) and run that check; the tab is guarded
+//!   (`guard::allows`) so pages stay off the local network. [`fetch`]: the same render for JD ingest.
 //!
 //! Get the manager with [`Core::sessions`]; every method is async and `'static`, so the UI runs them with
 //! `runtime::spawn`:
@@ -27,13 +28,18 @@ pub mod challenge;
 pub mod chrome;
 pub mod fetch;
 pub mod form;
+// The session gate, the guard proxy and the session reads are unused since discovery reads pages
+// through the browser bridge; they go with the rest of the chromiumoxide code.
+#[allow(dead_code)]
 pub(crate) mod gate;
+#[allow(dead_code)]
 pub(crate) mod guard;
 #[cfg(test)]
 mod integration;
 pub mod lock;
 pub mod probe;
 pub mod render;
+#[allow(dead_code)]
 pub mod session;
 pub mod tab;
 

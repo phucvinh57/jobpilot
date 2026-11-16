@@ -6,7 +6,7 @@
 //! ```
 //!
 //! The steps, in order: read the text the way "Generate CV" does ([`ingest_with_browser`]: plain
-//! fetch, headless Chrome for a page JavaScript draws); the model reads company, role and place
+//! fetch, a private tab of the user's Chrome for a page JavaScript draws); the model reads company, role and place
 //! from it (`pipeline::analyze`, the step the generator starts with); the same job already in the
 //! list is returned instead of added; the lead is scored like a discovered one (`discover::score`)
 //! and gets its brief (`pipeline::insight`); the text goes to `<data_dir>/leads/<id>/jd.md`.
@@ -14,8 +14,9 @@
 //! - Nothing is promoted and no CV is written: "Prepare CV" does that when the user presses it.
 //! - The hard filters do not apply: the user chose this job, so it is listed (and scored) even when
 //!   discovery would have dismissed it.
-//! - A link the user pasted is theirs, so it is read like the generator reads one (any public or
-//!   private address); links found by sources still go through `net::http`.
+//! - A link the user pasted is theirs, so it is read like the generator reads one (the plain fetch
+//!   reads any public or private address; the browser fallback, which runs the page's scripts,
+//!   public pages only); links found by sources still go through `net::http`.
 //! - A lead without a link (a file, pasted text) has the address `manual:<hash of its text>`, so
 //!   adding the same text twice finds the same lead. It is not a web link: the UI must not offer
 //!   "Open posting" for it (check that `Lead::url` starts with `http`).
@@ -89,11 +90,12 @@ impl Core {
     ///
     /// Takes up to about a minute: run it on the global runtime. Errors the user can act on: no AI
     /// provider, no profile, a bad link or file, a login or captcha page (paste the text instead),
-    /// no Chrome, a network failure (retry), no job title, and a job that is an application already.
+    /// no browser (the extension is not connected or not allowed in Incognito: a `BridgeError`), a
+    /// network failure (retry), no job title, and a job that is an application already.
     pub async fn add_lead(&self, input: JdInput) -> Result<Lead> {
         let deps = ManualDeps::live(self)?;
-        let paths = self.paths.clone();
-        self.add_lead_with(&deps, input, move |input| async move { ingest_with_browser(&paths, input).await }).await
+        let bridge = self.browser();
+        self.add_lead_with(&deps, input, move |input| async move { ingest_with_browser(&bridge, input).await }).await
     }
 
     /// [`add_lead`](Self::add_lead) with explicit [`ManualDeps`] and the function that reads the

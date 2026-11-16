@@ -1,10 +1,10 @@
 //! Challenge detection: is a login, captcha or block page standing between the app and a page?
 //!
 //! This only **detects**. The app never solves, evades or waits out a challenge: a source that meets
-//! one pauses, the user is notified and deals with it in the visible managed browser (see
+//! one pauses, the user is notified and deals with it in a tab of their own browser (see
 //! `discover::handoff`). No solver service, no fingerprint tricks.
 //!
-//! - [`detect`] / [`detect_at`]: look at a rendered page. One script reads what is on screen (title,
+//! - [`detect`] / [`detect_at`]: look at a rendered page (a [`Tab`]). One script reads what is on screen (title,
 //!   the start of the text, visible captcha widgets, the navigation's HTTP status); the verdict is
 //!   [`classify`], a plain function over [`PageFacts`] so it is testable without a browser. Login uses
 //!   the pieces of the session probe (`probe`): a visible password input, or a redirect to a login URL.
@@ -19,11 +19,11 @@
 
 use std::sync::OnceLock;
 
-use chromiumoxide::Page;
 use regex::Regex;
 use serde::Deserialize;
 
 use super::probe::{looks_like_login_url, PASSWORD_JS};
+use super::tab::Tab;
 use crate::engine::graph::nodes::ChallengeKind;
 
 /// Pages with at least this much text are real content for the rules that read a page's **title** or
@@ -299,22 +299,22 @@ fn facts_script() -> String {
     TEMPLATE.replace("__WIDGETS__", &WIDGET_SELECTORS.join(", ")).replace("__TEXT__", &TEXT_SNIPPET_CHARS.to_string())
 }
 
-/// What `page` shows right now, or `None` when it cannot be read (the page is gone or navigating).
-pub async fn facts(page: &Page) -> Option<PageFacts> {
-    let json: String = page.evaluate_expression(facts_script()).await.ok()?.into_value().ok()?;
+/// What `tab` shows right now, or `None` when it cannot be read (the tab is gone or navigating).
+pub async fn facts(tab: &Tab) -> Option<PageFacts> {
+    let json: String = tab.eval_as(&facts_script()).await.ok()?;
     let mut facts: PageFacts = serde_json::from_str(&json).ok()?;
-    facts.password = page.evaluate_expression(PASSWORD_JS).await.ok().and_then(|v| v.into_value::<bool>().ok()).unwrap_or(false);
+    facts.password = tab.eval_as::<bool>(PASSWORD_JS).await.unwrap_or(false);
     Some(facts)
 }
 
-/// Is a login, captcha or block page showing in `page`? A page that cannot be read is not reported.
-pub async fn detect(page: &Page) -> Option<ChallengeKind> {
-    detect_at(page, None).await
+/// Is a login, captcha or block page showing in `tab`? A page that cannot be read is not reported.
+pub async fn detect(tab: &Tab) -> Option<ChallengeKind> {
+    detect_at(tab, None).await
 }
 
 /// [`detect`] knowing which address was asked for (see [`classify`]).
-pub async fn detect_at(page: &Page, requested: Option<&str>) -> Option<ChallengeKind> {
-    classify(&facts(page).await?, requested)
+pub async fn detect_at(tab: &Tab, requested: Option<&str>) -> Option<ChallengeKind> {
+    classify(&facts(tab).await?, requested)
 }
 
 #[cfg(test)]
@@ -458,7 +458,10 @@ pub(crate) mod tests {
     }
 
     // ---- real pages in a real browser: `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored challenge`
+    // (after `bun run ext:build`). Fixture pages are reached as `http://site.test:<port>`: the test
+    // browser maps `*.test` to this machine, and the extension blocks address literals on guarded tabs.
 
+    use crate::engine::browser::bridge::testkit;
     use crate::engine::net::fixtures::Fixtures;
 
     const WIDGET_STYLE: &str = "width:304px;height:78px;border:1px solid #888;display:block";
@@ -473,10 +476,12 @@ pub(crate) mod tests {
         page("Backend Engineer - Acme", &format!("<main><h1>Backend Engineer</h1><p>{text}</p>{extra}</main>"))
     }
 
-    fn fixtures(fx: &Fixtures) {
+    /// `fx`'s pages; the address of the site is `http://site.test:<port>`, returned.
+    fn fixtures(fx: &Fixtures) -> String {
+        let base = format!("http://site.test:{}", url::Url::parse(fx.base()).unwrap().port().unwrap());
         let html = "text/html; charset=utf-8";
         fx.route("/login", 200, html, page("Sign in", "<form><input name=u><input type=password name=p><button>Sign in</button></form>"))
-            .redirect("/jobs/1", 302, &format!("{}/account/login?next=/jobs/1", fx.base()))
+            .redirect("/jobs/1", 302, &format!("{base}/account/login?next=/jobs/1"))
             .route("/account/login", 200, html, page("Welcome", "<p>Welcome back. Your session ended.</p>"))
             .route("/recaptcha", 200, html, page("Sign up", &format!("<form><div class=\"g-recaptcha\" data-sitekey=\"k\" style=\"{WIDGET_STYLE}\"></div></form>")))
             .route("/recaptcha-frame", 200, html, page("Sign up", "<iframe title=\"reCAPTCHA\" src=\"about:blank\" width=\"304\" height=\"78\"></iframe>"))
@@ -497,83 +502,93 @@ pub(crate) mod tests {
                     "<form><div class=\"g-recaptcha\" data-sitekey=\"k\" style=\"{WIDGET_STYLE}\"></div></form><div class=\"grecaptcha-badge\" style=\"width:256px;height:60px;position:fixed;bottom:0;right:0\"><iframe title=\"reCAPTCHA\" src=\"about:blank\" width=\"256\" height=\"60\"></iframe></div>"
                 )),
             );
+        base
     }
 
-    #[test]
-    #[ignore = "launches Chrome"]
-    fn challenge_detect_tells_login_captcha_block_and_content_apart_in_a_real_browser() {
-        use crate::engine::{runtime, Core, Paths, Secrets};
-        runtime::block_on(async {
-            let dir = tempfile::tempdir().unwrap();
-            let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
-            let renderer = crate::engine::browser::render::Renderer::new(&core, true);
-            let fx = Fixtures::start().await;
-            fixtures(&fx);
-
-            let expected = [
-                ("/login", Some(ChallengeKind::Login)),
-                ("/jobs/1", Some(ChallengeKind::Login)),
-                ("/recaptcha", Some(ChallengeKind::Captcha)),
-                ("/recaptcha-frame", Some(ChallengeKind::Captcha)),
-                ("/hcaptcha", Some(ChallengeKind::Captcha)),
-                ("/turnstile", Some(ChallengeKind::Captcha)),
-                ("/moment", Some(ChallengeKind::Captcha)),
-                ("/403", Some(ChallengeKind::Blocked)),
-                ("/429", Some(ChallengeKind::Blocked)),
-                ("/blocktext", Some(ChallengeKind::Blocked)),
-                ("/hello", None),
-                ("/posting", None),
-                ("/posting-with-captcha", None),
-            ];
-            // A few browsers at a time (each page waits a few seconds for text that never comes).
-            for chunk in expected.chunks(5) {
-                let renders = chunk.iter().map(|(path, _)| {
-                    let (renderer, url) = (renderer.clone(), format!("{}{path}", fx.base()));
-                    async move { renderer.render(None, &url).await }
-                });
-                for ((path, want), got) in chunk.iter().zip(futures::future::join_all(renders).await) {
-                    let got = got.unwrap_or_else(|e| panic!("{path}: {e:#}"));
-                    assert_eq!(got.challenge, *want, "{path}");
-                    assert!(!got.html.is_empty(), "{path}: the DOM is returned either way");
-                }
-            }
-        });
+    fn core() -> (tempfile::TempDir, crate::engine::Core) {
+        let dir = tempfile::tempdir().unwrap();
+        let core = crate::engine::Core::open_at(crate::engine::Paths::new(dir.path().join("jp")), crate::engine::Secrets::memory()).unwrap();
+        (dir, core)
     }
 
-    #[test]
-    #[ignore = "launches Chrome"]
-    fn detect_reads_a_page_that_is_open_in_a_browser_and_the_facts_carry_the_status() {
-        use crate::engine::{runtime, Core, Paths, Secrets};
-        runtime::block_on(async {
-            let dir = tempfile::tempdir().unwrap();
-            let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
-            let mgr = core.sessions();
-            let session = mgr.create("fixture", "https://fixture.test/").await.unwrap();
-            let fx = Fixtures::start().await;
-            fixtures(&fx);
-            // The same detection through a managed session's profile: `detect` over a page we opened.
-            let handle = mgr.launch(session.id, true).await.unwrap();
-            let blocked = handle.new_page(&format!("{}/403", fx.base())).await.unwrap();
-            let page_facts = super::facts(&blocked).await.expect("facts");
-            assert_eq!((page_facts.status, detect(&blocked).await), (403, Some(ChallengeKind::Blocked)), "{page_facts:?}");
-            let hello = handle.new_page(&format!("{}/hello", fx.base())).await.unwrap();
-            assert_eq!((super::facts(&hello).await.map(|f| f.status), detect(&hello).await), (Some(200), None));
-            let login = handle.new_page(&format!("{}/login", fx.base())).await.unwrap();
-            let page_facts = super::facts(&login).await.expect("facts");
-            assert!(page_facts.password, "{page_facts:?}");
-            assert_eq!(detect(&login).await, Some(ChallengeKind::Login));
-            handle.close().await.unwrap();
+    #[tokio::test]
+    #[ignore = "launches Chromium with the extension"]
+    async fn challenge_detect_tells_login_captcha_block_and_content_apart_in_a_real_browser() {
+        let Some(browser) = testkit::launch_incognito().await else { return };
+        let (_dir, core) = core();
+        browser.attach(&core);
+        let renderer = crate::engine::browser::render::Renderer::new(&core, true);
+        let fx = Fixtures::start().await;
+        let base = fixtures(&fx);
 
-            // And `Renderer` in the session: the same verdict, and the profile is free afterwards.
-            let renderer = crate::engine::browser::render::Renderer::new(&core, true);
-            let got = renderer.render(Some(session.id), &format!("{}/turnstile", fx.base())).await.unwrap();
-            assert_eq!(got.challenge, Some(ChallengeKind::Captcha));
-            assert!(!mgr.is_open(session.id));
-            // The address stays out of a failure's text.
-            let err = renderer.render(Some(session.id), "http://127.0.0.1:1/never").await.err();
-            if let Some(e) = err {
-                assert!(!format!("{e:#}").contains("127.0.0.1:1/never"), "{e:#}");
+        let expected = [
+            ("/login", Some(ChallengeKind::Login)),
+            ("/jobs/1", Some(ChallengeKind::Login)),
+            ("/recaptcha", Some(ChallengeKind::Captcha)),
+            ("/recaptcha-frame", Some(ChallengeKind::Captcha)),
+            ("/hcaptcha", Some(ChallengeKind::Captcha)),
+            ("/turnstile", Some(ChallengeKind::Captcha)),
+            ("/moment", Some(ChallengeKind::Captcha)),
+            ("/403", Some(ChallengeKind::Blocked)),
+            ("/429", Some(ChallengeKind::Blocked)),
+            ("/blocktext", Some(ChallengeKind::Blocked)),
+            ("/hello", None),
+            ("/posting", None),
+            ("/posting-with-captcha", None),
+        ];
+        // A few tabs at a time (each page waits a few seconds for text that never comes).
+        for chunk in expected.chunks(5) {
+            let renders = chunk.iter().map(|(path, _)| {
+                let (renderer, url) = (renderer.clone(), format!("{base}{path}"));
+                async move { renderer.render(None, &url).await }
+            });
+            for ((path, want), got) in chunk.iter().zip(futures::future::join_all(renders).await) {
+                let got = got.unwrap_or_else(|e| panic!("{path}: {e:#}"));
+                assert_eq!(got.challenge, *want, "{path}");
+                assert!(!got.html.is_empty(), "{path}: the DOM is returned either way");
             }
-        });
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "launches Chromium with the extension"]
+    async fn detect_reads_a_tab_that_is_open_and_the_facts_carry_the_status() {
+        use crate::engine::browser::{OpenOptions, Profile};
+        let Some(browser) = testkit::launch_incognito().await else { return };
+        let (_dir, core) = core();
+        browser.attach(&core);
+        let fx = Fixtures::start().await;
+        let base = fixtures(&fx);
+        let open = |path: &str| {
+            let (bridge, url) = (browser.bridge.clone(), format!("{base}{path}"));
+            async move {
+                let tab = bridge.open(&url, OpenOptions { profile: Profile::Signed, focus: false, guard: None }).await.unwrap();
+                tab.wait_loaded(std::time::Duration::from_secs(20)).await;
+                tab
+            }
+        };
+        // `detect` over a tab we opened.
+        let blocked = open("/403").await;
+        let page_facts = super::facts(&blocked).await.expect("facts");
+        assert_eq!((page_facts.status, detect(&blocked).await), (403, Some(ChallengeKind::Blocked)), "{page_facts:?}");
+        let hello = open("/hello").await;
+        assert_eq!((super::facts(&hello).await.map(|f| f.status), detect(&hello).await), (Some(200), None));
+        let login = open("/login").await;
+        let page_facts = super::facts(&login).await.expect("facts");
+        assert!(page_facts.password, "{page_facts:?}");
+        assert_eq!(detect(&login).await, Some(ChallengeKind::Login));
+        // A closed tab cannot be read: nothing is reported.
+        login.close().await;
+        assert_eq!(super::facts(&login).await, None);
+        assert_eq!(detect(&login).await, None);
+
+        // And `Renderer` for a source with a session (the signed-in profile): the same verdict.
+        let session = core.store.add_session(&crate::engine::store::NewSession { name: "fixture".into(), start_url: format!("{base}/") }).unwrap();
+        let renderer = crate::engine::browser::render::Renderer::new(&core, true);
+        let got = renderer.render(Some(session.id), &format!("{base}/turnstile")).await.unwrap();
+        assert_eq!(got.challenge, Some(ChallengeKind::Captcha));
+        // The address stays out of a failure's text.
+        let err = renderer.render(Some(session.id), "http://127.0.0.1:1/never").await.unwrap_err();
+        assert!(!format!("{err:#}").contains("127.0.0.1:1/never"), "{err:#}");
     }
 }

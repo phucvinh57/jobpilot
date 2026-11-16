@@ -38,7 +38,7 @@ use super::state::{
     SourceState, SourceStatus, DISCOVERY_GRAPH, LAST_RUN_KEY, SOURCE_GRAPH,
 };
 use crate::engine::browser::challenge::ChallengeFound;
-use crate::engine::browser::gate::SessionInUse;
+use crate::engine::browser::{BridgeError, INCOGNITO_NOT_ALLOWED, NOT_CONNECTED};
 use crate::engine::graph::nodes::{self, Challenge, ChallengeKind};
 use crate::engine::graph::{GraphDef, Graphs, Limits, Outcome, END, START};
 use crate::engine::health::{classify, Problem};
@@ -393,10 +393,11 @@ pub(super) fn skip_kind(e: &anyhow::Error) -> &'static str {
         return "needs_browser";
     }
     let text = format!("{e:#}");
-    // The source's browser session is busy (its window is open for the user): nothing is wrong with
-    // the posting, and a later run reads it.
-    if e.downcast_ref::<SessionInUse>().is_some() || text.contains("the browser session is in use") {
-        "session_in_use"
+    // The browser cannot be used right now (the extension is not connected, or may not open
+    // Incognito tabs): nothing is wrong with the posting, and a later run reads it.
+    let unavailable = matches!(e.downcast_ref::<BridgeError>(), Some(BridgeError::NotConnected | BridgeError::IncognitoNotAllowed));
+    if unavailable || [NOT_CONNECTED, INCOGNITO_NOT_ALLOWED].iter().any(|t| text.contains(t)) {
+        "browser_unavailable"
     } else if ["HTTP 404", "HTTP 410"].iter().any(|s| text.contains(s)) {
         "gone"
     } else if ["HTTP 401", "HTTP 403"].iter().any(|s| text.contains(s)) {
