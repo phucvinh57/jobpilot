@@ -12,12 +12,10 @@ mkdir -p "$dist"
 echo "==> web app dependencies"
 bun install --frozen-lockfile
 
-echo "==> browser extension (extension/dist, bundled as a resource)"
-bun run ext:build
-
 echo "==> release build and packages ($bundles)"
 # The Tauri CLI finds `src-tauri/tauri.conf.json` from the repository root. It builds the web app
-# (`beforeBuildCommand`), the release binary, then the bundles. The AppImage step downloads
+# and the extension (`beforeBuildCommand`; `extension/dist` is bundled as a resource), the release
+# binary, then the bundles. The AppImage step downloads
 # linuxdeploy on first use.
 # A bundle that fails (the AppImage needs linuxdeploy to work on this machine) does not hide the
 # ones that were built: they are still copied, and the script ends with the failure.

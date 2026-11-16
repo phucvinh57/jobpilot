@@ -123,7 +123,7 @@ await waitFor(() => $("#drawer"));
 await shot("jobs-cv-drawer");
 await click("#drawer-close");
 await click("#open-settings");
-await click("Appearance: Light");
+await click(byText("Light"));
 await shot("settings-light");
 ```
 

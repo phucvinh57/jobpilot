@@ -36,8 +36,10 @@ describe("Settings > Job sources", () => {
     expect(within(first).getByRole("switch", { name: "Search Acme careers" }).getAttribute("aria-checked")).toBe(
       "true",
     );
-    // No session bound: "No session" is the one that is on.
-    expect(within(first).getByRole("button", { name: "No session" }).getAttribute("aria-pressed")).toBe("true");
+    // No site bound: "Private (no sign-in)" is the one that is on.
+    expect(within(first).getByRole("button", { name: "Private (no sign-in)" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     expect(within(first).getByRole("button", { name: "LinkedIn" }).getAttribute("aria-pressed")).toBe("false");
 
     // A source with no name shows its kind; a paused one needs the user, whatever its status says.
@@ -59,7 +61,7 @@ describe("Settings > Job sources", () => {
     await user.click(within(first).getByRole("button", { name: "Work account" }));
     expect(mocked.setSourceSession).toHaveBeenCalledWith(1, 6);
     const second = screen.getByRole("listitem", { name: /^Career page/ });
-    await user.click(within(second).getByRole("button", { name: "No session" }));
+    await user.click(within(second).getByRole("button", { name: "Private (no sign-in)" }));
     expect(mocked.setSourceSession).toHaveBeenCalledWith(2, null);
 
     await user.click(within(first).getByRole("button", { name: "Remove" }));

@@ -2,7 +2,7 @@
 Type=Application
 Name=JobPilot
 GenericName=Job application assistant
-Comment=Tailor your CV to a job description, apply in a managed browser, track replies
+Comment=Tailor your CV to a job description, apply in your own Chrome, track replies
 Exec=jobpilot
 Icon=jobpilot
 Terminal=false

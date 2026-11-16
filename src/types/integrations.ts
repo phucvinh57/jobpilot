@@ -1,4 +1,4 @@
-// AI providers, Gmail and browser sessions as the shell reads them (`integrations_*` commands).
+// AI providers, Gmail and the browser (extension pairing, signed-in sites) as the shell reads them (`integrations_*` commands).
 // An API key is never part of what is read: only "a key is saved" comes back.
 
 export interface SyncReport {

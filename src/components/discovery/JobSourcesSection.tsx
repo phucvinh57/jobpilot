@@ -75,14 +75,14 @@ function SourceRow({
         </Button>
       </div>
       <Caption className="selectable">{line}</Caption>
-      <div role="group" aria-label="Browser session" className="flex flex-wrap items-center gap-1.5">
-        <Caption>Browser session:</Caption>
+      <div role="group" aria-label="Signed-in site" className="flex flex-wrap items-center gap-1.5">
+        <Caption>Read as:</Caption>
         <FilterChip
           id={`source-${id}-session-none`}
           selected={source.sessionId === null}
           onClick={() => onSession(null)}
         >
-          No session
+          Private (no sign-in)
         </FilterChip>
         {sessions.map((session) => (
           <FilterChip
@@ -230,7 +230,7 @@ export function JobSourcesSection() {
     <Section
       id="settings-sources"
       title="Job sources"
-      hint="Where to look for jobs. Public boards and Hacker News need no login; for a site that wants one, pick a browser session you logged in to."
+      hint="Where to look for jobs. Public boards and Hacker News need no login; for a site that wants one, pick a site you are signed in to (Settings > Browser)."
       actions={
         <Button id="add-source" disabled={data === undefined} onClick={openForm}>
           Add source

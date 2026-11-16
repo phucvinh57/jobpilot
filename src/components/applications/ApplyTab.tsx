@@ -77,7 +77,7 @@ function ExportCvButton({ apply, session }: { apply: Apply; session: ApplySessio
   );
 }
 
-/** Applying by hand when the managed browser cannot: save the CV, send it on the site, mark it. */
+/** Applying by hand when JobPilot cannot fill the form in your browser: save the CV, send it on the site, mark it. */
 function Manual({ idle, apply, session }: { idle: ApplyIdle; apply: Apply; session: ApplySession }) {
   const busy = apply.busy !== null || session.busy;
   const url = idle.applyUrl;
