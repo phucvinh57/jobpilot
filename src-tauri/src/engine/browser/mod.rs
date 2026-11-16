@@ -1,5 +1,7 @@
 //! Managed Chrome sessions (chromiumoxide).
 //!
+//! - [`bridge`] + [`tab`]: the replacement being ported to: tabs in the user's own Chrome, driven
+//!   through the JobPilot extension ([`Core::browser`] -> [`Bridge::open`] -> [`Tab`]).
 //! - [`chrome`]: which Chrome to run (`JOBPILOT_CHROME` -> managed Chrome-for-Testing -> system) and the
 //!   explicit "download browser" step.
 //! - [`session`]: [`SessionManager`], the single owner of every launch. Each session is an app-owned
@@ -20,6 +22,7 @@
 //! Auto-apply launches automation browsers with [`SessionManager::launch`] and drives the returned
 //! [`BrowserHandle`] (`new_page(url)` -> `chromiumoxide::Page`, `cookies()`, `close()`).
 
+pub mod bridge;
 pub mod challenge;
 pub mod chrome;
 pub mod fetch;
@@ -32,12 +35,16 @@ pub mod lock;
 pub mod probe;
 pub mod render;
 pub mod session;
+pub mod tab;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+pub use bridge::{Bridge, BridgeError, BridgeEvent, BridgeStatus, INCOGNITO_NOT_ALLOWED, NOT_CONNECTED};
 pub use chrome::{Chrome, ChromeSource, DownloadProgress};
+pub use guard::Policy;
+pub use tab::{Clip, OpenOptions, Profile, Tab};
 pub use form::FormBrowser;
 pub use lock::{LockError, ProfileLock};
 pub use session::{BrowserHandle, SessionManager, SessionStatus};

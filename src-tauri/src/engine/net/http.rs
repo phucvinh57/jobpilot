@@ -342,7 +342,7 @@ pub(crate) async fn public_socket_addrs(url: &url::Url) -> Result<Vec<std::net::
     })
 }
 
-fn is_public_host(url: &url::Url) -> bool {
+pub(crate) fn is_public_host(url: &url::Url) -> bool {
     match url.host() {
         Some(url::Host::Domain(name)) => {
             let name = name.trim_end_matches('.').to_ascii_lowercase();
@@ -357,7 +357,7 @@ fn is_public_host(url: &url::Url) -> bool {
     }
 }
 
-fn ip_is_public(ip: std::net::IpAddr) -> bool {
+pub(crate) fn ip_is_public(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(ip) => ipv4_is_public(ip),
         std::net::IpAddr::V6(ip) => ipv6_is_public(ip),

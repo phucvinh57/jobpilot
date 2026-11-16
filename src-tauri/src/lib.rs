@@ -45,6 +45,9 @@ pub fn run() -> anyhow::Result<()> {
 
     // Gmail tracking: poll for replies while the app runs (no-op unless Gmail is connected).
     mail::autostart(&core);
+    // The browser bridge: the JobPilot extension in the user's Chrome connects to it.
+    let browser = core.browser();
+    browser.start();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -89,10 +92,12 @@ pub fn run() -> anyhow::Result<()> {
         .build(tauri::generate_context!())
         .context("JobPilot cannot start")?;
 
-    app.run(|_, event| {
+    app.run(move |_, event| {
         if let RunEvent::Exit = event {
             // The window is gone: do not leave an auto-apply Chrome running behind.
             crate::engine::runtime::block_on(crate::engine::apply::close_all());
+            // And close the tabs JobPilot opened in the user's browser.
+            crate::engine::runtime::block_on(browser.close_all());
             tracing::info!("JobPilot closed");
         }
     });

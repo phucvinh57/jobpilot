@@ -34,7 +34,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::{JoinHandle, JoinSet};
 
-use crate::engine::net::http::{public_socket_addrs, NotPublic};
+use crate::engine::net::http::{ip_is_public, is_public_host, public_socket_addrs, NotPublic};
 
 /// Longest request head accepted.
 const HEAD_MAX: usize = 16 * 1024;
@@ -45,7 +45,7 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Which hosts the guard lets the browser reach.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Policy {
+pub enum Policy {
     /// Public hosts only (the rules of `net::http`).
     Public,
     /// Everything (tests that read fixture pages on `127.0.0.1`).
@@ -311,6 +311,46 @@ async fn resolve(url: &url::Url, policy: &Policy) -> Result<Vec<SocketAddr>, Ref
     }
 }
 
+/// How long resolving a name may take for [`allows`].
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// May a guarded browser tab request `url` (the browser bridge's guard, which answers each request
+/// the tab is about to make)? Only http(s) and ws(s) addresses are judged; other schemes (`data:`,
+/// `blob:`, `chrome-extension:`, ...) reach no host and are allowed. Under [`Policy::Public`] the
+/// host must be public by the `net::http` rules and, for a name, **every** address it resolves to
+/// must be public (the browser resolves it again and may pick any of them). A name that does not
+/// resolve is refused.
+pub(crate) async fn allows(policy: &Policy, url: &url::Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https" | "ws" | "wss") {
+        return true;
+    }
+    match policy {
+        Policy::Anything => true,
+        Policy::Public => {
+            if !is_public_host(url) {
+                return false;
+            }
+            match url.host() {
+                Some(url::Host::Domain(name)) => {
+                    let lookup = tokio::net::lookup_host((name.trim_end_matches('.'), 0));
+                    match tokio::time::timeout(RESOLVE_TIMEOUT, lookup).await {
+                        Ok(Ok(addrs)) => {
+                            let addrs: Vec<_> = addrs.collect();
+                            !addrs.is_empty() && addrs.iter().all(|a| ip_is_public(a.ip()))
+                        }
+                        _ => false,
+                    }
+                }
+                // An address literal: `is_public_host` judged it.
+                Some(_) => true,
+                None => false,
+            }
+        }
+        #[cfg(test)]
+        Policy::OnlyPorts(ports) => url.port_or_known_default().is_some_and(|port| ports.contains(&port)),
+    }
+}
+
 /// Every address of `url`'s host, private or not.
 async fn any_addrs(url: &url::Url) -> Result<Vec<SocketAddr>> {
     let port = url.port_or_known_default().unwrap_or(80);
@@ -495,6 +535,24 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(stopped, "still listening");
+    }
+
+    #[tokio::test]
+    async fn allows_judges_hosts_by_the_net_rules_and_lets_other_schemes_through() {
+        let at = |raw: &str| url::Url::parse(raw).unwrap();
+        for private in ["http://127.0.0.1/", "https://10.0.0.5/x", "http://[::1]:8080/", "http://localhost/", "http://intranet/", "https://printer.local/", "ws://192.168.1.1/", "http://169.254.169.254/"] {
+            assert!(!allows(&Policy::Public, &at(private)).await, "{private}");
+            assert!(allows(&Policy::Anything, &at(private)).await, "{private}");
+        }
+        assert!(allows(&Policy::Public, &at("https://93.184.215.14/")).await, "a public address literal");
+        assert!(!allows(&Policy::Public, &at("https://does-not-exist.invalid/")).await, "a name that does not resolve");
+        for other in ["data:text/html,hi", "blob:https://a.test/0b2c", "chrome-extension://abc/x.js", "about:blank"] {
+            assert!(allows(&Policy::Public, &at(other)).await, "{other}");
+        }
+        let only = Policy::OnlyPorts(vec![4000]);
+        assert!(allows(&only, &at("http://127.0.0.1:4000/")).await);
+        assert!(!allows(&only, &at("http://127.0.0.1:4001/")).await);
+        assert!(!allows(&only, &at("https://example.com/")).await);
     }
 
     #[test]
