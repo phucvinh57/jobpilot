@@ -88,8 +88,8 @@ impl Core {
         self.store.set_source_session(id, session_id)
     }
 
-    /// Remove a job source. A run of it that waits for the user is skipped (and its browser window
-    /// closed); the leads it found stay.
+    /// Remove a job source. A run of it that waits for the user is skipped (and the browser tab
+    /// opened for it closed); the leads it found stay.
     pub fn remove_job_source(&self, id: i64) -> Result<()> {
         self.job_source(id)?;
         for waiting in self.discover_waiting()?.into_iter().filter(|w| w.source_id == id) {

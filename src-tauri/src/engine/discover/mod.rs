@@ -4,7 +4,7 @@
 //! ```text
 //! let summary = core.discover_now().await?;            // "Search now": every enabled job source
 //! for w in core.discover_waiting()? { .. }              // sources paused at a login, captcha or block page
-//! core.discover_open_browser(&w.thread).await?;         // "Open browser": a visible window on the page to deal with
+//! core.discover_open_browser(&w.thread).await?;         // "Open browser": a tab on the page, for the user to deal with
 //! core.discover_resume(&w.thread).await?;               // "Continue" (or "Retry" for a failed source)
 //! core.discover_cancel(&w.thread)?;                     // skip that source
 //! if core.discover_due(Utc::now())? { .. }              // the daily timer: setting on, a source, idle, 24h since the last run
@@ -151,7 +151,7 @@ impl Core {
             None => bail!("no such source thread: it was cancelled or is too old"),
         }
         let runner = run::Runner::new(self, deps)?;
-        // The user is done with the browser window: close it, so the next read can use its profile.
+        // The user is done with the tab opened for them: close it.
         handoff::close_window(&self.paths, thread).await;
         self.store.set_source_status(source_id, "running")?;
         let outcome = self.graphs.resume(&runner.source, thread, |s| s.challenge = None).await;

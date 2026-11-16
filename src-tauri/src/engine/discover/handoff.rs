@@ -3,23 +3,23 @@
 //! ```text
 //! core.discover_waiting()?            // [WaitingSource { reason: Captcha { url }, .. }]   (the run paused)
 //! needs_human(&w.reason)              // Some(Problem::NeedsHuman(Challenge::Captcha))     (what to show)
-//! core.discover_open_browser(&w.thread).await?   // "Open browser": a visible window on that page
+//! core.discover_open_browser(&w.thread).await?   // "Open browser": a tab on that page, in front
 //! // ... the user solves it themselves ...
-//! core.discover_resume(&w.thread).await?          // "Continue": the window closes, the source goes on
+//! core.discover_resume(&w.thread).await?          // "Continue": the tab closes, the source goes on
 //! ```
 //!
-//! The app **never solves, evades or waits out** a challenge: it only opens the page for the user.
-//! The window uses the profile of the source's bound session, so what the user does there (a login, a
-//! passed check) is what the headless reads reuse afterwards; a source without a session gets a clean
-//! throwaway window, in which nothing is remembered. "Continue" and "Skip" close the window first (a
-//! profile has one live browser), so the next headless read can use the profile.
+//! The app **never solves, evades or waits out** a challenge: it only opens the page for the user, in
+//! a focused tab of their own Chrome. A source with a session gets a tab in the user's normal
+//! profile, where they are signed in, so what they do there (a login, a passed check) is what the
+//! source's next reads use; a source without one gets a tab in the JobPilot Incognito window, in
+//! which nothing is remembered. "Continue" and "Skip" close the tab; a tab the user closed
+//! themselves is forgotten.
 //!
 //! [`text_probe`] is the default challenge hook of a run: the cheap, browser-free check of what a
 //! fetch returned. Pages rendered in the browser report their own challenge (`ChallengeFound`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use futures::FutureExt;
@@ -27,17 +27,13 @@ use futures::FutureExt;
 use super::deps::{ChallengeProbe, CheckStage};
 use super::state::parse_source_thread;
 use crate::engine::browser::challenge::detect_text;
-use crate::engine::browser::gate::{self, SessionUse};
-use crate::engine::browser::guard::{Guard, Policy};
-use crate::engine::browser::render::{open_visible, Visible};
-use crate::engine::browser::BrowserHandle;
+use crate::engine::browser::guard::Policy;
+use crate::engine::browser::render::open_visible;
+use crate::engine::browser::{Profile, Tab};
 use crate::engine::graph::{ThreadStatus, WaitReason};
 use crate::engine::health::{Challenge, Problem};
 use crate::engine::net::http::public_http_url;
 use crate::engine::{runtime, Core, Paths};
-
-/// How often a window is checked to see whether the user closed it.
-const WATCH_EVERY: Duration = Duration::from_secs(3);
 
 /// The default [`ChallengeProbe`]: after a search page nothing is checked here (the adapters that
 /// render a page raise their own challenge); after a posting was fetched the start of its text is
@@ -76,48 +72,20 @@ fn page_of(reason: &WaitReason) -> Option<(i64, &str)> {
     }
 }
 
-/// A window opened for the user. The fields after the browser outlive it: the request guard its
-/// requests go through, and the right to use the session's profile.
-enum Held {
-    /// In a managed session's profile.
-    Session(BrowserHandle, SessionUse, Guard),
-    /// With a throwaway profile.
-    Temp(Box<Visible>),
-}
-
-impl Held {
-    async fn is_alive(&mut self) -> bool {
-        match self {
-            Held::Session(handle, ..) => handle.is_alive().await,
-            Held::Temp(window) => window.is_alive(),
-        }
-    }
-
-    async fn close(self) {
-        match self {
-            Held::Session(handle, _in_use, _guard) => {
-                let _ = handle.close().await;
-            }
-            Held::Temp(window) => window.close().await,
-        }
-    }
-}
-
 /// The registries below are process-wide and keyed by data dir and source thread (two data dirs in
 /// one process, as in tests, can have threads of the same name).
 fn key(paths: &Paths, thread: &str) -> String {
     format!("{}\u{0}{thread}", paths.data_dir.display())
 }
 
-/// The open windows by [`key`]. A window lives until the user continues or skips the source (or
-/// closes it themselves).
-fn open_windows() -> &'static Mutex<HashMap<String, Held>> {
-    static OPEN: OnceLock<Mutex<HashMap<String, Held>>> = OnceLock::new();
+/// The tabs opened for the user, by [`key`]. A tab lives until the user continues or skips the
+/// source (or closes it themselves).
+fn open_tabs() -> &'static Mutex<HashMap<String, Tab>> {
+    static OPEN: OnceLock<Mutex<HashMap<String, Tab>>> = OnceLock::new();
     OPEN.get_or_init(Default::default)
 }
 
-/// One lock per [`key`]: opening, closing and the watcher's check of its window never overlap (a
-/// double click opens one window).
+/// One lock per [`key`]: opening and closing its tab never overlap (a double click opens one tab).
 fn thread_lock(thread: &str) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
     let mut locks = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
@@ -126,21 +94,27 @@ fn thread_lock(thread: &str) -> Arc<tokio::sync::Mutex<()>> {
     locks.entry(thread.to_string()).or_default().clone()
 }
 
-fn take_window(thread: &str) -> Option<Held> {
-    open_windows().lock().unwrap_or_else(|e| e.into_inner()).remove(thread)
+fn take_tab(key: &str) -> Option<Tab> {
+    open_tabs().lock().unwrap_or_else(|e| e.into_inner()).remove(key)
 }
 
-fn put_window(thread: &str, held: Held) {
-    open_windows().lock().unwrap_or_else(|e| e.into_inner()).insert(thread.to_string(), held);
+fn put_tab(key: &str, tab: Tab) {
+    open_tabs().lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), tab);
 }
 
-/// Is a window open for `thread`? (For tests.)
+/// Is a tab open for `thread`? (For tests.)
 #[cfg(test)]
 pub(crate) fn has_window(paths: &Paths, thread: &str) -> bool {
-    open_windows().lock().unwrap_or_else(|e| e.into_inner()).contains_key(&key(paths, thread))
+    open_tabs().lock().unwrap_or_else(|e| e.into_inner()).get(&key(paths, thread)).is_some_and(Tab::is_open)
 }
 
-/// Close the window opened for `thread`, if any, and wait until its profile is free.
+/// The tab open for `thread`, if any. (For tests.)
+#[cfg(test)]
+pub(crate) fn tab_of(paths: &Paths, thread: &str) -> Option<Tab> {
+    open_tabs().lock().unwrap_or_else(|e| e.into_inner()).get(&key(paths, thread)).cloned()
+}
+
+/// Close the tab opened for `thread`, if any.
 pub(crate) async fn close_window(paths: &Paths, thread: &str) {
     close_key(&key(paths, thread)).await;
 }
@@ -148,86 +122,52 @@ pub(crate) async fn close_window(paths: &Paths, thread: &str) {
 async fn close_key(key: &str) {
     let lock = thread_lock(key);
     let _one_at_a_time = lock.lock().await;
-    if let Some(held) = take_window(key) {
-        held.close().await;
+    if let Some(tab) = take_tab(key) {
+        tab.close().await;
     }
 }
 
-/// Close the window opened for `thread` in the background (for a caller that cannot wait).
+/// Close the tab opened for `thread` in the background (for a caller that cannot wait).
 pub(crate) fn discard_window(paths: &Paths, thread: &str) {
     let key = key(paths, thread);
     drop(runtime::spawn(async move { close_key(&key).await }));
 }
 
-/// The keys that have a watcher running.
-fn watchers() -> &'static Mutex<HashSet<String>> {
-    static WATCHERS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    WATCHERS.get_or_init(Default::default)
-}
-
-/// The right to be the one watcher of a key; ends when dropped.
-struct WatchClaim(String);
-
-impl WatchClaim {
-    /// `None` when a watcher is already running for `key`.
-    fn new(key: &str) -> Option<Self> {
-        watchers().lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string()).then(|| WatchClaim(key.to_string()))
-    }
-}
-
-impl Drop for WatchClaim {
-    fn drop(&mut self) {
-        watchers().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
-    }
-}
-
-/// Watch the window under `key`: when the user closes it themselves, close what is left of it (the
-/// session's profile is free again for reads) and stop. Also stops when the window is gone. One
-/// watcher per key: opening the browser again while a watcher runs adds no second one.
-fn watch(key: String) {
-    let Some(claim) = WatchClaim::new(&key) else { return };
+/// Forget the tab under `key` once it is closed (by the user, or by "Continue" / "Skip"), unless a
+/// newer tab took its place.
+fn watch(key: String, tab: Tab) {
     drop(runtime::spawn(async move {
-        loop {
-            tokio::time::sleep(WATCH_EVERY).await;
-            let lock = thread_lock(&key);
-            let _one_at_a_time = lock.lock().await;
-            let Some(mut held) = take_window(&key) else {
-                // Given up while the key's lock is held, so an open that follows starts a new watcher.
-                drop(claim);
-                return;
-            };
-            if held.is_alive().await {
-                put_window(&key, held);
-            } else {
-                tracing::info!("the user closed a browser window opened for a paused source");
-                held.close().await;
-                drop(claim);
-                return;
-            }
+        tab.closed().await;
+        let lock = thread_lock(&key);
+        let _one_at_a_time = lock.lock().await;
+        let mut tabs = open_tabs().lock().unwrap_or_else(|e| e.into_inner());
+        if tabs.get(&key).is_some_and(|held| held.id() == tab.id()) {
+            tracing::info!(tab = tab.id(), "the user closed a browser tab opened for a paused source");
+            tabs.remove(&key);
         }
     }));
 }
 
 impl Core {
-    /// "Open browser" for a source that waits at a login, captcha or block page: a **visible**
-    /// browser on that page, in the source's bound session profile if it has one (else a throwaway
-    /// one). The user deals with the page themselves; the app does nothing in it. "Continue"
-    /// ([`Core::discover_resume`]) closes the window and goes on.
+    /// "Open browser" for a source that waits at a login, captcha or block page: a **focused** tab
+    /// of the user's Chrome on that page, in their signed-in profile when the source has a session
+    /// (else in the JobPilot Incognito window). The user deals with the page themselves; the app
+    /// does nothing in it. "Continue" ([`Core::discover_resume`]) closes the tab and goes on.
     ///
-    /// Does nothing while the window is open (double clicks included); once the user closed it, a
-    /// new one opens. `Err` when the thread is not a waiting source, no Chrome is installed
-    /// (`Problem::NoChrome`), the profile is open elsewhere, or a read of the session holds it for
-    /// over a minute
-    /// ([`SessionInUse`](crate::engine::browser::gate::SessionInUse)).
+    /// While the tab is open (double clicks included) it is only brought to the front; once the
+    /// user closed it, a new one opens. `Err` when the thread is not a waiting source, the page is
+    /// on this machine or a private network, or the browser cannot be used (a
+    /// [`BridgeError`](crate::engine::browser::BridgeError): the extension is not connected, or not
+    /// allowed in Incognito).
     ///
-    /// Like the headless reads, the window is not disguised and its requests go through the request
-    /// guard (no machine-local or private hosts).
+    /// Like the reads, the tab is not disguised and its requests are checked by the guard (no
+    /// machine-local or private hosts).
     pub async fn discover_open_browser(&self, thread: &str) -> Result<()> {
         open_browser(self, thread, false).await
     }
 }
 
-/// [`Core::discover_open_browser`]; `allow_private` lets tests open fixture pages on `127.0.0.1`.
+/// [`Core::discover_open_browser`]; `allow_private` lets tests open fixture pages on this machine.
 pub(crate) async fn open_browser(core: &Core, thread: &str, allow_private: bool) -> Result<()> {
     parse_source_thread(thread).context("not a discovery source thread")?;
     let key = key(&core.paths, thread);
@@ -242,47 +182,21 @@ pub(crate) async fn open_browser(core: &Core, thread: &str, allow_private: bool)
     let url = public_http_url(url, allow_private).context("the page to open")?.to_string();
     let session_id = core.store.get_source(source_id)?.and_then(|s| s.session_id);
 
-    if let Some(mut held) = take_window(&key) {
-        if held.is_alive().await {
-            put_window(&key, held);
+    if let Some(tab) = take_tab(&key) {
+        if tab.is_open() {
+            if let Err(e) = tab.focus().await {
+                tracing::debug!("bringing a browser tab to the front: {e}");
+            }
+            put_tab(&key, tab);
             return Ok(());
         }
-        // The user closed it themselves: release the profile and open a fresh one.
-        held.close().await;
     }
-    let held = match session_id {
-        Some(id) => open_in_session(core, id, &url, allow_private).await?,
-        None => Held::Temp(Box::new(open_visible(&core.paths, &url, allow_private).await?)),
-    };
-    tracing::info!(thread, source_id, with_session = session_id.is_some(), "browser opened for the user");
-    put_window(&key, held);
-    watch(key);
+    let profile = if session_id.is_some() { Profile::Signed } else { Profile::Private };
+    let tab = open_visible(&core.browser(), &url, profile, Policy::new(allow_private)).await?;
+    tracing::info!(thread, source_id, tab = tab.id(), with_session = session_id.is_some(), "browser tab opened for the user");
+    put_tab(&key, tab.clone());
+    watch(key, tab);
     Ok(())
-}
-
-/// A visible browser on session `id`'s profile, showing `url`.
-async fn open_in_session(core: &Core, id: i64, url: &str, allow_private: bool) -> Result<Held> {
-    let in_use = gate::window(&core.paths.session_dir(id)).await.map_err(anyhow::Error::new)?;
-    let guard = Guard::start(Policy::new(allow_private)).await?;
-    let handle = core.sessions().launch_reading(id, false, &guard.chrome_args()).await?;
-    let shown = async {
-        // The window opens on a blank tab: use it.
-        match handle.pages().await?.into_iter().next() {
-            Some(page) => {
-                page.goto(url).await.context("opening the page")?;
-            }
-            None => {
-                handle.new_page(url).await?;
-            }
-        }
-        anyhow::Ok(())
-    }
-    .await;
-    if let Err(e) = shown {
-        let _ = handle.close().await;
-        return Err(e);
-    }
-    Ok(Held::Session(handle, in_use, guard))
 }
 
 #[cfg(test)]
@@ -322,17 +236,6 @@ mod tests {
         assert_eq!(probe(check(CheckStage::Posting, crate::engine::browser::challenge::tests::BOT_POSTING)).await.unwrap(), None);
         // The posting's own address says nothing: a job called "login engineer" is not a login wall.
         assert_eq!(probe(check(CheckStage::Posting, &posting)).await.unwrap(), None);
-    }
-
-    #[test]
-    fn a_key_has_one_watcher_at_a_time() {
-        let key = "watch-test\u{0}discover:run:1";
-        let first = WatchClaim::new(key).expect("the first watcher");
-        assert!(WatchClaim::new(key).is_none(), "a second one is not started while the first runs");
-        assert!(WatchClaim::new("watch-test\u{0}discover:run:2").is_some(), "another key has its own");
-        drop(first);
-        let again = WatchClaim::new(key);
-        assert!(again.is_some(), "once it ended, a new one may start");
     }
 
     #[test]

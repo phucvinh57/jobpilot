@@ -7,6 +7,11 @@
 //! `/opt/pw-browsers` (branded Google Chrome ignores `--load-extension`). It runs headless, with
 //! `--no-sandbox` when `JOBPILOT_NO_SANDBOX` is set, and maps every `*.test` name to `127.0.0.1`
 //! (fixture servers under a name the extension's literal-address rule does not block).
+//!
+//! [`launch`] leaves the extension out of Incognito, as an unpacked extension is until the user says
+//! otherwise; [`launch_incognito`] seeds the profile's preferences with "Allow in Incognito" (what the
+//! toggle on chrome://extensions stores), so `Profile::Private` tabs work. [`TestBrowser::attach`]
+//! makes `core.browser()` return the test browser's bridge, for code that takes a `Core`.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -14,6 +19,8 @@ use std::time::Duration;
 
 use super::{Bridge, BridgeConfig, EXTENSION_ID};
 use crate::engine::Secrets;
+#[cfg(test)]
+use {super::BRIDGES, crate::engine::Core};
 
 /// The built extension.
 pub fn extension_dist() -> PathBuf {
@@ -44,6 +51,15 @@ pub struct TestBrowser {
     _dirs: tempfile::TempDir,
 }
 
+impl TestBrowser {
+    /// From now on `core.browser()` (for every `Core` on the same data dir) is this browser's bridge.
+    #[cfg(test)]
+    pub(crate) fn attach(&self, core: &Core) {
+        let mut map = BRIDGES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        map.insert(core.paths.data_dir.clone(), self.bridge.clone());
+    }
+}
+
 impl Drop for TestBrowser {
     fn drop(&mut self) {
         let _ = self.child.start_kill();
@@ -54,6 +70,11 @@ impl Drop for TestBrowser {
 /// install).
 pub async fn launch() -> Option<TestBrowser> {
     launch_with(Bridge::new(Secrets::memory()), false).await
+}
+
+/// [`launch`] with the extension allowed in Incognito (`Profile::Private` tabs work).
+pub async fn launch_incognito() -> Option<TestBrowser> {
+    launch_with(Bridge::new(Secrets::memory()), true).await
 }
 
 /// Start `bridge` (auto-approving, on a free port; pass `core.browser()` to drive the browser through
