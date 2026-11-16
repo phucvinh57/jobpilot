@@ -57,7 +57,7 @@ export function CvTab(input: CvTabInput) {
   });
 
   return (
-    <div id="cv-tab" className="flex min-h-[520px] flex-col gap-3">
+    <div id="cv-tab" className="flex min-h-[520px] shrink-0 flex-col gap-3">
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         {/* Left: what the posting asks for, the fact check, then the YAML. */}
         <div id="cv-left" className="flex min-w-0 flex-col gap-3">
