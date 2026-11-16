@@ -69,6 +69,17 @@ pub fn load_cv_files(app: &Application) -> CvFiles {
     }
 }
 
+/// `cv.pdf` exists and was rendered after the last save of `cv.yaml` (an edit whose render failed leaves
+/// the older PDF behind: that one must not be sent).
+pub fn pdf_is_current(app: &Application) -> bool {
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    match (modified(&app.cv_pdf_path()), modified(&app.cv_yaml_path())) {
+        (Some(pdf), Some(yaml)) => pdf >= yaml,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
 /// `page-<n>.png` files of a folder in page order (`page-2` before `page-10`).
 pub fn page_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -294,5 +305,19 @@ mod tests {
             std::fs::read_to_string(app.cv_yaml_path()).expect("cv.yaml"),
             "basics: ["
         );
+    }
+
+    #[test]
+    fn a_pdf_older_than_the_yaml_is_not_current() {
+        let (_dir, core) = fresh_core();
+        let app = app(&core, None);
+        std::fs::create_dir_all(&app.dir).unwrap();
+        assert!(!pdf_is_current(&app), "no pdf");
+        std::fs::write(app.cv_pdf_path(), b"%PDF").unwrap();
+        assert!(pdf_is_current(&app), "pdf, no yaml");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options().write(true).open(app.cv_pdf_path()).unwrap().set_modified(old).unwrap();
+        std::fs::write(app.cv_yaml_path(), "name: x").unwrap();
+        assert!(!pdf_is_current(&app), "yaml saved after the pdf");
     }
 }
