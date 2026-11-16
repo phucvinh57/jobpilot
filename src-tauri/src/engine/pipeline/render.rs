@@ -227,6 +227,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn profile_links_get_one_scheme_and_handles_their_site() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = dir.path().join("cv.yaml");
+        let cv = EXAMPLE
+            .replace("github: github.com/phucvinh57", "github: \"@phucvinh57\"")
+            .replace("linkedin: linkedin.com/in/npvinh57", "linkedin: HTTPS://www.linkedin.com/in/npvinh57/\n  website: https://vinh.dev/");
+        std::fs::write(&yaml, cv).unwrap();
+        let r = render(&yaml, dir.path()).await.unwrap();
+        let links = crate::engine::pipeline::ingest::pdf_links(&std::fs::read(&r.pdf).unwrap());
+        for want in ["https://github.com/phucvinh57", "https://linkedin.com/in/npvinh57", "https://vinh.dev"] {
+            assert!(links.iter().any(|l| l == want), "{want} not in {links:?}");
+        }
+        assert!(!links.iter().any(|l| l.matches("://").count() > 1), "{links:?}");
+    }
+
+    #[tokio::test]
     async fn typst_errors_are_readable() {
         let dir = tempfile::tempdir().unwrap();
         let yaml = dir.path().join("cv.yaml");
