@@ -162,7 +162,7 @@ pub struct SourceDto {
     /// The host of its address (never the whole address: it may carry a token).
     pub host: String,
     pub enabled: bool,
-    /// The managed browser session it is read in.
+    /// The session (a site the user is signed in to) it is read in.
     pub session_id: Option<i64>,
     /// RFC 3339.
     pub last_run_at: Option<String>,
@@ -421,7 +421,7 @@ impl From<&BoardHint> for BoardHintDto {
     }
 }
 
-/// A managed browser session a source can be read in (name only).
+/// A session (a site the user is signed in to) a source can be read in (name only).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionOptionDto {

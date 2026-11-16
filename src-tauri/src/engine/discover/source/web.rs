@@ -7,7 +7,7 @@
 //!
 //! A listing is read with a plain HTTP request first; only when that fails with a wall (HTTP 401, 403,
 //! 406, 429, 503) or the page has no postings in it (a job list that JavaScript draws) is it rendered
-//! in the managed browser, in the source's bound session if it has one. A login, captcha or block
+//! in the browser (the user's signed-in profile when the source has a session). A login, captcha or block
 //! page shown there surfaces as [`ChallengeFound`], so the run waits for the user.
 
 use std::collections::HashMap;
@@ -40,7 +40,7 @@ pub trait Pages: Send + Sync {
     /// A plain HTTP read. A wall (a bot check or login answer) is `Err` carrying [`NeedsBrowser`].
     async fn plain(&self, url: &str) -> Result<Page>;
 
-    /// The page rendered in the managed browser (the source's session if it has one). `Err` carrying
+    /// The page rendered in the browser (the signed-in profile if the source has a session). `Err` carrying
     /// [`ChallengeFound`] when a login, captcha or block page was shown instead.
     async fn rendered(&self, source: &Source, url: &str) -> Result<Page>;
 }

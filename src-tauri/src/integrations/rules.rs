@@ -1,5 +1,7 @@
 //! Pure rules of this context, unit-tested here: what a provider form means as a provider, what
-//! each kind starts with, which host a session shows.
+//! each kind starts with, which host a session shows, where the extension to load is.
+
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, ensure, Result};
 use crate::engine::llm;
@@ -82,6 +84,17 @@ pub fn host(url: &str) -> String {
         .next()
         .unwrap_or(url)
         .to_string()
+}
+
+/// The folder of the built extension to pick in "Load unpacked": the repository's
+/// `extension/dist` when the app runs from a source checkout, else the copy bundled with the app
+/// (`<resource dir>/extension`). Only a folder that holds a `manifest.json` counts.
+pub fn extension_path(checkout: &Path, bundled: Option<PathBuf>) -> Option<PathBuf> {
+    let built = |dir: &Path| dir.join("manifest.json").is_file();
+    if built(checkout) {
+        return Some(checkout.to_path_buf());
+    }
+    bundled.filter(|dir| built(dir))
 }
 
 #[cfg(test)]
@@ -178,5 +191,21 @@ mod tests {
         assert_eq!(host("https://accounts.google.com/"), "accounts.google.com");
         assert_eq!(host("linkedin.com/login"), "linkedin.com", "no scheme");
         assert_eq!(host("http://localhost:8080"), "localhost:8080");
+    }
+
+    #[test]
+    fn the_extension_is_the_checkout_build_else_the_bundled_copy() {
+        use super::extension_path;
+        let dir = tempfile::tempdir().unwrap();
+        let (checkout, bundled) = (dir.path().join("repo/extension/dist"), dir.path().join("resources/extension"));
+        assert_eq!(extension_path(&checkout, Some(bundled.clone())), None, "nothing built");
+        std::fs::create_dir_all(&bundled).unwrap();
+        assert_eq!(extension_path(&checkout, Some(bundled.clone())), None, "an empty folder is not the extension");
+        std::fs::write(bundled.join("manifest.json"), "{}").unwrap();
+        assert_eq!(extension_path(&checkout, Some(bundled.clone())), Some(bundled.clone()));
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::write(checkout.join("manifest.json"), "{}").unwrap();
+        assert_eq!(extension_path(&checkout, Some(bundled)), Some(checkout.clone()));
+        assert_eq!(extension_path(&checkout, None), Some(checkout));
     }
 }

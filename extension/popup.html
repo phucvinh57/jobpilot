@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>JobPilot</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>JobPilot</h1>
+    <p id="state" role="status">Not connected</p>
+    <section id="pairing" aria-label="Pairing" hidden>
+      <p id="code" class="code" aria-label="Pairing code"></p>
+      <p id="consent-hint" class="hint">Pair only if JobPilot shows the same code (Settings, Browser).</p>
+      <button id="consent" type="button" class="primary">Pair with JobPilot</button>
+    </section>
+    <section id="impostor" aria-label="Not JobPilot" hidden>
+      <p class="hint">
+        This browser keeps its pairing, and that program did not get it. Quit that program and start JobPilot. If
+        you paired JobPilot with another browser since, pair this one again.
+      </p>
+      <button id="pair-again" type="button">Pair again</button>
+    </section>
+    <p id="reason" class="muted" hidden></p>
+    <form id="port-form">
+      <label for="port">App port</label>
+      <div class="row">
+        <input id="port" type="text" inputmode="numeric" autocomplete="off" />
+        <button id="port-save" type="submit">Save</button>
+      </div>
+      <p id="port-message" class="muted" aria-live="polite"></p>
+    </form>
+    <p id="incognito" class="hint" hidden>
+      Allow in Incognito on chrome://extensions so JobPilot can read job pages without your logins.
+    </p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

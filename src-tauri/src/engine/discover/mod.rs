@@ -4,7 +4,7 @@
 //! ```text
 //! let summary = core.discover_now().await?;            // "Search now": every enabled job source
 //! for w in core.discover_waiting()? { .. }              // sources paused at a login, captcha or block page
-//! core.discover_open_browser(&w.thread).await?;         // "Open browser": a visible window on the page to deal with
+//! core.discover_open_browser(&w.thread).await?;         // "Open browser": a tab on the page, for the user to deal with
 //! core.discover_resume(&w.thread).await?;               // "Continue" (or "Retry" for a failed source)
 //! core.discover_cancel(&w.thread)?;                     // skip that source
 //! if core.discover_due(Utc::now())? { .. }              // the daily timer: setting on, a source, idle, 24h since the last run
@@ -12,7 +12,7 @@
 //! ```
 //!
 //! - [`source`]: the adapters (`greenhouse`, `lever`, `ashby`, `smartrecruiters`, `recruitee`, `personio`,
-//!   `hn_hiring`; `yc` and `career_page`, which read web pages and use the managed browser when a
+//!   `hn_hiring`; `yc` and `career_page`, which read web pages and use the user's browser when a
 //!   page needs it) behind [`JobSource`].
 //! - [`run`]: the `discovery` graph (one thread per run) and the `source_run` graph (one thread per
 //!   source, so a paused source never holds back the others).
@@ -24,7 +24,7 @@
 //!   shown again when a later change lets it pass.
 //! - [`dedup`]: canonical URL and `slug(company)-slug(role)` against leads and applications.
 //! - [`deps`]: the replaceable pieces of a run. [`DiscoverDeps::live`] wires the text-based challenge
-//!   probe, `pipeline::insight` and the posting fetch with the managed browser as its fallback.
+//!   probe, `pipeline::insight` and the posting fetch with the user's browser as its fallback.
 //! - [`handoff`]: the login / captcha / block page hand-off: [`Core::discover_open_browser`] opens the
 //!   page visibly for the user (the app never solves a challenge), the default [`text_probe`], and
 //!   [`needs_human`] (a paused run's reason as the `Problem` to show).
@@ -151,7 +151,7 @@ impl Core {
             None => bail!("no such source thread: it was cancelled or is too old"),
         }
         let runner = run::Runner::new(self, deps)?;
-        // The user is done with the browser window: close it, so the next read can use its profile.
+        // The user is done with the tab opened for them: close it.
         handoff::close_window(&self.paths, thread).await;
         self.store.set_source_status(source_id, "running")?;
         let outcome = self.graphs.resume(&runner.source, thread, |s| s.challenge = None).await;

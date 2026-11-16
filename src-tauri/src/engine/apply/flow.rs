@@ -1,9 +1,13 @@
 //! The auto-apply flow: prepare (open, read, answer, fill) -> review -> explicit submit.
 //!
-//! A [`Run`] holds the live browser of one application between the review and the click, so what the
-//! user confirms is exactly the form that gets submitted. Runs live in a process-wide registry keyed by
-//! data dir + application id; the UI reads a cheap snapshot ([`Live`]) and drives the run with
-//! [`prepare`], [`advance`], [`submit`], [`open_visible`], [`finish_manually`] and [`discard`].
+//! A [`Run`] holds the browser tab of one application (a background tab in the user's Chrome, see
+//! [`FormBrowser`]) between the review and the click, so what the user confirms is exactly the form
+//! that gets submitted. Runs live in a process-wide registry keyed by data dir + application id; the
+//! UI reads a cheap snapshot ([`Live`]) and drives the run with [`prepare`], [`advance`], [`submit`],
+//! [`open_visible`], [`finish_manually`] and [`discard`].
+//!
+//! When a run stops for the user (a hand-off), its tab stays open with the answers filled in;
+//! [`open_visible`] brings it to the front.
 //!
 //! Safety rules enforced here, not left to the UI or the model:
 //! - nothing is submitted except by [`submit`], which the UI calls from an explicit click;
@@ -17,7 +21,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chromiumoxide::Page;
 use serde_json::json;
 
 use super::answer::{answer_step, is_cover_letter, normalize_key, validate_value, Facts};
@@ -26,7 +29,7 @@ use super::detect::{captcha_blocking, judge, Verdict};
 use super::fields::{Answer, FieldKind, FormField, Source};
 use super::form::{self, Button, FillItem, FillResult};
 use super::{apply_info, dry_run_forced, ApplyOptions, SessionState};
-use crate::engine::browser::FormBrowser;
+use crate::engine::browser::{FormBrowser, Tab};
 use crate::engine::llm::Llm;
 use crate::engine::store::{Application, Status};
 use crate::engine::Core;
@@ -54,7 +57,7 @@ pub enum Stage {
 impl Stage {
     pub fn label(&self) -> String {
         match self {
-            Stage::Launching => "Starting the browser".into(),
+            Stage::Launching => "Opening a tab in your browser".into(),
             Stage::OpeningForm => "Opening the application form".into(),
             Stage::Reading(n) => format!("Reading the form fields (step {})", n + 1),
             Stage::Answering(n) => format!("Choosing answers (step {})", n + 1),
@@ -124,7 +127,7 @@ pub struct Review {
     /// Screenshots of the filled form (one per step).
     pub screenshots: Vec<PathBuf>,
     pub notes: Vec<String>,
-    /// Name of the browser session used (`None` = throwaway profile).
+    /// Name of the browser session used (`None` = a private tab).
     pub session: Option<String>,
 }
 
@@ -148,7 +151,7 @@ pub enum Live {
     /// Nothing prepared (or already finished).
     Idle,
     Review(Review),
-    /// Stopped with a reason; `headed` = the visible browser is open.
+    /// Stopped with a reason; `headed` = the form's tab was brought to the front for the user.
     Handoff { handoff: Handoff, headed: bool },
 }
 
@@ -178,10 +181,22 @@ pub struct Edit {
 
 // ---- registry ----
 
+/// Which browser profile the form opens in.
 #[derive(Clone)]
 enum Target {
+    /// A browser session covers the ATS: the user's signed-in profile.
     Session(i64),
+    /// No login needed: a private (Incognito) tab.
     Temp,
+}
+
+impl Target {
+    fn session_id(&self) -> Option<i64> {
+        match self {
+            Target::Session(id) => Some(*id),
+            Target::Temp => None,
+        }
+    }
 }
 
 struct StepRecord {
@@ -203,13 +218,27 @@ struct Run {
     target: Target,
     session_name: Option<String>,
     dry_run: bool,
+    /// The form's tab: kept through a hand-off, so the user finishes in it.
     browser: Option<FormBrowser>,
-    page: Option<Page>,
     steps: Vec<StepRecord>,
     complete: bool,
     screenshots: Vec<PathBuf>,
     notes: Vec<String>,
     phase: Phase,
+}
+
+impl Run {
+    /// The tab JobPilot drives.
+    fn tab(&self) -> Result<Tab> {
+        self.browser.as_ref().map(|b| b.tab().clone()).context("the form's browser tab is gone")
+    }
+
+    /// Close the tab, if any.
+    async fn close_browser(&mut self) {
+        if let Some(b) = self.browser.take() {
+            b.close().await;
+        }
+    }
 }
 
 struct Entry {
@@ -289,13 +318,15 @@ pub fn latest_proof(core: &Core, slug: &str) -> Option<PathBuf> {
     found.pop()
 }
 
-/// Close every browser of every run (call when the app quits so no Chrome is left behind).
+/// Close the form tabs JobPilot still drives (call when the app quits, so no half-filled form is
+/// left behind). A tab handed to the user (a hand-off, or one they brought to the front to finish by
+/// hand) stays open: they may still be working in it.
 pub async fn close_all() {
     let all: Vec<Arc<Entry>> = runs().lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, e)| e).collect();
     for e in all {
-        let run = e.run.lock().await;
-        if let Some(b) = &run.browser {
-            b.close().await;
+        let mut run = e.run.lock().await;
+        if run.browser.as_ref().is_some_and(FormBrowser::is_driven) {
+            run.close_browser().await;
         }
     }
 }
@@ -329,11 +360,10 @@ fn event(core: &Core, app_id: i64, message: &str) {
     }
 }
 
-async fn launch(core: &Core, target: &Target, app_id: i64, headless: bool) -> Result<FormBrowser> {
-    match target {
-        Target::Session(id) => FormBrowser::launch_session(&core.sessions(), *id, headless).await,
-        Target::Temp => FormBrowser::launch_temp(&core.paths, &format!("app-{app_id}"), headless).await,
-    }
+/// Open the form in a tab of the user's Chrome: in the background for JobPilot to fill, or in front
+/// (`focus`) for the user.
+async fn launch(core: &Core, run: &Run, focus: bool) -> Result<FormBrowser> {
+    FormBrowser::open(&core.browser(), &run.form_url, run.target.session_id(), focus).await
 }
 
 fn items_for(fields: &[FormField], answers: &[Answer]) -> Vec<FillItem> {
@@ -387,29 +417,29 @@ fn handoff(reason: impl Into<String>, captcha: bool) -> Handoff {
 
 // ---- opening the form ----
 
-async fn open_form(page: &Page, ats: Ats, adapter: &Adapter) -> Result<Result<Vec<FormField>, Handoff>> {
+async fn open_form(tab: &Tab, ats: Ats, adapter: &Adapter) -> Result<Result<Vec<FormField>, Handoff>> {
     let min_fields = if ats == Ats::LinkedIn { 1 } else { 2 };
     let mut fields = Vec::new();
     for hop in 0..3 {
-        let sig = form::signals(page, adapter).await?;
+        let sig = form::signals(tab, adapter).await?;
         if let Some(reason) = captcha_blocking(&sig) {
             return Ok(Err(handoff(reason, true)));
         }
         let wait = if hop == 0 { Duration::from_secs(8) } else { Duration::from_secs(5) };
-        fields = form::extract_waiting(page, adapter, 0, wait).await?;
+        fields = form::extract_waiting(tab, adapter, 0, wait).await?;
         if fields.len() >= min_fields {
             return Ok(Ok(fields));
         }
         // A company page that embeds the ATS form: go to the form itself.
-        if let Some(url) = form::embedded_form_url(page).await {
-            page.goto(url.as_str()).await.map_err(|e| anyhow!("opening the embedded form: {e}"))?;
-            form::settle(page).await;
+        if let Some(url) = form::embedded_form_url(tab).await {
+            tab.goto(&url).await.context("opening the embedded form")?;
+            form::settle(tab).await;
             continue;
         }
         // A job page with an "Apply" button.
-        if form::find_button(page, adapter, Button::Apply).await?.is_some() {
-            form::click_button(page, Button::Apply).await?;
-            form::settle(page).await;
+        if form::find_button(tab, adapter, Button::Apply).await?.is_some() {
+            form::click_button(tab, Button::Apply).await?;
+            form::settle(tab).await;
             continue;
         }
         break;
@@ -445,7 +475,7 @@ struct Ctx<'a> {
 }
 
 async fn process_steps(ctx: &Ctx<'_>, run: &mut Run, start: Start) -> Result<StepsEnd> {
-    let page = run.page.clone().context("the browser page is gone")?;
+    let tab = run.tab()?;
     let adapter = run.adapter;
     let mut state = start;
     loop {
@@ -455,11 +485,11 @@ async fn process_steps(ctx: &Ctx<'_>, run: &mut Run, start: Start) -> Result<Ste
                 if step >= MAX_STEPS {
                     return Ok(StepsEnd::Handoff(handoff("the form has too many steps to follow", false)));
                 }
-                let sig = form::signals(&page, &adapter).await?;
+                let sig = form::signals(&tab, &adapter).await?;
                 if let Some(reason) = captcha_blocking(&sig) {
                     return Ok(StepsEnd::Handoff(handoff(reason, true)));
                 }
-                form::enrich_comboboxes(&page, &mut fields).await;
+                form::enrich_comboboxes(&tab, &mut fields).await;
                 tidy_labels(&mut fields);
                 (ctx.progress)(Stage::Answering(step));
                 let out = answer_step(ctx.llm, ctx.facts, &fields).await?;
@@ -470,18 +500,18 @@ async fn process_steps(ctx: &Ctx<'_>, run: &mut Run, start: Start) -> Result<Ste
                 }
                 (ctx.progress)(Stage::Filling(step));
                 let mut answers = out.answers;
-                let results = form::fill(&page, &items_for(&fields, &answers)).await?;
+                let results = form::fill(&tab, &items_for(&fields, &answers)).await?;
                 merge_fill_results(&mut answers, &results);
 
                 (ctx.progress)(Stage::Capturing(step));
                 let shot = shot_path(ctx.core, &run.app.slug, "filled", Some(step));
-                match form::screenshot_form(&page, &adapter, &shot).await {
+                match form::screenshot_form(&tab, &adapter, &shot).await {
                     Ok(()) => run.screenshots.push(shot),
                     Err(e) => tracing::warn!("screenshot failed: {e:#}"),
                 }
                 run.steps.push(StepRecord { fields, answers });
 
-                if form::find_button(&page, &adapter, Button::Submit).await?.is_some() {
+                if form::find_button(&tab, &adapter, Button::Submit).await?.is_some() {
                     run.complete = true;
                     return Ok(StepsEnd::Complete);
                 }
@@ -495,13 +525,13 @@ async fn process_steps(ctx: &Ctx<'_>, run: &mut Run, start: Start) -> Result<Ste
                     return Ok(StepsEnd::Waiting);
                 }
                 let step = run.steps.len() - 1;
-                if form::find_button(&page, &adapter, Button::Next).await?.is_none() {
+                if form::find_button(&tab, &adapter, Button::Next).await?.is_none() {
                     return Ok(StepsEnd::Handoff(handoff("the form has no submit or next button", false)));
                 }
                 (ctx.progress)(Stage::NextStep(step));
                 let before = form::signature(&last.fields);
-                form::click_button(&page, Button::Next).await?;
-                match wait_step_change(&page, &adapter, step + 1, &before).await? {
+                form::click_button(&tab, Button::Next).await?;
+                match wait_step_change(&tab, &adapter, step + 1, &before).await? {
                     Ok(fields) => state = Start::NewStep(fields),
                     Err(errors) => {
                         let why = if errors.is_empty() {
@@ -519,17 +549,17 @@ async fn process_steps(ctx: &Ctx<'_>, run: &mut Run, start: Start) -> Result<Ste
 }
 
 /// After clicking Next: the fields of the new step, or the validation messages when it did not move.
-async fn wait_step_change(page: &Page, adapter: &Adapter, next_step: usize, before: &str) -> Result<Result<Vec<FormField>, Vec<String>>> {
+async fn wait_step_change(tab: &Tab, adapter: &Adapter, next_step: usize, before: &str) -> Result<Result<Vec<FormField>, Vec<String>>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        if let Ok(fields) = form::extract(page, adapter, next_step).await {
+        if let Ok(fields) = form::extract(tab, adapter, next_step).await {
             if !fields.is_empty() && form::signature(&fields) != before {
                 return Ok(Ok(fields));
             }
         }
         if tokio::time::Instant::now() >= deadline {
-            let errors = form::signals(page, adapter).await.map(|s| s.errors).unwrap_or_default();
+            let errors = form::signals(tab, adapter).await.map(|s| s.errors).unwrap_or_default();
             return Ok(Err(errors));
         }
     }
@@ -587,9 +617,11 @@ fn count_summary(review: &Review) -> String {
 
 // ---- prepare ----
 
-/// Open the form of `app_id` in a headless browser, read and answer its fields, fill it and take
-/// screenshots. The browser stays open for the review. With `dry_run` (or `JOBPILOT_DRY_RUN=1`) the run
-/// can be reviewed but never submitted, and the application status does not change.
+/// Open the form of `app_id` in a background tab of the user's Chrome, read and answer its fields,
+/// fill it and take screenshots. The tab stays open for the review. With `dry_run` (or
+/// `JOBPILOT_DRY_RUN=1`) the run can be reviewed but never submitted, and the application status does
+/// not change. Fails with a [`BridgeError`](crate::engine::browser::BridgeError) when the JobPilot
+/// extension is not connected (or may not open the private tab).
 pub async fn prepare(
     core: &Core,
     app_id: i64,
@@ -624,7 +656,7 @@ pub(crate) async fn prepare_with(
         SessionState::NotNeeded => (Target::Temp, None),
         SessionState::Matched { id, name, .. } => (Target::Session(*id), Some(name.clone())),
         SessionState::Missing { domain } => {
-            bail!("{} needs a logged-in browser session for {domain}: create one in Settings > Browser sessions", ats.label())
+            bail!("{} needs you signed in to {domain} in your browser: add the site in Settings > Browser", ats.label())
         }
     };
     let adapter = adapter(ats);
@@ -639,7 +671,6 @@ pub(crate) async fn prepare_with(
         session_name,
         dry_run,
         browser: None,
-        page: None,
         steps: Vec::new(),
         complete: false,
         screenshots: Vec::new(),
@@ -659,7 +690,7 @@ pub(crate) async fn prepare_with(
     let facts = Facts::load(core, &app)?;
 
     progress(Stage::Launching);
-    let browser = launch(core, &run.target, app_id, true).await?;
+    let browser = launch(core, &run, false).await?;
     run.browser = Some(browser.clone());
     let result = prepare_run(core, &mut run, &facts, llm, &progress).await;
     match result {
@@ -679,12 +710,10 @@ async fn prepare_run(
     progress: &(dyn Fn(Stage) + Send + Sync),
 ) -> Result<StepsEnd> {
     progress(Stage::OpeningForm);
-    let browser = run.browser.clone().context("no browser")?;
-    let page = browser.new_page(&run.form_url).await?;
-    form::settle(&page).await;
-    run.page = Some(page.clone());
+    let tab = run.tab()?;
+    form::settle(&tab).await;
     progress(Stage::Reading(0));
-    let fields = match open_form(&page, run.ats, &run.adapter).await? {
+    let fields = match open_form(&tab, run.ats, &run.adapter).await? {
         Ok(fields) => fields,
         Err(h) => return Ok(StepsEnd::Handoff(h)),
     };
@@ -695,21 +724,8 @@ async fn prepare_run(
 async fn finish_prepare(core: &Core, mut run: Run, end: StepsEnd, progress: &(dyn Fn(Stage) + Send + Sync)) -> Result<Prepared> {
     let app_id = run.app.id;
     match end {
-        StepsEnd::Handoff(mut h) => {
-            if let Some(page) = &run.page {
-                let shot = shot_path(core, &run.app.slug, "handoff", None);
-                if form::screenshot(page, &shot).await.is_ok() {
-                    h.screenshot = Some(shot);
-                }
-            }
-            if let Some(b) = run.browser.take() {
-                b.close().await;
-            }
-            run.page = None;
-            event(core, app_id, &format!("handoff: {}", h.reason));
-            if !run.dry_run {
-                let _ = core.store.set_status(app_id, Status::Failed, &h.reason);
-            }
+        StepsEnd::Handoff(h) => {
+            let h = retire_to_handoff(core, &mut run, h).await;
             Ok(Prepared::Handoff(register_handoff(core, run, h)))
         }
         StepsEnd::Complete | StepsEnd::Waiting => {
@@ -738,13 +754,10 @@ fn register_handoff(core: &Core, mut run: Run, h: Handoff) -> Handoff {
     h
 }
 
-/// Close the browser of an earlier run and forget it.
+/// Close the tab of an earlier run and forget it.
 async fn discard_run(core: &Core, app_id: i64) {
     if let Some(e) = remove_entry(core, app_id) {
-        let mut run = e.run.lock().await;
-        if let Some(b) = run.browser.take() {
-            b.close().await;
-        }
+        e.run.lock().await.close_browser().await;
     }
 }
 
@@ -780,7 +793,7 @@ async fn apply_edits(run: &mut Run, edits: &[Edit]) -> Result<Vec<(String, Strin
     }
 
     if !changes.is_empty() {
-        let page = run.page.clone().context("the browser page is gone")?;
+        let tab = run.tab()?;
         let items: Vec<FillItem> = {
             let last = run.steps.last().context("there is no open form step")?;
             changes
@@ -789,7 +802,7 @@ async fn apply_edits(run: &mut Run, edits: &[Edit]) -> Result<Vec<(String, Strin
                 .map(|(i, v)| FillItem { id: last.fields[*i].id.clone(), kind: last.fields[*i].kind, value: v.clone() })
                 .collect()
         };
-        let results = if items.is_empty() { Vec::new() } else { form::fill(&page, &items).await? };
+        let results = if items.is_empty() { Vec::new() } else { form::fill(&tab, &items).await? };
         let last = run.steps.last_mut().context("there is no open form step")?;
         for (i, value) in changes {
             let id = last.fields[i].id.clone();
@@ -873,7 +886,7 @@ pub(crate) async fn advance_with(
     if run.complete {
         bail!("this is the last step: review the answers and submit");
     }
-    ensure_alive(&run).await?;
+    ensure_alive(&run)?;
     let remember = apply_edits(&mut run, &edits).await?;
     save_remembered(core, app_id, &remember);
     if run.steps.last().is_some_and(blocked) {
@@ -907,27 +920,27 @@ pub(crate) async fn advance_with(
     }
 }
 
-async fn ensure_alive(run: &Run) -> Result<()> {
+fn ensure_alive(run: &Run) -> Result<()> {
     match &run.browser {
-        Some(b) if b.is_alive().await => Ok(()),
-        _ => bail!("the browser was closed: press Review & Submit to start again"),
+        Some(b) if b.is_alive() => Ok(()),
+        _ => bail!("the form's browser tab was closed: press Review & Submit to start again"),
     }
 }
 
-/// Screenshot, close the headless browser, mark the application failed and switch the run to handoff.
+/// Screenshot the page, leave its tab to the user (open, with the answers in it), mark the
+/// application failed (not in a dry run) and switch the run to handoff.
 async fn retire_to_handoff(core: &Core, run: &mut Run, mut h: Handoff) -> Handoff {
-    if let Some(page) = &run.page {
+    if let Some(b) = run.browser.as_ref().filter(|b| b.is_alive()) {
         let shot = shot_path(core, &run.app.slug, "handoff", None);
-        if form::screenshot(page, &shot).await.is_ok() {
+        if form::screenshot(b.tab(), &shot).await.is_ok() {
             h.screenshot = Some(shot);
         }
+        b.hand_over();
     }
-    if let Some(b) = run.browser.take() {
-        b.close().await;
-    }
-    run.page = None;
     event(core, run.app.id, &format!("handoff: {}", h.reason));
-    let _ = core.store.set_status(run.app.id, Status::Failed, &h.reason);
+    if !run.dry_run {
+        let _ = core.store.set_status(run.app.id, Status::Failed, &h.reason);
+    }
     run.phase = Phase::Handoff(h.clone());
     h
 }
@@ -962,7 +975,7 @@ pub(crate) async fn submit_with(core: &Core, app_id: i64, edits: Vec<Edit>, llm:
     if !run.complete {
         bail!("there are more steps: press Continue first");
     }
-    ensure_alive(&run).await?;
+    ensure_alive(&run)?;
 
     let remember = apply_edits(&mut run, &edits).await?;
     if run.steps.last().is_some_and(blocked) {
@@ -972,28 +985,28 @@ pub(crate) async fn submit_with(core: &Core, app_id: i64, edits: Vec<Edit>, llm:
     save_remembered(core, app_id, &remember);
     publish(&e, Live::Review(build_review(&run)));
 
-    let page = run.page.clone().context("the browser page is gone")?;
+    let tab = run.tab()?;
     let adapter = run.adapter;
-    let before = form::signals(&page, &adapter).await?;
+    let before = form::signals(&tab, &adapter).await?;
     if let Some(reason) = captcha_blocking(&before) {
         let h = retire_to_handoff(core, &mut run, handoff(reason, true)).await;
         publish(&e, Live::Handoff { handoff: h.clone(), headed: false });
         return Ok(Submitted::Handoff(h));
     }
-    if form::find_button(&page, &adapter, Button::Submit).await?.is_none() {
+    if form::find_button(&tab, &adapter, Button::Submit).await?.is_none() {
         let h = retire_to_handoff(core, &mut run, handoff("the submit button is not on the page any more", false)).await;
         publish(&e, Live::Handoff { handoff: h.clone(), headed: false });
         return Ok(Submitted::Handoff(h));
     }
 
     event(core, app_id, &format!("submit clicked on {}", run.ats.label()));
-    form::click_button(&page, Button::Submit).await?;
+    form::click_button(&tab, Button::Submit).await?;
 
-    let verdict = watch_result(&page, &adapter, &before.url, llm).await;
+    let verdict = watch_result(&tab, &adapter, &before.url, llm).await;
     match verdict {
         Outcome::Submitted => {
             let proof = shot_path(core, &run.app.slug, "proof", None);
-            let proof = match form::screenshot(&page, &proof).await {
+            let proof = match form::screenshot(&tab, &proof).await {
                 Ok(()) => proof,
                 Err(err) => {
                     tracing::warn!("proof screenshot failed: {err:#}");
@@ -1002,10 +1015,7 @@ pub(crate) async fn submit_with(core: &Core, app_id: i64, edits: Vec<Edit>, llm:
             };
             event(core, app_id, "submission confirmed by the page");
             core.store.set_status(app_id, Status::Applied, &format!("submitted via {}", run.ats.label()))?;
-            if let Some(b) = run.browser.take() {
-                b.close().await;
-            }
-            run.page = None;
+            run.close_browser().await;
             drop(run);
             remove_entry(core, app_id);
             Ok(Submitted::Applied { proof })
@@ -1024,7 +1034,7 @@ enum Outcome {
 }
 
 /// Poll the page after the click until it shows a result.
-async fn watch_result(page: &Page, adapter: &Adapter, before_url: &str, llm: Option<&dyn Llm>) -> Outcome {
+async fn watch_result(tab: &Tab, adapter: &Adapter, before_url: &str, llm: Option<&dyn Llm>) -> Outcome {
     let deadline = tokio::time::Instant::now() + SUBMIT_TIMEOUT;
     let mut rejected = 0;
     let mut changed_polls = 0;
@@ -1032,7 +1042,7 @@ async fn watch_result(page: &Page, adapter: &Adapter, before_url: &str, llm: Opt
     loop {
         tokio::time::sleep(Duration::from_millis(600)).await;
         // While the page navigates the script may fail; just try again.
-        if let Ok(sig) = form::signals(page, adapter).await {
+        if let Ok(sig) = form::signals(tab, adapter).await {
             match judge(adapter, before_url, &sig) {
                 Verdict::Submitted => return Outcome::Submitted,
                 Verdict::Captcha(reason) => return Outcome::Failed { reason, captcha: true },
@@ -1098,8 +1108,9 @@ async fn llm_confirms(llm: &dyn Llm, page_text: &str) -> Option<bool> {
 
 // ---- handoff / manual finish ----
 
-/// Relaunch the same profile in a visible window at the form for manual finishing (answers already
-/// chosen are filled in again, best effort).
+/// Bring the form's tab to the front for the user to finish by hand: the tab the run filled (the
+/// answers are still in it), or, when there is none (an ATS that is only ever finished by hand) or the
+/// user closed it, a new tab at the form. From then on JobPilot no longer touches the tab.
 pub async fn open_visible(core: &Core, app_id: i64) -> Result<()> {
     let _busy = Busy::acquire(core, app_id)?;
     let e = entry(core, app_id).context("nothing to open: press Review & Submit first")?;
@@ -1108,62 +1119,20 @@ pub async fn open_visible(core: &Core, app_id: i64) -> Result<()> {
         Phase::Handoff(h) | Phase::Headed(h) => h.clone(),
         Phase::Review => handoff("opened by you", false),
     };
-    if let Some(b) = run.browser.take() {
-        b.close().await;
-    }
-    run.page = None;
-    let browser = launch(core, &run.target, app_id, false).await?;
-    let page = match browser.new_page(&run.form_url).await {
-        Ok(p) => p,
-        Err(err) => {
-            browser.close().await;
-            return Err(err);
+    let open = run.browser.clone().filter(FormBrowser::is_open);
+    match open {
+        Some(browser) => {
+            browser.hand_over();
+            browser.focus().await?;
         }
-    };
-    form::settle(&page).await;
-    run.browser = Some(browser);
-    run.page = Some(page.clone());
+        None => {
+            run.close_browser().await;
+            run.browser = Some(launch(core, &run, true).await?);
+        }
+    }
     run.phase = Phase::Headed(h.clone());
     publish(&e, Live::Handoff { handoff: h, headed: true });
-    event(core, app_id, "opened the visible browser for manual finishing");
-    if !run.ats.handoff_only() {
-        if let Err(err) = refill(&mut run, &page).await {
-            tracing::debug!("could not re-fill the form for the handoff: {err:#}");
-        }
-    }
-    Ok(())
-}
-
-/// Best effort: open the form again and put the earlier answers back, step by step (never submits).
-async fn refill(run: &mut Run, page: &Page) -> Result<()> {
-    let adapter = run.adapter;
-    let first = match open_form(page, run.ats, &adapter).await? {
-        Ok(fields) => fields,
-        Err(_) => return Ok(()),
-    };
-    let mut fields = first;
-    for step in 0..run.steps.len() {
-        let record = &run.steps[step];
-        // Same page, same order: ids line up; check labels to be sure.
-        let aligned = fields.len() == record.fields.len()
-            && fields.iter().zip(&record.fields).all(|(a, b)| a.label == b.label && a.kind == b.kind);
-        if !aligned {
-            return Ok(());
-        }
-        let items: Vec<FillItem> = items_for(&fields, &record.answers);
-        form::fill(page, &items).await?;
-        if step + 1 < run.steps.len() {
-            if form::find_button(page, &adapter, Button::Next).await?.is_none() {
-                return Ok(());
-            }
-            let before = form::signature(&fields);
-            form::click_button(page, Button::Next).await?;
-            match wait_step_change(page, &adapter, step + 1, &before).await? {
-                Ok(next) => fields = next,
-                Err(_) => return Ok(()),
-            }
-        }
-    }
+    event(core, app_id, "brought the form's browser tab to the front for manual finishing");
     Ok(())
 }
 
@@ -1198,10 +1167,10 @@ pub async fn discard(core: &Core, app_id: i64) -> Result<()> {
     Ok(())
 }
 
-/// The live page of a run (tests inspect the filled form with it).
+/// The tab of a run (tests inspect the filled form with it).
 #[cfg(test)]
-pub(crate) async fn test_page(core: &Core, app_id: i64) -> Option<Page> {
+pub(crate) async fn test_tab(core: &Core, app_id: i64) -> Option<Tab> {
     let e = entry(core, app_id)?;
     let run = e.run.lock().await;
-    run.page.clone()
+    run.tab().ok()
 }

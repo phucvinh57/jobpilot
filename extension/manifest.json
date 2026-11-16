@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "JobPilot",
+  "version": "0.1.0",
+  "description": "Lets the JobPilot desktop app open and drive job pages in tabs of their own.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8/d2RY6jGt0DC4TGM8qO4836AR2uXwSrCLR99VvXq6+sAQnD/sbEsYVsHzuL/rxs0H8CEqw0HYjCJPLIOG1wvNhoxXNpZqTpvntm6kykrLhyI5P2VO+hYyo/S7VambuKFEpt8L4DXc5fN0XhbnJrZy1isEe7d/BkRNGkGlhNExhLC+t3KX615shy+AnQWrcE9NovyoT6pOQOo/eVzSYADSw93B0dcnVKu0nLAsNGBvgzInnMBtYMwhxalTl/K7XY7NbVD7h9YLwzOiUGDaOXuLlw1bYkC158badvpOE1YBhWpkzoWblMKkOHAoMNcQ5yUD0Ew7SG5MclLBpnNP/Z9wIDAQAB",
+  "minimum_chrome_version": "125",
+  "incognito": "spanning",
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["debugger", "tabs", "tabGroups", "cookies", "storage", "declarativeNetRequest", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "JobPilot",
+    "default_popup": "popup.html",
+    "default_icon": { "48": "icons/jobpilot-48.png", "128": "icons/jobpilot-256.png" }
+  },
+  "icons": { "48": "icons/jobpilot-48.png", "128": "icons/jobpilot-256.png" }
+}

@@ -551,10 +551,16 @@ describe("paused sources", () => {
     void openBrowser("discover:1:3");
     expect(mocked.openBrowser).toHaveBeenCalledTimes(1);
     expect(useTodayStore.getState().opening).toEqual(["discover:1:3"]);
-    opened.reject(new CommandError("no Chrome found"));
+    opened.reject(new CommandError("the JobPilot browser extension is not connected"));
     await first;
     expect(useTodayStore.getState().opening).toEqual([]);
-    expect(toasts()).toEqual([{ kind: "error", title: "The browser could not be opened", body: "no Chrome found" }]);
+    expect(toasts()).toEqual([
+      {
+        kind: "error",
+        title: "The browser could not be opened",
+        body: "the JobPilot browser extension is not connected",
+      },
+    ]);
 
     // The toast's Retry opens it again.
     mocked.openBrowser.mockResolvedValue(undefined);

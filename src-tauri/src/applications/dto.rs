@@ -639,7 +639,7 @@ pub struct HandoffDto {
     pub title: &'static str,
     pub reason: String,
     pub captcha: bool,
-    /// The visible browser is open.
+    /// The form's tab was brought to the front for the user.
     pub headed: bool,
     pub has_screenshot: bool,
 }
@@ -1090,7 +1090,7 @@ mod tests {
             ],
             attachment: Some(PathBuf::from("/tmp/cv.pdf")),
             screenshots: vec![PathBuf::from("/tmp/one.png")],
-            notes: vec!["No Chrome found".into()],
+            notes: vec!["the JobPilot browser extension is not connected".into()],
             session: Some("LinkedIn".into()),
         });
         view.sync(
@@ -1109,7 +1109,7 @@ mod tests {
         assert_eq!(dto.close_label, "Discard");
         assert_eq!(dto.attached.as_deref(), Some("cv.pdf"));
         assert_eq!(dto.screenshots, 1);
-        assert_eq!(dto.notes[0].problem.kind, "noChrome");
+        assert_eq!(dto.notes[0].problem.kind, "noBrowser");
         let (a, b) = (&dto.rows[0], &dto.rows[1]);
         assert_eq!(
             (

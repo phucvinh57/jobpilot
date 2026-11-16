@@ -15,7 +15,7 @@
 //! | `career_page` | a careers page | its `JobPosting` JSON-LD, else the same-site links that look like postings; else the site's `sitemap.xml`; else the browser (a page drawn by JavaScript) |
 //!
 //! The API adapters read through [`Http`] and a base URL, so tests answer from saved fixture JSON; the
-//! page adapters read through [`Pages`] (plain HTTP, then the managed browser), so tests answer from
+//! page adapters read through [`Pages`] (plain HTTP, then the user's browser), so tests answer from
 //! fixture HTML. A login, captcha or block page met in the browser is a `ChallengeFound` error, which
 //! the runner turns into a pause for the user.
 

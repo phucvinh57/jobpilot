@@ -3,7 +3,7 @@ name = "jobpilot"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
-description = "Tailored CVs, managed-browser job applications and Gmail status tracking"
+description = "Tailored CVs, job applications in your own browser and Gmail status tracking"
 
 [lib]
 # Not `jobpilot`: a lib and a bin with the same name collide on Windows (cargo#8519).
@@ -31,23 +31,26 @@ dirs = "6"
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
+hmac = "0.12"
 base64 = "0.22"
 rand = "0.8"
 dom_smoothie = "0.19"
 html2text = "0.13"
 pdf-extract = "0.12"
-chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime", "bytes"] }
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 futures = "0.3"
 adk-graph = "=2.3.0"
 async-trait = "0.1"
 tokio-util = "0.7"
+# The browser bridge: the JobPilot extension connects to a WebSocket server on 127.0.0.1 (no TLS).
+tokio-tungstenite = { version = "0.23", default-features = false, features = ["connect", "handshake"] }
 url = "2"
 quick-xml = "0.41"
 encoding_rs = "0.8"
 notify-rust = "4"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry", "tracing-log"] }
 tracing-appender = "0.2.5"
+# Only with the `test-browser` feature (the browser test kit's temp dirs).
+tempfile = { version = "3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -60,6 +63,10 @@ custom-protocol = ["tauri/custom-protocol"]
 # UI checks without a person at the screen: the webview snapshots itself and runs a script
 # (`src/devtools.rs`). Never part of a release package.
 dev-tools = ["dep:webkit2gtk", "dep:gtk", "dep:cairo-rs"]
+# The browser test kit (`engine::browser::bridge::testkit`: Chromium with the built extension) for the
+# integration tests under `tests/`; never part of a release package:
+# `cargo test -p jobpilot --features test-browser --test e2e_discovery -- --ignored`.
+test-browser = ["dep:tempfile"]
 
 # The versions Tauri itself links (same `PlatformWebview::inner()` type).
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -4,7 +4,8 @@
 //! // Apply tab, idle: what would happen?
 //! let info = core.apply_info(app_id)?;                // ATS, apply URL, session, dry-run
 //!
-//! // "Review & Submit": open the form, read + answer + fill it, keep the browser for the review.
+//! // "Review & Submit": open the form in a tab of the user's Chrome, read + answer + fill it, keep
+//! // the tab for the review.
 //! let rx = runtime::spawn(async move { apply::prepare(&core, id, ApplyOptions { dry_run }, |stage| ..).await });
 //! // -> Prepared::Review(review) | Prepared::Handoff(handoff)
 //!
@@ -15,12 +16,12 @@
 //! match apply::submit(&core, id, edits).await? {
 //!     Submitted::Applied { proof } => ..,      // status Applied, proof screenshot in shots/
 //!     Submitted::DryRun => ..,                 // nothing was sent
-//!     Submitted::Handoff(h) => ..,             // status Failed; apply::open_visible(..) then finish_manually(..)
+//!     Submitted::Handoff(h) => ..,             // status Failed; apply::open_visible(..) (the tab to the front) then finish_manually(..)
 //! }
 //! ```
 //!
-//! The browser of a prepared application stays alive in a process-wide registry ([`flow`]) between the
-//! review and the submit click; [`live`] tells the UI what to show for an application (also after
+//! The browser tab of a prepared application stays open in a process-wide registry ([`flow`]) between
+//! the review and the submit click; [`live`] tells the UI what to show for an application (also after
 //! switching tabs). Call [`close_all`] when the app quits.
 //!
 //! Modules: [`ats`] detection + per-ATS adapters, [`js`] injected scripts, [`form`] page driving,
@@ -79,7 +80,7 @@ pub enum UrlSource {
 /// The browser session a run will use.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionState {
-    /// A throwaway profile is enough.
+    /// No login needed: a private (Incognito) tab is enough.
     NotNeeded,
     Matched { id: i64, name: String, status: SessionStatus },
     /// The ATS needs a login and no session covers this domain.
@@ -94,8 +95,10 @@ pub struct ApplyInfo {
     pub url_source: Option<UrlSource>,
     pub session: SessionState,
     pub dry_run_forced: bool,
-    /// A Chrome/Chromium was found.
-    pub chrome: bool,
+    /// The JobPilot extension is connected: the form can be opened in a tab of the user's Chrome.
+    pub browser_connected: bool,
+    /// The extension may open private (Incognito) tabs, where forms that need no login open.
+    pub private_tabs: bool,
 }
 
 impl ApplyInfo {
@@ -103,8 +106,8 @@ impl ApplyInfo {
     pub fn blocker_settings(&self) -> Option<&'static str> {
         if self.apply_url.is_none() {
             None
-        } else if matches!(self.session, SessionState::Missing { .. }) || !self.chrome {
-            Some("Browser sessions")
+        } else if matches!(self.session, SessionState::Missing { .. }) || !self.browser_connected {
+            Some("Browser")
         } else {
             None
         }
@@ -117,12 +120,21 @@ impl ApplyInfo {
         }
         if let SessionState::Missing { domain } = &self.session {
             return Some(format!(
-                "{} needs a logged-in browser session for {domain}: create one in Settings > Browser sessions.",
+                "{} needs you signed in to {domain} in your browser: add the site in Settings > Browser.",
                 self.ats.label()
             ));
         }
-        if !self.chrome {
-            return Some("No Chrome found: install Chrome/Chromium or download the browser in Settings.".into());
+        if !self.browser_connected {
+            return Some(
+                "Connect the JobPilot extension: open Chrome with the extension and pair it in Settings > Browser."
+                    .into(),
+            );
+        }
+        if self.session == SessionState::NotNeeded && !self.private_tabs {
+            return Some(
+                "Allow the JobPilot extension in Incognito (chrome://extensions > JobPilot > Details > Allow in Incognito): forms that need no login open in a private tab."
+                    .into(),
+            );
         }
         None
     }
@@ -173,13 +185,15 @@ pub fn apply_info(core: &Core, app: &Application) -> ApplyInfo {
     let url = apply_url.as_deref().unwrap_or("");
     let ats = detect_ats(url);
     let sessions = core.store.list_sessions().unwrap_or_default();
+    let status = core.browser().status();
     ApplyInfo {
         ats,
         session: pick_session(ats, url, &sessions),
         apply_url,
         url_source,
         dry_run_forced: dry_run_forced(),
-        chrome: core.chrome().is_some(),
+        browser_connected: status.connected,
+        private_tabs: status.incognito_allowed,
     }
 }
 
@@ -298,6 +312,19 @@ mod tests {
         assert_eq!(info.ats, Ats::Lever);
         assert_eq!(info.url_source, Some(UrlSource::Application));
         assert_eq!(info.session, SessionState::NotNeeded);
+        // No extension is connected to this data dir's bridge: the form cannot be opened yet.
+        assert!(!info.browser_connected);
+        assert!(info.blocker().is_some_and(|b| b.contains("Connect the JobPilot extension")), "{:?}", info.blocker());
+        assert_eq!(info.blocker_settings(), Some("Browser"));
+
+        // Connected, but not allowed in Incognito: a form that needs no login cannot open its private tab.
+        let connected = ApplyInfo { browser_connected: true, ..info.clone() };
+        assert!(connected.blocker().is_some_and(|b| b.contains("Allow in Incognito")), "{:?}", connected.blocker());
+        assert_eq!(connected.blocker_settings(), None, "the fix is in Chrome");
+        assert_eq!(ApplyInfo { private_tabs: true, ..connected.clone() }.blocker(), None);
+        // A form behind a login opens in the signed-in profile: Incognito does not matter.
+        let signed = ApplyInfo { session: SessionState::Matched { id: 1, name: "Lever".into(), status: SessionStatus::Ok }, ..connected };
+        assert_eq!(signed.blocker(), None);
     }
 
     #[test]

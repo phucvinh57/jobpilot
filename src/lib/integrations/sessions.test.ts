@@ -1,33 +1,38 @@
 import { describe, expect, it } from "vitest";
 
+import { CONNECTED, DISCONNECTED, PAIRING } from "@/test/fixtures/integrations";
 import {
-  browserLine,
-  browserTag,
-  downloadLabel,
+  connectionLine,
+  connectionTag,
+  disconnectedLine,
   FIRST_SUGGESTION,
+  privateTabsLine,
   sessionLine,
+  statusLabel,
   statusTone,
   SUGGESTIONS,
 } from "./sessions";
-import type { Chrome } from "@/types/integrations";
 
-const CHROME: Chrome = { path: "/usr/bin/chromium", source: "system" };
-
-describe("sessions", () => {
-  it("shows the tone of a login state", () => {
+describe("sites", () => {
+  it("shows the tone and the words of a sign-in state", () => {
     expect(statusTone("ok")).toBe("ok");
     expect(statusTone("expired")).toBe("danger");
     expect(statusTone("new")).toBe("neutral");
+    expect([statusLabel("ok"), statusLabel("expired"), statusLabel("new")]).toEqual([
+      "signed in",
+      "signed out",
+      "not checked",
+    ]);
   });
 
-  it("says when a session was last verified", () => {
+  it("says when a site was last checked", () => {
     const now = new Date("2026-11-14T12:00:00Z");
-    expect(sessionLine({ host: "www.linkedin.com", verifiedAt: null }, now)).toBe("www.linkedin.com - never verified");
+    expect(sessionLine({ host: "www.linkedin.com", verifiedAt: null }, now)).toBe("www.linkedin.com - never checked");
     expect(sessionLine({ host: "www.linkedin.com", verifiedAt: "2026-11-14T11:55:00Z" }, now)).toBe(
-      "www.linkedin.com - verified 5 min ago",
+      "www.linkedin.com - checked 5 min ago",
     );
     expect(sessionLine({ host: "indeed.com", verifiedAt: "2026-11-12T12:00:00Z" }, now)).toBe(
-      "indeed.com - verified 2 d ago",
+      "indeed.com - checked 2 d ago",
     );
   });
 
@@ -38,23 +43,32 @@ describe("sessions", () => {
   });
 });
 
-describe("the browser line", () => {
-  it("names the browser, or says there is none", () => {
-    expect(browserLine(CHROME, { active: false, percent: null })).toBe("Browser: /usr/bin/chromium (system)");
-    expect(browserLine(null, { active: false, percent: null })).toBe("Browser: not found");
+describe("the connection", () => {
+  it("tags the state of the extension", () => {
+    expect(connectionTag(CONNECTED)).toEqual({ tone: "ok", text: "Connected" });
+    expect(connectionTag(PAIRING)).toEqual({ tone: "warn", text: "Waiting for pairing" });
+    expect(connectionTag({ ...PAIRING, pairingWaitingForExtension: true })).toEqual({
+      tone: "warn",
+      text: "Waiting for the extension",
+    });
+    expect(connectionTag(DISCONNECTED)).toEqual({ tone: "warn", text: "Not connected" });
+    expect(connectionTag({ ...DISCONNECTED, listening: false })).toEqual({ tone: "danger", text: "Off" });
   });
 
-  it("follows the download", () => {
-    expect(browserLine(null, { active: true, percent: null })).toBe("Downloading browser...");
-    expect(browserLine(null, { active: true, percent: 42 })).toBe("Downloading browser... 42%");
-    expect(browserLine(CHROME, { active: true, percent: 7 })).toBe("Downloading browser... 7%");
+  it("names the browser and the extension", () => {
+    expect(connectionLine(CONNECTED)).toBe("Chrome 153, JobPilot extension 0.1.0");
+    expect(connectionLine({ ...CONNECTED, browser: null, extensionVersion: null })).toBe("Your browser");
   });
 
-  it("labels the button and the tag", () => {
-    expect(downloadLabel(CHROME)).toBe("Update browser");
-    expect(downloadLabel(null)).toBe("Download browser");
-    expect(browserTag(CHROME, { active: false, percent: null })).toEqual({ tone: "ok", text: "Chrome found" });
-    expect(browserTag(null, { active: true, percent: 3 })).toEqual({ tone: "neutral", text: "Downloading" });
-    expect(browserTag(null, { active: false, percent: null })).toEqual({ tone: "warn", text: "No browser" });
+  it("says whether private tabs work and how to allow them", () => {
+    expect(privateTabsLine({ incognitoAllowed: true })).toBe("Private tabs: allowed");
+    expect(privateTabsLine({ incognitoAllowed: false })).toContain("Allow in Incognito");
+    expect(privateTabsLine({ incognitoAllowed: false })).toContain("chrome://extensions");
+  });
+
+  it("says why no browser is connected", () => {
+    expect(disconnectedLine(DISCONNECTED)).toMatch(/^Install the JobPilot extension/);
+    expect(disconnectedLine({ ...DISCONNECTED, paired: true })).toMatch(/^The paired browser is not connected/);
+    expect(disconnectedLine({ ...DISCONNECTED, listening: false })).toContain("port 47615");
   });
 });

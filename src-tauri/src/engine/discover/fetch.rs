@@ -36,11 +36,12 @@ pub(crate) fn fetcher(http: Http) -> PostingFetcher {
     })
 }
 
-/// [`fetcher`] with the managed browser as the fallback: a page the plain read cannot use
-/// ([`NeedsBrowser`]: a wall, or a page JavaScript draws) is rendered headless, in the source's
-/// bound session if it has one. A login, captcha or block page shown there is **not** skipped: it is
-/// returned as [`ChallengeFound`], so the run pauses and the user deals with it in the visible
-/// browser (`Core::discover_open_browser`). Any other browser failure is an ordinary error.
+/// [`fetcher`] with the browser as the fallback: a page the plain read cannot use ([`NeedsBrowser`]:
+/// a wall, or a page JavaScript draws) is rendered in a background tab of the user's Chrome (their
+/// signed-in profile when the source has a session, else a private tab). A login, captcha or block
+/// page shown there is **not** skipped: it is returned as [`ChallengeFound`], so the run pauses and
+/// the user deals with it in a tab opened for them (`Core::discover_open_browser`). Any other
+/// browser failure is an ordinary error.
 pub(crate) fn fetcher_with_browser(http: Http, renderer: Renderer) -> PostingFetcher {
     std::sync::Arc::new(move |req| {
         let (http, renderer) = (http.clone(), renderer.clone());

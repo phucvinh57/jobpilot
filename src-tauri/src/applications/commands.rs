@@ -545,7 +545,7 @@ fn apply_sink(
     }
 }
 
-/// Open the form in the managed browser, read and answer its fields, fill it. Never submits.
+/// Open the form in a tab of the user's browser, read and answer its fields, fill it. Never submits.
 async fn prepare(
     app: AppHandle,
     core: Arc<Core>,
@@ -637,7 +637,7 @@ pub async fn applications_apply_discard(
     Ok(())
 }
 
-/// After a handoff: the same browser profile in a visible window at the form, to finish by hand.
+/// After a handoff: bring the form's tab in the user's Chrome to the front, to finish by hand.
 #[tauri::command]
 pub async fn applications_apply_open_visible(
     app: AppHandle,
@@ -656,7 +656,7 @@ pub async fn applications_apply_open_visible(
     Ok(())
 }
 
-/// "Mark as applied / failed" after finishing by hand in the visible browser.
+/// "Mark as applied / failed" after finishing by hand in the browser.
 #[tauri::command]
 pub async fn applications_apply_mark(
     app: AppHandle,

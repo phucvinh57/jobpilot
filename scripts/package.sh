@@ -14,7 +14,8 @@ bun install --frozen-lockfile
 
 echo "==> release build and packages ($bundles)"
 # The Tauri CLI finds `src-tauri/tauri.conf.json` from the repository root. It builds the web app
-# (`beforeBuildCommand`), the release binary, then the bundles. The AppImage step downloads
+# and the extension (`beforeBuildCommand`; `extension/dist` is bundled as a resource), the release
+# binary, then the bundles. The AppImage step downloads
 # linuxdeploy on first use.
 # A bundle that fails (the AppImage needs linuxdeploy to work on this machine) does not hide the
 # ones that were built: they are still copied, and the script ends with the failure.
@@ -32,6 +33,8 @@ if ((found == 0)); then
     echo "no package was produced (see the output above)" >&2
     exit 1
 fi
+# The extension also as a zip, for "Load unpacked" after unzipping, or a store upload later.
+(cd "$root/extension/dist" && rm -f "$dist/jobpilot-extension.zip" && zip -qr "$dist/jobpilot-extension.zip" .)
 ls -1 "$dist"
 
 if ((status != 0)); then
@@ -39,4 +42,4 @@ if ((status != 0)); then
     exit "$status"
 fi
 echo "Done. Packages are in $dist/"
-echo "Not bundled: the typst CLI (cargo install --locked typst-cli) and Chrome (Settings > Browser sessions can download one)."
+echo "Not bundled: the typst CLI (cargo install --locked typst-cli) and Chrome (install the JobPilot extension in it: Settings > Browser)."

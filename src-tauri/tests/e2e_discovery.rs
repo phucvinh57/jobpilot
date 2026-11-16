@@ -11,8 +11,10 @@
 //! - a plain application form for the apply step.
 //!
 //! The CV is rendered by the real `typst` CLI. [`discovery_to_approved_cv`] needs only that;
-//! [`discovery_to_dry_run_apply`] also starts Chrome, so it is `#[ignore]`d:
-//! `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot --test e2e_discovery -- --ignored`.
+//! `discovery_to_dry_run_apply` also drives a real Chromium through the JobPilot extension (the
+//! bridge's test kit, behind the cargo feature `test-browser`), so it is `#[ignore]`d. Build the
+//! extension once (`bun run ext:build`), then:
+//! `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot --features test-browser --test e2e_discovery -- --ignored`.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -23,7 +25,10 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+#[cfg(feature = "test-browser")]
 use jobpilot_lib::engine::apply::{self, ApplyOptions, Prepared, Submitted};
+#[cfg(feature = "test-browser")]
+use jobpilot_lib::engine::browser::bridge::testkit;
 use jobpilot_lib::engine::discover::source::{Greenhouse, JobSource, NetHttp};
 use jobpilot_lib::engine::discover::{DiscoverDeps, DismissedKind, RunSummary};
 use jobpilot_lib::engine::net::http::{Http, HttpLimits};
@@ -65,6 +70,7 @@ impl Resp {
         Self::ok("application/json", body.to_string())
     }
 
+    #[cfg(feature = "test-browser")]
     fn html(body: impl Into<String>) -> Self {
         Self::ok("text/html; charset=utf-8", body)
     }
@@ -319,6 +325,7 @@ async fn serve_board(hits: Arc<Mutex<Vec<String>>>) -> SocketAddr {
     .await
 }
 
+#[cfg(feature = "test-browser")]
 const FORM: &str = r#"<!doctype html><html><head><title>Senior Backend Engineer at Acme Robotics</title></head><body>
 <h1>Senior Backend Engineer</h1>
 <form id="application_form" method="post" action="/submit" enctype="multipart/form-data">
@@ -331,6 +338,7 @@ const FORM: &str = r#"<!doctype html><html><head><title>Senior Backend Engineer 
 </form></body></html>"#;
 
 /// The application form; every POST is recorded (a dry run must send none).
+#[cfg(feature = "test-browser")]
 async fn serve_form(posts: Arc<Mutex<Vec<String>>>) -> SocketAddr {
     serve(Arc::new(move |req: Req| match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/apply") => Resp::html(FORM),
@@ -383,7 +391,16 @@ fn deps(core: &Core, board: SocketAddr) -> DiscoverDeps {
     deps
 }
 
-async fn flow(with_apply: bool) {
+/// What [`flow`] leaves for the apply step (only read with the `test-browser` feature).
+#[cfg_attr(not(feature = "test-browser"), allow(dead_code))]
+struct Done {
+    _tmp: tempfile::TempDir,
+    core: Core,
+    app_id: i64,
+    asked: Asked,
+}
+
+async fn flow() -> Done {
     let tmp = tempfile::tempdir().expect("tmp");
     let (model, asked) = serve_model().await;
     let board_hits = Arc::new(Mutex::new(Vec::new()));
@@ -488,16 +505,21 @@ async fn flow(with_apply: bool) {
     let hits = board_hits.lock().unwrap().clone();
     assert!(hits.iter().all(|p| p.starts_with("/v1/boards/acme/jobs")), "{hits:?}");
 
-    if !with_apply {
-        return;
-    }
+    Done { _tmp: tmp, core, app_id: app.id, asked }
+}
 
-    // 6. "Review & Submit" as a dry run on a local form: the page is filled from the profile and the
-    //    model, the CV is attached, and nothing is sent.
+/// 6. "Review & Submit" as a dry run on a local form, in a tab of a real Chromium driven through the
+///    extension: the page is filled from the profile and the model, the CV is attached, and nothing is
+///    sent.
+#[cfg(feature = "test-browser")]
+async fn dry_run_apply(done: &Done) {
+    let Done { core, asked, .. } = done;
+    let app = core.store.get_application(done.app_id).expect("app").expect("row");
+    let Some(_browser) = testkit::launch_with(core.browser(), true).await else { return };
     let posts = Arc::new(Mutex::new(Vec::new()));
     let form = serve_form(posts.clone()).await;
     core.set_apply_url(app.id, &format!("http://{form}/apply")).expect("apply url");
-    let prepared = apply::prepare(&core, app.id, ApplyOptions { dry_run: true }, |_| {}).await.expect("prepare apply");
+    let prepared = apply::prepare(core, app.id, ApplyOptions { dry_run: true }, |_| {}).await.expect("prepare apply");
     let Prepared::Review(review) = prepared else { panic!("expected a review, got {prepared:?}") };
     assert!(review.dry_run && review.complete, "{review:?}");
     let value = |label: &str| review.rows.iter().find(|r| r.label.starts_with(label)).unwrap_or_else(|| panic!("no row {label}: {:?}", review.rows)).value.clone();
@@ -506,20 +528,24 @@ async fn flow(with_apply: bool) {
     assert!(value("Why do you want").starts_with("I like building backend services in Rust"), "the model wrote the free-text answer");
     assert_eq!(review.attachment.as_deref().and_then(|p| p.file_name()).and_then(|n| n.to_str()), Some("cv.pdf"));
     assert_eq!(asked.count("answers"), 1, "{:?}", asked.all());
-    let done = apply::submit(&core, app.id, Vec::new()).await.expect("submit");
-    assert!(matches!(done, Submitted::DryRun), "{done:?}");
+    let submitted = apply::submit(core, app.id, Vec::new()).await.expect("submit");
+    assert!(matches!(submitted, Submitted::DryRun), "{submitted:?}");
     assert!(posts.lock().unwrap().is_empty(), "a dry run sends nothing");
     assert_eq!(core.store.get_application(app.id).expect("app").expect("row").status, Status::CvReady, "a dry run does not move the status");
-    apply::discard(&core, app.id).await.expect("discard");
+    apply::discard(core, app.id).await.expect("discard");
 }
 
 #[test]
 fn discovery_to_approved_cv() {
-    runtime::block_on(flow(false));
+    runtime::block_on(flow());
 }
 
+#[cfg(feature = "test-browser")]
 #[test]
-#[ignore = "launches Chrome"]
+#[ignore = "launches Chromium with the extension"]
 fn discovery_to_dry_run_apply() {
-    runtime::block_on(flow(true));
+    runtime::block_on(async {
+        let done = flow().await;
+        dry_run_apply(&done).await;
+    });
 }

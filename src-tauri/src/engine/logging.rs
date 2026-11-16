@@ -21,9 +21,8 @@ use crate::engine::Paths;
 pub const LOG_FILE: &str = "jobpilot.log";
 /// Daily files kept on disk.
 const KEEP_FILES: usize = 14;
-/// Default filter: our crate at info, everything else at warn. chromiumoxide is off: it logs every
-/// Chrome DevTools event it cannot parse (newer Chrome versions) as an error, which is only noise.
-const DEFAULT_FILTER: &str = "warn,chromiumoxide=off,jobpilot_lib=info";
+/// Default filter: our crate at info, everything else at warn.
+const DEFAULT_FILTER: &str = "warn,jobpilot_lib=info";
 
 /// Keep this alive for the life of the program: dropping it flushes the file writer.
 pub struct LogGuard {

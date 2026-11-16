@@ -1,6 +1,6 @@
 //! What a failed command tells the web app: the message and what the user can do about it.
 //!
-//! The classification (no AI provider, no Chrome, no typst, network, a site that needs the user)
+//! The classification (no AI provider, no browser extension, no typst, network, a site that needs the user)
 //! lives in `crate::engine::health`; this file only carries it over the bridge, so every screen
 //! shows the same advice, Settings shortcut and Retry.
 
@@ -15,7 +15,7 @@ use serde::Serialize;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProblemDto {
-    /// `noProvider` / `noTypst` / `noChrome` / `network` / `needsHuman` / `other`.
+    /// `noProvider` / `noProfile` / `noTypst` / `noBrowser` / `network` / `needsHuman` / `other`.
     pub kind: &'static str,
     /// `login` / `captcha` / `blocked`, only with `needsHuman`.
     pub challenge: Option<&'static str>,
@@ -23,6 +23,8 @@ pub struct ProblemDto {
     pub advice: Option<String>,
     /// The Settings section that fixes it.
     pub settings_section: Option<&'static str>,
+    /// The label of the button that opens that section, when it says more than "Open Settings > ...".
+    pub call_to_action: Option<&'static str>,
     /// Trying the same thing again can succeed.
     pub retryable: bool,
 }
@@ -33,7 +35,7 @@ impl From<Problem> for ProblemDto {
             Problem::NoProvider => ("noProvider", None),
             Problem::NoProfile => ("noProfile", None),
             Problem::NoTypst => ("noTypst", None),
-            Problem::NoChrome => ("noChrome", None),
+            Problem::NoBrowser { .. } => ("noBrowser", None),
             Problem::Network => ("network", None),
             Problem::NeedsHuman(challenge) => ("needsHuman", Some(challenge.as_str())),
             Problem::Other => ("other", None),
@@ -43,6 +45,7 @@ impl From<Problem> for ProblemDto {
             challenge,
             advice: problem.advice(),
             settings_section: problem.settings_section(),
+            call_to_action: problem.call_to_action(),
             retryable: problem.retryable(),
         }
     }
@@ -131,6 +134,16 @@ mod tests {
 
         let other = ProblemDto::from(Problem::Other);
         assert_eq!((other.kind, other.advice), ("other", None));
+
+        // The extension is not connected (or not allowed in Incognito): Settings > Browser.
+        let browser = CommandError::new(crate::engine::browser::BridgeError::NotConnected.to_string()).problem;
+        assert_eq!(
+            (browser.kind, browser.settings_section, browser.call_to_action),
+            ("noBrowser", Some("Browser"), Some("Connect the JobPilot extension"))
+        );
+        let incognito = CommandError::new(crate::engine::browser::BridgeError::IncognitoNotAllowed.to_string()).problem;
+        assert_eq!((incognito.kind, incognito.call_to_action), ("noBrowser", None));
+        assert!(incognito.advice.is_some_and(|a| a.contains("chrome://extensions")));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! YC has no public JSON API for it. Its own board, `https://www.ycombinator.com/jobs`, is plain
 //! server-rendered HTML with one link per job (`/companies/<company>/jobs/<id>-<title>`), so the
 //! default needs neither a browser nor a login. `workatastartup.com` itself refuses plain requests
-//! (HTTP 406) and wants a signed-in visitor: set it as the source's address, bind a managed browser
+//! (HTTP 406) and wants a signed-in visitor: set it as the source's address, bind a browser
 //! session in which you are logged in, and the page is read in that browser (jobs there are
 //! `/jobs/<number>` or `/companies/<company>/jobs/...`).
 //!

@@ -59,7 +59,7 @@ impl Core {
 
     /// Add a job source. The adapter of `kind` must accept `url` (a board name or address, a
     /// careers page, ...); an empty `name` becomes the board name, the host or the kind's title.
-    /// `session_id` binds a managed browser session to it.
+    /// `session_id` binds a session (a site the user is signed in to) to it.
     pub fn add_job_source(&self, kind: &str, name: &str, url: &str, session_id: Option<i64>) -> Result<Source> {
         let (url, default_name) = check_source(kind.trim(), url)?;
         let name = match name.trim() {
@@ -88,8 +88,8 @@ impl Core {
         self.store.set_source_session(id, session_id)
     }
 
-    /// Remove a job source. A run of it that waits for the user is skipped (and its browser window
-    /// closed); the leads it found stay.
+    /// Remove a job source. A run of it that waits for the user is skipped (and the browser tab
+    /// opened for it closed); the leads it found stay.
     pub fn remove_job_source(&self, id: i64) -> Result<()> {
         self.job_source(id)?;
         for waiting in self.discover_waiting()?.into_iter().filter(|w| w.source_id == id) {

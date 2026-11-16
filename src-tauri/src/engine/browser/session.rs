@@ -1,66 +1,28 @@
-//! Managed browser sessions: the only place that launches Chrome.
+//! Sessions: the sites the user is signed in to in their own Chrome (LinkedIn, an ATS account).
 //!
-//! A session is an app-owned Chrome profile in `sessions/<id>/` (never the user's own profile). Every
-//! launch goes through [`SessionManager::launch`], which takes the per-profile lock, writes the profile
-//! preferences (no password manager) and starts Chrome with the managed flag set.
+//! JobPilot keeps no browser profile and never touches the user's cookies: a session is a row (name,
+//! start URL, the cookie domains the last check found, `new`/`ok`/`expired`). Signing in happens in a
+//! tab of the user's browser that JobPilot opens ([`SessionManager::open_login`]); the check
+//! ([`SessionManager::check`]) opens the start page in a background tab and looks whether the browser
+//! holds cookies for the site and the page is not a login page ([`probe`]). Apply picks the session
+//! that covers an ATS (`apply::pick_session`).
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Context, Result};
-use chromiumoxide::cdp::browser_protocol::network::Cookie;
-use chromiumoxide::error::CdpError;
-use chromiumoxide::handler::viewport::Viewport;
-use chromiumoxide::{Browser, BrowserConfig, Page};
-use futures::StreamExt;
-use serde_json::{json, Value};
+use anyhow::{bail, Context, Result};
 
-use super::chrome::{self, Chrome};
-use super::lock::{LockError, ProfileLock};
+use super::bridge::Bridge;
 use super::probe;
+use super::tab::{OpenOptions, Profile, Tab};
 use crate::engine::store::{NewSession, Session};
-use crate::engine::{Paths, Store};
-
-/// Set to anything non-empty to launch Chrome with `--no-sandbox` (containers, running as root).
-pub const NO_SANDBOX_ENV: &str = "JOBPILOT_NO_SANDBOX";
-
-/// How long page navigation may take in [`BrowserHandle::new_page`].
-pub(crate) const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Fixed launch flags of every managed browser (no sync, no extensions, no password manager).
-/// None of them hides that the browser is automated.
-const LAUNCH_ARGS: &[&str] = &[
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-sync",
-    "--disable-extensions",
-    "--password-store=basic",
-    "--use-mock-keychain",
-    "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection,PasswordImport,AutofillServerCommunication,TranslateUI,MediaRouter,OptimizationHints",
-    "--disable-save-password-bubble",
-    "--disable-background-mode",
-    "--disable-breakpad",
-    "--disable-component-extensions-with-background-pages",
-    "--disable-default-apps",
-    "--disable-dev-shm-usage",
-    "--disable-hang-monitor",
-    "--disable-ipc-flooding-protection",
-    "--disable-prompt-on-repost",
-    "--disable-background-timer-throttling",
-    "--disable-backgrounding-occluded-windows",
-    "--disable-renderer-backgrounding",
-    "--metrics-recording-only",
-    "--force-color-profile=srgb",
-    "--lang=en-US",
-];
+use crate::engine::{Core, Paths, Secrets, Store};
 
 /// Login state of a session as stored in the `sessions.status` column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionStatus {
-    /// Never logged in / signed out.
+    /// Never checked (or checked before the browser was the user's own).
     New,
     Ok,
     Expired,
@@ -90,160 +52,36 @@ impl Session {
         SessionStatus::parse(&self.status)
     }
 
-    /// Cookie domains saved by the last login/check.
+    /// Cookie domains saved by the last check.
     pub fn domains(&self) -> Vec<String> {
         serde_json::from_str(&self.domains_json).unwrap_or_default()
     }
 }
 
-// ---- handle ----
-
-/// A running managed browser. Cheap to clone (all clones share one browser); the browser is killed and
-/// the profile lock released when [`close`](Self::close) is called or the last clone is dropped.
-#[derive(Clone)]
-pub struct BrowserHandle {
-    inner: Arc<HandleInner>,
-}
-
-struct HandleInner {
-    session_id: i64,
-    headless: bool,
-    browser: tokio::sync::Mutex<Option<Browser>>,
-    handler_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    lock: Mutex<Option<ProfileLock>>,
-    closed: AtomicBool,
-}
-
-impl Drop for HandleInner {
-    fn drop(&mut self) {
-        if let Some(task) = self.handler_task.get_mut().unwrap_or_else(|e| e.into_inner()).take() {
-            task.abort();
-        }
-        // `browser` (kill-on-drop) and `lock` drop after this, in field order.
-    }
-}
-
-impl BrowserHandle {
-    pub fn session_id(&self) -> i64 {
-        self.inner.session_id
-    }
-
-    pub fn is_headless(&self) -> bool {
-        self.inner.headless
-    }
-
-    /// False once [`close`](Self::close) ran (or the browser exited and was noticed).
-    pub fn is_closed(&self) -> bool {
-        self.inner.closed.load(Ordering::SeqCst)
-    }
-
-    /// Is the Chrome process still running? `false` after the user closed the window themselves.
-    pub async fn is_alive(&self) -> bool {
-        let mut guard = self.inner.browser.lock().await;
-        match guard.as_mut() {
-            None => false,
-            Some(b) => matches!(b.try_wait(), Ok(None)),
-        }
-    }
-
-    /// Open `url` in a new tab and wait (up to 30 s; a slow page is returned as-is) for it to load.
-    pub async fn new_page(&self, url: &str) -> Result<Page> {
-        self.new_page_with_timeout(url, NAVIGATE_TIMEOUT).await
-    }
-
-    /// Like [`new_page`](Self::new_page) with an explicit load timeout.
-    pub async fn new_page_with_timeout(&self, url: &str, load_timeout: Duration) -> Result<Page> {
-        let guard = self.inner.browser.lock().await;
-        let browser = guard.as_ref().context("the browser is closed")?;
-        let page = browser.new_page("about:blank").await.context("opening a tab")?;
-        drop(guard);
-        page.goto(url).await.with_context(|| format!("navigating to {url}"))?;
-        wait_loaded(&page, load_timeout).await;
-        Ok(page)
-    }
-
-    /// The tabs currently open (e.g. the login page of a headed window).
-    pub async fn pages(&self) -> Result<Vec<Page>> {
-        let guard = self.inner.browser.lock().await;
-        let browser = guard.as_ref().context("the browser is closed")?;
-        browser.pages().await.context("listing tabs")
-    }
-
-    /// Every cookie in the profile (CDP `Storage.getCookies`).
-    pub async fn cookies(&self) -> Result<Vec<Cookie>> {
-        let guard = self.inner.browser.lock().await;
-        let browser = guard.as_ref().context("the browser is closed")?;
-        browser.get_cookies().await.context("reading cookies")
-    }
-
-    /// Sorted cookie domains of the profile.
-    pub async fn domains(&self) -> Result<Vec<String>> {
-        Ok(probe::cookie_domains(&self.cookies().await?))
-    }
-
-    /// Close the browser (gracefully, then forcibly after 5 s) and release the profile lock. Idempotent.
-    pub async fn close(&self) -> Result<()> {
-        let browser = self.inner.browser.lock().await.take();
-        self.inner.closed.store(true, Ordering::SeqCst);
-        if let Some(mut browser) = browser {
-            // Already gone when the user closed the window; `close` then just errors, which is fine.
-            let _ = tokio::time::timeout(Duration::from_secs(5), async {
-                let _ = browser.close().await;
-                let _ = browser.wait().await;
-            })
-            .await;
-            if matches!(browser.try_wait(), Ok(None)) {
-                let _ = browser.kill().await;
-            }
-        }
-        if let Some(task) = self.inner.handler_task.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            task.abort();
-        }
-        self.inner.lock.lock().unwrap_or_else(|e| e.into_inner()).take();
-        Ok(())
-    }
-}
-
-/// Wait until `document.readyState == "complete"` (errors while the page navigates are ignored).
-pub(crate) async fn wait_loaded(page: &Page, timeout: Duration) {
-    let poll = async {
-        loop {
-            if let Ok(res) = page.evaluate_expression("document.readyState").await {
-                if res.into_value::<String>().is_ok_and(|s| s == "complete") {
-                    return;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    };
-    let _ = tokio::time::timeout(timeout, poll).await;
-}
-
-// ---- manager ----
-
-/// Owner of every managed browser launch. Cheap to clone; get it with `core.sessions()`.
+/// The sessions and their login tabs. Cheap to clone; get it with `core.sessions()`.
 #[derive(Clone)]
 pub struct SessionManager {
     inner: Arc<ManagerInner>,
 }
 
 struct ManagerInner {
-    paths: Paths,
     store: Store,
-    /// Every browser launched through the manager (weak: callers own the handle they get).
-    live: Mutex<HashMap<i64, Weak<HandleInner>>>,
-    /// Headed login browsers the manager keeps alive until `finish_login`.
-    logins: Mutex<HashMap<i64, BrowserHandle>>,
+    /// Which bridge (`Core::browser`) to use: looked up on every call, so a test browser attached
+    /// later is the one used.
+    data_dir: PathBuf,
+    secrets: Secrets,
+    /// The login tab of each session, until `finish_login`.
+    logins: Mutex<HashMap<i64, Tab>>,
 }
 
 impl SessionManager {
-    pub(crate) fn new(paths: Paths, store: Store) -> Self {
-        Self { inner: Arc::new(ManagerInner { paths, store, live: Default::default(), logins: Default::default() }) }
+    pub(crate) fn new(paths: &Paths, store: Store, secrets: Secrets) -> Self {
+        let inner = ManagerInner { store, data_dir: paths.data_dir.clone(), secrets, logins: Mutex::default() };
+        Self { inner: Arc::new(inner) }
     }
 
-    /// The Chrome that [`launch`](Self::launch) would use (`None` = not installed).
-    pub fn chrome(&self) -> Option<Chrome> {
-        chrome::resolve(&self.inner.paths)
+    fn bridge(&self) -> Bridge {
+        Bridge::for_data_dir(&self.inner.data_dir, &self.inner.secrets)
     }
 
     /// All sessions, oldest first.
@@ -255,208 +93,85 @@ impl SessionManager {
         self.inner.store.get_session(id)?.with_context(|| format!("session {id} not found"))
     }
 
-    /// Is a browser for this session currently running (launched through the manager)?
-    pub fn is_open(&self, id: i64) -> bool {
-        self.live_handle(id).is_some()
-    }
-
-    /// Is a headed login window pending `finish_login`?
+    /// Is a login tab open for this session (until `finish_login`, or the user closed it)?
     pub fn login_in_progress(&self, id: i64) -> bool {
-        self.inner.logins.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id)
+        self.logins().get(&id).is_some_and(Tab::is_open)
     }
 
-    /// Add a session (row + empty private profile dir). `start_url` must be http(s).
-    pub async fn create(&self, name: &str, start_url: &str) -> Result<Session> {
+    fn logins(&self) -> std::sync::MutexGuard<'_, HashMap<i64, Tab>> {
+        self.inner.logins.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Add a session (a row only). `start_url` must be http(s).
+    pub fn create(&self, name: &str, start_url: &str) -> Result<Session> {
         let name = name.trim();
         if name.is_empty() {
-            bail!("give the session a name");
+            bail!("give the site a name");
         }
         let start_url = normalize_start_url(start_url)?;
         let session = self.inner.store.add_session(&NewSession { name: name.to_string(), start_url })?;
-        if let Err(e) = prepare_profile(&self.inner.paths.session_dir(session.id)) {
-            let _ = self.inner.store.delete_session(session.id);
-            return Err(e);
-        }
+        tracing::info!("session {} added", session.id);
         Ok(session)
     }
 
-    /// Start a **headed** browser at the session's start URL so the user can log in. The manager keeps the
-    /// browser until [`finish_login`](Self::finish_login); the returned clone is optional to hold.
-    pub async fn open_login(&self, id: i64) -> Result<BrowserHandle> {
-        let previous = self.inner.logins.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-        if let Some(previous) = previous {
-            if previous.is_alive().await {
-                self.inner.logins.lock().unwrap_or_else(|e| e.into_inner()).insert(id, previous.clone());
-                return Ok(previous);
+    /// Open the session's start URL in a focused tab of the user's browser so they can sign in. A
+    /// login tab that is still open is brought to the front instead.
+    pub async fn open_login(&self, id: i64) -> Result<()> {
+        let open = self.logins().get(&id).filter(|t| t.is_open()).cloned();
+        if let Some(tab) = open {
+            if tab.focus().await.is_ok() {
+                return Ok(());
             }
-            // The user closed the previous login window themselves: release it and start over.
-            previous.close().await?;
         }
         let session = self.get(id)?;
-        let handle = self.launch_inner(id, false, Some(&session.start_url), Flavor::Managed).await?;
-        self.inner.logins.lock().unwrap_or_else(|e| e.into_inner()).insert(id, handle.clone());
-        Ok(handle)
+        let tab = self
+            .bridge()
+            .open(&session.start_url, OpenOptions { profile: Profile::Signed, focus: true, guard: None })
+            .await?;
+        tracing::info!("session {id}: login tab {} opened", tab.id());
+        self.logins().insert(id, tab);
+        Ok(())
     }
 
-    /// The user is done logging in: save the cookie domains, close the window (it may already have been
-    /// closed by the user), then run the health check. Returns the resulting status.
+    /// The user is done signing in: close the login tab (unless they already did), then check.
     pub async fn finish_login(&self, id: i64) -> Result<SessionStatus> {
-        let handle = self.inner.logins.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-        if let Some(handle) = handle {
-            if handle.is_alive().await {
-                match handle.domains().await {
-                    Ok(domains) => self.save_domains(id, &domains)?,
-                    Err(e) => tracing::warn!("session {id}: could not read cookies before closing: {e:#}"),
-                }
-            }
-            handle.close().await?;
+        let tab = self.logins().remove(&id);
+        if let Some(tab) = tab {
+            tab.close().await;
         }
         self.check(id).await
     }
 
-    /// Headless health check of a session; stores and returns `Ok` or `Expired`. Fails (leaving the stored
-    /// status alone) when the browser or the page cannot be reached.
+    /// Open the start page in a background tab of the user's browser and judge whether they are
+    /// signed in; stores and returns `Ok` or `Expired` (and the cookie domains). Fails, leaving the
+    /// stored status alone, when the browser or the page cannot be reached.
     pub async fn check(&self, id: i64) -> Result<SessionStatus> {
         let session = self.get(id)?;
-        let handle = self.launch(id, true).await?;
-        let result = probe::probe(&handle, &session.start_url).await;
-        let _ = handle.close().await;
-        let result = result?;
-
+        let result = probe::probe(&self.bridge(), &session.start_url).await?;
         let status = if result.logged_in() { SessionStatus::Ok } else { SessionStatus::Expired };
         tracing::info!(
-            "session {id} check: {} (url={}, cookies={}, login_url={}, password_input={})",
+            "session {id} check: {} (cookie domains={}, login_url={}, password_input={})",
             status.as_str(),
-            result.final_url,
-            result.has_cookies,
+            result.domains.len(),
             result.login_url,
             result.password_input
         );
-        self.save_domains(id, &result.domains)?;
+        self.inner.store.update_session_domains(id, &serde_json::to_string(&result.domains)?)?;
         self.inner.store.update_session_status(id, status.as_str(), Some(chrono::Utc::now()))?;
         Ok(status)
     }
 
-    /// Close any live browser of the session and delete its profile contents (cookies, logins); the row
-    /// stays, reset to `new`.
-    pub async fn sign_out(&self, id: i64) -> Result<()> {
-        self.get(id)?;
-        self.close_live(id).await?;
-        let dir = self.inner.paths.session_dir(id);
-        if dir.exists() {
-            let lock = ProfileLock::acquire(&dir).map_err(lock_error)?;
-            for entry in std::fs::read_dir(&dir)? {
-                let path = entry?.path();
-                if path.file_name().is_some_and(|n| n == super::lock::LOCK_FILE) {
-                    continue;
-                }
-                remove_path(&path)?;
-            }
-            drop(lock);
-        }
-        prepare_profile(&dir)?;
-        self.inner.store.reset_session(id)
-    }
-
-    /// Remove the session: close its browser, delete the profile dir and the row.
-    pub async fn delete(&self, id: i64) -> Result<()> {
-        self.close_live(id).await?;
-        let dir = self.inner.paths.session_dir(id);
-        if dir.exists() {
-            let _lock = ProfileLock::acquire(&dir).map_err(lock_error)?;
-            remove_dir_retry(&dir)?;
-        }
-        self.inner.store.delete_session(id)
-    }
-
-    /// Launch Chrome on the session's profile (the single entry point for automation, e.g. auto-apply).
-    /// Fails when the profile is already open, so there is at most one live browser per profile.
-    /// Close it with [`BrowserHandle::close`]; dropping every clone also kills it.
-    pub async fn launch(&self, id: i64, headless: bool) -> Result<BrowserHandle> {
-        self.launch_inner(id, headless, None, Flavor::Managed).await
-    }
-
-    /// Like [`launch`](Self::launch) for **reading third-party pages** (job discovery): with
-    /// `guard_args` (a [`Guard`](super::guard::Guard)'s flags) every request goes through the
-    /// request guard. The profile and its lock are the session's, so the
-    /// cookies of a login the user made are what the page is read with.
-    pub(crate) async fn launch_reading(&self, id: i64, headless: bool, guard_args: &[String]) -> Result<BrowserHandle> {
-        self.launch_inner(id, headless, None, Flavor::Reading(guard_args)).await
-    }
-
-    async fn launch_inner(&self, id: i64, headless: bool, start_url: Option<&str>, flavor: Flavor<'_>) -> Result<BrowserHandle> {
-        self.get(id)?;
-        let chrome = self.chrome().context("Chrome not found: install Chrome/Chromium or download the browser in Settings")?;
-        let dir = self.inner.paths.session_dir(id);
-        prepare_profile(&dir)?;
-        let dir = std::fs::canonicalize(&dir).with_context(|| format!("resolving {}", dir.display()))?;
-        let lock = ProfileLock::acquire(&dir).map_err(lock_error)?;
-
-        // A headed window without a URL would open the new-tab page; keep it blank instead.
-        let start_url = start_url.or((!headless).then_some("about:blank"));
-        let config = browser_config_for(&chrome.path, &dir, headless, start_url, flavor)?;
-        let (browser, mut handler) = Browser::launch(config)
-            .await
-            .with_context(|| format!("launching {}", chrome.path.display()))?;
-        let handler_task = tokio::spawn(async move {
-            while let Some(event) = handler.next().await {
-                match event {
-                    Ok(()) => {}
-                    // The socket is gone (browser exited): stop driving it.
-                    Err(CdpError::Ws(_)) | Err(CdpError::Io(_)) => break,
-                    // CDP messages newer than this chromiumoxide knows: ignore.
-                    Err(e) => tracing::debug!("chromiumoxide: {e}"),
-                }
-            }
-        });
-
-        let handle = BrowserHandle {
-            inner: Arc::new(HandleInner {
-                session_id: id,
-                headless,
-                browser: tokio::sync::Mutex::new(Some(browser)),
-                handler_task: Mutex::new(Some(handler_task)),
-                lock: Mutex::new(Some(lock)),
-                closed: AtomicBool::new(false),
-            }),
-        };
-        self.inner.live.lock().unwrap_or_else(|e| e.into_inner()).insert(id, Arc::downgrade(&handle.inner));
-        Ok(handle)
-    }
-
-    fn live_handle(&self, id: i64) -> Option<BrowserHandle> {
-        let mut live = self.inner.live.lock().unwrap_or_else(|e| e.into_inner());
-        match live.get(&id).and_then(Weak::upgrade) {
-            Some(inner) if !inner.closed.load(Ordering::SeqCst) => Some(BrowserHandle { inner }),
-            Some(_) => None,
-            None => {
-                live.remove(&id);
-                None
-            }
-        }
-    }
-
-    async fn close_live(&self, id: i64) -> Result<()> {
-        let login = self.inner.logins.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-        if let Some(handle) = login {
-            handle.close().await?;
-        }
-        if let Some(handle) = self.live_handle(id) {
-            handle.close().await?;
-        }
+    /// Remove the session's row. The user stays signed in to the site in their browser, and a login
+    /// tab that is still open stays open (it is the user's now).
+    pub fn delete(&self, id: i64) -> Result<()> {
+        self.logins().remove(&id);
+        self.inner.store.delete_session(id)?;
+        tracing::info!("session {id} deleted");
         Ok(())
     }
-
-    fn save_domains(&self, id: i64, domains: &[String]) -> Result<()> {
-        self.inner.store.update_session_domains(id, &serde_json::to_string(domains)?)
-    }
 }
 
-fn lock_error(e: LockError) -> anyhow::Error {
-    anyhow!(e)
-}
-
-/// Accept only http(s) URLs (this also keeps the value from ever being parsed as a Chrome flag).
+/// Accept only http(s) URLs.
 fn normalize_start_url(raw: &str) -> Result<String> {
     let raw = raw.trim();
     let candidate = if raw.contains("://") { raw.to_string() } else { format!("https://{raw}") };
@@ -467,136 +182,23 @@ fn normalize_start_url(raw: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
-/// How a browser is started.
-#[derive(Clone, Copy)]
-pub(crate) enum Flavor<'a> {
-    /// The managed flag set: logins and the apply flow (`LAUNCH_ARGS`).
-    Managed,
-    /// For reading third-party pages (job discovery): the managed flags plus these extra flags (the
-    /// request guard's).
-    Reading(&'a [String]),
-}
-
-pub(crate) fn browser_config(chrome: &Path, dir: &Path, headless: bool, start_url: Option<&str>) -> Result<BrowserConfig> {
-    browser_config_for(chrome, dir, headless, start_url, Flavor::Managed)
-}
-
-/// The launch flags of `flavor`.
-fn launch_args(flavor: Flavor<'_>) -> Vec<String> {
-    let mut args: Vec<String> = LAUNCH_ARGS.iter().map(|a| a.to_string()).collect();
-    if let Flavor::Reading(extra) = flavor {
-        args.extend(extra.iter().cloned());
-    }
-    args
-}
-
-pub(crate) fn browser_config_for(chrome: &Path, dir: &Path, headless: bool, start_url: Option<&str>, flavor: Flavor<'_>) -> Result<BrowserConfig> {
-    let args = launch_args(flavor);
-    let mut builder = BrowserConfig::builder()
-        .chrome_executable(chrome)
-        .user_data_dir(dir)
-        .disable_default_args()
-        .args(args)
-        .launch_timeout(Duration::from_secs(30));
-    builder = if headless {
-        builder.new_headless_mode().window_size(1280, 800).viewport(Viewport {
-            width: 1280,
-            height: 800,
-            ..Default::default()
-        })
-    } else {
-        // A real window: let it size itself instead of emulating an 800x600 viewport.
-        builder.with_head().window_size(1280, 900).viewport(None)
-    };
-    if std::env::var_os(NO_SANDBOX_ENV).is_some_and(|v| !v.is_empty()) {
-        builder = builder.no_sandbox();
-    }
-    if let Some(url) = start_url {
-        builder = builder.arg(url);
-    }
-    builder.build().map_err(|e| anyhow!(e))
-}
-
-/// Create the profile dir (mode 0700) and make sure the password manager and autofill are off.
-pub(crate) fn prepare_profile(dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(dir.join("Default")).with_context(|| format!("creating {}", dir.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    write_preferences(&dir.join("Default").join("Preferences"))
-}
-
-/// Merge our privacy preferences into `Default/Preferences` (Chrome must not be running on the profile).
-fn write_preferences(path: &Path) -> Result<()> {
-    let mut prefs: Value = match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({})),
-        Err(_) => json!({}),
-    };
-    if !prefs.is_object() {
-        prefs = json!({});
-    }
-    let before = prefs.clone();
-    for (key, value) in [
-        ("credentials_enable_service", json!(false)),
-        ("credentials_enable_autosignin", json!(false)),
-        ("profile.password_manager_enabled", json!(false)),
-        ("profile.password_manager_leak_detection", json!(false)),
-        ("autofill.profile_enabled", json!(false)),
-        ("autofill.credit_card_enabled", json!(false)),
-        ("signin.allowed", json!(false)),
-    ] {
-        set_pref(&mut prefs, key, value);
-    }
-    if prefs != before || !path.exists() {
-        std::fs::write(path, serde_json::to_vec(&prefs)?).with_context(|| format!("writing {}", path.display()))?;
-    }
-    Ok(())
-}
-
-/// Set a dotted key (`a.b.c`) inside nested JSON objects, creating them as needed.
-fn set_pref(root: &mut Value, dotted: &str, value: Value) {
-    let mut node = root;
-    let mut parts = dotted.split('.').peekable();
-    while let Some(part) = parts.next() {
-        if !node.is_object() {
-            *node = json!({});
-        }
-        let Some(map) = node.as_object_mut() else { return };
-        if parts.peek().is_none() {
-            map.insert(part.to_string(), value);
-            return;
-        }
-        node = map.entry(part.to_string()).or_insert_with(|| json!({}));
-    }
-}
-
-fn remove_path(path: &PathBuf) -> Result<()> {
-    let meta = std::fs::symlink_metadata(path)?;
-    if meta.is_dir() {
-        remove_dir_retry(path)
-    } else {
-        std::fs::remove_file(path).with_context(|| format!("removing {}", path.display()))
-    }
-}
-
-/// `remove_dir_all` with a few retries: a just-closed Chrome may still be flushing files for a moment.
-fn remove_dir_retry(dir: &Path) -> Result<()> {
-    let mut last: Option<std::io::Error> = None;
-    for _ in 0..5 {
-        match std::fs::remove_dir_all(dir) {
-            Ok(()) => return Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+impl Core {
+    /// Delete `<data_dir>/sessions/`, the Chrome profiles of releases that ran their own browser
+    /// (cookies of old logins). Best effort; returns how many profiles were removed.
+    pub fn remove_old_browser_profiles(&self) -> usize {
+        let dir = self.paths.old_sessions_dir();
+        let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
+        let count = entries.count();
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => {
+                tracing::info!(count, "removed the old browser profiles");
+                count
+            }
             Err(e) => {
-                last = Some(e);
-                std::thread::sleep(Duration::from_millis(200));
+                tracing::warn!("removing the old browser profiles failed: {}", e.kind());
+                0
             }
         }
-    }
-    match last {
-        Some(e) => Err(anyhow!(e).context(format!("removing {}", dir.display()))),
-        None => Ok(()),
     }
 }
 
@@ -605,64 +207,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_browser_is_disguised() {
-        // No browser hides that it is automated (no fingerprint spoofing).
-        assert!(!launch_args(Flavor::Managed).iter().any(|a| a.contains("AutomationControlled") || a.contains("user-agent")));
-        // Discovery adds the request guard's flags.
-        let guard = vec!["--proxy-server=http://127.0.0.1:1".to_string()];
-        let reading = launch_args(Flavor::Reading(&guard));
-        assert!(!reading.iter().any(|a| a.contains("AutomationControlled") || a.contains("user-agent")), "{reading:?}");
-        assert!(reading.contains(&guard[0]));
-        // Everything else the managed browsers have (no password manager, no sync) stays.
-        for kept in ["--disable-sync", "--password-store=basic", "--no-first-run"] {
-            assert!(reading.iter().any(|a| a == kept), "{kept}");
-        }
-        assert_eq!(reading.len(), launch_args(Flavor::Managed).len() + 1);
-    }
-
-    #[test]
     fn start_url_is_validated() {
         assert_eq!(normalize_start_url("https://www.linkedin.com/login").unwrap(), "https://www.linkedin.com/login");
         assert_eq!(normalize_start_url(" linkedin.com/login ").unwrap(), "https://linkedin.com/login");
         assert!(normalize_start_url("file:///etc/passwd").is_err());
         assert!(normalize_start_url("javascript:alert(1)").is_err());
-        // Whatever the input, the result starts with a scheme, so it can never be read as a Chrome flag.
-        assert!(normalize_start_url("--remote-debugging-port=1").map_or(true, |u| u.starts_with("https://")));
         assert!(normalize_start_url("").is_err());
-    }
-
-    #[test]
-    fn preferences_disable_the_password_manager_and_keep_other_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        prepare_profile(dir.path()).unwrap();
-        let path = dir.path().join("Default/Preferences");
-        let prefs: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(prefs["credentials_enable_service"], json!(false));
-        assert_eq!(prefs["profile"]["password_manager_enabled"], json!(false));
-
-        // Chrome rewrote the file with its own keys and re-enabled a pref: ours win, the rest survives.
-        std::fs::write(&path, r#"{"profile":{"password_manager_enabled":true,"name":"x"},"other":1}"#).unwrap();
-        prepare_profile(dir.path()).unwrap();
-        let prefs: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(prefs["profile"]["password_manager_enabled"], json!(false));
-        assert_eq!(prefs["profile"]["name"], json!("x"));
-        assert_eq!(prefs["other"], json!(1));
-
-        // A corrupt file is replaced instead of failing the launch.
-        std::fs::write(&path, "{ not json").unwrap();
-        prepare_profile(dir.path()).unwrap();
-        let prefs: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(prefs["credentials_enable_service"], json!(false));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn profile_dir_is_private() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let profile = dir.path().join("7");
-        prepare_profile(&profile).unwrap();
-        assert_eq!(profile.metadata().unwrap().permissions().mode() & 0o777, 0o700);
     }
 
     #[test]
@@ -674,11 +224,92 @@ mod tests {
     }
 
     #[test]
-    fn launch_args_never_enable_automation_or_password_manager() {
-        assert!(!LAUNCH_ARGS.iter().any(|a| a.contains("enable-automation")));
-        for needed in ["--no-first-run", "--no-default-browser-check", "--disable-sync", "--disable-extensions", "--password-store=basic"] {
-            assert!(LAUNCH_ARGS.contains(&needed), "missing {needed}");
-        }
-        assert_eq!(LAUNCH_ARGS.iter().filter(|a| a.starts_with("--disable-features=")).count(), 1);
+    fn create_validates_and_delete_removes_the_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
+        let mgr = core.sessions();
+        assert!(mgr.create("  ", "https://example.com").is_err());
+        assert!(mgr.create("x", "ftp://example.com").is_err());
+        let s = mgr.create(" LinkedIn ", "linkedin.com/login").unwrap();
+        assert_eq!((s.name.as_str(), s.start_url.as_str(), s.session_status()), ("LinkedIn", "https://linkedin.com/login", SessionStatus::New));
+        assert!(!mgr.login_in_progress(s.id));
+        mgr.delete(s.id).unwrap();
+        assert!(mgr.get(s.id).is_err());
+    }
+
+    #[test]
+    fn the_old_browser_profiles_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
+        assert_eq!(core.remove_old_browser_profiles(), 0, "nothing to remove");
+        let old = core.paths.old_sessions_dir();
+        std::fs::create_dir_all(old.join("1/Default")).unwrap();
+        std::fs::write(old.join("1/Default/Cookies"), "x").unwrap();
+        std::fs::create_dir_all(old.join("2")).unwrap();
+        assert_eq!(core.remove_old_browser_profiles(), 2);
+        assert!(!old.exists());
+    }
+
+    /// Sessions in a real Chromium with the extension (`testkit`): the check, the login flow and
+    /// delete. `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored sessions_` after
+    /// `bun run ext:build`. `*.test` names resolve to the local fixture server.
+    #[tokio::test]
+    #[ignore = "launches Chromium with the extension"]
+    async fn sessions_check_login_and_delete_in_the_users_browser() {
+        use crate::engine::browser::bridge::testkit;
+        use crate::engine::net::fixtures::Fixtures;
+
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
+        let Some(browser) = testkit::launch().await else { return };
+        browser.attach(&core);
+        let mgr = core.sessions();
+
+        let fx = Fixtures::start().await;
+        let port = url::Url::parse(fx.base()).unwrap().port().unwrap();
+        let signed_in = "<title>Feed</title><script>document.cookie = 'sid=abc; path=/; max-age=3600'</script><h1>welcome back</h1>";
+        fx.route("/", 200, "text/html", signed_in);
+        fx.route("/login", 200, "text/html", "<script>document.cookie = 'sid=abc; path=/; max-age=3600'</script><form><input name=u><input type=password name=p></form>");
+        fx.route("/plain", 200, "text/html", "<h1>no cookie here</h1>");
+        fx.redirect("/go", 302, "/login");
+
+        // Cookies for the site and no login page: ok, and the cookie domains are saved.
+        let ok = mgr.create("home", &format!("http://home.test:{port}/")).unwrap();
+        assert_eq!(mgr.check(ok.id).await.unwrap(), SessionStatus::Ok);
+        let row = mgr.get(ok.id).unwrap();
+        assert_eq!((row.session_status(), row.domains()), (SessionStatus::Ok, vec!["home.test".to_string()]));
+        assert!(row.last_verified_at.is_some());
+
+        // A login form (cookies or not), a redirect to a login URL, or no cookies: expired.
+        let login = mgr.create("login", &format!("http://login.test:{port}/login")).unwrap();
+        assert_eq!(mgr.check(login.id).await.unwrap(), SessionStatus::Expired);
+        let redirected = mgr.create("go", &format!("http://go.test:{port}/go")).unwrap();
+        assert_eq!(mgr.check(redirected.id).await.unwrap(), SessionStatus::Expired);
+        let plain = mgr.create("plain", &format!("http://plain.test:{port}/plain")).unwrap();
+        assert_eq!(mgr.check(plain.id).await.unwrap(), SessionStatus::Expired);
+        assert!(mgr.get(plain.id).unwrap().domains().is_empty());
+
+        // Login flow: a focused tab, opened once; Done closes it and checks.
+        let site = mgr.create("site", &format!("http://site.test:{port}/")).unwrap();
+        mgr.open_login(site.id).await.unwrap();
+        assert!(mgr.login_in_progress(site.id));
+        let tab = mgr.logins().get(&site.id).cloned().unwrap();
+        mgr.open_login(site.id).await.unwrap();
+        assert_eq!(mgr.logins().get(&site.id).map(Tab::id), Some(tab.id()), "the open login tab is reused");
+        tab.wait_loaded(std::time::Duration::from_secs(20)).await;
+        assert_eq!(mgr.finish_login(site.id).await.unwrap(), SessionStatus::Ok);
+        assert!(!mgr.login_in_progress(site.id) && !tab.is_open());
+
+        // The user closed the login tab before pressing Done.
+        mgr.open_login(ok.id).await.unwrap();
+        let tab = mgr.logins().get(&ok.id).cloned().unwrap();
+        tab.close().await;
+        assert!(!mgr.login_in_progress(ok.id));
+        assert_eq!(mgr.finish_login(ok.id).await.unwrap(), SessionStatus::Ok);
+
+        // Delete removes the row only.
+        mgr.delete(login.id).unwrap();
+        assert!(mgr.get(login.id).is_err());
+        assert_eq!(mgr.list().unwrap().len(), 4);
     }
 }

@@ -14,7 +14,7 @@ interface ActionsProps {
   /** Run the failed thing again (shown for retryable problems only). */
   onRetry?: () => void;
   /** Open the visible browser of the paused run (`needsHuman`); without it the button opens
-   *  Settings > Browser sessions. */
+   *  Settings > Browser. */
   onOpenBrowser?: () => void;
 }
 
@@ -37,7 +37,7 @@ export function ProblemActions({ problem, onRetry, onOpenBrowser }: ActionsProps
                 icon={sectionPlace(section) === "Profile" ? UserRound : Settings}
                 onClick={() => openSection(section)}
               >
-                Open {sectionPlace(section)} &gt; {section}
+                {problem.callToAction ?? `Open ${sectionPlace(section)} > ${section}`}
               </Button>
             );
           }
@@ -53,7 +53,7 @@ export function ProblemActions({ problem, onRetry, onOpenBrowser }: ActionsProps
                 key={action}
                 size="compact"
                 icon={ExternalLink}
-                onClick={onOpenBrowser ?? (() => openSettings("Browser sessions"))}
+                onClick={onOpenBrowser ?? (() => openSettings("Browser"))}
               >
                 Open browser
               </Button>

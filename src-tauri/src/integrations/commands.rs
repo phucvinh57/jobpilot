@@ -5,6 +5,7 @@
 //! through `Core` and nowhere else: no DTO, event, log line or error message carries one. An error
 //! message is scrubbed of every secret `Core` has read or written (`redact`) before it leaves.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -13,13 +14,12 @@ use crate::engine::mail::{self, SECRET_CLIENT_SECRET};
 use crate::engine::redact::redact;
 use crate::engine::Core;
 use tauri::ipc::Invoke;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
-use super::download::{download_browser, Downloads};
 use super::dto::{
-    DownloadDto, GmailDto, ProviderDto, ProviderInput, ProvidersDto, SessionDto, SessionsDto,
+    BrowserDto, BrowserSectionDto, GmailDto, ProviderDto, ProviderInput, ProvidersDto, SessionDto,
 };
-use super::rules::{client_id as required_client_id, provider_from_form, typed_key};
+use super::rules::{self, client_id as required_client_id, provider_from_form, typed_key};
 use crate::shared::{run, run_sync, CommandResult};
 
 type CoreState<'a> = State<'a, Arc<Core>>;
@@ -101,18 +101,26 @@ async fn list_models(core: &Core, input: &ProviderInput) -> Result<Vec<String>> 
     llm::from_provider(&provider, key).list_models().await
 }
 
-fn sessions(core: &Core, download: DownloadDto) -> Result<SessionsDto> {
+/// The connection to the user's browser and the sites they are signed in to.
+pub(super) fn browser_section(core: &Core, extension_path: Option<String>) -> Result<BrowserSectionDto> {
     let manager = core.sessions();
     let sessions = manager
         .list()?
         .iter()
         .map(|s| SessionDto::new(s, manager.login_in_progress(s.id)))
         .collect();
-    Ok(SessionsDto {
+    Ok(BrowserSectionDto {
+        browser: BrowserDto::new(&core.browser().status(), extension_path),
         sessions,
-        chrome: core.chrome().as_ref().map(Into::into),
-        download,
     })
+}
+
+/// Where the built extension is for "Load unpacked" (see [`rules::extension_path`]).
+pub(super) fn extension_folder(app: &AppHandle) -> Option<String> {
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../extension/dist");
+    let checkout = checkout.canonicalize().unwrap_or(checkout);
+    let bundled = app.path().resource_dir().ok().map(|dir| dir.join("extension"));
+    rules::extension_path(&checkout, bundled).map(|p| p.display().to_string())
 }
 
 fn gmail(core: &Core) -> GmailDto {
@@ -187,20 +195,38 @@ pub async fn integrations_remove_provider(core: CoreState<'_>, id: i64) -> Comma
     run_sync(move || core.remove_provider(id)).await
 }
 
-// ------------------------------------------------------------------ commands: sessions
+// ------------------------------------------------------------------ commands: browser
 
-/// The sessions, the browser they run on and the state of a browser download.
+/// The connection to the user's browser (the JobPilot extension) and the sites they are signed in to.
 #[tauri::command]
-pub async fn integrations_sessions(
-    core: CoreState<'_>,
-    downloads: State<'_, Downloads>,
-) -> CommandResult<SessionsDto> {
+pub async fn integrations_browser(app: AppHandle, core: CoreState<'_>) -> CommandResult<BrowserSectionDto> {
     let core = core.inner().clone();
-    let download = downloads.state();
-    run_sync(move || sessions(&core, download)).await
+    let path = extension_folder(&app);
+    run_sync(move || browser_section(&core, path)).await
 }
 
-/// Add a session and open its browser at the login address, so the user can log in.
+/// The user checked the code: pair the browser that waits.
+#[tauri::command]
+pub async fn integrations_approve_pairing(core: CoreState<'_>) -> CommandResult<()> {
+    let bridge = core.inner().browser();
+    run_sync(move || bridge.approve_pairing()).await
+}
+
+/// The user does not know the browser that asks to pair: refuse it.
+#[tauri::command]
+pub async fn integrations_decline_pairing(core: CoreState<'_>) -> CommandResult<()> {
+    let bridge = core.inner().browser();
+    run_sync(move || bridge.decline_pairing()).await
+}
+
+/// Forget the paired browser: it has to pair again (the user stays signed in to their sites).
+#[tauri::command]
+pub async fn integrations_forget_browser(core: CoreState<'_>) -> CommandResult<()> {
+    let bridge = core.inner().browser();
+    run_sync(move || bridge.forget()).await
+}
+
+/// Add a site and open its sign-in page in a tab of the user's browser; resolves with its id.
 #[tauri::command]
 pub async fn integrations_create_session(
     core: CoreState<'_>,
@@ -209,58 +235,39 @@ pub async fn integrations_create_session(
 ) -> CommandResult<i64> {
     let manager = core.inner().sessions();
     run(async move {
-        let session = manager.create(&name, &url).await?;
+        let session = manager.create(&name, &url)?;
         manager.open_login(session.id).await?;
-        tracing::info!(session = session.id, "session created, login window opened");
         Ok(session.id)
     })
     .await
 }
 
-/// Open the login window of a session again.
+/// Open the sign-in tab of a site again (or bring it to the front).
 #[tauri::command]
 pub async fn integrations_open_session(core: CoreState<'_>, id: i64) -> CommandResult<()> {
     let manager = core.inner().sessions();
-    run(async move { manager.open_login(id).await.map(|_| ()) }).await
+    run(async move { manager.open_login(id).await }).await
 }
 
-/// The user is done logging in: save the logins, close the window and check the session.
+/// The user is done signing in: close the sign-in tab and check the site.
 #[tauri::command]
 pub async fn integrations_finish_login(core: CoreState<'_>, id: i64) -> CommandResult<()> {
     let manager = core.inner().sessions();
     run(async move { manager.finish_login(id).await.map(|_| ()) }).await
 }
 
-/// Check in the background whether the session is still logged in.
+/// Check in a background tab whether the user is still signed in to the site.
 #[tauri::command]
 pub async fn integrations_check_session(core: CoreState<'_>, id: i64) -> CommandResult<()> {
     let manager = core.inner().sessions();
     run(async move { manager.check(id).await.map(|_| ()) }).await
 }
 
-/// Forget the logins of a session (the session stays, as new).
-#[tauri::command]
-pub async fn integrations_sign_out_session(core: CoreState<'_>, id: i64) -> CommandResult<()> {
-    let manager = core.inner().sessions();
-    run(async move { manager.sign_out(id).await }).await
-}
-
-/// Delete a session and its browser profile.
+/// Remove a site from the list (the user stays signed in to it in their browser).
 #[tauri::command]
 pub async fn integrations_delete_session(core: CoreState<'_>, id: i64) -> CommandResult<()> {
     let manager = core.inner().sessions();
-    run(async move { manager.delete(id).await }).await
-}
-
-/// Download (or update) the managed browser. Resolves when done; progress goes out as
-/// `integrations:browser-download` events.
-#[tauri::command]
-pub async fn integrations_download_browser(
-    app: AppHandle,
-    core: CoreState<'_>,
-    downloads: State<'_, Downloads>,
-) -> CommandResult<()> {
-    download_browser(app, core.inner().clone(), downloads.inner()).await
+    run_sync(move || manager.delete(id)).await
 }
 
 // ------------------------------------------------------------------ commands: gmail
@@ -331,14 +338,15 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         integrations_list_models,
         integrations_make_default,
         integrations_remove_provider,
-        integrations_sessions,
+        integrations_browser,
+        integrations_approve_pairing,
+        integrations_decline_pairing,
+        integrations_forget_browser,
         integrations_create_session,
         integrations_open_session,
         integrations_finish_login,
         integrations_check_session,
-        integrations_sign_out_session,
         integrations_delete_session,
-        integrations_download_browser,
         integrations_gmail,
         integrations_gmail_connect,
         integrations_gmail_cancel_connect,
@@ -351,7 +359,9 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
 mod tests {
     use crate::engine::{Core, Paths, Secrets};
 
-    use super::{gmail, provider_has_key, providers, save_provider, scrub, ProviderInput};
+    use super::{
+        browser_section, gmail, provider_has_key, providers, save_provider, scrub, ProviderInput,
+    };
     use crate::shared::CommandError;
 
     const API_KEY: &str = "sk-TOPSECRET-api-key-1234";
@@ -461,6 +471,17 @@ mod tests {
         let message = scrub(failed).unwrap_err().message;
         assert!(!message.contains("LEAKY"), "{message}");
         assert!(message.contains("HTTP 401"));
+    }
+
+    #[test]
+    fn the_browser_section_lists_the_sites_and_says_no_browser_is_connected() {
+        let (_dir, core) = core();
+        let site = core.sessions().create("LinkedIn", "https://www.linkedin.com/login").unwrap();
+        let dto = browser_section(&core, None).unwrap();
+        assert!(!dto.browser.connected && dto.browser.pairing_code.is_none());
+        assert_eq!(dto.sessions.len(), 1);
+        assert_eq!((dto.sessions[0].id, dto.sessions[0].status), (site.id, "new"));
+        assert!(!dto.sessions[0].login_in_progress);
     }
 
     #[test]

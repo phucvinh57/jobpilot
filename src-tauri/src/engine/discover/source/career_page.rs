@@ -4,7 +4,7 @@
 //! 1. the page read plain: its schema.org `JobPosting` JSON-LD ([`super::jsonld`]), else its links
 //!    that look like postings;
 //! 2. the site's `sitemap.xml` ([`super::sitemap`]);
-//! 3. the page rendered in the managed browser (a job list that JavaScript draws, or a wall on the
+//! 3. the page rendered in the user's browser (a job list that JavaScript draws, or a wall on the
 //!    plain read): its JSON-LD, else its links.
 //!
 //! The model never picks a URL: only addresses on the configured site ([`super::web::same_site`]: the host

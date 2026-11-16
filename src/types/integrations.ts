@@ -1,4 +1,4 @@
-// AI providers, Gmail and browser sessions as the shell reads them (`integrations_*` commands).
+// AI providers, Gmail and the browser (extension pairing, signed-in sites) as the shell reads them (`integrations_*` commands).
 // An API key is never part of what is read: only "a key is saved" comes back.
 
 export interface SyncReport {
@@ -63,7 +63,7 @@ export interface ProviderInput {
 
 export type SessionStatus = "new" | "ok" | "expired";
 
-/** A managed browser profile. */
+/** A site the user is signed in to in their own browser. */
 export interface Session {
   id: number;
   name: string;
@@ -71,26 +71,34 @@ export interface Session {
   status: SessionStatus;
   /** RFC 3339, `null` when it was never checked. */
   verifiedAt: string | null;
-  /** A login window is open and waits for the user to press Done. */
+  /** A sign-in tab is open and waits for the user to press Done. */
   loginInProgress: boolean;
 }
 
-/** The browser sessions run on. */
-export interface Chrome {
-  path: string;
-  /** `JOBPILOT_CHROME` / `managed` / `system`. */
-  source: string;
+/** The user's browser: is the JobPilot extension connected and paired. Never the pairing token. */
+export interface BrowserStatus {
+  /** The app waits for the extension (false when its port is taken). */
+  listening: boolean;
+  port: number;
+  /** A paired extension is connected. */
+  connected: boolean;
+  /** "Chrome 153", also while pairing. */
+  browser: string | null;
+  extensionVersion: string | null;
+  /** The extension may open private (Incognito) tabs. */
+  incognitoAllowed: boolean;
+  /** The 6-digit code to approve while an extension waits for pairing. */
+  pairingCode: string | null;
+  /** The user approved the code here; the extension's popup still has to say Pair. */
+  pairingWaitingForExtension: boolean;
+  /** Some browser was paired before. */
+  paired: boolean;
+  /** The folder to pick in "Load unpacked" on chrome://extensions, when it is known. */
+  extensionPath: string | null;
 }
 
-/** Where the browser download stands (also the payload of `integrations:browser-download`). */
-export interface Download {
-  active: boolean;
-  /** Percent done, when the size is known. */
-  percent: number | null;
-}
-
-export interface Sessions {
+/** Settings > Browser: the connection and the sites the user is signed in to. */
+export interface BrowserSection {
+  browser: BrowserStatus;
   sessions: Session[];
-  chrome: Chrome | null;
-  download: Download;
 }

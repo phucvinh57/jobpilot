@@ -1,8 +1,10 @@
-//! End-to-end tests on a real headless Chrome against local fixture pages (a Greenhouse-like form,
-//! a two-step form, a CAPTCHA page, a form that rejects its submission, a confirmation without clear
-//! text). They are `#[ignore]`d because they start Chrome; run with
-//! `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored apply_` (set `JOBPILOT_CHROME` when
-//! Chrome is elsewhere). Nothing leaves localhost and no real application is ever submitted.
+//! End-to-end tests in a real Chromium driven through the JobPilot extension (the bridge test kit),
+//! against local fixture pages (a Greenhouse-like form, a two-step form, a CAPTCHA page, a form that
+//! rejects its submission, a confirmation without clear text, a page that opens dialogs). They are
+//! `#[ignore]`d because they start Chromium; run with `bun run ext:build`, then
+//! `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot apply_ -- --ignored` (set `JOBPILOT_CHROME` when
+//! the Chromium is elsewhere). Apply tabs are not guarded, so the fixtures stay on 127.0.0.1. Nothing
+//! leaves localhost and no real application is ever submitted.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -12,16 +14,25 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use super::flow::{self, test_page};
+use super::flow::{self, test_tab};
 use super::form::eval;
 use super::fields::{FieldKind, Source};
 use super::{ApplyOptions, Edit, Prepared, Submitted};
+use crate::engine::browser::bridge::testkit::{self, TestBrowser};
+use crate::engine::browser::BridgeError;
 use crate::engine::llm::{Llm, LlmFuture};
 use crate::engine::store::{NewApplication, Status};
 use crate::engine::{runtime, Core, Paths, Secrets};
 
-/// Chrome tests share one process-wide registry and the dry-run env var: run them one at a time.
+/// Browser tests share one process-wide registry and the dry-run env var: run them one at a time.
 static LOCK: Mutex<()> = Mutex::new(());
+
+/// A Chromium with the extension, connected to `core`'s bridge and allowed in Incognito (forms that
+/// need no login open in a private tab). `None` (the test is skipped) without a built extension or a
+/// Chromium.
+async fn browser_for(core: &Core) -> Option<TestBrowser> {
+    testkit::launch_with(core.browser(), true).await
+}
 
 const PROFILE: &str = "\
 basics:
@@ -82,6 +93,13 @@ fn two_step(ask: bool) -> String {
     )
 }
 
+/// Opens an alert while it loads and asks to confirm the submit: both block every script call until
+/// they are answered.
+const DIALOGS: &str = r#"<!doctype html><html><head><title>Dialogs</title><script>alert('Welcome to the form');</script></head><body>
+<form id="application-form" action="/submit" method="post" onsubmit="return confirm('Send the application?')">
+ <label for="a">Full name</label><input id="a" name="a"><label for="b">Email</label><input id="b" name="b" type="text">
+ <button type="submit">Submit application</button></form></body></html>"#;
+
 const CAPTCHA: &str = r#"<!doctype html><html><body><form action="/submit" method="post">
  <label for="a">Name</label><input id="a" name="a"><label for="b">Email</label><input id="b" name="b" type="email">
  <iframe title="reCAPTCHA" src="https://www.google.com/recaptcha/api2/anchor?size=normal" style="width:304px;height:78px"></iframe>
@@ -105,6 +123,8 @@ struct Post {
 struct Server {
     addr: SocketAddr,
     posts: Arc<Mutex<Vec<Post>>>,
+    /// The path of every GET.
+    gets: Arc<Mutex<Vec<String>>>,
 }
 
 impl Server {
@@ -115,6 +135,11 @@ impl Server {
     fn posts(&self) -> Vec<Post> {
         self.posts.lock().unwrap().clone()
     }
+
+    /// How many times `path` was loaded.
+    fn hits(&self, path: &str) -> usize {
+        self.gets.lock().unwrap().iter().filter(|p| *p == path).count()
+    }
 }
 
 async fn serve() -> Server {
@@ -122,10 +147,13 @@ async fn serve() -> Server {
     let addr = listener.local_addr().unwrap();
     let posts: Arc<Mutex<Vec<Post>>> = Arc::default();
     let log = posts.clone();
+    let gets: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = gets.clone();
     tokio::spawn(async move {
         loop {
             let Ok((mut stream, _)) = listener.accept().await else { return };
             let log = log.clone();
+            let seen = seen.clone();
             tokio::spawn(async move {
                 let mut data = Vec::new();
                 let mut buf = [0u8; 8192];
@@ -156,6 +184,9 @@ async fn serve() -> Server {
                 let (method, target) = (first.next().unwrap_or(""), first.next().unwrap_or("/"));
                 let (path, query) = target.split_once('?').unwrap_or((target, ""));
                 let body = String::from_utf8_lossy(&data[head_end..]).to_string();
+                if method == "GET" {
+                    seen.lock().unwrap().push(path.to_string());
+                }
 
                 let html = |status: &str, body: &str| {
                     format!("HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n{body}")
@@ -165,6 +196,7 @@ async fn serve() -> Server {
                     ("GET", "/gh") => html("200 OK", GREENHOUSE),
                     ("GET", "/two") => html("200 OK", &two_step(query.contains("ask=1"))),
                     ("GET", "/captcha") => html("200 OK", CAPTCHA),
+                    ("GET", "/dialogs") => html("200 OK", DIALOGS),
                     ("GET", "/reject") => html("200 OK", &simple_form("/reject-post", None)),
                     ("GET", "/ambiguous") => html("200 OK", &simple_form("/ambiguous-post", None)),
                     ("GET", "/thanks") => html(
@@ -191,7 +223,7 @@ async fn serve() -> Server {
             });
         }
     });
-    Server { addr, posts }
+    Server { addr, posts, gets }
 }
 
 /// A scripted model that answers by label from the field list it is shown, like a real one would.
@@ -295,13 +327,14 @@ fn is_png(path: &Path) -> bool {
 }
 
 #[test]
-#[ignore = "launches Chrome"]
+#[ignore = "launches Chromium with the extension"]
 fn apply_greenhouse_like_form_fills_reviews_and_submits() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     runtime::block_on(async {
         let tmp = tempfile::tempdir().unwrap();
         let server = serve().await;
         let (core, id) = setup(tmp.path(), &server.url("/gh"));
+        let Some(_browser) = browser_for(&core).await else { return };
         let llm = LabelLlm::new(true);
 
         let stages = Arc::new(Mutex::new(Vec::new()));
@@ -328,9 +361,9 @@ fn apply_greenhouse_like_form_fills_reviews_and_submits() {
         assert!(stages.lock().unwrap().contains(&flow::Stage::Ready));
 
         // The page really holds those values, and nothing was sent yet.
-        let page = test_page(&core, id).await.unwrap();
+        let tab = test_tab(&core, id).await.unwrap();
         let dom: Value = eval(
-            &page,
+            &tab,
             "(() => { const v = (n) => document.querySelector(`[name=${n}]`).value; return {first: v('first_name'), email: v('email'), phone: v('phone'), country: v('country'), why: v('why'), cover: v('cover_letter'), \
              authorized: document.querySelector('[name=authorized]:checked')?.value, agree: document.querySelector('[name=agree]').checked, file: document.querySelector('[name=resume]').files[0]?.name, hp: v('website_hp')}; })()".to_string(),
         )
@@ -389,13 +422,14 @@ fn apply_greenhouse_like_form_fills_reviews_and_submits() {
 }
 
 #[test]
-#[ignore = "launches Chrome"]
+#[ignore = "launches Chromium with the extension"]
 fn apply_dry_run_never_submits() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     runtime::block_on(async {
         let tmp = tempfile::tempdir().unwrap();
         let server = serve().await;
         let (core, id) = setup(tmp.path(), &server.url("/gh"));
+        let Some(_browser) = browser_for(&core).await else { return };
         let llm = LabelLlm::new(true);
 
         // Option.
@@ -428,13 +462,14 @@ fn apply_dry_run_never_submits() {
 }
 
 #[test]
-#[ignore = "launches Chrome"]
+#[ignore = "launches Chromium with the extension"]
 fn apply_two_step_form_walks_both_steps() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     runtime::block_on(async {
         let tmp = tempfile::tempdir().unwrap();
         let server = serve().await;
         let (core, id) = setup(tmp.path(), &server.url("/two"));
+        let Some(_browser) = browser_for(&core).await else { return };
         let llm = LabelLlm::new(true);
 
         let r = review(flow::prepare_with(&core, id, ApplyOptions::default(), Some(&llm), |_| {}).await.unwrap());
@@ -457,13 +492,14 @@ fn apply_two_step_form_walks_both_steps() {
 }
 
 #[test]
-#[ignore = "launches Chrome"]
+#[ignore = "launches Chromium with the extension"]
 fn apply_step_needing_input_waits_for_the_user() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     runtime::block_on(async {
         let tmp = tempfile::tempdir().unwrap();
         let server = serve().await;
         let (core, id) = setup(tmp.path(), &server.url("/two?ask=1"));
+        let Some(_browser) = browser_for(&core).await else { return };
         let llm = LabelLlm::new(true);
 
         let r = review(flow::prepare_with(&core, id, ApplyOptions::default(), Some(&llm), |_| {}).await.unwrap());
@@ -487,13 +523,14 @@ fn apply_step_needing_input_waits_for_the_user() {
 }
 
 #[test]
-#[ignore = "launches Chrome"]
+#[ignore = "launches Chromium with the extension"]
 fn apply_captcha_hands_off_immediately() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     runtime::block_on(async {
         let tmp = tempfile::tempdir().unwrap();
         let server = serve().await;
         let (core, id) = setup(tmp.path(), &server.url("/captcha"));
+        let Some(_browser) = browser_for(&core).await else { return };
         let llm = LabelLlm::new(true);
 
         let Prepared::Handoff(h) = flow::prepare_with(&core, id, ApplyOptions::default(), Some(&llm), |_| {}).await.unwrap() else {
@@ -506,20 +543,89 @@ fn apply_captcha_hands_off_immediately() {
         assert!(llm.prompts.lock().unwrap().is_empty(), "nothing was answered or filled");
         assert!(server.posts().is_empty());
 
+        // The tab stays open for the user; "Open" brings that same tab to the front (no new one).
+        let tab = test_tab(&core, id).await.expect("the form's tab is kept");
+        assert!(tab.is_open());
+        flow::open_visible(&core, id).await.unwrap();
+        assert!(matches!(flow::live(&core, id), flow::Live::Handoff { headed: true, .. }));
+        assert_eq!(test_tab(&core, id).await.map(|t| t.id()), Some(tab.id()));
+        assert_eq!(server.hits("/captcha"), 1, "the form was not loaded again");
+
+        // Closed by the user: "Open" opens the form again in a new tab.
+        tab.close().await;
+        flow::open_visible(&core, id).await.unwrap();
+        let again = test_tab(&core, id).await.expect("a new tab");
+        assert!(again.is_open() && again.id() != tab.id());
+
         flow::finish_manually(&core, id, false).await.unwrap();
         assert!(matches!(flow::live(&core, id), flow::Live::Idle));
         assert_eq!(status(&core, id), Status::Failed);
+        assert!(!again.is_open(), "finishing closes the form's tab");
     });
 }
 
 #[test]
-#[ignore = "launches Chrome"]
+#[ignore = "launches Chromium with the extension"]
+fn apply_answers_page_dialogs_while_it_drives_the_tab() {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    runtime::block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = serve().await;
+        let (core, id) = setup(tmp.path(), &server.url("/dialogs"));
+        let Some(_browser) = browser_for(&core).await else { return };
+        let llm = LabelLlm::new(true);
+
+        // An alert while the page loads, a confirm on submit: neither leaves a script call hanging.
+        let r = review(flow::prepare_with(&core, id, ApplyOptions::default(), Some(&llm), |_| {}).await.unwrap());
+        assert_eq!(value_of(&r, "Email"), "vinh@example.com");
+        let done = tokio::time::timeout(std::time::Duration::from_secs(90), flow::submit_with(&core, id, Vec::new(), Some(&llm)))
+            .await
+            .expect("submit does not hang on a dialog")
+            .unwrap();
+        assert!(matches!(done, Submitted::Applied { .. }), "{done:?}");
+        assert_eq!(server.posts().len(), 1, "the confirm was accepted");
+        assert_eq!(status(&core, id), Status::Applied);
+    });
+}
+
+#[test]
+#[ignore = "launches Chromium with the extension"]
+fn apply_needs_the_extension_and_incognito_access() {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    runtime::block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let server = serve().await;
+        let (core, id) = setup(tmp.path(), &server.url("/gh"));
+        let llm = LabelLlm::new(true);
+
+        // No extension connected to this data dir's bridge.
+        assert!(!core.apply_info(id).unwrap().browser_connected);
+        let err = flow::prepare_with(&core, id, ApplyOptions::default(), Some(&llm), |_| {}).await.unwrap_err();
+        assert_eq!(err.downcast_ref::<BridgeError>(), Some(&BridgeError::NotConnected), "{err:#}");
+        assert!(matches!(flow::live(&core, id), flow::Live::Idle));
+
+        // Connected, but not allowed in Incognito: a form that needs no login opens in a private tab.
+        let Some(_browser) = testkit::launch_with(core.browser(), false).await else { return };
+        let info = core.apply_info(id).unwrap();
+        assert!(info.browser_connected && !info.private_tabs);
+        assert!(info.blocker().is_some_and(|b| b.contains("Allow in Incognito")), "{:?}", info.blocker());
+        let err = flow::prepare_with(&core, id, ApplyOptions::default(), Some(&llm), |_| {}).await.unwrap_err();
+        assert_eq!(err.downcast_ref::<BridgeError>(), Some(&BridgeError::IncognitoNotAllowed), "{err:#}");
+        assert!(matches!(flow::live(&core, id), flow::Live::Idle));
+        assert_eq!(status(&core, id), Status::CvReady, "nothing happened to the application");
+        assert_eq!(server.hits("/gh"), 0);
+    });
+}
+
+#[test]
+#[ignore = "launches Chromium with the extension"]
 fn apply_rejected_submission_becomes_a_handoff() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     runtime::block_on(async {
         let tmp = tempfile::tempdir().unwrap();
         let server = serve().await;
         let (core, id) = setup(tmp.path(), &server.url("/reject"));
+        let Some(_browser) = browser_for(&core).await else { return };
         let llm = LabelLlm::new(true);
 
         let r = review(flow::prepare_with(&core, id, ApplyOptions::default(), Some(&llm), |_| {}).await.unwrap());
@@ -538,7 +644,7 @@ fn apply_rejected_submission_becomes_a_handoff() {
 }
 
 #[test]
-#[ignore = "launches Chrome"]
+#[ignore = "launches Chromium with the extension"]
 fn apply_unclear_confirmation_is_decided_by_a_yes_no_question() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     runtime::block_on(async {
@@ -547,6 +653,7 @@ fn apply_unclear_confirmation_is_decided_by_a_yes_no_question() {
 
         // The model says the page confirms: Applied.
         let (core, id) = setup(tmp.path(), &server.url("/ambiguous"));
+        let Some(_browser) = browser_for(&core).await else { return };
         let yes = LabelLlm::new(true);
         review(flow::prepare_with(&core, id, ApplyOptions::default(), Some(&yes), |_| {}).await.unwrap());
         assert!(matches!(flow::submit_with(&core, id, Vec::new(), Some(&yes)).await.unwrap(), Submitted::Applied { .. }));
@@ -557,6 +664,7 @@ fn apply_unclear_confirmation_is_decided_by_a_yes_no_question() {
         // No: handoff that warns the application may have gone through.
         let tmp2 = tempfile::tempdir().unwrap();
         let (core, id) = setup(tmp2.path(), &server.url("/ambiguous"));
+        let Some(_browser) = browser_for(&core).await else { return };
         let no = LabelLlm::new(false);
         review(flow::prepare_with(&core, id, ApplyOptions::default(), Some(&no), |_| {}).await.unwrap());
         let Submitted::Handoff(h) = flow::submit_with(&core, id, Vec::new(), Some(&no)).await.unwrap() else { panic!("expected a handoff") };
@@ -566,13 +674,14 @@ fn apply_unclear_confirmation_is_decided_by_a_yes_no_question() {
 }
 
 #[test]
-#[ignore = "launches Chrome"]
+#[ignore = "launches Chromium with the extension"]
 fn apply_without_a_model_fills_only_the_profile_and_blocks_on_required_fields() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     runtime::block_on(async {
         let tmp = tempfile::tempdir().unwrap();
         let server = serve().await;
         let (core, id) = setup(tmp.path(), &server.url("/gh"));
+        let Some(_browser) = browser_for(&core).await else { return };
         let r = review(flow::prepare_with(&core, id, ApplyOptions::default(), None, |_| {}).await.unwrap());
         assert_eq!(value_of(&r, "Email"), "vinh@example.com");
         assert!(r.notes.iter().any(|n| n.contains("No AI provider")));
@@ -590,7 +699,7 @@ fn apply_without_a_model_fills_only_the_profile_and_blocks_on_required_fields() 
 /// the fixtures. URLs: `JOBPILOT_TEST_APPLY_URLS` (comma separated; defaults to Lever's demo company and
 /// a Greenhouse board). Screenshots are copied to `JOBPILOT_TEST_SHOTS` when set. Needs network.
 #[test]
-#[ignore = "launches Chrome and needs network"]
+#[ignore = "launches Chromium with the extension and needs network"]
 fn apply_real_postings_dry_run() {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let urls = std::env::var("JOBPILOT_TEST_APPLY_URLS").unwrap_or_else(|_| {
@@ -602,6 +711,7 @@ fn apply_real_postings_dry_run() {
         for url in urls.split(',').map(str::trim).filter(|u| !u.is_empty()) {
             let tmp = tempfile::tempdir().unwrap();
             let (core, id) = setup(tmp.path(), url);
+            let Some(_browser) = browser_for(&core).await else { return };
             let llm = LabelLlm::new(false);
             let prepared =
                 flow::prepare_with(&core, id, ApplyOptions { dry_run: true }, Some(&llm), |s| eprintln!("  {}", s.label())).await;

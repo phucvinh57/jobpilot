@@ -28,7 +28,7 @@ pub struct HealthLine {
     pub focus: Option<&'static str>,
 }
 
-/// What to say about the prerequisites (AI provider, typst, Chrome).
+/// What to say about the prerequisites (AI provider, typst, the browser extension).
 pub fn health_line(health: &Health) -> HealthLine {
     let mut problems = Vec::new();
     if !health.provider {
@@ -37,15 +37,15 @@ pub fn health_line(health: &Health) -> HealthLine {
     if health.typst.is_none() {
         problems.push(Problem::NoTypst);
     }
-    if !health.chrome {
-        problems.push(Problem::NoChrome);
+    if !health.browser {
+        problems.push(Problem::NoBrowser { incognito: false });
     }
     let focus = problems.iter().find_map(|p| p.settings_section());
     let text = match problems.as_slice() {
         [] => "All checks passing".to_string(),
         [Problem::NoProvider] => "No AI provider".to_string(),
         [Problem::NoTypst] => "typst is missing".to_string(),
-        [Problem::NoChrome] => "No Chrome found".to_string(),
+        [Problem::NoBrowser { .. }] => "Browser extension not connected".to_string(),
         many => format!("{} setup problems", many.len()),
     };
     HealthLine {
@@ -179,10 +179,10 @@ mod tests {
 
     use super::{blockers, health_line};
 
-    fn health(provider: bool, typst: bool, chrome: bool) -> Health {
+    fn health(provider: bool, typst: bool, browser: bool) -> Health {
         Health {
             typst: typst.then(|| "typst 0.13".to_string()),
-            chrome,
+            browser,
             provider,
         }
     }
@@ -203,10 +203,9 @@ mod tests {
         assert_eq!(no_typst.text, "typst is missing");
         assert_eq!(no_typst.focus, None, "no Settings section installs typst");
 
-        assert_eq!(
-            health_line(&health(true, true, false)).focus,
-            Some("Browser sessions")
-        );
+        let no_browser = health_line(&health(true, true, false));
+        assert_eq!(no_browser.text, "Browser extension not connected");
+        assert_eq!(no_browser.focus, Some("Browser"));
         assert_eq!(
             health_line(&health(false, false, false)).text,
             "3 setup problems"
@@ -217,7 +216,7 @@ mod tests {
     fn the_banner_lists_what_blocks_writing_a_cv() {
         assert!(
             blockers(&health(true, true, false)).is_empty(),
-            "Chrome is only needed to apply"
+            "the browser is only needed to apply"
         );
         let all = blockers(&health(false, false, true));
         assert_eq!(

@@ -1,7 +1,7 @@
 // Why something failed, in terms the user can act on. The classification is done by the shell
 // (`engine::health`); the web app only shows it.
 
-export type ProblemKind = "noProvider" | "noProfile" | "noTypst" | "noChrome" | "network" | "needsHuman" | "other";
+export type ProblemKind = "noProvider" | "noProfile" | "noTypst" | "noBrowser" | "network" | "needsHuman" | "other";
 
 export interface Problem {
   kind: ProblemKind;
@@ -11,6 +11,8 @@ export interface Problem {
   advice: string | null;
   /** The Settings section that fixes it. */
   settingsSection: string | null;
+  /** The label of the button that opens that section, when it says more than "Open Settings > ...". */
+  callToAction?: string | null;
   /** Trying the same thing again can succeed. */
   retryable: boolean;
 }
@@ -52,7 +54,7 @@ export function needsRecheck(problem: Problem): boolean {
     problem.kind === "noProvider" ||
     problem.kind === "noProfile" ||
     problem.kind === "noTypst" ||
-    problem.kind === "noChrome"
+    problem.kind === "noBrowser"
   );
 }
 

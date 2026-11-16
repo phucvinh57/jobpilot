@@ -1,0 +1,113 @@
+:root {
+  color-scheme: light dark;
+  --ink: #1d1d1f;
+  --muted: #5f6368;
+  --line: #d0d0d5;
+  --surface: #ffffff;
+  --accent: #1a56db;
+  --danger: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ececf1;
+    --muted: #a0a4ab;
+    --line: #44464d;
+    --surface: #1f2023;
+    --accent: #8ab4f8;
+    --danger: #f97066;
+  }
+}
+
+body {
+  width: 300px;
+  margin: 0;
+  padding: 12px 14px;
+  font:
+    13px / 1.4 system-ui,
+    sans-serif;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+p {
+  margin: 0 0 8px;
+}
+
+#state[data-state="connected"] {
+  color: var(--accent);
+}
+
+#state[data-state="impostor"],
+#state[data-state="refused"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+section {
+  margin-bottom: 8px;
+}
+
+.code {
+  font:
+    600 26px / 1.2 ui-monospace,
+    monospace;
+  letter-spacing: 0.15em;
+  text-align: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.hint {
+  padding: 8px;
+  border: 1px solid var(--line);
+}
+
+label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+}
+
+button {
+  padding: 4px 10px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+button.primary {
+  width: 100%;
+  padding: 6px 10px;
+  font-weight: 600;
+  color: var(--surface);
+  background: var(--accent);
+  border-color: var(--accent);
+}

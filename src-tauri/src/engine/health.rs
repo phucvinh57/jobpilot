@@ -1,6 +1,7 @@
 //! What the app needs from the machine, and how to tell the user what is missing.
 //!
-//! - [`Health`]: which prerequisites are in place (an AI provider, the `typst` binary, Chrome).
+//! - [`Health`]: which prerequisites are in place (an AI provider, the `typst` binary, the browser
+//!   extension).
 //! - [`classify`]: turns an error message from any pipeline stage into a [`Problem`], so the UI can
 //!   offer the right fix (open Settings, show the install command, retry) instead of a bare error.
 
@@ -9,6 +10,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
+use crate::engine::browser::{INCOGNITO_NOT_ALLOWED, NOT_CONNECTED};
 use crate::engine::pipeline::render::typst_binary;
 use crate::engine::Core;
 
@@ -47,8 +49,9 @@ pub enum Problem {
     NoProfile,
     /// The `typst` binary is missing.
     NoTypst,
-    /// No Chrome/Chromium to drive.
-    NoChrome,
+    /// The JobPilot extension in the user's Chrome is not connected (`incognito: false`), or it may
+    /// not open private tabs because it is not allowed in Incognito (`incognito: true`).
+    NoBrowser { incognito: bool },
     /// The network (or the remote server) did not answer: trying again may help.
     Network,
     /// A site waits for the user (login, captcha, blocked): open the browser, do it, continue.
@@ -64,7 +67,16 @@ impl Problem {
         match self {
             Problem::NoProvider => Some("AI providers"),
             Problem::NoProfile => Some("About you"),
-            Problem::NoChrome => Some("Browser sessions"),
+            Problem::NoBrowser { .. } => Some("Browser"),
+            _ => None,
+        }
+    }
+
+    /// The label of the button that opens [`settings_section`](Self::settings_section), when it is
+    /// more than "Open Settings > <section>".
+    pub fn call_to_action(self) -> Option<&'static str> {
+        match self {
+            Problem::NoBrowser { incognito: false } => Some("Connect the JobPilot extension"),
             _ => None,
         }
     }
@@ -74,9 +86,13 @@ impl Problem {
         match self {
             Problem::NoProvider => Some("Add an AI provider in Settings > AI providers and make it the default.".into()),
             Problem::NoProfile => Some("Add your CV or describe your work in Profile > About you.".into()),
-            Problem::NoChrome => {
-                Some("Install Chrome or Chromium, or download a browser in Settings > Browser sessions.".into())
-            }
+            Problem::NoBrowser { incognito: false } => Some(
+                "Connect the JobPilot extension: open Chrome with the extension and pair it in Settings > Browser.".into(),
+            ),
+            Problem::NoBrowser { incognito: true } => Some(
+                "Allow the JobPilot extension in Incognito: on chrome://extensions open JobPilot > Details and turn on \"Allow in Incognito\"."
+                    .into(),
+            ),
             Problem::NoTypst => Some(format!(
                 "Install Typst with `{TYPST_INSTALL_HINT}` (or set JOBPILOT_TYPST to the binary), then try again."
             )),
@@ -111,8 +127,10 @@ pub fn classify(message: &str) -> Problem {
         Problem::NoProfile
     } else if has(&["typst was not found"]) {
         Problem::NoTypst
-    } else if has(&["chrome not found", "no chrome found"]) {
-        Problem::NoChrome
+    } else if m.contains(&INCOGNITO_NOT_ALLOWED.to_ascii_lowercase()) {
+        Problem::NoBrowser { incognito: true }
+    } else if m.contains(&NOT_CONNECTED.to_ascii_lowercase()) {
+        Problem::NoBrowser { incognito: false }
     } else if has(&[
         "cannot connect",
         "timed out",
@@ -142,8 +160,8 @@ pub fn classify(message: &str) -> Problem {
 pub struct Health {
     /// `typst --version` output, or `None` when the binary cannot be run.
     pub typst: Option<String>,
-    /// A Chrome/Chromium is installed (or downloaded).
-    pub chrome: bool,
+    /// The JobPilot extension is connected (paired).
+    pub browser: bool,
     /// A default AI provider exists.
     pub provider: bool,
 }
@@ -174,7 +192,7 @@ impl Core {
     /// Check the prerequisites (spawns `typst --version`, so run it on the core runtime).
     pub async fn health(&self) -> Health {
         let provider = matches!(self.store.default_provider(), Ok(Some(_)));
-        Health { typst: typst_version().await, chrome: self.chrome().is_some(), provider }
+        Health { typst: typst_version().await, browser: self.browser().status().connected, provider }
     }
 
     /// Where `typst` was found (for the settings/diagnostics line).
@@ -186,14 +204,13 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::browser::BridgeError;
 
     #[test]
     fn errors_are_classified_by_what_the_user_can_do() {
         let cases = [
             ("no AI provider is set up: add one in Settings > AI providers", Problem::NoProvider),
             ("typst was not found (typst): install it", Problem::NoTypst),
-            ("Chrome not found: install Chrome/Chromium", Problem::NoChrome),
-            ("No Chrome found: install Chrome/Chromium or download the browser in Settings.", Problem::NoChrome),
             ("OpenAI: cannot connect (tcp connect error: Connection refused)", Problem::Network),
             ("OpenAI: the request timed out", Problem::Network),
             ("fetching https://x.test: error sending request for url", Problem::Network),
@@ -205,9 +222,18 @@ mod tests {
         for (message, expected) in cases {
             assert_eq!(classify(message), expected, "{message}");
         }
+        let not_connected = format!("{:#}", anyhow::Error::new(BridgeError::NotConnected).context("opening the start page"));
+        assert_eq!(classify(&not_connected), Problem::NoBrowser { incognito: false }, "{not_connected}");
+        let incognito = BridgeError::IncognitoNotAllowed.to_string();
+        assert_eq!(classify(&incognito), Problem::NoBrowser { incognito: true }, "{incognito}");
         assert!(Problem::Network.retryable() && !Problem::NoProvider.retryable());
         assert!(Problem::NoTypst.advice().unwrap().contains("cargo install --locked typst-cli"));
-        assert_eq!(Problem::NoChrome.settings_section(), Some("Browser sessions"));
+        assert_eq!(Problem::NoBrowser { incognito: false }.settings_section(), Some("Browser"));
+        assert!(Problem::NoBrowser { incognito: false }.advice().unwrap().contains("Connect the JobPilot extension"));
+        assert!(Problem::NoBrowser { incognito: true }.advice().unwrap().contains("Allow in Incognito"));
+        assert_eq!(Problem::NoBrowser { incognito: false }.call_to_action(), Some("Connect the JobPilot extension"));
+        assert_eq!(Problem::NoBrowser { incognito: true }.call_to_action(), None);
+        assert_eq!(Problem::NoProvider.call_to_action(), None);
         // The web app opens "About you" on the Profile page; the message and advice say so too.
         assert_eq!(Problem::NoProfile.settings_section(), Some("About you"));
         assert!(Problem::NoProfile.advice().unwrap().contains("Profile > About you"));
@@ -232,7 +258,7 @@ mod tests {
     #[test]
     fn blockers_lists_what_the_main_flow_needs() {
         assert_eq!(Health::default().blockers(), [Problem::NoProvider, Problem::NoTypst]);
-        let ok = Health { typst: Some("typst 0.13".into()), chrome: false, provider: true };
-        assert!(ok.blockers().is_empty(), "Chrome is only needed to apply");
+        let ok = Health { typst: Some("typst 0.13".into()), browser: false, provider: true };
+        assert!(ok.blockers().is_empty(), "the browser is only needed to apply and for some sources");
     }
 }

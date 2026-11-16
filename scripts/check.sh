@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs the checks that cover files changed since the merge base with main (committed and
 # uncommitted). The checks come in independent groups, each run only when its paths changed:
-#   web     the web app: typecheck, Biome (lint + format), vitest, vite build
+#   web     the web app and the browser extension: typecheck, Biome (lint + format), vitest, vite build, extension build
 #   rust    the workspace: clippy, cargo test
 #   render  the CV template: a Typst render of the example CV
 # A change to the web app alone never builds Rust, and a Rust change never needs bun: the desktop
@@ -63,7 +63,7 @@ fi
 # What each group covers. A change to this script runs everything.
 self='scripts/check\.sh$'
 declare -A paths=(
-  [web]="^(src/|assets/fonts/|(package|tsconfig)\.json$|bun\.lock$|index\.html$|vite\.config\.ts$|biome\.jsonc?$|$self)"
+  [web]="^(src/|extension/|assets/fonts/|(package|tsconfig)\.json$|bun\.lock$|index\.html$|vite\.config\.ts$|biome\.jsonc?$|$self)"
   [rust]="^(Cargo\.(toml|lock)$|src-tauri/|assets/|$self)"
   [render]="^(assets/|$self)"
 )
@@ -120,7 +120,8 @@ if wanted web; then
     run web-typecheck bun run typecheck &&
     run web-lint biome_check &&
     run web-test bun run test &&
-    run web-build bun x vite build
+    run web-build bun x vite build &&
+    run ext-build bun run ext:build
 fi
 
 if wanted rust; then

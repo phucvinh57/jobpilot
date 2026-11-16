@@ -1,10 +1,11 @@
-// What the browser sessions card says about each session and the managed browser.
+// What Settings > Browser says: the connection to the JobPilot extension in the user's Chrome, how
+// to install it, and each site the user is signed in to (a session).
 
 import { ago } from "@/lib/display";
 import type { Tone } from "@/lib/tokens";
-import type { SessionStatus, Session, Chrome, Download } from "@/types/integrations";
+import type { BrowserStatus, Session, SessionStatus } from "@/types/integrations";
 
-/** Quick starts for the "New session" form: (name, login URL). */
+/** Quick starts for the "Add a site" dialog: (name, sign-in URL). */
 export const SUGGESTIONS: readonly { name: string; url: string }[] = [
   { name: "LinkedIn", url: "https://www.linkedin.com/login" },
   { name: "Indeed", url: "https://secure.indeed.com/account/login" },
@@ -14,11 +15,8 @@ export const SUGGESTIONS: readonly { name: string; url: string }[] = [
 /** The first suggestion fills the form when it opens. */
 export const FIRST_SUGGESTION = SUGGESTIONS[0] ?? { name: "", url: "" };
 
-/** `busy` key for operations that are not about one existing session (creating a new one). */
+/** `busy` key for operations that are not about one existing site (adding one). */
 export const NEW_KEY = 0;
-
-/** The destructive actions of a row: the first click asks "Sure?", the second runs it. */
-export type Destructive = "signOut" | "delete";
 
 export function statusTone(status: SessionStatus): Tone {
   switch (status) {
@@ -31,30 +29,60 @@ export function statusTone(status: SessionStatus): Tone {
   }
 }
 
-/** `host - verified 5 min ago`, or `host - never verified`. */
+/** What the status tag of a site says. */
+export function statusLabel(status: SessionStatus): string {
+  switch (status) {
+    case "ok":
+      return "signed in";
+    case "expired":
+      return "signed out";
+    case "new":
+      return "not checked";
+  }
+}
+
+/** `host - checked 5 min ago`, or `host - never checked`. */
 export function sessionLine(session: Pick<Session, "host" | "verifiedAt">, now: Date): string {
-  const verified =
-    session.verifiedAt === null ? "never verified" : `verified ${ago(now, new Date(session.verifiedAt))}`;
-  return `${session.host} - ${verified}`;
+  const checked = session.verifiedAt === null ? "never checked" : `checked ${ago(now, new Date(session.verifiedAt))}`;
+  return `${session.host} - ${checked}`;
 }
 
-/** The browser line of the card. */
-export function browserLine(chrome: Chrome | null, download: Download): string {
-  if (download.active) {
-    return download.percent === null ? "Downloading browser..." : `Downloading browser... ${download.percent}%`;
+/** The tag at the top of the section. */
+export function connectionTag(browser: BrowserStatus): { tone: Tone; text: string } {
+  if (browser.connected) {
+    return { tone: "ok", text: "Connected" };
   }
-  return chrome ? `Browser: ${chrome.path} (${chrome.source})` : "Browser: not found";
-}
-
-/** The label of the download button. */
-export function downloadLabel(chrome: Chrome | null): string {
-  return chrome ? "Update browser" : "Download browser";
-}
-
-/** The tag at the top of the card. */
-export function browserTag(chrome: Chrome | null, download: Download): { tone: Tone; text: string } {
-  if (chrome) {
-    return { tone: "ok", text: "Chrome found" };
+  if (browser.pairingCode !== null) {
+    return {
+      tone: "warn",
+      text: browser.pairingWaitingForExtension ? "Waiting for the extension" : "Waiting for pairing",
+    };
   }
-  return download.active ? { tone: "neutral", text: "Downloading" } : { tone: "warn", text: "No browser" };
+  if (!browser.listening) {
+    return { tone: "danger", text: "Off" };
+  }
+  return { tone: "warn", text: "Not connected" };
+}
+
+/** "Chrome 153, JobPilot extension 0.1.0" for a connected browser. */
+export function connectionLine(browser: BrowserStatus): string {
+  const name = browser.browser ?? "Your browser";
+  return browser.extensionVersion ? `${name}, JobPilot extension ${browser.extensionVersion}` : name;
+}
+
+/** Whether the extension may open private tabs (forms that need no sign-in open in one). */
+export function privateTabsLine(browser: Pick<BrowserStatus, "incognitoAllowed">): string {
+  return browser.incognitoAllowed
+    ? "Private tabs: allowed"
+    : "Private tabs: not allowed (turn on Allow in Incognito for JobPilot on chrome://extensions)";
+}
+
+/** Why the browser is not connected, in one line. */
+export function disconnectedLine(browser: Pick<BrowserStatus, "listening" | "port" | "paired">): string {
+  if (!browser.listening) {
+    return `JobPilot cannot wait for the extension: port ${browser.port} is used by another program.`;
+  }
+  return browser.paired
+    ? "The paired browser is not connected: open Chrome with the JobPilot extension."
+    : "Install the JobPilot extension in Chrome to let JobPilot open tabs there.";
 }

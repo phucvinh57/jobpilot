@@ -344,23 +344,24 @@ describe("Needs you", () => {
   it("says why the browser could not be opened, with what to do about it", async () => {
     const user = userEvent.setup();
     const problem: Problem = {
-      kind: "noChrome",
+      kind: "noBrowser",
       challenge: null,
-      advice: "Chrome is needed.",
-      settingsSection: "Browser sessions",
+      advice: "Connect the JobPilot extension: open Chrome with the extension and pair it in Settings > Browser.",
+      settingsSection: "Browser",
+      callToAction: "Connect the JobPilot extension",
       retryable: false,
     };
     mocked.readQueue.mockResolvedValue(queue({ waiting: [{ ...WAITING, reason: "captcha", url: null }] }));
-    mocked.openBrowser.mockRejectedValue(new CommandError("no Chrome found", problem));
+    mocked.openBrowser.mockRejectedValue(new CommandError("the JobPilot browser extension is not connected", problem));
     renderWithToasts(<JobsPage />);
     const banner = await screen.findByRole("group", { name: "Beta jobs shows a captcha" });
     expect(within(banner).getByText("Deal with the page in the browser, then press Continue.")).toBeTruthy();
     await user.click(within(banner).getByRole("button", { name: "Open browser" }));
     const toast = await screen.findByRole("alert", { name: "The browser could not be opened" });
-    expect(within(toast).getByText("no Chrome found")).toBeTruthy();
-    expect(within(toast).getByText("Chrome is needed.")).toBeTruthy();
-    expect(within(toast).getByRole("button", { name: "Open Settings > Browser sessions" })).toBeTruthy();
-    expect(within(banner).queryByText(/no Chrome found/), "nothing red under the banner").toBeNull();
+    expect(within(toast).getByText("the JobPilot browser extension is not connected")).toBeTruthy();
+    expect(within(toast).getByText(/^Connect the JobPilot extension: open Chrome/)).toBeTruthy();
+    expect(within(toast).getByRole("button", { name: "Connect the JobPilot extension" })).toBeTruthy();
+    expect(within(banner).queryByText(/not connected/), "nothing red under the banner").toBeNull();
   });
 
   it("shows a CV that could not be written, with Try again, Open application and Forget", async () => {
