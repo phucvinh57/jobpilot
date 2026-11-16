@@ -53,7 +53,10 @@ export function connectionTag(browser: BrowserStatus): { tone: Tone; text: strin
     return { tone: "ok", text: "Connected" };
   }
   if (browser.pairingCode !== null) {
-    return { tone: "warn", text: "Waiting for pairing" };
+    return {
+      tone: "warn",
+      text: browser.pairingWaitingForExtension ? "Waiting for the extension" : "Waiting for pairing",
+    };
   }
   if (!browser.listening) {
     return { tone: "danger", text: "Off" };

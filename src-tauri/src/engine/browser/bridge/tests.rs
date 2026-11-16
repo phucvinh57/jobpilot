@@ -1,5 +1,6 @@
-//! The bridge against a fake extension (a tokio-tungstenite client): the upgrade checks, pairing,
-//! calls and their errors, events and the guard's answers. No browser.
+//! The bridge against a fake extension (a tokio-tungstenite client): the upgrade checks, the
+//! handshake (proofs both ways, the token never sent again), pairing (approved in the app and in the
+//! extension, in either order), calls and their errors, events and the guard's answers. No browser.
 
 use std::time::{Duration, Instant};
 
@@ -11,7 +12,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-use super::pairing::TOKEN_KEY;
+use super::pairing::{self, TOKEN_KEY};
 use super::*;
 use crate::engine::browser::tab::{OpenOptions, Profile};
 
@@ -48,8 +49,46 @@ impl Fake {
         self.ws.send(Message::Text(v.to_string())).await.unwrap();
     }
 
-    async fn hello(&mut self, token: Option<&str>) {
-        self.send(json!({"type":"hello","protocol":1,"extension":"0.1.0","browser":"Mozilla/5.0 (X11; Linux x86_64) Chrome/153.0.0.0 Safari/537.36","incognitoAllowed":false,"token":token})).await;
+    /// The first message: `paired` says the extension holds a token; `nonce` is its nonce.
+    async fn hello_with(&mut self, paired: bool, nonce: &str) {
+        self.send(json!({"type":"hello","protocol":1,"extension":"0.1.0","browser":"Mozilla/5.0 (X11; Linux x86_64) Chrome/153.0.0.0 Safari/537.36","incognitoAllowed":false,"paired":paired,"nonce":nonce})).await;
+    }
+
+    /// The hello of an extension without a token.
+    async fn hello(&mut self) {
+        self.hello_with(false, &pairing::new_nonce()).await;
+    }
+
+    /// The hello of an extension holding `token`: checks the app's challenge proves the same token,
+    /// and returns the app's nonce.
+    async fn hello_paired(&mut self, token: &str) -> String {
+        let nonce = pairing::new_nonce();
+        self.hello_with(true, &nonce).await;
+        let challenge = self.recv().await;
+        assert_eq!(challenge["type"], "challenge", "{challenge}");
+        assert_eq!(challenge["proof"].as_str(), Some(pairing::app_proof(token, &nonce).as_str()), "the app proves it holds the token");
+        assert!(!challenge.to_string().contains(token), "the token is never sent");
+        let app_nonce = challenge["nonce"].as_str().unwrap().to_string();
+        assert!(pairing::is_nonce(&app_nonce) && app_nonce != nonce, "{app_nonce}");
+        app_nonce
+    }
+
+    /// Reconnect with `token`: the challenge, the extension's proof, then `welcome`.
+    async fn authenticate(&mut self, token: &str) {
+        let app_nonce = self.hello_paired(token).await;
+        self.send(json!({"type":"auth","proof":pairing::ext_proof(token, &app_nonce)})).await;
+        assert_eq!(self.recv().await, json!({"type":"welcome"}));
+    }
+
+    async fn consent(&mut self, code: &str) {
+        self.send(json!({"type":"consent","code":code})).await;
+    }
+
+    /// Nothing arrives for a while.
+    async fn quiet(&mut self) {
+        if let Ok(frame) = tokio::time::timeout(Duration::from_millis(300), self.ws.next()).await {
+            panic!("expected no message, got {frame:?}");
+        }
     }
 
     /// The next JSON message; `None` when the server closed the connection.
@@ -79,12 +118,14 @@ impl Fake {
         self.send(json!({"type":"result","id":id,"result":result})).await;
     }
 
-    /// Pair through the code (approved by the user) and return the token.
+    /// Pair through the code (approved by the user in the app, then in the extension) and return
+    /// the token.
     async fn pair(&mut self, bridge: &Bridge) -> String {
-        self.hello(None).await;
+        self.hello().await;
         let pair = self.recv().await;
         assert_eq!(pair["type"], "pair", "{pair}");
         bridge.approve_pairing().unwrap();
+        self.consent(pair["code"].as_str().unwrap()).await;
         let paired = self.recv().await;
         assert_eq!(paired["type"], "paired", "{paired}");
         assert_eq!(self.recv().await, json!({"type":"welcome"}));
@@ -121,7 +162,7 @@ async fn an_unknown_extension_pairs_with_the_code_the_user_approves() {
     assert!(bridge.status().listening && bridge.status().port == port && !bridge.status().paired);
     let mut events = bridge.subscribe();
     let mut ext = Fake::connect(port).await;
-    ext.hello(None).await;
+    ext.hello().await;
     let pair = ext.recv().await;
     assert_eq!(pair["type"], "pair");
     let code = pair["code"].as_str().unwrap().to_string();
@@ -137,23 +178,140 @@ async fn an_unknown_extension_pairs_with_the_code_the_user_approves() {
     ext.send(json!({"type":"ping"})).await;
     assert_eq!(ext.recv().await, json!({"type":"pong"}));
 
+    // Approved in the app: nothing is sent until the user also presses Pair in the extension.
+    bridge.approve_pairing().unwrap();
+    until("waiting for the extension", || bridge.status().pairing_waiting_for_extension).await;
+    ext.quiet().await;
+    assert_eq!(secrets.get(TOKEN_KEY).unwrap(), None, "no token before both approved");
+    assert!(bridge.approve_pairing().is_ok(), "approving again changes nothing");
+    // A consent for another code is ignored.
+    ext.consent("000000x").await;
+    ext.quiet().await;
+
+    ext.consent(&code).await;
+    let paired = ext.recv().await;
+    assert_eq!(paired["type"], "paired");
+    let token = paired["token"].as_str().unwrap().to_string();
+    assert!(token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()), "{token}");
+    assert_eq!(ext.recv().await, json!({"type":"welcome"}));
+    assert_eq!(secrets.get(TOKEN_KEY).unwrap().as_deref(), Some(token.as_str()));
+    let status = bridge.status();
+    assert!(status.connected && status.paired && status.pairing_code.is_none() && !status.pairing_waiting_for_extension, "{status:?}");
+    assert!(bridge.approve_pairing().is_err(), "nothing is waiting any more");
+
+    // The same browser proves it holds the token (never sending it) and is let in; it replaces
+    // the older connection.
+    let mut again = Fake::connect(port).await;
+    again.authenticate(&token).await;
+    assert_eq!(ext.next().await, None, "the older connection is closed");
+    assert!(bridge.status().connected);
+}
+
+#[tokio::test]
+async fn the_extension_may_consent_before_the_app_approves() {
+    let (bridge, port, secrets) = started(false).await;
+    let mut ext = Fake::connect(port).await;
+    ext.hello().await;
+    let pair = ext.recv().await;
+    let code = pair["code"].as_str().unwrap().to_string();
+    ext.consent(&code).await;
+    until("the code in the status", || bridge.status().pairing_code.is_some()).await;
+    ext.quiet().await;
+    assert!(!bridge.status().pairing_waiting_for_extension, "the extension already said yes");
+    assert_eq!(secrets.get(TOKEN_KEY).unwrap(), None);
+
     bridge.approve_pairing().unwrap();
     let paired = ext.recv().await;
     assert_eq!(paired["type"], "paired");
-    let token = paired["token"].as_str().unwrap();
-    assert!(token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()), "{token}");
     assert_eq!(ext.recv().await, json!({"type":"welcome"}));
-    assert_eq!(secrets.get(TOKEN_KEY).unwrap().as_deref(), Some(token));
-    let status = bridge.status();
-    assert!(status.connected && status.paired && status.pairing_code.is_none(), "{status:?}");
-    assert!(bridge.approve_pairing().is_err(), "nothing is waiting any more");
-
-    // The same browser with its token is let in at once, and replaces the older connection.
-    let mut again = Fake::connect(port).await;
-    again.hello(Some(token)).await;
-    assert_eq!(again.recv().await, json!({"type":"welcome"}));
-    assert_eq!(ext.next().await, None, "the older connection is closed");
+    assert_eq!(secrets.get(TOKEN_KEY).unwrap().as_deref(), paired["token"].as_str());
     assert!(bridge.status().connected);
+}
+
+#[tokio::test]
+async fn the_token_never_travels_after_pairing() {
+    let (bridge, port, _) = started(false).await;
+    let mut ext = Fake::connect(port).await;
+    let token = ext.pair(&bridge).await;
+    drop(ext);
+    until("disconnected", || !bridge.status().connected).await;
+
+    let mut again = Fake::connect(port).await;
+    let nonce = pairing::new_nonce();
+    again.hello_with(true, &nonce).await;
+    let mut seen = vec![again.recv().await];
+    let app_nonce = seen[0]["nonce"].as_str().unwrap().to_string();
+    again.send(json!({"type":"auth","proof":pairing::ext_proof(&token, &app_nonce)})).await;
+    seen.push(again.recv().await);
+    assert_eq!(seen[1], json!({"type":"welcome"}));
+
+    // A call and its answer, then forget: still no token on the wire.
+    let b = bridge.clone();
+    let call = tokio::spawn(async move { b.call("tab.info", json!({"tab": 1})).await });
+    let msg = again.recv().await;
+    again.answer(msg["id"].as_u64().unwrap(), json!({"url":"","title":"","loading":false})).await;
+    call.await.unwrap().unwrap();
+    seen.push(msg);
+    bridge.forget().unwrap();
+    while let Some(msg) = again.next().await {
+        seen.push(msg);
+    }
+    for msg in &seen {
+        assert!(!msg.to_string().contains(&token), "the token was sent: {msg}");
+    }
+    assert!(seen.iter().any(|m| m["type"] == "forget"), "{seen:?}");
+}
+
+#[tokio::test]
+async fn a_wrong_proof_from_the_extension_is_asked_to_pair() {
+    let (bridge, port, secrets) = started(false).await;
+    let mut ext = Fake::connect(port).await;
+    let token = ext.pair(&bridge).await;
+    drop(ext);
+    until("disconnected", || !bridge.status().connected).await;
+
+    // The right challenge, a proof with another token: pairing, and the stored token stays.
+    let mut other = Fake::connect(port).await;
+    let app_nonce = other.hello_paired(&token).await;
+    other.send(json!({"type":"auth","proof":pairing::ext_proof(&"b".repeat(64), &app_nonce)})).await;
+    assert_eq!(other.recv().await["type"], "pair");
+    until("pairing", || bridge.status().pairing_code.is_some()).await;
+    assert!(!bridge.status().connected);
+    drop(other);
+    until("no pairing", || bridge.status().pairing_code.is_none()).await;
+
+    // Replaying the app's own proof as the extension's does not work either.
+    let mut replay = Fake::connect(port).await;
+    let app_nonce = replay.hello_paired(&token).await;
+    replay.send(json!({"type":"auth","proof":pairing::app_proof(&token, &app_nonce)})).await;
+    assert_eq!(replay.recv().await["type"], "pair");
+    assert_eq!(secrets.get(TOKEN_KEY).unwrap().as_deref(), Some(token.as_str()), "the stored token stays");
+}
+
+#[tokio::test]
+async fn an_unpaired_extension_or_an_app_without_a_token_means_pairing() {
+    let (bridge, port, secrets) = started(false).await;
+    // The extension says it holds a token, the app has none: pairing (no challenge).
+    let mut ext = Fake::connect(port).await;
+    ext.hello_with(true, &pairing::new_nonce()).await;
+    assert_eq!(ext.recv().await["type"], "pair");
+    drop(ext);
+    until("no pairing", || bridge.status().pairing_code.is_none()).await;
+
+    // The app holds a token, the extension says it has none: pairing.
+    secrets.set(TOKEN_KEY, &"a".repeat(64)).unwrap();
+    let mut ext = Fake::connect(port).await;
+    ext.hello().await;
+    assert_eq!(ext.recv().await["type"], "pair");
+    drop(ext);
+    until("no pairing", || bridge.status().pairing_code.is_none()).await;
+
+    // A nonce that is not 64 hex characters is not answered with a proof.
+    for nonce in ["", "abc", &"z".repeat(64)] {
+        let mut ext = Fake::connect(port).await;
+        ext.hello_with(true, nonce).await;
+        assert_eq!(ext.recv().await["type"], "pair", "{nonce:?}");
+    }
 }
 
 #[tokio::test]
@@ -161,9 +319,13 @@ async fn a_wrong_token_is_asked_to_pair_and_a_declined_pairing_is_rejected() {
     let (bridge, port, secrets) = started(false).await;
     secrets.set(TOKEN_KEY, &"a".repeat(64)).unwrap();
     let mut ext = Fake::connect(port).await;
-    ext.hello(Some(&"b".repeat(64))).await;
+    let app_nonce = ext.hello_paired(&"a".repeat(64)).await;
+    ext.send(json!({"type":"auth","proof":pairing::ext_proof(&"b".repeat(64), &app_nonce)})).await;
     assert_eq!(ext.recv().await["type"], "pair");
     until("pairing", || bridge.status().pairing_code.is_some()).await;
+    // Declined even after the extension consented.
+    let code = bridge.status().pairing_code.unwrap();
+    ext.consent(&code).await;
     bridge.decline_pairing().unwrap();
     assert_eq!(ext.recv().await, json!({"type":"rejected","reason":"declined"}));
     assert_eq!(ext.next().await, None);
@@ -176,18 +338,22 @@ async fn a_wrong_token_is_asked_to_pair_and_a_declined_pairing_is_rejected() {
 async fn another_protocol_version_is_rejected() {
     let (bridge, port, _) = started(true).await;
     let mut ext = Fake::connect(port).await;
-    ext.send(json!({"type":"hello","protocol":2,"extension":"9.0.0","browser":"x","incognitoAllowed":false,"token":null})).await;
+    ext.send(json!({"type":"hello","protocol":2,"extension":"9.0.0","browser":"x","incognitoAllowed":false,"paired":false,"nonce":pairing::new_nonce()})).await;
     assert_eq!(ext.recv().await, json!({"type":"rejected","reason":"protocol"}));
     assert_eq!(ext.next().await, None);
     assert!(!bridge.status().connected);
 }
 
 #[tokio::test]
-async fn auto_approval_pairs_at_once() {
+async fn auto_approval_pairs_once_the_extension_consents() {
     let (bridge, port, secrets) = started(true).await;
     let mut ext = Fake::connect(port).await;
-    ext.hello(None).await;
-    assert_eq!(ext.recv().await["type"], "pair");
+    ext.hello().await;
+    let pair = ext.recv().await;
+    assert_eq!(pair["type"], "pair");
+    until("waiting for the extension", || bridge.status().pairing_waiting_for_extension).await;
+    ext.quiet().await;
+    ext.consent(pair["code"].as_str().unwrap()).await;
     let paired = ext.recv().await;
     assert_eq!(paired["type"], "paired");
     assert_eq!(ext.recv().await, json!({"type":"welcome"}));
@@ -261,8 +427,11 @@ async fn a_call_waits_for_the_extension_to_connect() {
     let call = tokio::spawn(async move { b.call("tab.info", json!({"tab": 1})).await });
     tokio::time::sleep(Duration::from_millis(300)).await;
     let mut ext = Fake::connect(port).await;
-    ext.hello(None).await;
-    for kind in ["pair", "paired", "welcome"] {
+    ext.hello().await;
+    let pair = ext.recv().await;
+    assert_eq!(pair["type"], "pair");
+    ext.consent(pair["code"].as_str().unwrap()).await;
+    for kind in ["paired", "welcome"] {
         assert_eq!(ext.recv().await["type"], kind);
     }
     let (_, id, _) = ext.call().await;

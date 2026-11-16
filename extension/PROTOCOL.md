@@ -14,9 +14,14 @@ together.
   with `JOBPILOT_BRIDGE_PORT`; the extension reads its port from, in order: `chrome.storage.local.port`
   (set in the popup), `config.json` packaged next to `manifest.json` (`{"port": 1234}`, tests write
   it), else 47615.
+- **Test-only knob:** the testkit's `config.json` also says `"autoConsent": true`: the extension then
+  sends `consent` for every `pair` code by itself, as if the user had pressed Pair in its popup. The
+  extension honours it only from the packaged `config.json` (never from `chrome.storage` or from the
+  app); the shipped package has no `config.json`.
 - The app accepts the upgrade only when the `Origin` header is `chrome-extension://<extension id>` and
-  the path is `/jobpilot`; anything else gets HTTP 403. One extension connection at a time: a new
-  authenticated connection replaces the old one.
+  the path is `/jobpilot`; anything else gets HTTP 403. The Origin is only a filter (a non-browser
+  client can forge it): what lets a peer in is the handshake below. One extension connection at a
+  time: a new authenticated connection replaces the old one.
 - Every frame is one JSON text message with a `type`. Unknown `type`s are ignored by both sides.
 - The extension sends `{"type":"ping"}` every 20 s (an active WebSocket keeps an MV3 service worker
   alive); the app answers `{"type":"pong"}`. The extension reconnects with backoff 1 s, 2 s, 4 s … 30 s
@@ -24,22 +29,65 @@ together.
 
 ## Handshake and pairing
 
-1. Extension → app, first message:
-   `{"type":"hello","protocol":1,"extension":"0.1.0","browser":"<navigator.userAgent>","incognitoAllowed":true,"token":"<token>"|null}`
-   (`incognitoAllowed` = `chrome.extension.isAllowedIncognitoAccess()`).
-2. App → extension, one of:
-   - `{"type":"welcome"}`: the token matched the one in the app's keyring. Calls may follow.
-   - `{"type":"pair","code":"123456"}`: no or unknown token. The extension shows the code in its popup;
-     the app shows the same code in Settings and the user approves there.
-   - `{"type":"paired","token":"<64 hex chars>"}` (after a `pair`, once the user approved): the
-     extension stores it in `chrome.storage.local.token`, then the app sends `welcome`.
-   - `{"type":"rejected","reason":"..."}` (wrong protocol version, user declined, pairing timed out):
-     the app then closes the socket. On "declined" the extension clears its stored token.
-3. A hello whose `protocol` is not 1 is rejected with reason `protocol`.
-4. `{"type":"forget"}` (app → extension, any time): the user forgot this browser. The extension clears
-   its token, closes every tab it owns and reconnects (and will be asked to pair again).
+Neither side trusts the other until it proved it holds the pairing token (32 random bytes as 64 hex
+characters, in the app's OS keyring and the extension's `chrome.storage.local.token`). **The token
+travels once, in `paired`; after that only proofs do.** Any local program can bind the port before
+JobPilot, so the extension treats whatever answers as untrusted.
 
-Token values never appear in logs on either side.
+A proof is lower-case hex of HMAC-SHA256 keyed by the token (its 64 ASCII characters) over a prefix
+and the other side's nonce (64 hex characters, 32 random bytes):
+
+- the app's proof: `HMAC(token, "jobpilot-app:" + extensionNonce)`;
+- the extension's proof: `HMAC(token, "jobpilot-ext:" + appNonce)`.
+
+The prefixes keep one side's proof from being replayed as the other's. Both sides compare proofs in
+constant time (the app with the `hmac` crate, the extension with WebCrypto `crypto.subtle.verify`).
+Test vector (checked by both sides' tests): token
+`00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff`, nonce `0f` × 32 → app proof
+`f121701b6248be0864763d4ba74c37535456af3125ef7e9d700c0a4eb862dbd0`, extension proof
+`2cb63fe35b8ba5cc761110c06bef34353c149c6eebd169371c6cdcd15eb28f74`.
+
+1. Extension → app, first message:
+   `{"type":"hello","protocol":1,"extension":"0.1.0","browser":"<navigator.userAgent>","incognitoAllowed":true,"paired":true|false,"nonce":"<64 hex>"}`
+   (`incognitoAllowed` = `chrome.extension.isAllowedIncognitoAccess()`; `paired`: it holds a token —
+   it never sends it). A hello whose `protocol` is not 1 is rejected with reason `protocol`.
+2. **Paired on both sides** (the app holds a token, `paired` is true and `nonce` is 64 hex):
+   - App → `{"type":"challenge","proof":"<app proof for the extension's nonce>","nonce":"<64 hex>"}`.
+   - The extension verifies the proof. **On a mismatch** it sends nothing else, closes the socket, keeps
+     its token, and the popup says "Another program answered on port N, not JobPilot" (state
+     `impostor`, kept while it retries with the usual backoff; the popup offers "Pair again", which
+     drops the token, for when JobPilot was since paired with another browser). **On a match** →
+     `{"type":"auth","proof":"<extension proof for the app's nonce>"}`.
+   - The app verifies it: a match → `{"type":"welcome"}` (calls may follow); else (the extension's
+     token is stale or unknown) → the pairing below. No `auth` within 10 s: the app closes.
+3. **Otherwise** (either side has no token, or a bad nonce) → pairing, which needs the user's consent
+   on **both** sides (numeric comparison):
+   - App → `{"type":"pair","code":"123456"}`. The app shows the code in Settings (Pair / Decline); the
+     extension's popup shows it with a "Pair with JobPilot" button and "Pair only if JobPilot shows
+     the same code".
+   - When the user presses Pair in the popup: extension → `{"type":"consent","code":"123456"}`.
+   - The app sends `{"type":"paired","token":"<64 hex>"}` only once it has **both** the user's
+     approval in the app and the extension's `consent` for that code, in either order (Settings says
+     "Now press Pair in the extension's popup" while only the app side approved). Then `welcome`.
+   - The extension takes a `paired` only if the user pressed Pair for the code of the latest `pair`
+     on this connection; otherwise it drops the token, sends nothing, closes the socket and the
+     popup shows the pairing as refused (state `refused`). It accepts `welcome` only after a verified
+     `challenge` or a consented `paired` on the same connection; any other `welcome` closes the socket
+     (state `impostor`).
+   - `{"type":"rejected","reason":"..."}` (user declined, pairing timed out after 5 minutes): the app
+     then closes the socket. The extension keeps whatever token it has.
+4. `{"type":"forget"}` (app → extension, after `welcome`): the user forgot this browser. The extension
+   clears its token, closes every tab it owns and reconnects (and will be asked to pair again). It
+   ignores a `forget` before `welcome`, so an unproven peer cannot un-pair it. (Only the app the
+   extension proved can send it; were a peer able to, it could only un-pair the browser, which the
+   user then pairs again with both consents.)
+
+Tokens, proofs and nonces never appear in logs on either side.
+
+Known limit: pairing compares a code, it does not exchange keys. A program that holds the port *and*
+relays to a real JobPilot listening on another port could pass the codes through and learn the token
+if the user approves on both sides; a challenge cannot stop that, only the user's check that the app
+is the one on the port the popup names.
 
 ## Calls (app → extension)
 

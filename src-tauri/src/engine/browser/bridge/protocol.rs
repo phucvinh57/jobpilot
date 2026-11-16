@@ -9,16 +9,34 @@ use serde_json::Value;
 /// The protocol version this app speaks.
 pub const PROTOCOL: u32 = 1;
 
-/// A pairing token. Its value never appears in a `Debug` dump (and so never in a log).
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Token(pub String);
+/// A string whose value never appears in a `Debug` dump (and so never in a log).
+macro_rules! hidden {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(pub String);
 
-impl fmt::Debug for Token {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Token(***)")
-    }
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(concat!(stringify!($name), "(***)"))
+            }
+        }
+    };
 }
+
+hidden!(
+    /// A pairing token (sent once, in `paired`).
+    Token
+);
+hidden!(
+    /// A handshake nonce (64 hex characters).
+    Nonce
+);
+hidden!(
+    /// A handshake proof: hex HMAC-SHA256 keyed by the token (see [`super::pairing`]).
+    Proof
+);
 
 /// Extension -> app.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,6 +44,10 @@ impl fmt::Debug for Token {
 pub enum Incoming {
     /// The first message of a connection.
     Hello(Hello),
+    /// The extension's answer to a [`Outgoing::Challenge`].
+    Auth { proof: Proof },
+    /// The user pressed Pair in the extension's popup for this code.
+    Consent { code: String },
     Ping,
     /// The answer to a call.
     #[serde(rename = "result")]
@@ -60,8 +82,12 @@ pub struct Hello {
     pub browser: String,
     #[serde(default)]
     pub incognito_allowed: bool,
+    /// The extension holds a token (it never sends it).
     #[serde(default)]
-    pub token: Option<Token>,
+    pub paired: bool,
+    /// The extension's nonce, for the app's proof in a [`Outgoing::Challenge`].
+    #[serde(default)]
+    pub nonce: Option<Nonce>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +102,8 @@ pub struct ErrorBody {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Outgoing {
     Welcome,
+    /// The app's proof for the extension's nonce, and the app's nonce to answer with `auth`.
+    Challenge { proof: Proof, nonce: Nonce },
     Pair { code: String },
     Paired { token: Token },
     Rejected { reason: String },
@@ -177,20 +205,29 @@ mod tests {
     }
 
     #[test]
-    fn a_hello_from_the_extension_parses_and_hides_its_token() {
-        let raw = r#"{"type":"hello","protocol":1,"extension":"0.1.0","browser":"Mozilla/5.0 Chrome/153.0.0.0","incognitoAllowed":true,"token":"ab12"}"#;
+    fn a_hello_from_the_extension_parses_and_hides_its_nonce() {
+        let raw = r#"{"type":"hello","protocol":1,"extension":"0.1.0","browser":"Mozilla/5.0 Chrome/153.0.0.0","incognitoAllowed":true,"paired":true,"nonce":"ab12"}"#;
         let Incoming::Hello(hello) = incoming(raw) else { panic!("not a hello") };
         assert_eq!(hello.protocol, 1);
         assert_eq!(hello.extension, "0.1.0");
-        assert!(hello.incognito_allowed);
-        assert_eq!(hello.token, Some(Token("ab12".into())));
-        assert!(!format!("{hello:?}").contains("ab12"), "the token never shows in Debug");
+        assert!(hello.incognito_allowed && hello.paired);
+        assert_eq!(hello.nonce, Some(Nonce("ab12".into())));
+        assert!(!format!("{hello:?}").contains("ab12"), "the nonce never shows in Debug");
 
-        let Incoming::Hello(first) = incoming(r#"{"type":"hello","protocol":1,"extension":"0.1.0","browser":"x","incognitoAllowed":false,"token":null}"#) else {
+        let Incoming::Hello(first) = incoming(r#"{"type":"hello","protocol":1,"extension":"0.1.0","browser":"x","incognitoAllowed":false,"paired":false,"nonce":"cd"}"#) else {
             panic!()
         };
-        assert_eq!(first.token, None);
-        assert!(!first.incognito_allowed);
+        assert!(!first.paired && !first.incognito_allowed);
+        let Incoming::Hello(bare) = incoming(r#"{"type":"hello","protocol":1}"#) else { panic!() };
+        assert!(!bare.paired && bare.nonce.is_none());
+    }
+
+    #[test]
+    fn auth_and_consent_parse_and_hide_the_proof() {
+        let auth = incoming(r#"{"type":"auth","proof":"feed"}"#);
+        assert_eq!(auth, Incoming::Auth { proof: Proof("feed".into()) });
+        assert!(!format!("{auth:?}").contains("feed"));
+        assert_eq!(incoming(r#"{"type":"consent","code":"123456"}"#), Incoming::Consent { code: "123456".into() });
     }
 
     #[test]
@@ -233,6 +270,9 @@ mod tests {
         let out = |m: Outgoing| serde_json::to_value(m).unwrap();
         assert_eq!(out(Outgoing::Welcome), json!({"type":"welcome"}));
         assert_eq!(out(Outgoing::Pair { code: "123456".into() }), json!({"type":"pair","code":"123456"}));
+        let challenge = Outgoing::Challenge { proof: Proof("aa".into()), nonce: Nonce("bb".into()) };
+        assert!(!format!("{challenge:?}").contains("aa") && !format!("{challenge:?}").contains("bb"));
+        assert_eq!(out(challenge), json!({"type":"challenge","proof":"aa","nonce":"bb"}));
         assert_eq!(out(Outgoing::Paired { token: Token("ff".into()) }), json!({"type":"paired","token":"ff"}));
         assert_eq!(out(Outgoing::Rejected { reason: reason::PROTOCOL.into() }), json!({"type":"rejected","reason":"protocol"}));
         assert_eq!(out(Outgoing::Forget), json!({"type":"forget"}));
@@ -248,6 +288,7 @@ mod tests {
         let messages = [
             Outgoing::Welcome,
             Outgoing::Pair { code: "000042".into() },
+            Outgoing::Challenge { proof: Proof("c".repeat(64)), nonce: Nonce("d".repeat(64)) },
             Outgoing::Paired { token: Token("a".repeat(64)) },
             Outgoing::Rejected { reason: reason::DECLINED.into() },
             Outgoing::Forget,
@@ -259,7 +300,16 @@ mod tests {
             assert_eq!(serde_json::from_str::<Outgoing>(&text).unwrap(), m, "{text}");
         }
         let incoming = [
-            Incoming::Hello(Hello { protocol: 1, extension: "0.1.0".into(), browser: "ua".into(), incognito_allowed: true, token: None }),
+            Incoming::Hello(Hello {
+                protocol: 1,
+                extension: "0.1.0".into(),
+                browser: "ua".into(),
+                incognito_allowed: true,
+                paired: true,
+                nonce: Some(Nonce("e".repeat(64))),
+            }),
+            Incoming::Auth { proof: Proof("f".repeat(64)) },
+            Incoming::Consent { code: "000042".into() },
             Incoming::Ping,
             Incoming::CallResult { id: 2, result: json!({}) },
             Incoming::CallError { id: 3, error: ErrorBody { code: code::NOT_OWNED.into(), message: "gone".into() } },

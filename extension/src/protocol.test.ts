@@ -18,6 +18,11 @@ describe("parseIncoming", () => {
   it("reads the handshake messages", () => {
     expect(parseIncoming('{"type":"welcome"}')).toEqual({ type: "welcome" });
     expect(parseIncoming('{"type":"pair","code":"123456"}')).toEqual({ type: "pair", code: "123456" });
+    expect(parseIncoming('{"type":"challenge","proof":"ab","nonce":"cd"}')).toEqual({
+      type: "challenge",
+      proof: "ab",
+      nonce: "cd",
+    });
     expect(parseIncoming(`{"type":"paired","token":"${"a".repeat(64)}"}`)).toEqual({
       type: "paired",
       token: "a".repeat(64),
@@ -53,6 +58,9 @@ describe("parseIncoming", () => {
       '{"type":"hello"}',
       '{"type":"surprise"}',
       '{"type":"pair"}',
+      '{"type":"challenge","proof":"ab"}',
+      '{"type":"challenge","proof":"ab","nonce":""}',
+      '{"type":"challenge","nonce":"cd"}',
       '{"type":"paired","token":""}',
       '{"type":"call","id":"1","method":"tab.info"}',
       '{"type":"call","id":-1,"method":"tab.info"}',

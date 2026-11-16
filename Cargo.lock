@@ -2376,6 +2376,7 @@ dependencies = [
  "encoding_rs",
  "futures",
  "gtk",
+ "hmac",
  "html2text",
  "jsonschema",
  "keyring",

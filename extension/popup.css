@@ -5,6 +5,7 @@
   --line: #d0d0d5;
   --surface: #ffffff;
   --accent: #1a56db;
+  --danger: #b42318;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -14,6 +15,7 @@
     --line: #44464d;
     --surface: #1f2023;
     --accent: #8ab4f8;
+    --danger: #f97066;
   }
 }
 
@@ -39,6 +41,16 @@ p {
 
 #state[data-state="connected"] {
   color: var(--accent);
+}
+
+#state[data-state="impostor"],
+#state[data-state="refused"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+section {
+  margin-bottom: 8px;
 }
 
 .code {
@@ -89,4 +101,13 @@ button {
   background: transparent;
   border: 1px solid var(--line);
   cursor: pointer;
+}
+
+button.primary {
+  width: 100%;
+  padding: 6px 10px;
+  font-weight: 600;
+  color: var(--surface);
+  background: var(--accent);
+  border-color: var(--accent);
 }

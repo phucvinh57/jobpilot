@@ -47,6 +47,10 @@ describe("the connection", () => {
   it("tags the state of the extension", () => {
     expect(connectionTag(CONNECTED)).toEqual({ tone: "ok", text: "Connected" });
     expect(connectionTag(PAIRING)).toEqual({ tone: "warn", text: "Waiting for pairing" });
+    expect(connectionTag({ ...PAIRING, pairingWaitingForExtension: true })).toEqual({
+      tone: "warn",
+      text: "Waiting for the extension",
+    });
     expect(connectionTag(DISCONNECTED)).toEqual({ tone: "warn", text: "Not connected" });
     expect(connectionTag({ ...DISCONNECTED, listening: false })).toEqual({ tone: "danger", text: "Off" });
   });

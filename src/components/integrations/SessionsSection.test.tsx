@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
 import { renderWithToasts as render } from "@/test/render";
-import { browserSection, CONNECTED, DISCONNECTED, PAIRING, site } from "@/test/fixtures/integrations";
+import { browserSection, CONNECTED, DISCONNECTED, PAIRING, PAIRING_APPROVED, site } from "@/test/fixtures/integrations";
 
 import * as api from "@/api/sessions";
 import { SessionsSection } from "./SessionsSection";
@@ -95,6 +95,29 @@ describe("SessionsSection: the connection", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(await screen.findByText("Chrome 153, JobPilot extension 0.1.0")).toBeTruthy();
     expect(api.declinePairing).not.toHaveBeenCalled();
+  });
+
+  it("after Pair, waits for Pair in the extension's popup, then says the browser is paired", async () => {
+    vi.mocked(api.loadBrowser).mockResolvedValue(browserSection({ browser: PAIRING, sessions: [] }));
+    vi.mocked(api.approvePairing).mockResolvedValue(undefined);
+    render(<SessionsSection />);
+    const dialog = await screen.findByRole("dialog", { name: "Pair this browser?" });
+
+    vi.mocked(api.loadBrowser).mockResolvedValue(browserSection({ browser: PAIRING_APPROVED, sessions: [] }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pair" }));
+    expect(await within(dialog).findByText("Now press Pair in the extension's popup.")).toBeTruthy();
+    const waiting = within(dialog).getByRole("button", { name: "Waiting for the extension" });
+    expect((waiting as HTMLButtonElement).disabled).toBe(true);
+    expect(primaries().map((b) => b.textContent)).toEqual(["Waiting for the extension"]);
+    expect(within(dialog).getByRole("button", { name: "Decline" })).toBeTruthy();
+    expect(screen.getByText("Waiting for the extension", { selector: "span" })).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Browser paired" })).toBeNull();
+
+    // The user pressed Pair in the popup: the extension is connected.
+    vi.mocked(api.loadBrowser).mockResolvedValue(browserSection());
+    act(() => statusEvent());
+    expect(await screen.findByRole("status", { name: "Browser paired" })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("declines a browser the user does not know", async () => {

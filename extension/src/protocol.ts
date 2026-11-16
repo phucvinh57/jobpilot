@@ -24,6 +24,7 @@ export type Call = { type: "call"; id: number; method: string; params: Params | 
 /** What the app may send. Anything else (unknown `type`, bad JSON) parses to `null` and is ignored. */
 export type Incoming =
   | { type: "welcome" }
+  | { type: "challenge"; proof: string; nonce: string }
   | { type: "pair"; code: string }
   | { type: "paired"; token: string }
   | { type: "rejected"; reason: string }
@@ -51,6 +52,10 @@ export function parseIncoming(text: string): Incoming | null {
     case "forget":
     case "pong":
       return { type: value.type };
+    case "challenge":
+      return typeof value.proof === "string" && typeof value.nonce === "string" && value.nonce !== ""
+        ? { type: "challenge", proof: value.proof, nonce: value.nonce }
+        : null;
     case "pair":
       return typeof value.code === "string" ? { type: "pair", code: value.code } : null;
     case "paired":
