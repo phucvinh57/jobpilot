@@ -29,8 +29,6 @@ const mocks = vi.hoisted(() => ({
     addSource: vi.fn(),
     removeSource: vi.fn(),
     setSourceEnabled: vi.fn(),
-    saveKey: vi.fn(),
-    clearKey: vi.fn(),
     addToPreferences: vi.fn(),
   },
   invoke: vi.fn(),
@@ -96,7 +94,7 @@ async function shown() {
 const collect = () => screen.getByRole("button", { name: "Collect & build digest" });
 
 describe("the Trends screen", () => {
-  it("shows the digest with its citations, the skill chart, the sources and report search", async () => {
+  it("shows the digest with its citations, the skill chart and the sources", async () => {
     await shown();
     expect(screen.getByRole("heading", { level: 1, name: "Trends" })).toBeTruthy();
     expect(screen.getByText(/Week of 9 November · from 6 postings and articles/)).toBeTruthy();
@@ -152,12 +150,12 @@ describe("the Trends screen", () => {
     expect(wishes.getByRole("listitem", { name: "climate tech (domain): no data, no posting names it" })).toBeTruthy();
     expect(screen.getByText("Temporal (5 items), dbt (4 items)")).toBeTruthy();
 
-    // Sources and report search.
+    // Sources.
     expect(screen.getByRole("switch", { name: "Collect from Hacker News" }).getAttribute("aria-checked")).toBe("true");
     expect(
       screen.getByRole("switch", { name: "Collect from Example engineering blog" }).getAttribute("aria-checked"),
     ).toBe("false");
-    expect(screen.getByText("Report search is on.")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Report search" })).toBeNull();
   });
 
   it("switches the chart between the local and the global market", async () => {
@@ -458,10 +456,6 @@ describe("the Trends screen", () => {
         chart: null,
         history: [],
         sources: [],
-        searchKeys: [
-          { provider: "brave", label: "Brave Search", saved: false },
-          { provider: "tavily", label: "Tavily", saved: false },
-        ],
       }),
     );
     const user = userEvent.setup();
@@ -470,7 +464,6 @@ describe("the Trends screen", () => {
     expect(screen.getByText(/Add sources, then press "Collect & build digest"/)).toBeTruthy();
     expect(screen.getByText("No digest yet · Week of 9 November is the current period")).toBeTruthy();
     expect(screen.getByText("No sources yet: add Hacker News, the YC companies, a feed or a page.")).toBeTruthy();
-    expect(screen.getByText("Report search is off: no key saved.")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Skills in demand" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Earlier digests" }));

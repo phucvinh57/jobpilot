@@ -1,16 +1,15 @@
 //! The `trends` graph and the `Core` helpers, end to end against a local fixture server (the
 //! adapters have their own tests next to them).
 
-use std::path::Path;
 use std::time::{Duration, Instant};
 
-use super::testutil::{Fixtures, Hit};
+use super::testutil::Fixtures;
 use super::*;
 use crate::engine::graph::nodes::ChallengeKind;
 use crate::engine::graph::WaitReason;
 use crate::engine::pipeline::ingest::tests::JOB_HTML;
-use crate::engine::prefs::Preferences;
 use crate::engine::store::{NewSource, SourcePurpose};
+use crate::engine::Secrets;
 
 fn period() -> Period {
     Period::parse("2026-W46").unwrap()
@@ -27,8 +26,6 @@ pub(super) fn config(fx: &Fixtures) -> TrendConfig {
         endpoints: Endpoints {
             hackernews: format!("{}/hn", fx.base()),
             yc: format!("{}/yc", fx.base()),
-            brave: fx.base().to_string(),
-            tavily: fx.base().to_string(),
         },
         limits: CollectLimits {
             host_delay: Duration::ZERO,
@@ -92,19 +89,8 @@ pub(super) fn status_of<'a>(state: &'a TrendRun, kind: &'a str) -> &'a SourceSta
     &state.outcomes_of(kind).next().unwrap_or_else(|| panic!("no outcome for {kind}: {:?}", state.outcomes)).status
 }
 
-fn read_all(dir: &Path, found: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
-    for entry in std::fs::read_dir(dir).unwrap().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            read_all(&path, found);
-        } else {
-            found.push((path.clone(), std::fs::read(&path).unwrap()));
-        }
-    }
-}
-
 #[tokio::test]
-async fn a_run_collects_every_source_dedups_and_skips_report_search_without_a_key() {
+async fn a_run_collects_every_source_and_dedups() {
     let (_dir, core) = core();
     let fx = fixtures().await;
     add_all(&core, &fx);
@@ -121,14 +107,7 @@ async fn a_run_collects_every_source_dedups_and_skips_report_search_without_a_ke
     assert_eq!(state.outcomes_of("page").next().unwrap().items, 1);
     assert_eq!(state.stored, Stored { new: 9, duplicates: 0 });
 
-    // report_search: skipped with a reason, and not one request reached a search API.
-    assert_eq!(
-        status_of(&state, "report_search"),
-        &SourceStatus::Skipped { reason: "no search API key saved".into() }
-    );
-    assert!(state.plan.search.is_none());
-    let paths: Vec<String> = fx.hits().iter().map(|h: &Hit| h.path().to_string()).collect();
-    assert!(!paths.iter().any(|p| p == "/res/v1/web/search" || p == "/search" || p.starts_with("/reports")), "{paths:?}");
+    assert_eq!(state.outcomes.len(), 4, "one outcome per source: {:?}", state.outcomes);
 
     // Stored: rows, text files, source status.
     let items = core.store.list_trend_items(None).unwrap();
@@ -170,77 +149,6 @@ async fn the_same_address_from_two_collectors_is_stored_once() {
     assert_eq!(state.stored, Stored { new: 2, duplicates: 1 });
     let items = core.store.list_trend_items(None).unwrap();
     assert_eq!(items.iter().filter(|i| i.url.ends_with("/posts/shared")).count(), 1);
-}
-
-#[tokio::test]
-async fn report_search_runs_with_a_key_and_the_key_stays_in_the_keyring() {
-    let (dir, core) = core();
-    let fx = fixtures().await;
-    let key = "BSAtest-brave-key-0123456789";
-    core.set_search_key(SearchProvider::Brave, key).unwrap();
-    // The queries come from the profile's roles and the preferred locations; the wishes (domains,
-    // target roles, skills) are saved too and must not show up.
-    crate::engine::profile::set_test_profile(
-        &core,
-        "basics:\n  name: Test\n  headline: Backend Engineer\nexperience:\n  - company: Acme\n    position: Platform Engineer\n",
-    );
-    core.save_preferences(Preferences {
-        locations: vec!["Singapore".into()],
-        domains: vec!["fintech".into()],
-        roles: vec!["Product Manager".into()],
-        must_skills: vec!["Kotlin".into()],
-        ..Preferences::default()
-    })
-    .unwrap();
-    let report = "<html><head><title>Fintech report</title></head><body><article><h1>Fintech report</h1>".to_string()
-        + &"<p>Payments companies hired more Rust engineers this year while funding rounds shrank.</p>".repeat(6)
-        + "</article></body></html>";
-    fx.route("/reports/fintech", 200, "text/html", report);
-    fx.route(
-        "/res/v1/web/search",
-        200,
-        "application/json",
-        format!(r#"{{"web": {{"results": [{{"title": "Fintech 2026", "url": "{}/reports/fintech"}}]}}}}"#, fx.base()),
-    );
-
-    let state = run(&core, &fx).await;
-
-    let search = state.plan.search.clone().expect("search planned");
-    assert_eq!(search.provider, SearchProvider::Brave);
-    assert_eq!(
-        search.queries,
-        [
-            "Singapore technology job market report 2026",
-            "Platform Engineer hiring trends 2026 report",
-            "Backend Engineer hiring trends 2026 report",
-            "Singapore Platform Engineer salary survey 2026",
-            "Platform Engineer skills demand 2026 Q4",
-            "Backend Engineer skills demand 2026 Q4",
-        ],
-        "background and place, capped at max_queries"
-    );
-    let all = search.queries.join(" ").to_lowercase();
-    assert!(!all.contains("fintech") && !all.contains("product manager") && !all.contains("kotlin"), "{all}");
-    let outcome = state.outcomes_of("report_search").next().unwrap();
-    assert_eq!((&outcome.status, outcome.items, outcome.source_id), (&SourceStatus::Ok, 1, None));
-    let stored = core.store.list_trend_items(None).unwrap();
-    let item = stored.iter().find(|i| i.url.ends_with("/reports/fintech")).unwrap();
-    assert_eq!((item.source_id, item.title.as_str()), (None, "Fintech 2026"));
-    let searches = fx.hits_on("/res/v1/web/search");
-    assert_eq!(searches.len(), search.queries.len(), "one request per query");
-    assert_eq!(searches[0].header("x-subscription-token"), Some(key));
-
-    // The key is in the keyring and in no checkpoint, database file or text file.
-    assert_eq!(core.secrets.get(SearchProvider::Brave.secret_name()).unwrap().as_deref(), Some(key));
-    for row in core.store.graph_checkpoints(&thread_id(&period())).unwrap() {
-        assert!(!row.state_json.contains(key), "state of step {}", row.step);
-    }
-    let mut files = Vec::new();
-    read_all(dir.path(), &mut files);
-    assert!(files.len() > 3);
-    for (path, bytes) in files {
-        assert!(!bytes.windows(key.len()).any(|w| w == key.as_bytes()), "{} contains the key", path.display());
-    }
 }
 
 #[tokio::test]
@@ -383,20 +291,15 @@ fn trend_sources_are_validated_normalised_and_scoped_to_trends() {
 }
 
 #[test]
-fn search_keys_are_saved_through_the_secrets_and_brave_wins() {
+fn the_old_search_keys_are_removed_from_the_keyring() {
     let (_dir, core) = core();
-    assert_eq!(core.search_provider().unwrap(), None);
-    assert!(core.set_search_key(SearchProvider::Tavily, "   ").is_err());
-    core.set_search_key(SearchProvider::Tavily, " tvly-key-0123456789 ").unwrap();
-    assert_eq!(core.search_provider().unwrap(), Some(SearchProvider::Tavily));
-    assert_eq!(core.secrets.get("trends:tavily_api_key").unwrap().as_deref(), Some("tvly-key-0123456789"));
-    core.set_search_key(SearchProvider::Brave, "BSA-key-0123456789").unwrap();
-    assert_eq!(core.search_provider().unwrap(), Some(SearchProvider::Brave));
-    core.clear_search_key(SearchProvider::Brave).unwrap();
-    core.clear_search_key(SearchProvider::Brave).unwrap();
-    assert_eq!(core.search_provider().unwrap(), Some(SearchProvider::Tavily));
-    core.clear_search_key(SearchProvider::Tavily).unwrap();
-    assert_eq!(core.search_provider().unwrap(), None);
+    core.secrets.set("trends:brave_api_key", "BSA-key-0123456789").unwrap();
+    core.secrets.set("trends:tavily_api_key", "tvly-key-0123456789").unwrap();
+    core.forget_old_search_keys();
+    assert_eq!(core.secrets.get("trends:brave_api_key").unwrap(), None);
+    assert_eq!(core.secrets.get("trends:tavily_api_key").unwrap(), None);
+    // Nothing saved: still fine.
+    core.forget_old_search_keys();
 }
 
 #[test]
@@ -406,7 +309,6 @@ fn the_state_round_trips_and_the_thread_is_named_by_period() {
     let mut state = TrendRun::new(period());
     state.hn_settled.push("903@1".into());
     state.outcomes.push(SourceOutcome { source_id: Some(3), kind: "page".into(), status: SourceStatus::NeedsHuman { kind: ChallengeKind::Login }, items: 0 });
-    state.outcomes.push(SourceOutcome { source_id: None, kind: "report_search".into(), status: SourceStatus::Skipped { reason: "no search API key saved".into() }, items: 0 });
     let json = serde_json::to_string(&state).unwrap();
     assert_eq!(serde_json::from_str::<TrendRun>(&json).unwrap(), state);
     // A state saved before a field existed still loads.
@@ -419,6 +321,14 @@ fn the_state_round_trips_and_the_thread_is_named_by_period() {
     .unwrap();
     assert!(before.hn_settled.is_empty());
     assert_eq!(before.stored.new, 2);
+    // A run of a version that had report search: its plan and its outcome still load.
+    let searched = serde_json::from_str::<TrendRun>(
+        r#"{"period": {"week": {"year": 2026, "week": 46}},
+            "plan": {"hackernews": [1], "search": {"provider": "brave", "queries": ["q"]}, "search_skip": null},
+            "outcomes": [{"source_id": null, "kind": "report_search", "status": {"status": "skipped", "reason": "no search API key saved"}, "items": 0}]}"#,
+    )
+    .unwrap();
+    assert_eq!((searched.plan.hackernews.as_slice(), searched.outcomes.len()), (&[1][..], 1));
 }
 
 /// Two hiring threads: November (the newest) and October. `/hn/search_by_date` also serves the

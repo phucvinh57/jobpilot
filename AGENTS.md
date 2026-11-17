@@ -48,8 +48,8 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
              `manual` (`Core::add_lead`: pasted link/file -> scored lead), `check` (`Core::check_job_source`: a new source is read
              once and refused unless it lists jobs), `suggest/` (graph `source_suggest`: searches in the user's Chrome, Private
              tab -> results parsed in code -> checked -> `source_suggestions`; a captcha/consent page pauses it, never solved)
-  trends     collection (hackernews, yc, rss, page, `report_search` with a keyring key; graph `trends` -> `trend_items`),
-             `frame` (MarketFrame: background + place, never wishes; decides what is collected and counted),
+  trends     collection (hackernews, yc, rss, page; graph `trends` -> `trend_items`),
+             `frame` (MarketFrame: background + place, never wishes; decides what is counted),
              `digest/` (extract, count, synthesize, cite: every point cites stored items)
 src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |

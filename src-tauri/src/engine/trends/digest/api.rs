@@ -19,7 +19,6 @@ use crate::engine::store::Report;
 use crate::engine::trends::collect::{self, thread_id, TrendRun};
 use crate::engine::trends::config::TrendConfig;
 use crate::engine::trends::period::Period;
-use crate::engine::trends::source::SearchProvider;
 use crate::engine::Core;
 
 /// A saved report with its data read back. `data` is `None` for a row this version cannot read
@@ -142,17 +141,6 @@ impl Core {
             out.push(TrendChallenge { period, source_id, source_name, url, kind });
         }
         Ok(out)
-    }
-
-    /// The search APIs a key is saved for (report search runs with any of them).
-    pub fn saved_search_providers(&self) -> Result<Vec<SearchProvider>> {
-        let mut saved = Vec::new();
-        for provider in SearchProvider::ALL {
-            if self.secrets.get(provider.secret_name())?.is_some_and(|key| !key.trim().is_empty()) {
-                saved.push(provider);
-            }
-        }
-        Ok(saved)
     }
 
     /// Start `graph` on `thread`: a finished run is replaced, a paused or failed one is cancelled

@@ -1,12 +1,10 @@
-//! Market trends. Collection: sources the user adds (Hacker News, the YC directory, feeds, pages)
-//! and, with a search API key, annual and quarterly reports, all collected into `trend_items` by
-//! the `trends` graph ([`collect`]). The digest ([`digest`]): what the items say, with skill counts
+//! Market trends. Collection: sources the user adds (Hacker News, the YC directory, feeds, pages),
+//! collected into `trend_items` by the `trends` graph ([`collect`]). The digest ([`digest`]): what the items say, with skill counts
 //! and checked citations, saved as a report.
 //!
 //! ```text
 //! core.add_trend_source(SourceKind::HackerNews, "", "")?;
 //! core.add_trend_source(SourceKind::Rss, "Eng blog", "https://blog.example.com/feed.xml")?;
-//! core.set_search_key(SearchProvider::Brave, "BSA...")?;            // keyring only
 //! let outcome = core.collect_trends(Period::current_week()).await?; // Outcome<TrendRun>
 //! let outcome = core.collect_trends_and_digest(Period::current_week()).await?; // and the digest
 //! let latest = core.latest_trend_digest()?;                         // Option<Digest>
@@ -16,11 +14,11 @@
 //! the graph and its state, [`digest`] the nodes after the collection and the report API,
 //! [`config`] the injectable endpoints and limits, [`period`] the week or quarter a run covers.
 //!
-//! Rules that hold for every adapter: read-only GET (the search APIs take a POST for the query),
+//! Rules that hold for every adapter: read-only GET,
 //! http(s) only, a minimum gap per host and caps on items and bytes ([`CollectLimits`]), text from a
 //! page is data and never decides what is fetched, addresses taken from third-party data (feed
-//! entries, search results) must be on public hosts, URLs of user feeds never appear in errors or
-//! logs (they may carry a token), and API keys live in the keyring and nowhere else.
+//! entries) must be on public hosts, and URLs of user feeds never appear in errors or logs (they
+//! may carry a token).
 
 pub mod collect;
 pub mod config;
@@ -40,7 +38,7 @@ use std::path::PathBuf;
 use anyhow::{bail, ensure, Context, Result};
 
 pub use collect::{
-    detect_challenge, graph, thread_id, Collected, Plan, SearchPlan, SourceOutcome, SourceStatus, Stored, TrendRun, GRAPH,
+    detect_challenge, graph, thread_id, Collected, Plan, SourceOutcome, SourceStatus, Stored, TrendRun, GRAPH,
 };
 pub use config::{CollectLimits, Endpoints, TrendConfig};
 pub use digest::{
@@ -48,11 +46,11 @@ pub use digest::{
     Point, Section, SkillCount, SkillCounts, TrendChallenge, DIGEST_GRAPH,
 };
 pub use period::Period;
-pub use source::{Item, SearchProvider, SourceKind};
+pub use source::{Item, SourceKind};
 
 use crate::engine::graph::Outcome;
 use crate::engine::store::{NewSource, Source, SourcePurpose};
-use crate::engine::{Core, Paths, Secrets};
+use crate::engine::{Core, Paths};
 
 impl Paths {
     /// `trends/`: the text of collected items, one `<hash of the URL>.txt` each.
@@ -61,17 +59,20 @@ impl Paths {
     }
 }
 
-/// The search API whose key is saved (Brave first when both are).
-pub(crate) fn search_provider(secrets: &Secrets) -> Result<Option<SearchProvider>> {
-    for provider in SearchProvider::ALL {
-        if secrets.get(provider.secret_name())?.is_some_and(|key| !key.trim().is_empty()) {
-            return Ok(Some(provider));
-        }
-    }
-    Ok(None)
-}
+/// Keyring entries of the report search an older version had (Brave Search, Tavily).
+const OLD_SEARCH_KEYS: [&str; 2] = ["trends:brave_api_key", "trends:tavily_api_key"];
 
 impl Core {
+    /// Delete the report-search API keys an older version saved (best effort, at startup): nothing
+    /// reads them any more and the app no longer offers a way to remove them.
+    pub fn forget_old_search_keys(&self) {
+        for name in OLD_SEARCH_KEYS {
+            if self.secrets.delete(name).is_err() {
+                tracing::warn!("removing an old search API key from the keyring failed");
+            }
+        }
+    }
+
     // ------------------------------------------------------------ sources
 
     /// The user's trend sources (enabled or not), oldest first.
@@ -123,25 +124,6 @@ impl Core {
             Some(_) => bail!("source {id} is not a trend source"),
             None => bail!("trend source {id} not found"),
         }
-    }
-
-    // ------------------------------------------------------------ search key
-
-    /// The search API a key is saved for, if any.
-    pub fn search_provider(&self) -> Result<Option<SearchProvider>> {
-        search_provider(&self.secrets)
-    }
-
-    /// Save the API key of `provider` in the keyring; report search is enabled from then on.
-    pub fn set_search_key(&self, provider: SearchProvider, key: &str) -> Result<()> {
-        let key = key.trim();
-        ensure!(!key.is_empty(), "the {} API key is empty", provider.label());
-        self.secrets.set(provider.secret_name(), key)
-    }
-
-    /// Delete the saved key of `provider`.
-    pub fn clear_search_key(&self, provider: SearchProvider) -> Result<()> {
-        self.secrets.delete(provider.secret_name())
     }
 
     // ------------------------------------------------------------ collection

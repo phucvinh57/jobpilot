@@ -236,15 +236,6 @@ export interface SourceKindInfo {
   added: boolean;
 }
 
-export type SearchProvider = "brave" | "tavily";
-
-export interface SearchKey {
-  provider: SearchProvider;
-  label: string;
-  /** A key is in the OS keyring. The key itself never comes back. */
-  saved: boolean;
-}
-
 /** Everything the screen shows, read in one call. */
 export interface Overview {
   /** The current period of the chosen cadence: what "Collect & build digest" runs for. */
@@ -258,7 +249,6 @@ export interface Overview {
   challenges: Challenge[];
   sources: Source[];
   sourceKinds: SourceKindInfo[];
-  searchKeys: SearchKey[];
 }
 
 /** How a run that did not fail ended (a failed run is a `CommandError`). */
