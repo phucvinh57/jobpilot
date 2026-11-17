@@ -170,17 +170,33 @@ impl Core {
 /// [`Core::discover_open_browser`]; `allow_private` lets tests open fixture pages on this machine.
 pub(crate) async fn open_browser(core: &Core, thread: &str, allow_private: bool) -> Result<()> {
     parse_source_thread(thread).context("not a discovery source thread")?;
+    let session_of = |source_id: i64| -> Result<Option<i64>> { Ok(core.store.get_source(source_id)?.and_then(|s| s.session_id)) };
+    open_waiting_page(core, thread, "source", allow_private, session_of).await
+}
+
+/// "Open browser" for any graph `thread` paused at a login, captcha or block page (a discovery
+/// source, the source suggestion search): a focused tab on the page it waits at, in the signed-in
+/// profile when `session_of(source_id)` names a session, else in the JobPilot Incognito window.
+/// `what` names the thread in the error ("that source is not waiting ..."). While the tab is open
+/// it is only brought to the front; [`close_window`] closes it.
+pub(crate) async fn open_waiting_page(
+    core: &Core,
+    thread: &str,
+    what: &str,
+    allow_private: bool,
+    session_of: impl FnOnce(i64) -> Result<Option<i64>>,
+) -> Result<()> {
     let key = key(&core.paths, thread);
     let lock = thread_lock(&key);
     let _one_at_a_time = lock.lock().await;
 
     let status = core.graphs.status(thread)?.map(|t| t.status);
     let Some(ThreadStatus::Waiting(reason)) = status else {
-        bail!("that source is not waiting for a login, captcha or block page");
+        bail!("that {what} is not waiting for a login, captcha or block page");
     };
-    let (source_id, url) = page_of(&reason).context("that source is not waiting for a login, captcha or block page")?;
+    let (source_id, url) = page_of(&reason).with_context(|| format!("that {what} is not waiting for a login, captcha or block page"))?;
     let url = public_http_url(url, allow_private).context("the page to open")?.to_string();
-    let session_id = core.store.get_source(source_id)?.and_then(|s| s.session_id);
+    let session_id = session_of(source_id)?;
 
     if let Some(tab) = take_tab(&key) {
         if tab.is_open() {

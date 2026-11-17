@@ -166,6 +166,13 @@ pub fn no_postings_status(hints: &[BoardHint]) -> Option<String> {
     Some(format!("No postings on the page. It links to a {label} board: add it as a {label} source"))
 }
 
+/// The board behind one address found anywhere (a search result, for `discover::suggest`), by the
+/// same rules as the hints of a careers page: built from the pattern table, checked, never a
+/// look-alike.
+pub(crate) fn board_at(url: &Url) -> Option<BoardHint> {
+    hint_for(url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

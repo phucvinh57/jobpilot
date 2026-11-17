@@ -35,6 +35,8 @@
 //! - [`sources`]: add, enable, bind a session to and remove job sources (`Core::job_sources`, ...).
 //! - [`check`]: [`Core::check_job_source`], a new source read once before it is stored (a job page
 //!   that lists no jobs is refused); `Core::add_job_source_checked` is the add form's Add.
+//! - [`suggest`]: "Suggest sources": web searches in the user's Chrome -> checked job boards and
+//!   careers pages stored as suggestions (`Core::suggest_sources`, `Core::source_suggestions`, ...).
 //! - [`limits`]: the per-host delay, pages per run, and the three-challenges rule. Every request
 //!   (adapters and posting fetch) goes through the shared safe client, [`crate::engine::net::http`].
 //!
@@ -59,6 +61,7 @@ pub mod score;
 pub mod source;
 pub mod sources;
 pub mod state;
+pub mod suggest;
 #[cfg(test)]
 mod tests;
 
