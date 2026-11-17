@@ -188,6 +188,15 @@ describe("Settings > Job sources: suggested sources", () => {
     expect(within(toast).getByText("network is unreachable")).toBeTruthy();
   });
 
+  it("keeps Suggest sources disabled for a search started before the screen was shown", async () => {
+    mocked.readJobSources.mockResolvedValue(jobSources({ suggestRunning: true }));
+    renderWithToasts(<JobSourcesSection />);
+    const button = (await screen.findByRole("button", { name: /Search/ })) as HTMLButtonElement;
+    expect(button.id).toBe("suggest-sources");
+    expect(button.disabled).toBe(true);
+    expect(mocked.suggestSources).not.toHaveBeenCalled();
+  });
+
   it("shows a paused search with Open browser, Continue and Stop", async () => {
     const user = userEvent.setup();
     mocked.readJobSources.mockResolvedValue(jobSources({ suggestWaiting: true }));

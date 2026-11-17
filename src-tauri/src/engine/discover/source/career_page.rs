@@ -4,7 +4,8 @@
 //!
 //! 1. the page read plain: its schema.org `JobPosting` JSON-LD ([`super::jsonld`]), else its links
 //!    that look like postings;
-//! 2. the site's `sitemap.xml` ([`super::sitemap`]);
+//! 2. the site's `sitemap.xml` ([`super::sitemap`]), except on a host shared by many companies
+//!    (its sitemap lists every company's postings);
 //! 3. the page rendered in the user's browser (a job list that JavaScript draws, or a wall on the
 //!    plain read): its JSON-LD, else its links.
 //!
@@ -29,7 +30,7 @@ use url::Url;
 use super::boards::{page_hints, BoardHint};
 use super::jsonld::job_postings;
 use super::sitemap::read_sitemap;
-use super::web::{check_site, is_generic, links, looks_like_posting, normalize_page_url, page_url, read_plain_page, same_site, title_from_url, Page, Pages};
+use super::web::{check_site, is_generic, is_shared_host, links, looks_like_posting, normalize_page_url, page_url, read_plain_page, same_site, title_from_url, Page, Pages};
 use super::{page_of, title_fits_roles, Cached, Candidate, JobSource, SearchCtx, SearchPage, LISTING_TTL};
 use crate::engine::prefs::Preferences;
 use crate::engine::store::Source;
@@ -98,10 +99,15 @@ impl CareerPage {
                 return Ok(found);
             }
         }
-        let found: Vec<Candidate> =
-            read_sitemap(pages, &self.url, &self.url, &self.company, MAX_POSTINGS).await.into_iter().filter(|c| !closed.contains(&c.url)).collect();
-        if !found.is_empty() {
-            return Ok(found);
+        // A host shared by many companies (linkedin.com, apply.workable.com, github.io) has one
+        // sitemap for all of them: only the page itself says which postings are this source's.
+        let host = self.url.host_str().unwrap_or_default().trim_start_matches("www.").to_ascii_lowercase();
+        if !is_shared_host(&host) {
+            let found: Vec<Candidate> =
+                read_sitemap(pages, &self.url, &self.url, &self.company, MAX_POSTINGS).await.into_iter().filter(|c| !closed.contains(&c.url)).collect();
+            if !found.is_empty() {
+                return Ok(found);
+            }
         }
         let page = pages.rendered(&self.source, url).await?;
         add_hints(hints, &page);
@@ -289,6 +295,20 @@ mod tests {
         let page = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap();
         assert_eq!(page.candidates.len(), 2);
         assert_eq!(fake.asked(), [format!("plain {LIST}"), format!("plain {SITEMAP_URL}"), format!("browser {LIST}")]);
+    }
+
+    #[tokio::test]
+    async fn a_page_on_a_shared_host_never_reads_the_hosts_sitemap() {
+        // apply.workable.com lists every company: its sitemap is not this source's.
+        let list = "https://apply.workable.com/acme/";
+        let sitemap = "https://apply.workable.com/sitemap.xml";
+        let other = r#"<urlset><url><loc>https://apply.workable.com/otherco/j/123456/</loc></url></urlset>"#;
+        let empty = "<html><body><div id=root></div></body></html>";
+        let fake = pages(FakePages::new().plain(list, empty).plain(sitemap, other).rendered(list, empty));
+        let adapter = CareerPage::new(fake.clone(), &source(list), "Acme").unwrap();
+        let page = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap();
+        assert!(page.candidates.is_empty(), "no other company's posting");
+        assert_eq!(fake.asked(), [format!("plain {list}"), format!("browser {list}")], "no sitemap read");
     }
 
     #[tokio::test]

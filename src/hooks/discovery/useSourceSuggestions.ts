@@ -47,7 +47,8 @@ export function useSourceSuggestions(data: JobSources | undefined): SourceSugges
   const addOne = useAction(api.addSuggestion);
   const addEvery = useAction(api.addAllSuggestions);
   const dismissOne = useAction(api.dismissSuggestion);
-  const running = search.busy || resumeSearch.busy;
+  // Also a search started before this screen was shown (the shell says one is running).
+  const running = search.busy || resumeSearch.busy || (data?.suggestRunning ?? false);
 
   useGraphProgress((p) => {
     const text = suggestNote(p);

@@ -454,6 +454,8 @@ pub struct JobSourcesDto {
     pub suggestions: Vec<SourceSuggestionDto>,
     /// The "Suggest sources" search is paused at a page the user must deal with in Chrome.
     pub suggest_waiting: bool,
+    /// A suggestion search is running now (started before this screen was shown).
+    pub suggest_running: bool,
 }
 
 /// A job source the "Suggest sources" search found and checked, for the user to add or dismiss.
@@ -478,10 +480,7 @@ pub struct SourceSuggestionDto {
 
 impl From<&SourceSuggestion> for SourceSuggestionDto {
     fn from(s: &SourceSuggestion) -> Self {
-        let label = crate::engine::discover::JOB_SOURCE_KINDS
-            .iter()
-            .find(|(kind, _)| *kind == s.kind)
-            .map_or(s.kind.as_str(), |(_, label)| label);
+        let label = crate::engine::discover::sources::kind_label(&s.kind);
         Self {
             id: s.id,
             kind: s.kind.clone(),

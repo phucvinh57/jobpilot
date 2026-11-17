@@ -244,8 +244,16 @@ pub async fn discovery_job_sources(core: State<'_, Arc<Core>>) -> CommandResult<
                     hint: crate::engine::discover::source_url_hint(kind),
                 })
                 .collect(),
-            suggestions: suggestion_dtos(&core)?,
+            // Suggestions are a nicety: an unreadable list never hides the sources.
+            suggestions: suggestion_dtos(&core).unwrap_or_else(|e| {
+                tracing::warn!("reading the source suggestions failed: {e:#}");
+                Vec::new()
+            }),
             suggest_waiting,
+            suggest_running: core.suggest_running().unwrap_or_else(|e| {
+                tracing::warn!("reading the source suggestion search failed: {e:#}");
+                false
+            }),
         })
     })
     .await

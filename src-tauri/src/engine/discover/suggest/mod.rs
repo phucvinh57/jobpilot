@@ -33,6 +33,7 @@
 mod api;
 mod graph;
 pub mod queries;
+mod refused;
 pub mod results;
 #[cfg(test)]
 mod tests;
@@ -111,14 +112,18 @@ impl SuggestDeps {
     /// The running app's: results pages rendered in the user's Chrome (public hosts only) and the
     /// live verifier ([`verify::live_verifier`]).
     pub fn live(core: &Core) -> Result<Self> {
-        let http = Http::new(&HttpLimits { max_bytes: MAX_POSTING_BYTES, ..HttpLimits::default() })?;
-        let pages: Arc<dyn Pages> = Arc::new(NetPages::new(http, Some(Renderer::new(core, false))));
+        let pages: Arc<dyn Pages> = Arc::new(NetPages::new(search_client()?, Some(Renderer::new(core, false))));
         Ok(Self::new(pages, verify::live_verifier(core)))
     }
 }
 
-/// A `Core` sharing `core`'s handles (store, graphs, secrets and paths are cheap shared handles), for
-/// graph nodes and checks that outlive the borrow.
-pub(crate) fn core_handles(core: &Core) -> Core {
-    Core { paths: core.paths.clone(), store: core.store.clone(), secrets: core.secrets.clone(), graphs: core.graphs.clone() }
+/// The one plain-read client of the search, for the life of the process, so its per-host delay
+/// holds across searches (Suggest, Continue, Suggest again).
+fn search_client() -> Result<Http> {
+    static CLIENT: std::sync::OnceLock<Http> = std::sync::OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = Http::new(&HttpLimits { max_bytes: MAX_POSTING_BYTES, ..HttpLimits::default() })?;
+    Ok(CLIENT.get_or_init(|| client).clone())
 }

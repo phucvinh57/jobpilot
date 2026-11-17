@@ -12,7 +12,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::core_handles;
 use crate::engine::discover::source::title_fits_roles;
 use crate::engine::Core;
 
@@ -51,7 +50,7 @@ pub fn matching_titles<'a>(titles: impl IntoIterator<Item = &'a str>, roles: &[S
 /// in a Private tab, a board through its API), with `matching` from [`matching_titles`] over the
 /// postings' titles and the saved `Preferences::roles`.
 pub(crate) fn live_verifier(core: &Core) -> Arc<dyn VerifySource> {
-    Arc::new(CheckJobSource { core: Arc::new(core_handles(core)) })
+    Arc::new(CheckJobSource { core: Arc::new(core.handles()) })
 }
 
 struct CheckJobSource {
@@ -142,12 +141,5 @@ mod tests {
         let titles = ["Senior Backend Engineer", "Marketing Manager", "Engineering Lead", "Office assistant"];
         assert_eq!(matching_titles(titles, &roles), 2);
         assert_eq!(matching_titles(titles, &[]), 4, "no roles: everything fits");
-    }
-
-    #[tokio::test]
-    async fn the_unwired_live_verifier_refuses_every_candidate() {
-        let dir = tempfile::tempdir().unwrap();
-        let core = Core::open_at(crate::engine::Paths::new(dir.path().join("jp")), crate::engine::Secrets::memory()).unwrap();
-        assert!(live_verifier(&core).verify("lever", "jobs.lever.co/acme").await.is_err());
     }
 }

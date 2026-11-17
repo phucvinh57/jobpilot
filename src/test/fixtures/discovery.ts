@@ -144,6 +144,7 @@ export function jobSources(extra: Partial<JobSources> = {}): JobSources {
     ],
     suggestions: [],
     suggestWaiting: false,
+    suggestRunning: false,
     ...extra,
   };
 }

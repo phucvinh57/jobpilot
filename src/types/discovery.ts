@@ -186,6 +186,8 @@ export interface JobSources {
   suggestions: SourceSuggestion[];
   /** The "Suggest sources" search is paused at a page the user must deal with in Chrome. */
   suggestWaiting: boolean;
+  /** A suggestion search is running now (it may have been started before this screen was shown). */
+  suggestRunning: boolean;
 }
 
 /** A job source the "Suggest sources" search found and checked, for the user to add or dismiss. */

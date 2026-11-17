@@ -74,6 +74,12 @@ impl Core {
         Ok(())
     }
 
+    /// A search is running now (the screen keeps "Suggest sources" disabled when it is shown
+    /// again mid-search).
+    pub fn suggest_running(&self) -> Result<bool> {
+        Ok(matches!(self.graphs.status(SUGGEST_THREAD)?.map(|t| t.status), Some(ThreadStatus::Running)))
+    }
+
     /// The search paused at a consent page, captcha or login, if there is one (for the "Open
     /// browser" banner). Survives a restart.
     pub fn suggest_waiting(&self) -> Result<Option<Waiting>> {

@@ -3,7 +3,7 @@
 //! The page is untrusted: its links are only **candidates**, and code decides what one is. A link is
 //! kept when it is
 //!
-//! - on a job board the app knows (`boards::board_at`: Greenhouse, Lever, Ashby, SmartRecruiters,
+//! - on a job board the app knows (`boards::hint_for`: Greenhouse, Lever, Ashby, SmartRecruiters,
 //!   Recruitee, Personio, Workday): that board, as the source to add (one per board);
 //! - or a page that looks like a place where a company lists jobs: a `careers.` / `jobs.` host, or a
 //!   path segment that is a job word (`web::JOB_WORDS`). The page address is cut after that segment
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::engine::discover::score::excluded_company;
-use crate::engine::discover::source::boards::{board_at, kind_for_host};
+use crate::engine::discover::source::boards::{hint_for, kind_for_host};
 use crate::engine::discover::source::web::{links, normalize_page_url, Page, JOB_WORDS};
 use crate::engine::mail::classify::{is_ats_host, registrable_domain};
 use crate::engine::net::http::is_public_host;
@@ -67,7 +67,8 @@ pub(crate) struct Known {
 }
 
 impl Known {
-    /// The user's job sources and every suggestion ever stored (added and dismissed ones too).
+    /// The user's job sources, every suggestion ever stored (added and dismissed ones too) and the
+    /// candidates the check refused lately.
     pub(crate) fn load(store: &Store) -> Result<Self> {
         let mut known = Self::default();
         for source in store.list_sources(SourcePurpose::Jobs)? {
@@ -75,6 +76,9 @@ impl Known {
         }
         for suggestion in store.all_suggestions()? {
             known.insert(&suggestion.kind, &suggestion.input);
+        }
+        for refused in super::refused::recent(store, chrono::Utc::now())? {
+            known.insert(&refused.kind, &refused.input);
         }
         Ok(known)
     }
@@ -114,7 +118,7 @@ fn board_id(kind: &str, input: &str) -> Option<String> {
         return Some(input.to_ascii_lowercase());
     }
     let with_scheme = if input.contains("://") { input.to_string() } else { format!("https://{input}") };
-    let hint = board_at(&Url::parse(&with_scheme).ok()?)?;
+    let hint = hint_for(&Url::parse(&with_scheme).ok()?)?;
     if hint.kind != kind {
         return None;
     }
@@ -193,7 +197,7 @@ fn redirect_target(url: &Url) -> Option<Url> {
 /// What one result link is as a source, if anything.
 fn classify(url: &Url, host: &str, query: &str) -> Option<Hit> {
     if kind_for_host(host).is_some() {
-        let hint = board_at(url)?;
+        let hint = hint_for(url)?;
         let name = board_id(hint.kind, &hint.input).unwrap_or_default();
         let company = match hint.kind {
             "workday" => host.split('.').next().unwrap_or_default().to_string(),

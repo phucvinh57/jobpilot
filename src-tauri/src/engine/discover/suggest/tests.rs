@@ -191,8 +191,8 @@ async fn a_captcha_pauses_the_search_and_continue_searches_the_same_query_then_s
     assert_eq!(outcome, SuggestOutcome::Done { saved: 0 });
     assert_eq!(
         verify.asked(),
-        ["https://careers.zero.example/", "jobs.lever.co/broken", "https://careers.acme-co.example/"],
-        "the stored ones (any state) are known now; refused candidates are not remembered, so checked again"
+        ["https://careers.acme-co.example/"],
+        "the stored ones (any state) are known now, and the refused or empty ones are skipped for a while"
     );
     assert_eq!(inputs(core), ["https://careers.gamma.example/jobs"]);
     assert_eq!(core.store.get_suggestion(acme).unwrap().unwrap().state, SuggestionState::Dismissed);
@@ -298,4 +298,20 @@ fn adding_a_suggestion_stores_the_source_once_and_marks_it_added() {
     assert!(h.core.add_suggested_source(id).unwrap_err().to_string().contains("already added"));
     assert_eq!(h.core.job_sources().unwrap().len(), 1, "added once");
     assert!(h.core.add_suggested_source(id + 99).unwrap_err().to_string().contains("no longer exists"));
+}
+
+#[tokio::test]
+async fn a_check_that_fails_for_the_network_fails_the_search_instead_of_finding_nothing() {
+    let h = Harness::rust_in_berlin();
+    h.pages.page(&h.url(0), r#"<a href="https://jobs.ashbyhq.com/beta">Beta</a><a href="https://jobs.lever.co/gone">Gone</a>"#);
+    let down = Arc::new(FakeVerify::new().fails("jobs.ashbyhq.com/beta", "network error: net::ERR_CONNECTION_REFUSED at <page>"));
+    let err = h.core.suggest_sources_with(h.deps(down)).await.unwrap_err();
+    assert_eq!(classify(&format!("{err:#}")), Problem::Network, "{err:#}");
+    assert!(h.core.source_suggestions().unwrap().is_empty());
+
+    // Retry with the network back: both are checked again (a fatal failure is not remembered as a refusal).
+    let up = Arc::new(FakeVerify::new().ok("ashby", "jobs.ashbyhq.com/beta", "Beta", 3, 2));
+    let outcome = h.core.suggest_resume_with(h.deps(up.clone())).await.unwrap();
+    assert_eq!(outcome, SuggestOutcome::Done { saved: 1 });
+    assert_eq!(up.asked(), ["jobs.ashbyhq.com/beta", "jobs.lever.co/gone"]);
 }
