@@ -8,9 +8,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::engine::discover::suggest::SuggestOutcome;
-use crate::engine::discover::DismissedKind;
-use crate::engine::Core;
+use jobpilot_engine::discover::suggest::SuggestOutcome;
+use jobpilot_engine::discover::DismissedKind;
+use jobpilot_engine::Core;
 use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
 
@@ -236,12 +236,12 @@ pub async fn discovery_job_sources(core: State<'_, Arc<Core>>) -> CommandResult<
                 .map(SessionOptionDto::from)
                 .collect(),
             daily: core.discover_daily_enabled()?,
-            kinds: crate::engine::discover::JOB_SOURCE_KINDS
+            kinds: jobpilot_engine::discover::JOB_SOURCE_KINDS
                 .iter()
                 .map(|(kind, label)| SourceKindDto {
                     kind,
                     label,
-                    hint: crate::engine::discover::source_url_hint(kind),
+                    hint: jobpilot_engine::discover::source_url_hint(kind),
                 })
                 .collect(),
             // Suggestions are a nicety: an unreadable list never hides the sources.

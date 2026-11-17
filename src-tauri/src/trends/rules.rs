@@ -3,13 +3,13 @@
 //! summarised, where a topic stands in the saved preferences, and how the market numbers read
 //! (shares, directions, the gap and the wishes: all decided in code, never by the AI).
 
-use crate::engine::graph::nodes::ChallengeKind;
-use crate::engine::prefs::Preferences;
-use crate::engine::store::{Report, Source};
-use crate::engine::trends::digest::{
+use jobpilot_engine::graph::nodes::ChallengeKind;
+use jobpilot_engine::prefs::Preferences;
+use jobpilot_engine::store::{Report, Source};
+use jobpilot_engine::trends::digest::{
     Direction, GapBucket, GapScope, ScopeCounts, WishKind, WishSignal, MARKET_SCAN_VERSION,
 };
-use crate::engine::trends::{
+use jobpilot_engine::trends::{
     Digest, Period, Section, SkillCount, SkillCounts, SourceKind, SourceStatus, TrendRun,
 };
 use chrono::{Local, NaiveDate};
@@ -153,7 +153,7 @@ pub fn describe(skill: &SkillCount, documents: &[u32], latest_partial: bool) -> 
 
 /// `part` of `whole` in per mille, rounded (0 when there is no whole).
 pub fn permille(part: u32, whole: u32) -> u32 {
-    crate::engine::trends::digest::permille(u64::from(part), u64::from(whole))
+    jobpilot_engine::trends::digest::permille(u64::from(part), u64::from(whole))
 }
 
 /// A per mille as a whole percent, rounded half up: what a bar is drawn and labelled with.
@@ -544,12 +544,12 @@ pub fn target(section: Section) -> Field {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::store::{Source, SourcePurpose};
-    use crate::engine::trends::{
+    use jobpilot_engine::store::{Source, SourcePurpose};
+    use jobpilot_engine::trends::{
         Period, Section, SkillCount, SourceOutcome, SourceStatus, TrendRun,
     };
 
-    use crate::engine::trends::digest::{
+    use jobpilot_engine::trends::digest::{
         Direction, GapBucket, GapScope, ScopeCounts, SkillCounts, WishKind, WishSignal,
         MARKET_SCAN_VERSION,
     };
@@ -812,13 +812,13 @@ mod tests {
             "a new report with thin data is still new"
         );
         assert_eq!(
-            section_title(crate::engine::trends::Section::ForYou, false),
+            section_title(jobpilot_engine::trends::Section::ForYou, false),
             "What it means for you"
         );
         counts.version = MARKET_SCAN_VERSION;
         assert!(knows_background(&counts));
         assert_eq!(
-            section_title(crate::engine::trends::Section::ForYou, true),
+            section_title(jobpilot_engine::trends::Section::ForYou, true),
             "Your gap: build on, learn next, at risk"
         );
         let placed = SkillCounts {
@@ -1050,7 +1050,7 @@ mod tests {
     #[test]
     fn a_full_list_says_why_nothing_was_added() {
         let mut prefs = Preferences {
-            must_skills: (0..crate::engine::prefs::chat::MAX_LIST_ITEMS)
+            must_skills: (0..jobpilot_engine::prefs::chat::MAX_LIST_ITEMS)
                 .map(|i| format!("skill {i}"))
                 .collect(),
             ..Preferences::default()

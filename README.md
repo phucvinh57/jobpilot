@@ -82,9 +82,9 @@ Other env vars: `JOBPILOT_BRIDGE_PORT` (port of the extension bridge, default 47
 
 ```
 cargo test --workspace
-bun run ext:build && JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored   # real Chromium with the extension
-JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot --features test-browser --test e2e_discovery -- --include-ignored  # + dry-run apply
-cargo test -p jobpilot --test e2e_discovery                      # source -> lead -> CV -> approve, fake provider and board
+bun run ext:build && JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-engine -- --ignored   # real Chromium with the extension
+JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-engine --features test-browser --test e2e_discovery -- --include-ignored  # + dry-run apply
+cargo test -p jobpilot-engine --test e2e_discovery                      # source -> lead -> CV -> approve, fake provider and board
 ```
 
 See `AGENTS.md` for the module map, conventions and how to check the UI visually.

@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, ensure, Result};
-use crate::engine::prefs::{clean_notes, PrefSuggestions, Preferences};
-use crate::engine::profile::sources::is_supported;
-use crate::engine::Core;
+use jobpilot_engine::prefs::{clean_notes, PrefSuggestions, Preferences};
+use jobpilot_engine::profile::sources::is_supported;
+use jobpilot_engine::Core;
 use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
 
@@ -330,8 +330,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
 mod tests {
     use std::sync::Arc;
 
-    use crate::engine::prefs::chat::MAX_LIST_ITEMS;
-    use crate::engine::{runtime, Core, Paths, Secrets};
+    use jobpilot_engine::prefs::chat::MAX_LIST_ITEMS;
+    use jobpilot_engine::{runtime, Core, Paths, Secrets};
 
     use super::{
         about_of, add_file, add_item, add_text, field_named, read_sources, remove_item,
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(note.sources.len(), 2);
         assert!(add_text(&core, "Empty", "   ").is_err());
 
-        crate::engine::profile::set_test_profile(&core, crate::engine::profile::TEST_PROFILE);
+        jobpilot_engine::profile::set_test_profile(&core, jobpilot_engine::profile::TEST_PROFILE);
         let ready = about_of(&core).unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(ready.status, "ready");
         assert!(ready.summary.is_some_and(|s| !s.name.is_empty() && !s.roles.is_empty()));
@@ -526,8 +526,8 @@ mod tests {
             .map(|e| format!("{e:#}"))
             .unwrap_or_default();
         assert_eq!(
-            crate::engine::health::classify(&err),
-            crate::engine::health::Problem::NoProvider,
+            jobpilot_engine::health::classify(&err),
+            jobpilot_engine::health::Problem::NoProvider,
             "{err}"
         );
     }

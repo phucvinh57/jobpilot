@@ -2,7 +2,7 @@
 //! "Add to preferences" chip): how an entry is cleaned and compared, when a list takes one more,
 //! and where a topic stands in the saved preferences.
 
-use crate::engine::prefs::chat::MAX_LIST_ITEMS;
+use jobpilot_engine::prefs::chat::MAX_LIST_ITEMS;
 
 /// Longest list entry, in characters.
 pub const MAX_ITEM_CHARS: usize = 80;

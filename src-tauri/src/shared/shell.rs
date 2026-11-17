@@ -3,9 +3,9 @@
 
 use std::sync::Arc;
 
-use crate::engine::health::{Health, Problem};
-use crate::engine::prefs::Appearance;
-use crate::engine::Core;
+use jobpilot_engine::health::{Health, Problem};
+use jobpilot_engine::prefs::Appearance;
+use jobpilot_engine::Core;
 use serde::Serialize;
 use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
@@ -175,7 +175,7 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::health::Health;
+    use jobpilot_engine::health::Health;
 
     use super::{blockers, health_line};
 

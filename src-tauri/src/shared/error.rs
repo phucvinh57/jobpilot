@@ -1,14 +1,14 @@
 //! What a failed command tells the web app: the message and what the user can do about it.
 //!
 //! The classification (no AI provider, no browser extension, no typst, network, a site that needs the user)
-//! lives in `crate::engine::health`; this file only carries it over the bridge, so every screen
+//! lives in `jobpilot_engine::health`; this file only carries it over the bridge, so every screen
 //! shows the same advice, Settings shortcut and Retry.
 
 use std::future::Future;
 
-use crate::engine::health::{self, Problem};
-use crate::engine::redact::redact;
-use crate::engine::runtime;
+use jobpilot_engine::health::{self, Problem};
+use jobpilot_engine::redact::redact;
+use jobpilot_engine::runtime;
 use serde::Serialize;
 
 /// A [`Problem`] as the web app reads it.
@@ -111,7 +111,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::health::{Challenge, Problem};
+    use jobpilot_engine::health::{Challenge, Problem};
 
     use super::{CommandError, ProblemDto};
 
@@ -136,12 +136,12 @@ mod tests {
         assert_eq!((other.kind, other.advice), ("other", None));
 
         // The extension is not connected (or not allowed in Incognito): Settings > Browser.
-        let browser = CommandError::new(crate::engine::browser::BridgeError::NotConnected.to_string()).problem;
+        let browser = CommandError::new(jobpilot_engine::browser::BridgeError::NotConnected.to_string()).problem;
         assert_eq!(
             (browser.kind, browser.settings_section, browser.call_to_action),
             ("noBrowser", Some("Browser"), Some("Connect the JobPilot extension"))
         );
-        let incognito = CommandError::new(crate::engine::browser::BridgeError::IncognitoNotAllowed.to_string()).problem;
+        let incognito = CommandError::new(jobpilot_engine::browser::BridgeError::IncognitoNotAllowed.to_string()).problem;
         assert_eq!((incognito.kind, incognito.call_to_action), ("noBrowser", None));
         assert!(incognito.advice.is_some_and(|a| a.contains("chrome://extensions")));
     }

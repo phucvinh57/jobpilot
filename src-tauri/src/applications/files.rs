@@ -5,9 +5,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use crate::engine::pipeline::{self, JdInput, Violation};
-use crate::engine::store::Application;
-use crate::engine::Core;
+use jobpilot_engine::pipeline::{self, JdInput, Violation};
+use jobpilot_engine::store::Application;
+use jobpilot_engine::Core;
 
 /// How to (re)produce a CV for a Draft that has none.
 #[derive(Clone, Debug)]
@@ -156,8 +156,8 @@ pub fn guard_clean(core: &Core, yaml: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::store::NewApplication;
-    use crate::engine::{runtime, Paths, Secrets};
+    use jobpilot_engine::store::NewApplication;
+    use jobpilot_engine::{runtime, Paths, Secrets};
 
     use super::*;
 
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn saving_renders_the_edit_and_reports_problems() {
         let (_dir, core) = fresh_core();
-        crate::engine::profile::set_test_profile(&core, crate::engine::profile::TEST_PROFILE);
+        jobpilot_engine::profile::set_test_profile(&core, jobpilot_engine::profile::TEST_PROFILE);
         let id = app(&core, None).id;
 
         // A valid CV: written, rendered, previews counted.

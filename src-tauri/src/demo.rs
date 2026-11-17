@@ -5,23 +5,23 @@
 
 use anyhow::Result;
 use chrono::{Duration, Utc};
-use crate::engine::discover::dedup::dedup_key;
-use crate::engine::discover::lead_dir;
-use crate::engine::discover::score::{Criteria, Criterion, Eligible, Scored};
-use crate::engine::discover::{RunSummary, LAST_RUN_KEY};
-use crate::engine::pipeline::cv::Cv;
-use crate::engine::pipeline::insight::{CompanyFacts, Interview, Skills};
-use crate::engine::pipeline::Insight;
-use crate::engine::prefs::Weights;
-use crate::engine::store::{
+use jobpilot_engine::discover::dedup::dedup_key;
+use jobpilot_engine::discover::lead_dir;
+use jobpilot_engine::discover::score::{Criteria, Criterion, Eligible, Scored};
+use jobpilot_engine::discover::{RunSummary, LAST_RUN_KEY};
+use jobpilot_engine::pipeline::cv::Cv;
+use jobpilot_engine::pipeline::insight::{CompanyFacts, Interview, Skills};
+use jobpilot_engine::pipeline::Insight;
+use jobpilot_engine::prefs::Weights;
+use jobpilot_engine::store::{
     LeadState, NewApplication, NewLead, NewSession, NewSource, SourcePurpose, Status,
 };
-use crate::engine::Core;
+use jobpilot_engine::Core;
 
 /// Insert a few sample applications when the store is empty (`JOBPILOT_DEMO=1`).
 pub fn seed(core: &Core) -> Result<()> {
     seed_demo_profile(core)?;
-    crate::engine::prefs::seed_demo(core)?;
+    jobpilot_engine::prefs::seed_demo(core)?;
     crate::trends::demo::seed_demo(core)?;
     seed_demo_applications(core)?;
     seed_demo_sessions(core)?;
@@ -416,8 +416,8 @@ fn demo_insight(slug: &str) -> Insight {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::store::Status;
-    use crate::engine::{Core, Paths, Secrets};
+    use jobpilot_engine::store::Status;
+    use jobpilot_engine::{Core, Paths, Secrets};
 
     #[test]
     fn the_sample_applications_cover_every_stage_once() {
@@ -444,8 +444,8 @@ mod tests {
         assert!(!profile.stale, "read from the note that is there");
         assert_eq!(profile.left_out.len(), 2);
 
-        let cv = crate::engine::pipeline::cv::Cv::parse(super::DEMO_PROFILE_YAML).expect("valid");
-        let (traced, left_out) = crate::engine::profile::trace::trace(cv.clone(), super::DEMO_NOTE);
+        let cv = jobpilot_engine::pipeline::cv::Cv::parse(super::DEMO_PROFILE_YAML).expect("valid");
+        let (traced, left_out) = jobpilot_engine::profile::trace::trace(cv.clone(), super::DEMO_NOTE);
         assert!(left_out.is_empty(), "{left_out:#?}");
         assert_eq!(traced, cv);
     }

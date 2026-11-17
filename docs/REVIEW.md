@@ -16,10 +16,10 @@ For human reviewers and the `/pre-pr` skill. When a bug slips through, add a lin
 
 Set by the paths touched. The highest wins. Each PR gets exactly one label: `risk: low`, `risk: medium` or `risk: high`. Low and Medium PRs are merged by `/pre-pr` once `scripts/check.sh` passes on the PR's final commit. High PRs wait for a human. There is no CI: `scripts/risk.sh --label <tier>` checks the label against the High paths, and `/pre-pr` runs it before merging. Change the list there along with this one.
 
-- **High** (a human reads the diff): `src-tauri/src/engine/profile/`, `src-tauri/tests/fixtures/profile.yaml`, `assets/cv.typ`, `assets/prompts/`, `scripts/`, `lefthook.yml`, `.github/`, `.claude/`, `.agents/`, `AGENTS.md`, `CLAUDE.md`, `docs/REVIEW.md`.
+- **High** (a human reads the diff): `crates/engine/src/profile/`, `crates/engine/tests/fixtures/profile.yaml`, `assets/cv.typ`, `assets/prompts/`, `scripts/`, `lefthook.yml`, `.github/`, `.claude/`, `.agents/`, `AGENTS.md`, `CLAUDE.md`, `docs/REVIEW.md`.
 - **Low:** `README.md`, other docs.
 - **No PR:** a change that touches only `docs/` (except this file) is pushed directly to `main`.
-- **Medium:** everything else (`src-tauri/`, `src/`, the web config at the root, `Cargo.*`).
+- **Medium:** everything else (`crates/`, `src-tauri/`, `src/`, the web config at the root, `Cargo.*`).
 
 ## Ignore
 

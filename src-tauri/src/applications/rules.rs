@@ -4,11 +4,11 @@
 
 use std::collections::HashMap;
 
-use crate::engine::apply::{Edit, FieldKind, Review, Row, SessionState, Source};
-use crate::engine::browser::SessionStatus;
+use jobpilot_engine::apply::{Edit, FieldKind, Review, Row, SessionState, Source};
+use jobpilot_engine::browser::SessionStatus;
 use chrono::{NaiveDate, NaiveDateTime};
-use crate::engine::pipeline::{Analysis, Progress};
-use crate::engine::store::{clean_round, Application, Email, Event, Status};
+use jobpilot_engine::pipeline::{Analysis, Progress};
+use jobpilot_engine::store::{clean_round, Application, Email, Event, Status};
 use serde::Serialize;
 
 /// What a status or a tag means; the web app maps each to its colours.
@@ -1000,9 +1000,9 @@ pub fn review_notice(review: &Review, missing: usize) -> Option<(Tone, &'static 
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::apply::Ats;
+    use jobpilot_engine::apply::Ats;
     use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
-    use crate::engine::pipeline::{Analysis, Stage as JobStage};
+    use jobpilot_engine::pipeline::{Analysis, Stage as JobStage};
 
     use super::*;
 
@@ -1072,7 +1072,7 @@ mod tests {
 
     #[test]
     fn a_long_round_is_offered_as_the_store_keeps_it() {
-        use crate::engine::store::ROUND_MAX_CHARS;
+        use jobpilot_engine::store::ROUND_MAX_CHARS;
         let long = format!("  {}  ", "Pair programming with the platform team ".repeat(3));
         let options = round_options(&strings(&[&long, "HR screen"]));
         let kept = clean_round(Some(&long));
@@ -1084,7 +1084,7 @@ mod tests {
     #[test]
     fn an_offer_step_is_left_out_even_when_offer_comes_after_the_cut() {
         let step = "Final conversation with the VP of Engineering and the team, then a written offer".to_string();
-        assert!(step.chars().count() > crate::engine::store::ROUND_MAX_CHARS);
+        assert!(step.chars().count() > jobpilot_engine::store::ROUND_MAX_CHARS);
         let rounds = round_options(&[step, "Technical screen".to_string()]);
         assert_eq!(rounds, vec!["Technical screen".to_string()]);
     }

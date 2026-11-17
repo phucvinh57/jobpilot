@@ -1,8 +1,8 @@
 //! What "Dismiss" and "Restore" did, as both contexts report it: Leads dismiss and restore leads
 //! (and restore jobs from its Dismissed list), Applications dismiss and restore jobs in CVs.
 
-use crate::engine::discover::promote::Dismissed;
-use crate::engine::discover::Restored;
+use jobpilot_engine::discover::promote::Dismissed;
+use jobpilot_engine::discover::Restored;
 use serde::Serialize;
 
 /// What "Dismiss" did (the web app words it).

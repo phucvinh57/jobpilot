@@ -14,7 +14,9 @@ extension/                 the JobPilot Chrome extension (MV3, TypeScript, `bun 
                            between the app and the user's Chrome; `PROTOCOL.md` is the contract with `engine::browser::bridge` (change both together)
 assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) bundled by the web app (`src/styles.css`)
 scripts/package.sh         release .deb + AppImage (Tauri bundler) -> release/
-src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri; the shell's contexts call it, never the reverse
+crates/engine/  (package `jobpilot-engine`, lib `jobpilot_engine`)   no UI, no Tauri dependency; the shell's contexts call it, never the reverse.
+             `src/` the modules below (`lib.rs` = the module index); `tests/` integration tests (`e2e_discovery`) and `fixtures/profile.yaml`;
+             features `test-util` (test profile helpers for the shell's unit tests) and `test-browser` (the bridge's test kit for `tests/`)
   paths      data dir ($XDG_DATA_HOME/jobpilot, override JOBPILOT_DATA_DIR), logs_dir
   runtime    global tokio runtime; spawn(fut) -> oneshot::Receiver
   store/     SQLite (rusqlite), one file per table: applications, events, providers, sessions, emails, kv, status, sources, leads, preferences, chat, trends, graph,
@@ -51,7 +53,7 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
   trends     collection (hackernews, yc, rss, page; graph `trends` -> `trend_items`),
              `frame` (MarketFrame: background + place, never wishes; decides what is counted),
              `digest/` (extract, count, synthesize, cite: every point cites stored items)
-src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bounded context (never by technical layer)
+src-tauri/ (package `jobpilot`, lib `jobpilot_lib`)   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |
              profile (About you: the documents the profile is read from; preferences) | integrations (AI Providers, Gmail, Browser: extension pairing + signed-in sites) | trends (Digest, trend sources)
   tauri.conf.json, capabilities/default.json   one window `main`; permissions: core + the file picker only; strict CSP (no remote origin)
@@ -95,14 +97,14 @@ src/                   React + Vite + TypeScript + Tailwind; feature folders (ap
 - Web app first (the shell embeds `dist/` at compile time): `bun install`, then `bun run build`.
 - Run: `cargo run -p jobpilot` (the built web app; sample data: `JOBPILOT_DEMO=1`; throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory`). With hot reload: `bun run tauri dev`.
 - Web checks: `bun run check` (tsc, Biome lint + format with the import rules, vitest); `bun run format` applies Biome's fixes.
-- Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace`. The engine shares the `jobpilot` crate with Tauri, so even engine-only tests need a `dist/` (`scripts/check.sh` writes a placeholder) and the Linux libs below.
-- Browser tests (`#[ignore]`, start Chromium with the built extension and an auto-approving bridge, local fixture pages only): `bun run ext:build`, then `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot -- --ignored` (`browser::bridge::testkit`; it takes `JOBPILOT_CHROME` or Playwright's Chromium under `/opt/pw-browsers`: branded Google Chrome ignores `--load-extension`). Guarded tabs block `127.0.0.1` literals, so their fixtures are reached as `http://<name>.test:<port>`.
-- End-to-end without real services: `cargo test -p jobpilot --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: a text document -> profile, source -> leads with score and insight -> Prepare CV -> Approve CV); with `bun run ext:build` then `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot --features test-browser --test e2e_discovery -- --ignored` it also dry-runs the apply on a local form in a Chromium driven through the JobPilot extension (the cargo feature `test-browser` exposes the bridge's test kit to `tests/`).
+- Build/test: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace`. The engine is its own crate without Tauri: `cargo test -p jobpilot-engine` needs no `dist/` and no webkit/gtk libs (libdbus only). The shell (`-p jobpilot`) needs a `dist/` (`scripts/check.sh` writes a placeholder) and the Linux libs below.
+- Browser tests (`#[ignore]`, start Chromium with the built extension and an auto-approving bridge, local fixture pages only): `bun run ext:build`, then `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-engine -- --ignored` (`browser::bridge::testkit`; it takes `JOBPILOT_CHROME` or Playwright's Chromium under `/opt/pw-browsers`: branded Google Chrome ignores `--load-extension`). Guarded tabs block `127.0.0.1` literals, so their fixtures are reached as `http://<name>.test:<port>`.
+- End-to-end without real services: `cargo test -p jobpilot-engine --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: a text document -> profile, source -> leads with score and insight -> Prepare CV -> Approve CV); with `bun run ext:build` then `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-engine --features test-browser --test e2e_discovery -- --ignored` it also dry-runs the apply on a local form in a Chromium driven through the JobPilot extension (the cargo feature `test-browser` exposes the bridge's test kit to `tests/`).
 - Package: `scripts/package.sh` -> `release/`
 - Needs: Rust, Node + bun, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium 125+ with the JobPilot extension (Settings > Browser shows how to install and pair it), Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
 - Pre-PR checks (there is no CI; this is the gate, run by the pre-push hook and `/pre-pr`): `scripts/check.sh [--all] [--only web|rust|render]` runs the groups touched since main: `web` (typecheck, Biome, vitest, vite build, the extension's typecheck + build), `rust` (clippy + test), `render` (typst on `assets/prompts/example-cv.yaml`). `CARGO_PROFILE_ARG="--profile ci"` makes a cold run faster. `scripts/risk.sh [--label <tier>]` prints the risk tier the changed paths require (`docs/REVIEW.md`).
 - Hooks: `bun install` installs lefthook (pre-commit: Biome on staged files; pre-push: `check.sh`). If `core.hooksPath` was set before: `git config --unset core.hooksPath && bunx lefthook install`.
-- Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_lib::engine=debug` for more.
+- Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_engine=debug` for more.
 
 ## Check the UI visually
 
@@ -132,7 +134,7 @@ await shot("settings-light");
 
 Page errors, unhandled rejections and CSP violations are written to the app log (`ui script: ...`). Every interactive element has an `id` or an accessible name, so a script (or assistive technology) can reach it.
 
-For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), and the GUI needs the extension paired in a real Chrome,, so a fake job board cannot be driven from the GUI: that path is covered by `src-tauri/tests/e2e_discovery.rs`, and the GUI check of the Jobs page (Leads and a lead drawer), Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
+For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), and the GUI needs the extension paired in a real Chrome,, so a fake job board cannot be driven from the GUI: that path is covered by `crates/engine/tests/e2e_discovery.rs`, and the GUI check of the Jobs page (Leads and a lead drawer), Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
 
 ## Workflow
 
@@ -147,7 +149,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 - Never add facts to a CV that are not in the user's documents (employers, titles, dates, institutions, numbers, technologies). The profile is read from them (`engine::profile`), every fact must trace back to a document (`profile::trace`), and every CV is checked against the profile (`pipeline::guard`). Code never writes a fact into the profile; the user changes a document and reads again.
 - Secrets (API keys, OAuth tokens) only in the OS keyring via `engine::secrets`; never in the DB, logs or files. Logs are redacted as a second line of defence: still never put a secret in a log call, an error message or a `Debug` dump.
 - The UI never blocks and never owns I/O: a command calls the engine through `shared::run(fut)` / `shared::run_sync(f)` (the engine runtime); long work streams progress as events and the command returns the final result.
-- The shell reads/writes through `Core` only; no SQL or HTTP in `src-tauri` outside `engine/`. The web app talks to the shell only through `src/api/` (Tauri is imported in `src/api/bridge.ts` only, and the bridge only inside `src/api/`).
+- The shell reads/writes through `Core` only; no SQL or HTTP in `src-tauri` (they live in `crates/engine`). The web app talks to the shell only through `src/api/` (Tauri is imported in `src/api/bridge.ts` only, and the bridge only inside `src/api/`).
 - Bounded contexts do not depend on each other: Rust `src-tauri/src/<context>` uses `shared` and `engine` only. What two contexts share goes to the shared kernel. (The web app is not split by context: see the `src/` layout above.)
 - DTOs (`<context>/dto.rs`) never carry a secret: keys and tokens are write-only from the web app (it can learn that one is saved, never its value).
 - The webview shows the app only: no remote origin in the CSP, navigation is refused (`main.rs::may_show`), and http(s) links open in the system browser through `shared_open_url`. Untrusted text is rendered as text, never as HTML.
@@ -173,7 +175,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 
 ## Ownership (parallel work)
 
-- Engine: add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`.
+- Engine (`crates/engine`): add behaviour to `Core` with `impl Core { .. }` in your own module, not in `facade.rs`. An item the shell calls is `pub` (not `pub(crate)`).
 - Desktop: a change belongs to one bounded context and edits only `src-tauri/src/<context>/` and that feature's web files: every path under `src/` named after it (`<feature>/` folders, `<feature>.ts`; integrations also `api/{gmail,providers,sessions}.ts`; the extension (`extension/`) belongs to no context: it changes with `engine::browser::bridge`), plus its page or store (applications: `pages/ApplicationPage.tsx`; discovery: `stores/today.ts`; trends: `pages/TrendsPage.tsx`; profile: `pages/ProfilePage.tsx`).
 - The shared kernel (`src-tauri/src/shared`, `src-tauri/src/main.rs`) and every other web file under `src/` (the kit, layout, nav and shell stores, `api/{bridge,events,shell}.ts`, shared hooks, `lib/`, `types/`, the Jobs and Settings pages) change only for something every context needs.
 - Prompts under `assets/prompts/` are High risk (a human reads the diff).

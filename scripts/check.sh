@@ -64,7 +64,7 @@ fi
 self='scripts/check\.sh$'
 declare -A paths=(
   [web]="^(src/|extension/|assets/fonts/|(package|tsconfig)\.json$|bun\.lock$|index\.html$|vite\.config\.ts$|biome\.jsonc?$|$self)"
-  [rust]="^(Cargo\.(toml|lock)$|src-tauri/|assets/|$self)"
+  [rust]="^(Cargo\.(toml|lock)$|crates/|src-tauri/|assets/|$self)"
   [render]="^(assets/|$self)"
 )
 groups=(web rust render)
@@ -95,7 +95,8 @@ biome_check() {
 }
 
 # The desktop crate embeds `dist/` (tauri.conf.json `frontendDist`) and does not compile without
-# it; Rust checks do not need the real web app, so a placeholder stands in when there is none.
+# it (the engine, `crates/engine`, does not need it); Rust checks do not need the real web app, so a
+# placeholder stands in when there is none.
 ensure_dist() {
   [[ -f dist/index.html ]] && return 0
   echo "No web build in dist/: writing a placeholder (run \`bun run build\` for the real app)."
