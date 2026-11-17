@@ -569,7 +569,8 @@ async fn is_posting_item(item: &TrendItem) -> bool {
 }
 
 /// Take items round-robin over their sources (the input is newest first) until `max`, then order
-/// the pick newest first. Report search has no source row: its items count as one source.
+/// the pick newest first. Items without a source (of a removed source, or of an older version's
+/// report search) count as one source.
 fn spread(items: Vec<TrendItem>, max: usize) -> Vec<TrendItem> {
     if items.len() <= max {
         return items;

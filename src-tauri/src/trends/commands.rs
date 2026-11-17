@@ -28,8 +28,8 @@ fn kind_of(kind: &str) -> CommandResult<SourceKind> {
 // ------------------------------------------------------------------ reads
 
 /// Everything the screen shows: the digest `selected` (the newest when `None`), its chart, the
-/// history, the waiting collections, the sources and the saved search keys. `cadence`: `weekly` /
-/// `quarterly`, the period a new run would cover.
+/// history, the waiting collections and the sources. `cadence`: `weekly` / `quarterly`, the period
+/// a new run would cover.
 #[tauri::command]
 pub async fn trends_overview(
     core: Cx<'_>,
@@ -125,26 +125,6 @@ pub async fn trends_set_source_enabled(core: Cx<'_>, id: i64, enabled: bool) -> 
     run_sync(move || core.set_trend_source_enabled(id, enabled)).await
 }
 
-// ------------------------------------------------------------------ search keys (write-only)
-
-/// Save the API key of a search provider (`brave` / `tavily`) in the OS keyring. The key is never
-/// read back, logged or returned.
-#[tauri::command]
-pub async fn trends_save_key(core: Cx<'_>, provider: String, key: String) -> CommandResult<()> {
-    let provider = dto::parse_provider(&provider)
-        .ok_or_else(|| CommandError::new(format!("unknown search provider: {provider}")))?;
-    let core = core.inner().clone();
-    run_sync(move || core.set_search_key(provider, &key)).await
-}
-
-#[tauri::command]
-pub async fn trends_clear_key(core: Cx<'_>, provider: String) -> CommandResult<()> {
-    let provider = dto::parse_provider(&provider)
-        .ok_or_else(|| CommandError::new(format!("unknown search provider: {provider}")))?;
-    let core = core.inner().clone();
-    run_sync(move || core.clear_search_key(provider)).await
-}
-
 // ------------------------------------------------------------------ preferences
 
 /// "Add to preferences": put a skill or domain of the digest into the saved preferences at once.
@@ -186,8 +166,6 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         trends_add_source,
         trends_remove_source,
         trends_set_source_enabled,
-        trends_save_key,
-        trends_clear_key,
         trends_add_to_preferences,
     ]
 }

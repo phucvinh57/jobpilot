@@ -176,9 +176,6 @@ async fn a_run_with_the_fake_model_saves_a_report_that_cites_its_source() {
     assert!(digest.report.body_md.contains("point(s) were left out"));
     assert_eq!(core.latest_trend_digest().unwrap().unwrap().report.id, digest.report.id);
 
-    // report_search was skipped (no key), and no search API was called.
-    assert_eq!(status_of(&state, "report_search"), &SourceStatus::Skipped { reason: "no search API key saved".into() });
-    assert!(fx.hits().iter().all(|h| h.path() != "/res/v1/web/search" && h.path() != "/search"));
 }
 
 #[tokio::test]
@@ -937,14 +934,4 @@ fn a_report_reads_back_and_an_unreadable_one_still_shows_its_text() {
     assert!(back.data.is_none());
     assert_eq!(back.report.body_md, "plain");
     assert!(core.trend_digest(9999).unwrap().is_none());
-}
-
-#[test]
-fn search_keys_that_are_saved_are_listed() {
-    let (_dir, core) = core();
-    assert!(core.saved_search_providers().unwrap().is_empty());
-    core.set_search_key(crate::engine::trends::SearchProvider::Tavily, "tvly-key-0123456789").unwrap();
-    assert_eq!(core.saved_search_providers().unwrap(), [crate::engine::trends::SearchProvider::Tavily]);
-    core.set_search_key(crate::engine::trends::SearchProvider::Brave, "BSA-key-0123456789").unwrap();
-    assert_eq!(core.saved_search_providers().unwrap().len(), 2);
 }

@@ -432,6 +432,7 @@ pub fn summarize(run: &TrendRun) -> (String, Vec<String>) {
         .outcomes
         .iter()
         .map(|o| {
+            // The only kind without an adapter is `report_search`, in runs of older versions.
             let name = SourceKind::parse(&o.kind).map_or("Report search", SourceKind::label);
             let status = match &o.status {
                 SourceStatus::Ok => format!("{} new item(s)", o.items),

@@ -1,11 +1,10 @@
 //! The adapters: each turns one place (an API, a feed, a page) into [`Item`]s. They never touch the
 //! store or the disk (the collector does), only the network through [`Http`], and the addresses
 //! they request come from code, the user's own sources, or (read-only, http(s), public hosts) the
-//! pages and search results they fetch; text found on a page never decides what is fetched next.
+//! pages and feeds they fetch; text found on a page never decides what is fetched next.
 
 pub mod hackernews;
 pub mod page;
-pub mod report_search;
 pub mod rss;
 pub mod yc;
 
@@ -18,8 +17,6 @@ use chrono::{DateTime, Utc};
 use super::config::{CollectLimits, Endpoints, TrendConfig};
 use super::http::{checked_url, Http};
 use super::period::Period;
-
-pub use report_search::SearchProvider;
 
 /// The adapter a `sources` row (purpose `trends`) names in `kind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

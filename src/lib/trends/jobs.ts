@@ -40,7 +40,6 @@ export function stepLabel(node: string): string {
     case "hackernews":
     case "yc":
     case "feeds":
-    case "report_search":
       return "Reading the sources";
     case "store_items":
       return "Storing the items";

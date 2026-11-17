@@ -131,10 +131,6 @@ export function overviewFixture(patch: Partial<Overview> = {}): Overview {
       { kind: "rss", label: "RSS / Atom feed", needsUrl: true, added: true },
       { kind: "page", label: "Web page", needsUrl: true, added: false },
     ],
-    searchKeys: [
-      { provider: "brave", label: "Brave Search", saved: false },
-      { provider: "tavily", label: "Tavily", saved: true },
-    ],
     ...patch,
   };
 }

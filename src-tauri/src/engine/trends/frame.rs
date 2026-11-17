@@ -2,7 +2,7 @@
 //! user's background (the stored profile: positions, headline, skills) and place (the preferred
 //! locations and work mode), never from their wishes (wanted or avoided skills, wanted domains,
 //! target roles). Wishes are checked against the market at the end of the digest, so they cannot
-//! shape what is collected or counted.
+//! shape what is counted.
 
 use std::collections::HashSet;
 
@@ -25,7 +25,7 @@ const NOT_REMOTE: &[&str] =
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MarketFrame {
     /// Role phrases from the profile (visible positions, newest first, then the headline), at most
-    /// [`MAX_ROLES`]: "Backend Engineer". Used to build report searches.
+    /// [`MAX_ROLES`]: "Backend Engineer".
     pub roles: Vec<String>,
     /// The meaningful words of [`roles`](Self::roles) ("backend", "engineer"): a posting that names
     /// one is in the user's field.
