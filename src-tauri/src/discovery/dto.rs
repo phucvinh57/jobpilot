@@ -402,7 +402,7 @@ pub struct SourceKindDto {
     pub hint: &'static str,
 }
 
-/// A job board a careers page points to: offered as a source to add instead (never added or read
+/// A job board a job page points to: offered as a source to add instead (never added or read
 /// by itself).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

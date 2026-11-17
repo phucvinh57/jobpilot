@@ -1,5 +1,5 @@
-// Settings > Job sources: where job discovery looks, and with which signed-in site. What a source
-// accepts is checked by the shell when it is added; a source that needs a login is read in the
+// Settings > Job sources: where job discovery looks, and with which signed-in site. A source is
+// checked by the shell when it is added (it reads the page or board once and refuses one that lists no jobs); a source that needs a login is read in the
 // user's browser, signed in to a site under Settings > Browser; a source paused at a login, captcha or block
 // page is continued from the Jobs page.
 
@@ -22,7 +22,7 @@ import { useErrorToast } from "@/hooks/useErrorToast";
 import type { CommandError } from "@/lib/problem";
 
 import { shownSuggestions, suggestionText } from "@/lib/discovery/boards";
-import { rowAddress, rowName, sourceTag, statusLine } from "@/lib/discovery/sources";
+import { checkingText, rowAddress, rowName, sourceTag, statusLine } from "@/lib/discovery/sources";
 import type { SessionOption, Source, SourceKind } from "@/types/discovery";
 import { useBoardSuggestion } from "@/hooks/discovery/useBoardSuggestion";
 import { useJobSources } from "@/hooks/discovery/useJobSources";
@@ -99,10 +99,10 @@ function SourceRow({
   );
 }
 
-/** The dialog that adds a source: its kind, an optional name and the board's name or address. A
- *  careers page that lists its jobs on a known board offers that board instead (a plain button). The
- *  reason a source was refused stays in the dialog. Mounted again for every opening, so it starts
- *  empty. */
+/** The dialog that adds a source: its kind, an optional name and the board's name or the page's
+ *  address. A job page that lists its jobs on a known board offers that board instead (a plain button).
+ *  While Add runs the shell reads the source ("Checking the page…"); the reason a source was refused
+ *  stays in the dialog. Mounted again for every opening, so it starts empty. */
 function AddSourceDialog({
   open,
   kinds,
@@ -137,7 +137,7 @@ function AddSourceDialog({
             Cancel
           </Button>
           <Button id="save-source" type="submit" variant="primary" busy={adding} disabled={adding}>
-            Add
+            {adding ? checkingText(kind) : "Add"}
           </Button>
         </>
       }
@@ -165,10 +165,10 @@ function AddSourceDialog({
           onChange={(e) => setName(e.target.value)}
         />
       </Field>
-      <Field label="Board name or address">
+      <Field label="Address">
         <TextInput
           id="new-source-url"
-          placeholder="Board name or address"
+          placeholder="Address"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onBlur={suggestion.flush}
@@ -181,7 +181,7 @@ function AddSourceDialog({
           id={bannerId}
           tone="accent"
           title={suggestionText(board)}
-          body="You can still add the careers page itself."
+          body="You can still add the page itself if it lists the jobs."
           actions={
             <Button id={buttonId} size="compact" disabled={adding} onClick={() => onAdd(board.kind, name, board.input)}>
               {`Add ${board.label} source`}
@@ -270,7 +270,7 @@ export function JobSourcesSection() {
         ))}
       </ul>
       {v.loaded && data?.sources.length === 0 && (
-        <p className="text-body text-muted">No sources yet. Add a company board, a careers page or Hacker News.</p>
+        <p className="text-body text-muted">No sources yet. Add a company board, a job page or Hacker News.</p>
       )}
       <LoadError error={v.loadError} title="The job sources could not be read" onRetry={v.reload} />
       <AddSourceDialog

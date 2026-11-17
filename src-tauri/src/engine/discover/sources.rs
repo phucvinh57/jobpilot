@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! core.job_sources()?                                     // every job source, oldest first
-//! core.add_job_source("career_page", "", "acme.test/careers", None)?   // checked by the adapter that will read it
+//! core.add_job_source("career_page", "", "acme.test/careers", None)?   // the address checked by the adapter that will read it
+//! core.add_job_source_checked("career_page", "", url, None).await?    // also read once: refused unless it lists jobs (`check`)
 //! core.set_job_source_enabled(id, false)?
 //! core.set_job_source_session(id, Some(session_id))?      // the managed session a login-walled site is read in
 //! core.remove_job_source(id)?                             // also skips its paused run
@@ -32,7 +33,7 @@ pub const JOB_SOURCE_KINDS: [(&str, &str); 10] = [
     ("workday", "Workday"),
     ("hn_hiring", "HN Who is hiring"),
     ("yc", "Y Combinator"),
-    ("career_page", "Career page"),
+    ("career_page", "Job page"),
 ];
 
 /// What to type in the address field of a kind (a hint, not a rule).
@@ -47,7 +48,7 @@ pub fn source_url_hint(kind: &str) -> &'static str {
         "workday" => "Board URL, e.g. https://acme.wd5.myworkdayjobs.com/External",
         "hn_hiring" => "No address needed",
         "yc" => "Optional: https://www.ycombinator.com/jobs",
-        _ => "Careers page, e.g. https://acme.com/careers",
+        _ => "Any page that lists jobs, e.g. https://acme.com/careers",
     }
 }
 
@@ -57,19 +58,19 @@ impl Core {
         self.store.list_sources(SourcePurpose::Jobs)
     }
 
-    /// Add a job source. The adapter of `kind` must accept `url` (a board name or address, a
-    /// careers page, ...); an empty `name` becomes the board name, the host or the kind's title.
-    /// `session_id` binds a session (a site the user is signed in to) to it.
+    /// Add a job source without reading it. The adapter of `kind` must accept `url` (a board name
+    /// or address, a job page, ...; a board address given as a job page is stored as that board, see
+    /// [`check_source`]); an empty `name` becomes the board name, the host or the kind's title.
+    /// `session_id` binds a session (a site the user is signed in to) to it. The add form uses
+    /// [`Core::add_job_source_checked`], which reads the source first.
     pub fn add_job_source(&self, kind: &str, name: &str, url: &str, session_id: Option<i64>) -> Result<Source> {
-        let (url, default_name) = check_source(kind.trim(), url)?;
+        let checked = check_source(kind.trim(), url)?;
         let name = match name.trim() {
-            "" => default_name,
+            "" => checked.name,
             given => given.to_string(),
         };
-        if let Some(id) = session_id {
-            self.store.get_session(id)?.with_context(|| format!("session {id} not found"))?;
-        }
-        let source = self.store.add_source(&NewSource { kind: kind.trim().to_string(), name, url, purpose: SourcePurpose::Jobs, session_id })?;
+        self.require_session(session_id)?;
+        let source = self.store.add_source(&NewSource { kind: checked.kind, name, url: checked.url, purpose: SourcePurpose::Jobs, session_id })?;
         tracing::info!(source_id = source.id, kind = %source.kind, "job source added");
         Ok(source)
     }
@@ -101,12 +102,21 @@ impl Core {
         Ok(())
     }
 
-    /// The job boards a careers page points to (a Greenhouse iframe, Lever links, ...), each one a
+    /// The job boards a job page points to (a Greenhouse iframe, Lever links, ...), each one a
     /// board address that [`check_source`] accepts: what the add form offers to add instead. One
     /// plain read of the page through the safe HTTP client, no browser; nothing is stored and no
-    /// board is read. A page behind a wall has no hints. `url` must pass the career-page check.
+    /// board is read. A page behind a wall has no hints. `url` must pass the job-page check; an
+    /// address that is itself a company board is that board, without a read.
     pub async fn suggest_boards(&self, url: &str) -> Result<Vec<BoardHint>> {
         suggest_boards_with(&NetPages::new(suggest_client()?, None), url).await
+    }
+
+    /// `Err` when `session_id` names a session that does not exist.
+    pub(super) fn require_session(&self, session_id: Option<i64>) -> Result<()> {
+        if let Some(id) = session_id {
+            self.store.get_session(id)?.with_context(|| format!("session {id} not found"))?;
+        }
+        Ok(())
     }
 
     fn job_source(&self, id: i64) -> Result<Source> {
@@ -121,6 +131,11 @@ impl Core {
     pub fn waiting_thread_of(&self, source_id: i64) -> Result<Option<String>> {
         Ok(self.graphs.waiting()?.into_iter().find(|w| parse_source_thread(&w.thread).is_some_and(|(_, id)| id == source_id)).map(|w| w.thread))
     }
+}
+
+/// The UI label of a source kind (`greenhouse` -> `Greenhouse`); the kind itself when unknown.
+pub(crate) fn kind_label(kind: &str) -> &str {
+    JOB_SOURCE_KINDS.iter().find(|(k, _)| *k == kind).map_or(kind, |(_, label)| label)
 }
 
 /// The one client of [`Core::suggest_boards`], for the life of the process, so its per-host delay
@@ -138,10 +153,13 @@ fn suggest_client() -> Result<Http> {
 /// [`Core::suggest_boards`] over any page reader.
 pub(crate) async fn suggest_boards_with(pages: &dyn Pages, url: &str) -> Result<Vec<BoardHint>> {
     check_source("career_page", url)?;
-    let page_url = normalize_page_url(url).context("career page source")?;
+    let page_url = normalize_page_url(url).context("job page source")?;
+    if let Some(board) = boards::hint_for(&page_url) {
+        return Ok(vec![board]);
+    }
     let Some(page) = read_plain_page(pages, page_url.as_str()).await? else { return Ok(Vec::new()) };
     let hints = boards::page_hints(&page);
-    tracing::info!(boards = hints.len(), "careers page checked for job boards");
+    tracing::info!(boards = hints.len(), "job page checked for job boards");
     Ok(hints)
 }
 
@@ -187,6 +205,17 @@ mod tests {
     }
 
     #[test]
+    fn a_board_added_as_a_job_page_is_stored_as_that_board() {
+        let (_dir, core) = core();
+        let board = core.add_job_source("career_page", "", "https://jobs.lever.co/acme/123", None).unwrap();
+        assert_eq!((board.kind.as_str(), board.url.as_str(), board.name.as_str()), ("lever", "jobs.lever.co/acme", "acme"));
+        let page = core.add_job_source("career_page", "", "https://www.linkedin.com/jobs/search?keywords=rust", None).unwrap();
+        assert_eq!((page.kind.as_str(), page.name.as_str()), ("career_page", "linkedin.com"));
+        assert_eq!(kind_label("career_page"), "Job page");
+        assert_eq!(kind_label("nope"), "nope");
+    }
+
+    #[test]
     fn a_source_the_adapter_cannot_read_is_refused_with_the_reason() {
         let (_dir, core) = core();
         for (kind, url, why) in [
@@ -195,8 +224,8 @@ mod tests {
             ("career_page", "", "no page address"),
             ("career_page", "javascript:alert(1)", "not a valid address"),
             ("career_page", "ftp://x.test/careers", "must be http"),
-            ("career_page", "https://boards.greenhouse.io/acme", "job board shared by many companies"),
-            ("career_page", "https://github.io/careers", "hosting platform"),
+            ("career_page", "https://co.uk/careers", "public domain ending"),
+            ("career_page", "https://intranet/careers", "single-word name"),
             ("yc", "https://evil.test/jobs", "not a ycombinator.com"),
             ("linkedin", "https://www.linkedin.com/jobs", "no adapter"),
         ] {
@@ -220,10 +249,13 @@ mod tests {
         assert_eq!(pages.asked(), ["plain https://acme.test/careers"], "one plain read, no board, no browser");
         // A wall: no hints, no error.
         assert!(suggest_boards_with(&pages, "https://walled.test/careers").await.unwrap().is_empty());
-        // The address is checked as a careers page first, before anything is read.
-        for bad in ["", "javascript:alert(1)", "https://boards.greenhouse.io/acme"] {
+        // The address is checked as a job page first, before anything is read.
+        for bad in ["", "javascript:alert(1)", "https://co.uk/careers"] {
             assert!(suggest_boards_with(&pages, bad).await.is_err(), "{bad}");
         }
+        // A company board is that board, without a read.
+        let board = suggest_boards_with(&pages, "https://boards.greenhouse.io/acme/jobs/1").await.unwrap();
+        assert_eq!(board, [BoardHint { kind: "greenhouse", input: "boards.greenhouse.io/acme".into() }]);
         assert_eq!(pages.asked().len(), 2);
         // Another failure is the error.
         assert!(suggest_boards_with(&pages, "https://gone.test/careers").await.is_err());

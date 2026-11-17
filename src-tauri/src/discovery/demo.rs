@@ -1,12 +1,12 @@
-//! Sample answers for UI work (`JOBPILOT_DEMO=1`): a careers page on `example.com` points to a
-//! Greenhouse board, so the add form's suggestion can be seen without the network. Nothing is
-//! fetched.
+//! Sample answers for UI work (`JOBPILOT_DEMO=1`): a job page on `example.com` points to a
+//! Greenhouse board, so the add form's suggestion can be seen without the network, and is added
+//! without the check that reads it. Nothing is fetched.
 
 use url::Url;
 
 use crate::engine::discover::source::{detect_boards, BoardHint};
 
-/// The page every `example.com` careers page "is" in demo mode.
+/// The page every `example.com` job page "is" in demo mode.
 const DEMO_PAGE: &str = r#"<iframe title="Jobs" src="https://boards.greenhouse.io/embed/job_board?for=example"></iframe>"#;
 
 /// The board hints of `url` in demo mode: `Some` only with `JOBPILOT_DEMO` set and a page on
@@ -17,11 +17,27 @@ pub fn board_hints(url: &str) -> Option<Vec<BoardHint>> {
 }
 
 fn demo_hints(url: &str) -> Option<Vec<BoardHint>> {
+    let parsed = example_page(url)?;
+    Some(detect_boards(DEMO_PAGE, &parsed))
+}
+
+/// In demo mode, a job page on `example.com` is added without the check that reads it (the
+/// address is still checked).
+pub fn skips_check(kind: &str, url: &str) -> bool {
+    std::env::var_os("JOBPILOT_DEMO").is_some() && demo_skips_check(kind, url)
+}
+
+fn demo_skips_check(kind: &str, url: &str) -> bool {
+    kind.trim() == "career_page" && example_page(url).is_some()
+}
+
+/// `url` as an address on `example.com` (or a subdomain of it); `None` for any other.
+fn example_page(url: &str) -> Option<Url> {
     let raw = url.trim();
     let with_scheme = if raw.contains("://") { raw.to_string() } else { format!("https://{raw}") };
     let parsed = Url::parse(&with_scheme).ok()?;
     let host = parsed.host_str()?.to_ascii_lowercase();
-    (host == "example.com" || host.ends_with(".example.com")).then(|| detect_boards(DEMO_PAGE, &parsed))
+    (host == "example.com" || host.ends_with(".example.com")).then_some(parsed)
 }
 
 #[cfg(test)]
@@ -34,6 +50,16 @@ mod tests {
         assert_eq!(hints, [BoardHint { kind: "greenhouse", input: "boards.greenhouse.io/example".into() }]);
         for other in ["https://acme.test/careers", "https://example.com.evil.test/", "not a url"] {
             assert_eq!(demo_hints(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn only_example_com_job_pages_skip_the_check() {
+        assert!(demo_skips_check("career_page", "https://careers.example.com/jobs"));
+        assert!(demo_skips_check(" career_page ", "example.com/jobs"));
+        assert!(!demo_skips_check("greenhouse", "https://example.com/jobs"));
+        for other in ["https://acme.test/careers", "https://example.com.evil.test/", "not a url"] {
+            assert!(!demo_skips_check("career_page", other), "{other}");
         }
     }
 }

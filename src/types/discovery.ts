@@ -158,7 +158,7 @@ export interface SourceKind {
   hint: string;
 }
 
-/** A job board a careers page points to: offered as a source to add instead (never added by itself). */
+/** A job board a job page points to: offered as a source to add instead (never added by itself). */
 export interface BoardHint {
   /** The source kind to add (`greenhouse`, `lever`, ...). */
   kind: string;

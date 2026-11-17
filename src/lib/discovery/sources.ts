@@ -7,7 +7,7 @@ import type { Source, SourceKind } from "@/types/discovery";
 /** Longest status text shown on a row (a failure note can be long; a "links to a board" note fits). */
 export const STATUS_CHARS = 120;
 
-/** How the last run went, for the colour of the status tag. `boardHint`: a careers page with no
+/** How the last run went, for the colour of the status tag. `boardHint`: a job page with no
  *  postings that points to a job board (the status says which one to add). */
 export type Outcome = "never" | "ok" | "needsYou" | "failed" | "boardHint" | "other";
 
@@ -92,4 +92,13 @@ export function rowName(source: Pick<Source, "name" | "kind">, kinds: readonly S
 /** The line under the name: `Greenhouse boards.greenhouse.io`. */
 export function rowAddress(source: Pick<Source, "kind" | "host">, kinds: readonly SourceKind[]): string {
   return `${kindLabel(kinds, source.kind)} ${source.host.trim()}`.trim();
+}
+
+/** What the add dialog's Add button says while the shell checks the new source: a job page and a
+ *  company board are read once (seconds), the feeds are only added. */
+export function checkingText(kind: string): string {
+  if (kind === "career_page") {
+    return "Checking the page…";
+  }
+  return kind === "hn_hiring" || kind === "yc" ? "Adding…" : "Checking the board…";
 }

@@ -113,7 +113,7 @@ const VENDOR_LABELS: [&str; 8] = ["www", "app", "api", "help", "blog", "support"
 /// board name is validated before it is put into the address, and the address must read back to
 /// that same name, so a name carrying `?`, `#` or `/` (decoded from `for=acme%3Ffor%3Devil`) can
 /// never make the hint name one board and add another.
-fn hint_for(url: &Url) -> Option<BoardHint> {
+pub(crate) fn hint_for(url: &Url) -> Option<BoardHint> {
     if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
         return None;
     }
@@ -154,8 +154,9 @@ fn hint_for(url: &Url) -> Option<BoardHint> {
         }
         _ => return None,
     };
-    let (_, read_back) = check_source(kind, &input).ok()?;
-    (read_back == name).then_some(BoardHint { kind, input })
+    // Never `career_page`: the job-page check calls this function.
+    let read_back = check_source(kind, &input).ok()?;
+    (read_back.kind == kind && read_back.name == name).then_some(BoardHint { kind, input })
 }
 
 /// The status of a career-page run that found no postings on a page that points to a board.
@@ -163,6 +164,13 @@ pub fn no_postings_status(hints: &[BoardHint]) -> Option<String> {
     let first = hints.first()?;
     let label = first.label();
     Some(format!("No postings on the page. It links to a {label} board: add it as a {label} source"))
+}
+
+/// The board behind one address found anywhere (a search result, for `discover::suggest`), by the
+/// same rules as the hints of a careers page: built from the pattern table, checked, never a
+/// look-alike.
+pub(crate) fn board_at(url: &Url) -> Option<BoardHint> {
+    hint_for(url)
 }
 
 #[cfg(test)]
