@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use super::queries::build_queries;
 use super::results::{new_sources, Found, Known};
 use super::verify::Verified;
-use super::{core_handles, SuggestDeps};
+use super::{refused, SuggestDeps};
 use crate::engine::browser::challenge::ChallengeFound;
 use crate::engine::browser::BridgeError;
 use crate::engine::discover::score::excluded_company;
@@ -107,7 +107,7 @@ where
 
 /// The graph over `deps`.
 pub(crate) fn graph(core: &Core, deps: SuggestDeps) -> GraphDef<SuggestState> {
-    let sh = Arc::new(Shared { core: core_handles(core), deps });
+    let sh = Arc::new(Shared { core: core.handles(), deps });
     GraphDef::new(SUGGEST_GRAPH)
         .node("plan", node(&sh, plan))
         .node("search", node(&sh, search))
@@ -176,7 +176,7 @@ async fn search(sh: Arc<Shared>, mut s: SuggestState) -> Result<SuggestState> {
                 return Ok(s);
             }
             // The browser cannot be used, or the network is down: every other query would fail too.
-            if e.downcast_ref::<BridgeError>().is_some() || classify(&format!("{e:#}")) != Problem::Other {
+            if is_fatal(&e) {
                 return Err(e.context("searching the web"));
             }
             tracing::warn!(query = number, "a results page could not be read, skipped");
@@ -194,6 +194,12 @@ async fn search(sh: Arc<Shared>, mut s: SuggestState) -> Result<SuggestState> {
     s.found.extend(fresh);
     s.next += 1;
     Ok(s)
+}
+
+/// A failure the user has to fix (the browser cannot be used, the network is down, ...): every
+/// other read would fail the same way, so the search fails with it (and Retry continues).
+fn is_fatal(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.is::<BridgeError>()) || classify(&format!("{e:#}")) != Problem::Other
 }
 
 /// What the notification asks of the user.
@@ -222,17 +228,27 @@ async fn verify(sh: Arc<Shared>, mut s: SuggestState) -> Result<SuggestState> {
     });
     let results: Vec<(Found, Result<Verified>)> = futures::stream::iter(checks).buffered(VERIFY_CONCURRENCY).collect().await;
 
+    // The browser or the network failed: the search fails with that problem (Retry checks again),
+    // instead of reading as "nothing found".
+    if let Some(e) = results.iter().find_map(|(_, r)| r.as_ref().err().filter(|e| is_fatal(e))) {
+        return Err(anyhow::anyhow!("{e:#}").context("checking the sources found"));
+    }
     let checked = results.len();
     let (mut refused, mut empty) = (0usize, 0usize);
+    let mut skip_later: Vec<(String, String)> = Vec::new();
     s.verified.clear();
     for (found, result) in results {
         let mut source = match result {
             Ok(v) => v,
             Err(_) => {
                 refused += 1;
+                skip_later.push((found.kind.clone(), found.input.clone()));
                 continue;
             }
         };
+        if source.jobs == 0 {
+            skip_later.push((found.kind.clone(), found.input.clone()));
+        }
         if source.name.trim().is_empty() {
             source.name = found.name.clone();
         }
@@ -250,6 +266,8 @@ async fn verify(sh: Arc<Shared>, mut s: SuggestState) -> Result<SuggestState> {
         }
     }
     s.dropped = refused + empty;
+    // Remembered for a while, so the next searches check other candidates.
+    refused::record(&sh.core.store, &skip_later, chrono::Utc::now())?;
     if refused > 0 {
         tracing::warn!(checked, refused, "suggested sources refused by the check");
     }

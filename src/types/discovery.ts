@@ -182,6 +182,43 @@ export interface JobSources {
   /** "Search daily while JobPilot is open". */
   daily: boolean;
   kinds: SourceKind[];
+  /** Job sources the "Suggest sources" search found and checked, most matching postings first. */
+  suggestions: SourceSuggestion[];
+  /** The "Suggest sources" search is paused at a page the user must deal with in Chrome. */
+  suggestWaiting: boolean;
+  /** A suggestion search is running now (it may have been started before this screen was shown). */
+  suggestRunning: boolean;
+}
+
+/** A job source the "Suggest sources" search found and checked, for the user to add or dismiss. */
+export interface SourceSuggestion {
+  id: number;
+  /** The source kind it would be added as (`greenhouse`, `career_page`, ...). */
+  kind: string;
+  /** The kind's label (`Greenhouse`, `Job page`). */
+  label: string;
+  /** The name the check read (the board's company, the page's host). */
+  name: string;
+  /** The host of its address (never the whole address). */
+  host: string;
+  /** Postings the check found. */
+  jobs: number;
+  /** Of those, postings whose title fits the wanted roles. */
+  matching: number;
+}
+
+/** How "Suggest sources" (or its "Continue") ended this time. */
+export interface SuggestRun {
+  suggestions: SourceSuggestion[];
+  /** Paused at a page the user must deal with in Chrome. */
+  waiting: boolean;
+}
+
+/** How "Add all" ended: how many were added, and the first failure (the others were still tried). */
+export interface AddAll {
+  added: number;
+  failed: number;
+  error: CommandError | null;
 }
 
 /** Where a lead stands in "Prepare CV" during this session. */

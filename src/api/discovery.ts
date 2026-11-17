@@ -7,6 +7,7 @@ import type { GraphProgress } from "./bridge";
 import { invoke, listen, notifyChanged, onDataChanged, onGraphProgress, type Scope } from "./bridge";
 
 import type {
+  AddAll,
   AddedLead,
   BoardHint,
   Dismissed,
@@ -20,6 +21,7 @@ import type {
   RunSummary,
   SearchFinished,
   Source,
+  SuggestRun,
 } from "@/types/discovery";
 
 // ------------------------------------------------------------------ Leads: reading
@@ -205,5 +207,69 @@ export async function removeSource(id: number): Promise<void> {
 /** "Search daily while JobPilot is open". */
 export async function setDaily(on: boolean): Promise<void> {
   await invoke<void>("discovery_set_daily", { on });
+  notifyChanged("sources");
+}
+
+// ------------------------------------------------------------------ Settings > Job sources: suggestions
+
+interface AddAllDto {
+  added: number;
+  failed: number;
+  error: { problem: unknown; message: string } | null;
+}
+
+/** "Suggest sources": search the web in the user's Chrome for job boards and pages that fit the
+ *  wanted roles and check each one. Takes minutes (progress through graph `source_suggest`). */
+export async function suggestSources(): Promise<SuggestRun> {
+  try {
+    return await invoke<SuggestRun>("discovery_suggest_sources");
+  } finally {
+    notifyChanged("sources");
+  }
+}
+
+/** "Continue" the paused search (after the user dealt with the page in Chrome). */
+export async function resumeSuggest(): Promise<SuggestRun> {
+  try {
+    return await invoke<SuggestRun>("discovery_suggest_resume");
+  } finally {
+    notifyChanged("sources");
+  }
+}
+
+/** "Stop" the search (the suggestions found so far stay). */
+export async function cancelSuggest(): Promise<void> {
+  try {
+    await invoke<void>("discovery_suggest_cancel");
+  } finally {
+    notifyChanged("sources");
+  }
+}
+
+/** "Open browser" on the page the paused search waits at (the user deals with it; the app never does). */
+export function openSuggestBrowser(): Promise<void> {
+  return invoke<void>("discovery_suggest_open_browser");
+}
+
+/** "Add" a suggestion as a job source. */
+export async function addSuggestion(id: number): Promise<Source> {
+  const source = await invoke<Source>("discovery_add_suggestion", { id });
+  notifyChanged("sources");
+  return source;
+}
+
+/** "Add all": every suggestion; one that fails does not stop the others. */
+export async function addAllSuggestions(): Promise<AddAll> {
+  try {
+    const dto = await invoke<AddAllDto>("discovery_add_all_suggestions");
+    return { ...dto, error: dto.error === null ? null : toCommandError(dto.error) };
+  } finally {
+    notifyChanged("sources");
+  }
+}
+
+/** "Dismiss" a suggestion: no later search suggests it again. */
+export async function dismissSuggestion(id: number): Promise<void> {
+  await invoke<void>("discovery_dismiss_suggestion", { id });
   notifyChanged("sources");
 }

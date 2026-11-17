@@ -18,7 +18,8 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
   paths      data dir ($XDG_DATA_HOME/jobpilot, override JOBPILOT_DATA_DIR), logs_dir
   runtime    global tokio runtime; spawn(fut) -> oneshot::Receiver
   store/     SQLite (rusqlite), one file per table: applications, events, providers, sessions, emails, kv, status, sources, leads, preferences, chat, trends, graph,
-             profile (the user's documents + the profile read from them), answers (remembered application answers)
+             profile (the user's documents + the profile read from them), answers (remembered application answers),
+             source_suggestions (suggested job sources: new / added / dismissed)
   secrets    OS keyring wrapper (JOBPILOT_SECRETS=memory for tests); every value read/written is registered with redact
   redact     mask secrets in any text (key shapes, bearer/OAuth tokens, exact registered values)
   logging    tracing: stderr + rolling <data_dir>/logs/jobpilot.log.<date> (14 kept), both through redact
@@ -41,10 +42,12 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
   profile    `sources` (uploaded .pdf/.md/.txt files and typed notes), `extract` (`Core::read_profile_sources`: documents -> CV schema `Cv`),
              `trace` (keep only facts found in the documents; the rest is `left_out`), `typst` (escape markup);
              `Core::profile` / `require_profile` (NoProfile) is the one way to read it
-  discover   `source/` (ATS APIs: greenhouse, lever, ashby, smartrecruiters, recruitee, personio, workday; hn_hiring, yc, career_page with
-             JSON-LD, sitemap and board detection), `run` (graphs `discovery`, `source_run`), `score`, `dedup`, `handoff`, `sources`,
+  discover   `source/` (ATS APIs: greenhouse, lever, ashby, smartrecruiters, recruitee, personio, workday; hn_hiring, yc, career_page
+             = "Job page": any page that lists jobs, with JSON-LD, sitemap and board detection), `run` (graphs `discovery`, `source_run`), `score`, `dedup`, `handoff`, `sources`,
              `queue`, `promote` (graph `prepare_cv`, dismiss), `dismissed` (dismiss a CV, list dismissed jobs, Restore),
-             `manual` (`Core::add_lead`: pasted link/file -> scored lead)
+             `manual` (`Core::add_lead`: pasted link/file -> scored lead), `check` (`Core::check_job_source`: a new source is read
+             once and refused unless it lists jobs), `suggest/` (graph `source_suggest`: searches in the user's Chrome, Private
+             tab -> results parsed in code -> checked -> `source_suggestions`; a captcha/consent page pauses it, never solved)
   trends     collection (hackernews, yc, rss, page; graph `trends` -> `trend_items`),
              `frame` (MarketFrame: background + place, never wishes; decides what is counted),
              `digest/` (extract, count, synthesize, cite: every point cites stored items)

@@ -8,14 +8,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::engine::discover::suggest::SuggestOutcome;
 use crate::engine::discover::DismissedKind;
 use crate::engine::Core;
 use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
 
 use super::dto::{
-    AddedLeadDto, BoardHintDto, DismissedJobDto, JobSourcesDto, LeadInput, PrepareOutcomeDto, QueueDto,
-    RunSummaryDto, SessionOptionDto, SourceDto, SourceKindDto,
+    AddAllDto, AddedLeadDto, BoardHintDto, DismissedJobDto, JobSourcesDto, LeadInput, PrepareOutcomeDto,
+    QueueDto, RunSummaryDto, SessionOptionDto, SourceDto, SourceKindDto, SourceSuggestionDto,
+    SuggestRunDto,
 };
 use super::rules;
 use crate::shared::events::Scope;
@@ -217,6 +219,13 @@ pub async fn discovery_job_sources(core: State<'_, Arc<Core>>) -> CommandResult<
                 Vec::new()
             }
         };
+        let suggest_waiting = match core.suggest_waiting() {
+            Ok(waiting) => waiting.is_some(),
+            Err(e) => {
+                tracing::warn!("reading the paused source suggestion search failed: {e:#}");
+                false
+            }
+        };
         Ok(JobSourcesDto {
             sources: core.job_sources()?.iter().map(SourceDto::from).collect(),
             waiting,
@@ -235,6 +244,16 @@ pub async fn discovery_job_sources(core: State<'_, Arc<Core>>) -> CommandResult<
                     hint: crate::engine::discover::source_url_hint(kind),
                 })
                 .collect(),
+            // Suggestions are a nicety: an unreadable list never hides the sources.
+            suggestions: suggestion_dtos(&core).unwrap_or_else(|e| {
+                tracing::warn!("reading the source suggestions failed: {e:#}");
+                Vec::new()
+            }),
+            suggest_waiting,
+            suggest_running: core.suggest_running().unwrap_or_else(|e| {
+                tracing::warn!("reading the source suggestion search failed: {e:#}");
+                false
+            }),
         })
     })
     .await
@@ -316,6 +335,96 @@ pub async fn discovery_set_daily(core: State<'_, Arc<Core>>, on: bool) -> Comman
     run_sync(move || core.set_discover_daily(on)).await
 }
 
+// ------------------------------------------------------------------ Settings > Job sources: suggestions
+
+fn suggestion_dtos(core: &Core) -> anyhow::Result<Vec<SourceSuggestionDto>> {
+    Ok(core.source_suggestions()?.iter().map(SourceSuggestionDto::from).collect())
+}
+
+/// The suggestions after a search (or its "Continue") ended this way.
+fn suggest_run(core: &Core, outcome: SuggestOutcome) -> anyhow::Result<SuggestRunDto> {
+    let waiting = matches!(outcome, SuggestOutcome::Waiting { .. });
+    Ok(SuggestRunDto { suggestions: suggestion_dtos(core)?, waiting })
+}
+
+/// "Suggest sources": search the web in the user's Chrome for job boards and pages that fit the
+/// wanted roles, check each one and keep those with jobs as suggestions. Takes minutes; the steps
+/// go out as graph progress (`source_suggest`). A search paused at a page the user must deal with
+/// returns `waiting`. In demo mode three canned suggestions are stored without any search.
+#[tauri::command]
+pub async fn discovery_suggest_sources(core: State<'_, Arc<Core>>) -> CommandResult<SuggestRunDto> {
+    let core = core.inner().clone();
+    run(async move {
+        let outcome = match super::demo::suggestions() {
+            Some(canned) => {
+                let mut saved = 0;
+                for suggestion in &canned {
+                    saved += usize::from(core.store.upsert_suggestion(suggestion)?.is_some());
+                }
+                SuggestOutcome::Done { saved }
+            }
+            None => core.suggest_sources().await?,
+        };
+        suggest_run(&core, outcome)
+    })
+    .await
+}
+
+/// "Continue" the paused search after the user dealt with the page in Chrome (or retry a failed one).
+#[tauri::command]
+pub async fn discovery_suggest_resume(core: State<'_, Arc<Core>>) -> CommandResult<SuggestRunDto> {
+    let core = core.inner().clone();
+    run(async move {
+        let outcome = core.suggest_resume().await?;
+        suggest_run(&core, outcome)
+    })
+    .await
+}
+
+/// "Stop" the search for sources (the suggestions found so far stay).
+#[tauri::command]
+pub async fn discovery_suggest_cancel(core: State<'_, Arc<Core>>) -> CommandResult<()> {
+    let core = core.inner().clone();
+    run_sync(move || core.suggest_cancel()).await
+}
+
+/// "Open browser" for the paused search: a focused tab of the user's Chrome on the page the search
+/// engine showed. The user deals with it; the app never does.
+#[tauri::command]
+pub async fn discovery_suggest_open_browser(core: State<'_, Arc<Core>>) -> CommandResult<()> {
+    let core = core.inner().clone();
+    run(async move { core.suggest_open_browser().await }).await
+}
+
+/// "Add" on a suggestion: it becomes a job source (only the address is checked again: the search
+/// read it already).
+#[tauri::command]
+pub async fn discovery_add_suggestion(core: State<'_, Arc<Core>>, id: i64) -> CommandResult<SourceDto> {
+    let core = core.inner().clone();
+    run_sync(move || Ok(SourceDto::from(&core.add_suggested_source(id)?))).await
+}
+
+/// "Add all": every suggestion waiting for the user, one after the other. One that fails does not
+/// stop the others; the first failure is reported with the count.
+#[tauri::command]
+pub async fn discovery_add_all_suggestions(core: State<'_, Arc<Core>>) -> CommandResult<AddAllDto> {
+    let core = core.inner().clone();
+    run_sync(move || {
+        let pending = core.source_suggestions()?;
+        let dto = AddAllDto::tally(pending.iter().map(|s| core.add_suggested_source(s.id)));
+        tracing::info!(added = dto.added, failed = dto.failed, "source suggestions added");
+        Ok(dto)
+    })
+    .await
+}
+
+/// "Dismiss" a suggestion: no later search suggests it again.
+#[tauri::command]
+pub async fn discovery_dismiss_suggestion(core: State<'_, Arc<Core>>, id: i64) -> CommandResult<()> {
+    let core = core.inner().clone();
+    run_sync(move || core.dismiss_source_suggestion(id)).await
+}
+
 /// This context's commands; `lib.rs` routes every `discovery_*` call here.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -340,5 +449,12 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         discovery_set_source_session,
         discovery_remove_source,
         discovery_set_daily,
+        discovery_suggest_sources,
+        discovery_suggest_resume,
+        discovery_suggest_cancel,
+        discovery_suggest_open_browser,
+        discovery_add_suggestion,
+        discovery_add_all_suggestions,
+        discovery_dismiss_suggestion,
     ]
 }

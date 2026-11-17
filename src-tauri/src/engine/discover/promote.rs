@@ -236,7 +236,7 @@ impl Core {
     }
 
     /// A copy of the handles the graph nodes need (`Core` is not `Clone`: its parts are).
-    fn handles(&self) -> Core {
+    pub(crate) fn handles(&self) -> Core {
         Core {
             paths: self.paths.clone(),
             store: self.store.clone(),
