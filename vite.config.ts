@@ -16,7 +16,7 @@ export default defineConfig({
     strictPort: true,
     host: "127.0.0.1",
     // The Rust side rebuilds through the Tauri CLI, not through Vite.
-    watch: { ignored: ["**/src-tauri/**", "**/target/**", "**/.claude/**"] },
+    watch: { ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**", "**/.claude/**"] },
   },
   build: { target: "es2022", outDir: "dist", emptyOutDir: true },
   test: {

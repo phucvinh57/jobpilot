@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use crate::engine::graph::{Progress, ProgressEvent};
-use crate::engine::{mail, runtime, Core};
+use jobpilot_engine::graph::{Progress, ProgressEvent};
+use jobpilot_engine::{mail, runtime, Core};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::broadcast::error::RecvError;
@@ -113,7 +113,7 @@ pub fn bridge(app: &AppHandle, core: &Arc<Core>) {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::graph::{Progress, ProgressEvent};
+    use jobpilot_engine::graph::{Progress, ProgressEvent};
 
     use super::GraphProgressDto;
 

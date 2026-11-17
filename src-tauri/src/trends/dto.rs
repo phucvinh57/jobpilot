@@ -5,14 +5,14 @@
 //! skill chart per market scope (global, and local to the user's place), the history, the
 //! collections waiting for the user and the sources. Every number and label of the market is worked out here, in code.
 
-use crate::engine::graph::Outcome;
-use crate::engine::prefs::Preferences;
-use crate::engine::store::{Report, Source};
-use crate::engine::trends::digest::{GapScope, ScopeCounts, SkillCounts};
-use crate::engine::trends::{
+use jobpilot_engine::graph::Outcome;
+use jobpilot_engine::prefs::Preferences;
+use jobpilot_engine::store::{Report, Source};
+use jobpilot_engine::trends::digest::{GapScope, ScopeCounts, SkillCounts};
+use jobpilot_engine::trends::{
     Digest, DigestData, Period, Point, Section, SourceKind, TrendChallenge, TrendRun,
 };
-use crate::engine::Core;
+use jobpilot_engine::Core;
 use anyhow::Result;
 use chrono::Utc;
 use serde::Serialize;
@@ -744,21 +744,21 @@ pub struct AddedDto {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::graph::{Failure, Outcome, WaitReason};
-    use crate::engine::health::Problem;
-    use crate::engine::trends::digest::{
+    use jobpilot_engine::graph::{Failure, Outcome, WaitReason};
+    use jobpilot_engine::health::Problem;
+    use jobpilot_engine::trends::digest::{
         Direction, GapBucket, GapScope, GapSkill, ScopeCounts, TermCount, WishKind, WishSignal,
         MARKET_SCAN_VERSION,
     };
-    use crate::engine::trends::{
+    use jobpilot_engine::trends::{
         CitedItem, Digest, DigestData, Period, Point, Section, SkillCount, SkillCounts, TrendRun,
     };
-    use crate::engine::{Core, Paths, Secrets};
+    use jobpilot_engine::{Core, Paths, Secrets};
 
     use super::{
         overview, run_result, sections, ChartDto, DigestBodyDto,
     };
-    use crate::engine::prefs::Preferences;
+    use jobpilot_engine::prefs::Preferences;
     use crate::trends::demo;
     use crate::trends::rules::Cadence;
 
@@ -836,7 +836,7 @@ mod tests {
 
     fn digest_of(counts: SkillCounts) -> Digest {
         Digest {
-            report: crate::engine::store::Report {
+            report: jobpilot_engine::store::Report {
                 id: 1,
                 kind: "weekly".into(),
                 period: "2026-W46".into(),

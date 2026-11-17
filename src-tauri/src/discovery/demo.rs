@@ -5,8 +5,8 @@
 
 use url::Url;
 
-use crate::engine::discover::source::{detect_boards, BoardHint};
-use crate::engine::store::NewSuggestion;
+use jobpilot_engine::discover::source::{detect_boards, BoardHint};
+use jobpilot_engine::store::NewSuggestion;
 
 /// The page every `example.com` job page "is" in demo mode.
 const DEMO_PAGE: &str = r#"<iframe title="Jobs" src="https://boards.greenhouse.io/embed/job_board?for=example"></iframe>"#;
@@ -83,7 +83,7 @@ mod tests {
         let list = demo_suggestions();
         assert_eq!(list.len(), 3);
         for s in &list {
-            assert!(crate::engine::discover::source::check_source(&s.kind, &s.input).is_ok(), "{}", s.input);
+            assert!(jobpilot_engine::discover::source::check_source(&s.kind, &s.input).is_ok(), "{}", s.input);
         }
     }
 

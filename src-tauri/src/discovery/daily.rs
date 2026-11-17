@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use crate::engine::{runtime, Core};
+use jobpilot_engine::{runtime, Core};
 use tauri::AppHandle;
 
 use super::commands::SEARCH_FINISHED;

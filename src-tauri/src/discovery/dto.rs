@@ -3,14 +3,14 @@
 //! Nothing secret travels here: leads, sources, run summaries and session names only. Posting and
 //! brief text is data for the web app to show as text.
 
-use crate::engine::discover::promote::FailedPrepare;
-use crate::engine::discover::queue::{criteria_rows, QueueItem, QueueSnapshot};
-use crate::engine::discover::source::BoardHint;
-use crate::engine::discover::{DismissedJob, RunSummary, WaitingSource};
-use crate::engine::graph::WaitReason;
-use crate::engine::health;
-use crate::engine::pipeline::JdInput;
-use crate::engine::store::{Application, Lead, Session, Source, SourceSuggestion};
+use jobpilot_engine::discover::promote::FailedPrepare;
+use jobpilot_engine::discover::queue::{criteria_rows, QueueItem, QueueSnapshot};
+use jobpilot_engine::discover::source::BoardHint;
+use jobpilot_engine::discover::{DismissedJob, RunSummary, WaitingSource};
+use jobpilot_engine::graph::WaitReason;
+use jobpilot_engine::health;
+use jobpilot_engine::pipeline::JdInput;
+use jobpilot_engine::store::{Application, Lead, Session, Source, SourceSuggestion};
 use serde::{Deserialize, Serialize};
 
 use super::rules::host_of;
@@ -480,7 +480,7 @@ pub struct SourceSuggestionDto {
 
 impl From<&SourceSuggestion> for SourceSuggestionDto {
     fn from(s: &SourceSuggestion) -> Self {
-        let label = crate::engine::discover::sources::kind_label(&s.kind);
+        let label = jobpilot_engine::discover::sources::kind_label(&s.kind);
         Self {
             id: s.id,
             kind: s.kind.clone(),
@@ -541,12 +541,12 @@ mod tests {
     }
 
     use chrono::{TimeZone, Utc};
-    use crate::engine::discover::queue::QueueItem;
-    use crate::engine::discover::score::{Criteria, Criterion, Scored};
-    use crate::engine::discover::WaitingSource;
-    use crate::engine::graph::WaitReason;
-    use crate::engine::prefs::Weights;
-    use crate::engine::store::{Lead, LeadState, Source, SourcePurpose};
+    use jobpilot_engine::discover::queue::QueueItem;
+    use jobpilot_engine::discover::score::{Criteria, Criterion, Scored};
+    use jobpilot_engine::discover::WaitingSource;
+    use jobpilot_engine::graph::WaitReason;
+    use jobpilot_engine::prefs::Weights;
+    use jobpilot_engine::store::{Lead, LeadState, Source, SourcePurpose};
 
     use super::{
         AddedLeadDto, LeadDto, LeadInput, PrepareOutcomeDto, SearchFinishedDto, SourceDto,
@@ -750,7 +750,7 @@ mod tests {
 
     #[test]
     fn a_search_ends_with_its_summary_or_its_error() {
-        let ok = SearchFinishedDto::new(Ok(crate::engine::discover::RunSummary {
+        let ok = SearchFinishedDto::new(Ok(jobpilot_engine::discover::RunSummary {
             saved: 3,
             waiting: 1,
             ..Default::default()
@@ -765,8 +765,8 @@ mod tests {
         assert_eq!(failed.error.map(|e| e.problem.kind), Some("network"));
     }
 
-    fn suggestion(kind: &str, input: &str) -> crate::engine::store::SourceSuggestion {
-        crate::engine::store::SourceSuggestion {
+    fn suggestion(kind: &str, input: &str) -> jobpilot_engine::store::SourceSuggestion {
+        jobpilot_engine::store::SourceSuggestion {
             id: 12,
             kind: kind.into(),
             input: input.into(),
@@ -774,7 +774,7 @@ mod tests {
             jobs: 14,
             matching: 3,
             query: "\"robotics engineer\" site:boards.greenhouse.io".into(),
-            state: crate::engine::store::SuggestionState::New,
+            state: jobpilot_engine::store::SuggestionState::New,
             found_at: Utc.with_ymd_and_hms(2026, 11, 14, 8, 0, 0).unwrap(),
         }
     }

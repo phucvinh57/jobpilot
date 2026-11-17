@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { appProof, extProof, newNonce, verifyAppProof } from "./auth";
 
-// The same vector is checked by the app (`src-tauri/src/engine/browser/bridge/pairing.rs`).
+// The same vector is checked by the app (`crates/engine/src/browser/bridge/pairing.rs`).
 const TOKEN = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 const NONCE = "0f".repeat(32);
 const APP_PROOF = "f121701b6248be0864763d4ba74c37535456af3125ef7e9d700c0a4eb862dbd0";

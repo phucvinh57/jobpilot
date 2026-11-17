@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{bail, Context as _};
-use crate::engine::apply::{self, ApplyOptions, Live, Stage};
-use crate::engine::browser::fetch::generate_with_browser;
-use crate::engine::pipeline::{self, Progress};
-use crate::engine::store::Status;
-use crate::engine::Core;
+use jobpilot_engine::apply::{self, ApplyOptions, Live, Stage};
+use jobpilot_engine::browser::fetch::generate_with_browser;
+use jobpilot_engine::pipeline::{self, Progress};
+use jobpilot_engine::store::Status;
+use jobpilot_engine::Core;
 use tauri::ipc::{Invoke, Response};
 use tauri::{AppHandle, State};
 

@@ -1,7 +1,7 @@
 //! Read models of this context (serde, camelCase). Core types stay free of serde and Tauri.
 
-use crate::engine::prefs::chat::{MAX_LIST_ITEMS, MAX_NOTES_CHARS};
-use crate::engine::prefs::{PrefSuggestions, Preferences};
+use jobpilot_engine::prefs::chat::{MAX_LIST_ITEMS, MAX_NOTES_CHARS};
+use jobpilot_engine::prefs::{PrefSuggestions, Preferences};
 use serde::Serialize;
 
 use super::rules::{job_type_key, visible_suggestions, Field, MAX_ITEM_CHARS};
@@ -172,7 +172,7 @@ pub struct NotesReadDto {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::prefs::{PrefSuggestions, Preferences, Remote};
+    use jobpilot_engine::prefs::{PrefSuggestions, Preferences, Remote};
 
     use super::ProfileDto;
 

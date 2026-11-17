@@ -1,7 +1,7 @@
 // The handshake's proofs (PROTOCOL.md, "Handshake and pairing"): HMAC-SHA256 keyed by the token (its
 // characters) over a prefixed nonce, as lower-case hex. The app answers the extension's nonce with
 // `jobpilot-app:<nonce>`, the extension answers the app's with `jobpilot-ext:<nonce>`, so one side's
-// answer is never valid as the other's. Same as `src-tauri/src/engine/browser/bridge/pairing.rs`.
+// answer is never valid as the other's. Same as `crates/engine/src/browser/bridge/pairing.rs`.
 // Tokens, nonces and proofs are never logged.
 
 const APP = "jobpilot-app:";

@@ -9,14 +9,14 @@ use std::collections::HashSet;
 
 use crate::shared::topics::{self, presence_in};
 pub use crate::shared::topics::{item_text, with_item, Presence, MAX_ITEM_CHARS};
-use crate::engine::health::{classify, Problem};
-use crate::engine::prefs::chat::MAX_LIST_ITEMS;
+use jobpilot_engine::health::{classify, Problem};
+use jobpilot_engine::prefs::chat::MAX_LIST_ITEMS;
 
-use crate::engine::pipeline::cv::Cv;
-use crate::engine::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
-use crate::engine::profile::sources::{MAX_CHARS, MAX_TOTAL_CHARS};
-use crate::engine::profile::Profile;
-use crate::engine::store::ProfileSource;
+use jobpilot_engine::pipeline::cv::Cv;
+use jobpilot_engine::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
+use jobpilot_engine::profile::sources::{MAX_CHARS, MAX_TOTAL_CHARS};
+use jobpilot_engine::profile::Profile;
+use jobpilot_engine::store::ProfileSource;
 
 use super::dto::{
     AboutDto, AboutEducationDto, AboutLimitsDto, AboutRoleDto, AboutSourceDto, AboutSummaryDto,
@@ -427,11 +427,11 @@ mod tests {
 
     use chrono::Utc;
 
-    use crate::engine::pipeline::cv::Cv;
-    use crate::engine::prefs::chat::MAX_LIST_ITEMS;
-    use crate::engine::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
-    use crate::engine::profile::Profile;
-    use crate::engine::store::ProfileSource;
+    use jobpilot_engine::pipeline::cv::Cv;
+    use jobpilot_engine::prefs::chat::MAX_LIST_ITEMS;
+    use jobpilot_engine::prefs::{NotesRead, PrefSuggestions, Preferences, Remote};
+    use jobpilot_engine::profile::Profile;
+    use jobpilot_engine::store::ProfileSource;
 
     use super::{
         about, add_check, already_there_message, dates, flat_skills, job_type_key, notes_status,

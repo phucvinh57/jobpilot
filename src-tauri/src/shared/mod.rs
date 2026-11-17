@@ -2,7 +2,7 @@
 //! `Problem`, the event bridge, the company brief read model, the preference-list rules, what
 //! "Dismiss" and "Restore" did, and the app shell's commands.
 //!
-//! Contexts depend on this module and on `crate::engine`, never on each other.
+//! Contexts depend on this module and on `jobpilot_engine`, never on each other.
 
 pub mod dismiss;
 pub mod error;

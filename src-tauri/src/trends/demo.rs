@@ -2,15 +2,15 @@
 //! citations, market numbers for a global and a local scope, the gap and the wishes. Every address
 //! is on `example.com`; nothing is fetched.
 
-use crate::engine::store::NewTrendItem;
-use crate::engine::trends::digest::{
+use jobpilot_engine::store::NewTrendItem;
+use jobpilot_engine::trends::digest::{
     month_window, Direction, GapBucket, GapScope, GapSkill, ScopeCounts, TermCount, WishKind,
     WishSignal, MARKET_SCAN_VERSION,
 };
-use crate::engine::trends::{
+use jobpilot_engine::trends::{
     CitedItem, DigestData, Period, Point, Section, SkillCount, SkillCounts, SourceKind,
 };
-use crate::engine::Core;
+use jobpilot_engine::Core;
 use anyhow::Result;
 use chrono::{Duration, Utc};
 

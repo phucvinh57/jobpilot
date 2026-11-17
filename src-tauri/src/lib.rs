@@ -1,5 +1,5 @@
 //! JobPilot desktop app (Tauri). The composition root: it opens `Core`, wires the bounded contexts'
-//! commands and the event bridge, and opens the one window. All logic lives in `engine` (no UI);
+//! commands and the event bridge, and opens the one window. All logic lives in the engine (`jobpilot_engine`, `crates/engine`: no UI, no Tauri);
 //! the views are the web app in the repository's `src/`.
 
 mod applications;
@@ -7,7 +7,6 @@ mod demo;
 #[cfg(feature = "dev-tools")]
 mod devtools;
 mod discovery;
-pub mod engine;
 mod integrations;
 mod profile;
 mod shared;
@@ -16,7 +15,7 @@ mod trends;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use crate::engine::{logging, mail, Core, Paths, Secrets};
+use jobpilot_engine::{logging, mail, Core, Paths, Secrets};
 use tauri::ipc::Invoke;
 use tauri::webview::PageLoadEvent;
 use tauri::{RunEvent, WebviewUrl, WebviewWindowBuilder};
@@ -28,7 +27,7 @@ const WINDOW: &str = "main";
 pub fn run() -> anyhow::Result<()> {
     // Logs go to stderr and `<data dir>/logs/`, with secrets redacted.
     let paths = Paths::from_env()?;
-    let _log = logging::init(&paths);
+    let _log = logging::init(&paths, env!("CARGO_CRATE_NAME"));
     tracing::info!(
         "JobPilot {} starting, data in {}",
         env!("CARGO_PKG_VERSION"),
@@ -100,7 +99,7 @@ pub fn run() -> anyhow::Result<()> {
         if let RunEvent::Exit = event {
             // The window is gone: close the form tabs JobPilot still drives. Tabs the user works in
             // (a hand-off, a sign-in, a discovery page handed over) stay open in their browser.
-            crate::engine::runtime::block_on(crate::engine::apply::close_all());
+            jobpilot_engine::runtime::block_on(jobpilot_engine::apply::close_all());
             tracing::info!("JobPilot closed");
         }
     });

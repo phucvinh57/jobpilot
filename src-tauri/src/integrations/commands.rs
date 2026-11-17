@@ -9,10 +9,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use crate::engine::llm;
-use crate::engine::mail::{self, SECRET_CLIENT_SECRET};
-use crate::engine::redact::redact;
-use crate::engine::Core;
+use jobpilot_engine::llm;
+use jobpilot_engine::mail::{self, SECRET_CLIENT_SECRET};
+use jobpilot_engine::redact::redact;
+use jobpilot_engine::Core;
 use tauri::ipc::Invoke;
 use tauri::{AppHandle, Manager, State};
 
@@ -357,7 +357,7 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::{Core, Paths, Secrets};
+    use jobpilot_engine::{Core, Paths, Secrets};
 
     use super::{
         browser_section, gmail, provider_has_key, providers, save_provider, scrub, ProviderInput,

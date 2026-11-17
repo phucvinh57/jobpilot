@@ -10,7 +10,7 @@ pub mod rules;
 
 use std::sync::Arc;
 
-use crate::engine::Core;
+use jobpilot_engine::Core;
 use tauri::AppHandle;
 
 /// Called once at startup, before the window opens: start the daily search timer.

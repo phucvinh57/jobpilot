@@ -8,8 +8,8 @@ pub mod rules;
 
 use std::sync::Arc;
 
-use crate::engine::browser::BridgeEvent;
-use crate::engine::{mail, runtime, Core};
+use jobpilot_engine::browser::BridgeEvent;
+use jobpilot_engine::{mail, runtime, Core};
 use tauri::AppHandle;
 use tokio::sync::broadcast::error::RecvError;
 

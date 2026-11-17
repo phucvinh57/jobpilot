@@ -3,7 +3,7 @@
 The JobPilot desktop app drives the user's own Chrome through the JobPilot extension. The **app is the
 server**; the extension's service worker is the only client. The extension is a dumb, allowlisted relay:
 every decision (what to open, what to fill, which host is allowed) is made in the app
-(`src-tauri/src/engine/browser/bridge/`). This file is the contract between the two sides; change both
+(`crates/engine/src/browser/bridge/`). This file is the contract between the two sides; change both
 together.
 
 ## Identity and transport
