@@ -45,8 +45,8 @@ src-tauri/src/engine  (module `engine` of lib `jobpilot_lib`)   no UI, no Tauri;
              JSON-LD, sitemap and board detection), `run` (graphs `discovery`, `source_run`), `score`, `dedup`, `handoff`, `sources`,
              `queue`, `promote` (graph `prepare_cv`, dismiss), `dismissed` (dismiss a CV, list dismissed jobs, Restore),
              `manual` (`Core::add_lead`: pasted link/file -> scored lead)
-  trends     collection (hackernews, yc, rss, page, `report_search` with a keyring key; graph `trends` -> `trend_items`),
-             `frame` (MarketFrame: background + place, never wishes; decides what is collected and counted),
+  trends     collection (hackernews, yc, rss, page; graph `trends` -> `trend_items`),
+             `frame` (MarketFrame: background + place, never wishes; decides what is counted),
              `digest/` (extract, count, synthesize, cite: every point cites stored items)
 src-tauri/ (package `jobpilot`)                   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |

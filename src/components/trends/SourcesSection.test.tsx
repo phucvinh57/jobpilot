@@ -15,8 +15,6 @@ const mocks = vi.hoisted(() => ({
     addSource: vi.fn(),
     removeSource: vi.fn(),
     setSourceEnabled: vi.fn(),
-    saveKey: vi.fn(),
-    clearKey: vi.fn(),
   },
   invoke: vi.fn(),
 }));
@@ -48,7 +46,6 @@ async function shown() {
 }
 
 const sources = () => within(screen.getByRole("region", { name: "Sources" }));
-const search = () => within(screen.getByRole("region", { name: "Report search" }));
 
 describe("Sources", () => {
   it("lists each source with its kind, host and how its last run went", async () => {
@@ -139,61 +136,5 @@ describe("Sources", () => {
     await user.click(sources().getByRole("button", { name: "YC companies" }));
     const toast = await screen.findByRole("alert", { name: "Could not add YC companies" });
     expect(within(toast).getByText("database is locked")).toBeTruthy();
-  });
-});
-
-describe("Report search", () => {
-  it("shows which keys are saved and whether search is on", async () => {
-    await shown();
-    expect(search().getByText("Report search is on.")).toBeTruthy();
-    expect(search().getByLabelText("Brave Search · no key")).toBeTruthy();
-    expect(search().getByLabelText("Tavily · key saved")).toBeTruthy();
-    expect(search().getByRole("button", { name: "Save the Brave Search API key" }).textContent).toBe("Save key");
-    expect(search().getByRole("button", { name: "Save the Tavily API key" }).textContent).toBe("Replace key");
-    expect(search().queryByRole("button", { name: "Remove the Brave Search API key" })).toBeNull();
-    expect(search().getByRole("button", { name: "Remove the Tavily API key" })).toBeTruthy();
-  });
-
-  it("saves a typed key through the shell, clears the field and never shows it", async () => {
-    const user = await shown();
-    const field = search().getByLabelText("Brave Search · no key") as HTMLInputElement;
-    // Masked, with a toggle to check what was typed.
-    expect(field.type).toBe("password");
-    await user.type(field, "  BSA-secret-key ");
-    await user.click(search().getByRole("button", { name: "Show the Brave Search API key" }));
-    expect(field.type).toBe("text");
-    await user.click(search().getByRole("button", { name: "Hide the Brave Search API key" }));
-    expect(field.type).toBe("password");
-
-    await user.click(search().getByRole("button", { name: "Save the Brave Search API key" }));
-    expect(mocks.api.saveKey).toHaveBeenCalledWith("brave", "BSA-secret-key");
-    expect(field.value).toBe("");
-    expect(document.body.textContent).not.toContain("BSA-secret-key");
-  });
-
-  it("asks for the key first when the field is empty", async () => {
-    const user = await shown();
-    await user.click(search().getByRole("button", { name: "Save the Brave Search API key" }));
-    expect((await search().findByRole("alert")).textContent).toBe("Enter the Brave Search API key first.");
-    expect(mocks.api.saveKey).not.toHaveBeenCalled();
-    // Typing clears the reminder.
-    await user.type(search().getByLabelText("Brave Search · no key"), "k");
-    expect(search().queryByRole("alert")).toBeNull();
-  });
-
-  it("keeps the typed key when saving fails, and says why", async () => {
-    mocks.api.saveKey.mockRejectedValueOnce(new CommandError("the keyring is locked"));
-    const user = await shown();
-    const field = search().getByLabelText("Brave Search · no key") as HTMLInputElement;
-    await user.type(field, "abc");
-    await user.click(search().getByRole("button", { name: "Save the Brave Search API key" }));
-    expect((await search().findByRole("alert")).textContent).toBe("the keyring is locked");
-    expect(field.value).toBe("abc");
-  });
-
-  it("removes a saved key", async () => {
-    const user = await shown();
-    await user.click(search().getByRole("button", { name: "Remove the Tavily API key" }));
-    expect(mocks.api.clearKey).toHaveBeenCalledWith("tavily");
   });
 });

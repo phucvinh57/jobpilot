@@ -2,15 +2,12 @@
 //! ([`super::digest`]).
 //!
 //! ```text
-//! START -> plan -> { hackernews, yc, feeds, report_search } -> store_items -> wait_human
+//! START -> plan -> { hackernews, yc, feeds } -> store_items -> wait_human
 //!       -> END                                                        (collection only)
 //!       -> extract -> count -> synthesize -> enforce_citations -> save_report -> END   (with the digest)
 //! ```
 //!
-//! - `plan` reads the enabled trend sources, whether a search API key is saved, and builds the
-//!   report queries from the market frame ([`MarketFrame`]: the profile's roles and the preferred
-//!   locations, never the wished skills, domains or roles). Only ids, names and queries go into the
-//!   state, never a key.
+//! - `plan` reads the enabled trend sources. Only their ids go into the state.
 //! - The collectors run in parallel and each writes only its own part of the state: the lists
 //!   `items`, `outcomes` and `hn_settled` (append fields) and, for `feeds`, `challenge`. Item text
 //!   goes to `<data_dir>/trends/<hash of the URL>.txt` right away, so a checkpoint carries
@@ -18,11 +15,8 @@
 //! - A slow or failing source never fails the run. Every source gets its own timeout and every
 //!   collector a total budget (`CollectLimits`); what runs out is left out of this run and shows up
 //!   as [`SourceStatus::TimedOut`] in `outcomes` (and in the source's `last_status`), so
-//!   `store_items`, which the library runs once all four collectors are done, waits at most one
+//!   `store_items`, which the library runs once all three collectors are done, waits at most one
 //!   budget.
-//! - `report_search` is skipped, without a request, when no search API key is saved. The check is
-//!   the node's first step, not a route in front of it: the join waits for every incoming edge, so
-//!   a skipped branch would hold `store_items` back forever.
 //! - `store_items` deduplicates by URL into `trend_items`, then adds the Hacker News hiring
 //!   threads read in full (`hn_settled`) to kv [`HN_SETTLED_KEY`], which the next run's
 //!   `hackernews` node reads: those threads are not downloaded again. A run that fails or is
@@ -53,15 +47,12 @@ use tokio::time::Instant;
 
 use super::config::TrendConfig;
 use super::digest::{self, DigestConfig, DigestEnv, DigestState};
-use super::frame::MarketFrame;
 use super::http::{FetchError, Http};
 use super::period::Period;
-use super::source::report_search::{self, build_queries};
-use super::source::{hackernews, page, rss, yc, Ctx, Item, SearchProvider, SourceKind};
+use super::source::{hackernews, page, rss, yc, Ctx, Item, SourceKind};
 use super::text::truncate;
 use crate::engine::graph::nodes::{self, Challenge, ChallengeKind, Challenged};
 use crate::engine::graph::{GraphDef, END, START};
-use crate::engine::pipeline::cv::Cv;
 use crate::engine::redact::redact;
 use crate::engine::store::{NewTrendItem, Source, SourcePurpose};
 use crate::engine::{Paths, Secrets, Store};
@@ -92,23 +83,12 @@ pub struct Plan {
     pub hackernews: Vec<i64>,
     pub yc: Vec<i64>,
     pub feeds: Vec<i64>,
-    /// Set when a search API key is saved.
-    pub search: Option<SearchPlan>,
-    /// Why there is no [`search`](Self::search).
-    pub search_skip: Option<String>,
-}
-
-/// Report search: which API, and the queries built from the market frame. Never the key.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SearchPlan {
-    pub provider: SearchProvider,
-    pub queries: Vec<String>,
 }
 
 /// An item a collector read: stored by `store_items`, its text already on disk.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Collected {
-    /// `None` for report search, which has no source row.
+    /// `None` only in runs of older versions (their report search had no source row).
     pub source_id: Option<i64>,
     pub url: String,
     pub title: String,
@@ -116,7 +96,7 @@ pub struct Collected {
     pub text_path: PathBuf,
 }
 
-/// How one source (or the report search) went.
+/// How one source went.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SourceStatus {
@@ -135,7 +115,7 @@ pub enum SourceStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceOutcome {
     pub source_id: Option<i64>,
-    /// `hackernews`, `yc`, `rss`, `page` or `report_search`.
+    /// `hackernews`, `yc`, `rss` or `page` (`report_search` in runs of older versions).
     pub kind: String,
     pub status: SourceStatus,
     /// New items (not known before this run) the source gave.
@@ -201,16 +181,12 @@ impl Challenged for TrendRun {
     }
 }
 
-/// What the nodes share. Cheap to clone; holds no secret (keys are read when needed).
+/// What the nodes share. Cheap to clone; holds no secret.
 struct Env {
     store: Store,
-    secrets: Secrets,
     paths: Paths,
     config: Arc<TrendConfig>,
     http: Http,
-    /// The profile the market frame reads the background from (`DigestConfig::profile`);
-    /// `None`: no background, the queries come from the place alone.
-    profile: Option<Cv>,
 }
 
 impl Env {
@@ -229,9 +205,8 @@ pub fn graph(
 ) -> Result<GraphDef<TrendRun>> {
     let http = Http::new(&config.limits.http())?;
     let collector_timeout = config.limits.collector_budget + NODE_MARGIN;
-    let profile = digest.profile.clone();
-    let digest_env = Arc::new(DigestEnv { store: store.clone(), secrets: secrets.clone(), config: digest });
-    let env = Arc::new(Env { store, secrets, paths, config: Arc::new(config), http, profile });
+    let digest_env = Arc::new(DigestEnv { store: store.clone(), secrets, config: digest });
+    let env = Arc::new(Env { store, paths, config: Arc::new(config), http });
     let mut graph = GraphDef::new(GRAPH).append("items").append("outcomes").append("hn_settled").node("plan", {
         let env = env.clone();
         move |s| plan(env.clone(), s)
@@ -245,23 +220,18 @@ pub fn graph(
             let env = env.clone();
             move |s| group(env.clone(), s, SourceKind::Rss)
         })
-        .node("report_search", {
-            let env = env.clone();
-            move |s| report_search_node(env.clone(), s)
-        })
         .node("store_items", {
             let env = env.clone();
             move |s| store_items(env.clone(), s)
         })
         .wait("wait_human", nodes::challenge::<TrendRun>)
         .edge(START, "plan")
-        .parallel("plan", &["hackernews", "yc", "feeds", "report_search"], "store_items")
+        .parallel("plan", &["hackernews", "yc", "feeds"], "store_items")
         .edge("store_items", "wait_human")
         .route("wait_human", |s| if s.digest.enabled { "extract" } else { END }, &["extract", END])
         .node_timeout("hackernews", collector_timeout)
         .node_timeout("yc", collector_timeout)
-        .node_timeout("feeds", collector_timeout)
-        .node_timeout("report_search", collector_timeout);
+        .node_timeout("feeds", collector_timeout);
     Ok(digest::add_nodes(graph, digest_env))
 }
 
@@ -277,29 +247,11 @@ async fn plan(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
             None => tracing::warn!(source_id = source.id, "a trend source of an unknown kind is ignored"),
         }
     }
-    match super::search_provider(&env.secrets) {
-        Ok(Some(provider)) => {
-            let prefs = env.store.preferences().unwrap_or_else(|_| {
-                tracing::warn!("the saved preferences could not be read; the queries use no place");
-                Default::default()
-            });
-            // Background and place only: the frame reads no wish from the preferences.
-            let frame = MarketFrame::new(env.profile.as_ref(), &prefs);
-            let queries = build_queries(&frame, &s.period, env.config.limits.max_queries);
-            plan.search = Some(SearchPlan { provider, queries });
-        }
-        Ok(None) => plan.search_skip = Some("no search API key saved".into()),
-        Err(_) => {
-            tracing::warn!("the keyring could not be read; report search is skipped");
-            plan.search_skip = Some("the keyring could not be read".into());
-        }
-    }
     tracing::info!(
         period = %s.period.label(),
         hackernews = plan.hackernews.len(),
         yc = plan.yc.len(),
         feeds = plan.feeds.len(),
-        queries = plan.search.as_ref().map_or(0, |p| p.queries.len()),
         "trend collection planned"
     );
     s.plan = plan;
@@ -342,7 +294,7 @@ async fn group(env: Arc<Env>, mut s: TrendRun, group: SourceKind) -> Result<Tren
                 SourceKind::Page => page::collect(&ctx, &source.url).await,
             }
         };
-        let done = attempt(&env, deadline, Some(&source), kind.as_str(), work).await;
+        let done = attempt(&env, deadline, &source, kind.as_str(), work).await;
         // Only when the postings are in `items`: not after a timeout or a failed write.
         if done.outcome.status == SourceStatus::Ok {
             s.hn_settled.extend(settled);
@@ -377,37 +329,6 @@ fn load_settled(store: &Store) -> Result<Vec<String>> {
     }
 }
 
-async fn report_search_node(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
-    let skip = |s: &mut TrendRun, reason: &str| {
-        tracing::info!("report search skipped: {reason}");
-        s.outcomes.push(SourceOutcome {
-            source_id: None,
-            kind: "report_search".into(),
-            status: SourceStatus::Skipped { reason: reason.into() },
-            items: 0,
-        });
-    };
-    let Some(search) = s.plan.search.clone() else {
-        let reason = s.plan.search_skip.clone().unwrap_or_else(|| "no search API key saved".into());
-        skip(&mut s, &reason);
-        return Ok(s);
-    };
-    // The key is read now and lives only in this function: not in the state, not in a log.
-    let key = match env.secrets.get(search.provider.secret_name()) {
-        Ok(Some(key)) if !key.trim().is_empty() => key.trim().to_string(),
-        _ => {
-            skip(&mut s, "no search API key saved");
-            return Ok(s);
-        }
-    };
-    let deadline = Instant::now() + env.config.limits.collector_budget;
-    let known = Arc::new(known_urls(&env.store)?);
-    let ctx = env.ctx(&known, s.period);
-    let work = report_search::collect(&ctx, search.provider, &key, &search.queries);
-    attempt(&env, deadline, None, "report_search", work).await.apply(&mut s);
-    Ok(s)
-}
-
 /// What one source did, before it is applied to the state.
 struct Attempt {
     outcome: SourceOutcome,
@@ -428,7 +349,7 @@ impl Attempt {
 /// Run `work` for a source under its timeout (and what is left of the collector's budget), save the
 /// text of what it found, and record the result on the source row. Never fails: whatever goes
 /// wrong is the source's outcome.
-async fn attempt<Fut>(env: &Env, deadline: Instant, source: Option<&Source>, kind: &str, work: Fut) -> Attempt
+async fn attempt<Fut>(env: &Env, deadline: Instant, source: &Source, kind: &str, work: Fut) -> Attempt
 where
     Fut: Future<Output = Result<Vec<Item>>>,
 {
@@ -440,12 +361,12 @@ where
     let mut challenge = None;
     let status = match result {
         None => SourceStatus::TimedOut,
-        Some(Err(e)) => match (detect_challenge(kind, &e), source) {
-            (Some(found), Some(source)) => {
+        Some(Err(e)) => match detect_challenge(kind, &e) {
+            Some(found) => {
                 challenge = Some(Challenge { kind: found, source_id: source.id, url: source.url.clone() });
                 SourceStatus::NeedsHuman { kind: found }
             }
-            _ => SourceStatus::Failed { error: short(&e) },
+            None => SourceStatus::Failed { error: short(&e) },
         },
         Some(Ok(found)) => match write_items(env, source, found).await {
             Ok(written) => {
@@ -456,18 +377,16 @@ where
         },
     };
 
-    let source_id = source.map(|s| s.id);
-    if let Some(id) = source_id {
-        let recorded = match &status {
-            SourceStatus::Ok => env.store.set_source_run(id, "ok"),
-            SourceStatus::TimedOut => env.store.set_source_run(id, "timed out"),
-            SourceStatus::Failed { error } => env.store.set_source_run(id, &format!("failed: {error}")),
-            SourceStatus::NeedsHuman { .. } => env.store.set_source_status(id, "needs_human"),
-            SourceStatus::Skipped { .. } => Ok(()),
-        };
-        if recorded.is_err() {
-            tracing::warn!(source_id = id, "could not record the source's status");
-        }
+    let source_id = source.id;
+    let recorded = match &status {
+        SourceStatus::Ok => env.store.set_source_run(source_id, "ok"),
+        SourceStatus::TimedOut => env.store.set_source_run(source_id, "timed out"),
+        SourceStatus::Failed { error } => env.store.set_source_run(source_id, &format!("failed: {error}")),
+        SourceStatus::NeedsHuman { .. } => env.store.set_source_status(source_id, "needs_human"),
+        SourceStatus::Skipped { .. } => Ok(()),
+    };
+    if recorded.is_err() {
+        tracing::warn!(source_id, "could not record the source's status");
     }
     let label = match &status {
         SourceStatus::Ok => "ok",
@@ -478,16 +397,16 @@ where
     };
     let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     if matches!(status, SourceStatus::Failed { .. } | SourceStatus::TimedOut) {
-        tracing::warn!(source_id = source_id.unwrap_or(0), kind, status = label, ms, "trend source left out");
+        tracing::warn!(source_id, kind, status = label, ms, "trend source left out");
     } else {
-        tracing::info!(source_id = source_id.unwrap_or(0), kind, status = label, items = items.len(), ms, "trend source collected");
+        tracing::info!(source_id, kind, status = label, items = items.len(), ms, "trend source collected");
     }
     let count = items.len();
-    Attempt { outcome: SourceOutcome { source_id, kind: kind.into(), status, items: count }, items, challenge }
+    Attempt { outcome: SourceOutcome { source_id: Some(source_id), kind: kind.into(), status, items: count }, items, challenge }
 }
 
 /// Tells a login or bot wall from an ordinary failure, by status code (no browser). API adapters
-/// (Hacker News, YC, feeds, report search) never pause the run; a `page` source that answers 401
+/// (Hacker News, YC, feeds) never pause the run; a `page` source that answers 401
 /// (login) or 403, 429, 503 (blocked) does.
 pub fn detect_challenge(kind: &str, error: &anyhow::Error) -> Option<ChallengeKind> {
     if kind != SourceKind::Page.as_str() {
@@ -516,7 +435,7 @@ fn text_path(paths: &Paths, url: &str) -> PathBuf {
 }
 
 /// Save each item's text (cut at `max_text_chars`) and describe it for `store_items`.
-async fn write_items(env: &Env, source: Option<&Source>, found: Vec<Item>) -> Result<Vec<Collected>> {
+async fn write_items(env: &Env, source: &Source, found: Vec<Item>) -> Result<Vec<Collected>> {
     let dir = env.paths.trends_dir();
     tokio::fs::create_dir_all(&dir).await.with_context(|| format!("creating {}", dir.display()))?;
     let max = env.config.limits.max_text_chars;
@@ -527,7 +446,7 @@ async fn write_items(env: &Env, source: Option<&Source>, found: Vec<Item>) -> Re
         tokio::fs::write(&tmp, super::text::cap(&item.text, max)).await.with_context(|| format!("writing {}", tmp.display()))?;
         tokio::fs::rename(&tmp, &path).await.with_context(|| format!("saving {}", path.display()))?;
         written.push(Collected {
-            source_id: source.map(|s| s.id),
+            source_id: Some(source.id),
             url: item.url,
             title: item.title,
             published_at: item.published_at,

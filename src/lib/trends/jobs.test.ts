@@ -25,7 +25,6 @@ describe("step labels", () => {
       "hackernews",
       "yc",
       "feeds",
-      "report_search",
       "store_items",
       "wait_human",
       "extract",

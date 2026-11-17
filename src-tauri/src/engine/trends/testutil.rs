@@ -10,7 +10,7 @@ use super::http::Http;
 use super::period::Period;
 use super::source::Ctx;
 
-pub use crate::engine::net::fixtures::{Fixtures, Hit};
+pub use crate::engine::net::fixtures::Fixtures;
 
 /// A PDF made from Typst markup (the `typst` CLI is a prerequisite of the project).
 pub fn typst_pdf(markup: &str) -> Vec<u8> {
@@ -27,17 +27,14 @@ pub fn typst_pdf(markup: &str) -> Vec<u8> {
     std::fs::read(&pdf).expect("read pdf")
 }
 
-/// An adapter context for the period 2026-W46 whose endpoints are all on `fx` (`/hn`, `/yc`, and
-/// the search APIs at the root), with no delay between requests, `known` already collected and no
-/// settled hiring thread.
+/// An adapter context for the period 2026-W46 whose endpoints are all on `fx` (`/hn`, `/yc`), with
+/// no delay between requests, `known` already collected and no settled hiring thread.
 pub fn ctx(fx: &Fixtures, known: &[&str]) -> Ctx {
     let limits = CollectLimits { host_delay: Duration::ZERO, allow_private_hosts: true, ..CollectLimits::default() };
     let config = TrendConfig {
         endpoints: Endpoints {
             hackernews: format!("{}/hn", fx.base()),
             yc: format!("{}/yc", fx.base()),
-            brave: fx.base().to_string(),
-            tavily: fx.base().to_string(),
         },
         limits,
     };

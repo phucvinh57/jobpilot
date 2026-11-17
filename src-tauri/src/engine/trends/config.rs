@@ -14,10 +14,6 @@ pub struct Endpoints {
     /// YC publishes no JSON API of its own; the default is the community `yc-oss` mirror
     /// (static files, refreshed daily from the directory).
     pub yc: String,
-    /// Brave Search API host (`<host>/res/v1/web/search`).
-    pub brave: String,
-    /// Tavily API host (`<host>/search`).
-    pub tavily: String,
 }
 
 impl Default for Endpoints {
@@ -25,8 +21,6 @@ impl Default for Endpoints {
         Self {
             hackernews: "https://hn.algolia.com/api/v1".into(),
             yc: "https://yc-oss.github.io/api".into(),
-            brave: "https://api.search.brave.com".into(),
-            tavily: "https://api.tavily.com".into(),
         }
     }
 }
@@ -38,11 +32,11 @@ pub struct CollectLimits {
     pub host_delay: Duration,
     /// Timeout of one request.
     pub request_timeout: Duration,
-    /// Largest response body read (PDF reports are the big ones).
+    /// Largest response body read (PDFs are the big ones).
     pub max_bytes: usize,
     /// Longest text kept per item (characters); the rest is cut.
     pub max_text_chars: usize,
-    /// New items one source adds per run: stories, feed entries, companies, reports. Hacker News
+    /// New items one source adds per run: stories, feed entries, companies, pages. Hacker News
     /// hiring postings are not counted against it: they have their own cap,
     /// [`hiring_posts`](Self::hiring_posts) per thread for [`hiring_threads`](Self::hiring_threads)
     /// threads, so the backfill of the skill window (up to 2,400 postings by default, once) is
@@ -63,17 +57,13 @@ pub struct CollectLimits {
     pub yc_batches: usize,
     /// Feed entries per run whose page is fetched because the feed carries only a teaser.
     pub article_fetches: usize,
-    /// Report-search queries per run.
-    pub max_queries: usize,
-    /// Results read per query.
-    pub results_per_query: usize,
     /// One source (a feed, an API) may take this long; past it the source is left out of the run.
     /// Hacker News is the slowest: up to 3 + `hiring_threads` requests one `host_delay` apart, and a
     /// whole hiring thread is a few megabytes.
     pub source_timeout: Duration,
     /// One collector (all its sources together) may take this long.
     pub collector_budget: Duration,
-    /// Fetch addresses taken from third-party data (search results, feed entries) even when they
+    /// Fetch addresses taken from third-party data (feed entries) even when they
     /// point at this machine or a private network. Off, except in tests.
     pub allow_private_hosts: bool,
 }
@@ -93,8 +83,6 @@ impl Default for CollectLimits {
             hiring_posts: 400,
             yc_batches: 2,
             article_fetches: 20,
-            max_queries: 6,
-            results_per_query: 5,
             source_timeout: Duration::from_secs(180),
             collector_budget: Duration::from_secs(240),
             allow_private_hosts: false,

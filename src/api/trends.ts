@@ -4,7 +4,7 @@
 import { invoke, notifyChanged } from "./bridge";
 
 import type { Job, JobKind } from "@/lib/trends/jobs";
-import type { Added, Cadence, Overview, PrefField, RunResult, SearchProvider, SourceKind } from "@/types/trends";
+import type { Added, Cadence, Overview, PrefField, RunResult, SourceKind } from "@/types/trends";
 
 /** Everything the screen shows. `selected`: the report to show (the newest when `undefined`);
  *  `cadence`: the period a new run would cover. */
@@ -43,17 +43,6 @@ export async function removeSource(id: number): Promise<void> {
 
 export async function setSourceEnabled(id: number, enabled: boolean): Promise<void> {
   await invoke<void>("trends_set_source_enabled", { id, enabled });
-  notifyChanged("trends");
-}
-
-/** Save the API key in the OS keyring. Write-only: the key never comes back. */
-export async function saveKey(provider: SearchProvider, key: string): Promise<void> {
-  await invoke<void>("trends_save_key", { provider, key });
-  notifyChanged("trends");
-}
-
-export async function clearKey(provider: SearchProvider): Promise<void> {
-  await invoke<void>("trends_clear_key", { provider });
   notifyChanged("trends");
 }
 

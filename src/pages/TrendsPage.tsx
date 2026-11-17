@@ -8,7 +8,6 @@ import { Controls } from "@/components/trends/Controls";
 import { DigestCard } from "@/components/trends/DigestCard";
 import { History } from "@/components/trends/History";
 import { NoticeView } from "@/components/trends/NoticeView";
-import { SearchSection } from "@/components/trends/SearchSection";
 import { SkillChart } from "@/components/trends/SkillChart";
 import { SourcesSection } from "@/components/trends/SourcesSection";
 
@@ -90,7 +89,6 @@ export function TrendsPage() {
               onSelect={t.pickReport}
               onClose={t.closeHistory}
             />
-            <SearchSection keys={data.searchKeys} />
           </>
         ) : (
           t.loading && <Caption>Loading…</Caption>

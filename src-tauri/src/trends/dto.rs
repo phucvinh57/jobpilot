@@ -3,16 +3,14 @@
 //! The screen reads everything it shows in one call ([`overview`]): the digest with its numbered
 //! points and citations (and, next to them, the gap and the wishes as the app measured them), the
 //! skill chart per market scope (global, and local to the user's place), the history, the
-//! collections waiting for the user, the sources and which search keys are saved (never the keys
-//! themselves). Every number and label of the market is worked out here, in code.
+//! collections waiting for the user and the sources. Every number and label of the market is worked out here, in code.
 
 use crate::engine::graph::Outcome;
 use crate::engine::prefs::Preferences;
 use crate::engine::store::{Report, Source};
 use crate::engine::trends::digest::{GapScope, ScopeCounts, SkillCounts};
 use crate::engine::trends::{
-    Digest, DigestData, Period, Point, SearchProvider, Section, SourceKind, TrendChallenge,
-    TrendRun,
+    Digest, DigestData, Period, Point, Section, SourceKind, TrendChallenge, TrendRun,
 };
 use crate::engine::Core;
 use anyhow::Result;
@@ -54,7 +52,6 @@ pub struct OverviewDto {
     pub sources: Vec<SourceDto>,
     /// The kinds of source that can be added.
     pub source_kinds: Vec<SourceKindDto>,
-    pub search_keys: Vec<SearchKeyDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -87,7 +84,6 @@ pub fn overview(core: &Core, selected: Option<i64>, cadence: Cadence) -> Result<
     }
     let prefs = core.preferences()?;
     let sources = core.trend_sources()?;
-    let saved_keys = core.saved_search_providers()?;
     Ok(OverviewDto {
         period: PeriodDto::new(current),
         summary: header_summary(shown.as_ref(), current),
@@ -114,29 +110,7 @@ pub fn overview(core: &Core, selected: Option<i64>, cadence: Cadence) -> Result<
             })
             .collect(),
         sources: sources.iter().map(SourceDto::new).collect(),
-        search_keys: SearchProvider::ALL
-            .into_iter()
-            .map(|provider| SearchKeyDto {
-                provider: provider_name(provider),
-                label: provider.label(),
-                saved: saved_keys.contains(&provider),
-            })
-            .collect(),
     })
-}
-
-/// How the web app spells a search provider.
-pub fn provider_name(provider: SearchProvider) -> &'static str {
-    match provider {
-        SearchProvider::Brave => "brave",
-        SearchProvider::Tavily => "tavily",
-    }
-}
-
-pub fn parse_provider(name: &str) -> Option<SearchProvider> {
-    SearchProvider::ALL
-        .into_iter()
-        .find(|p| provider_name(*p) == name)
 }
 
 // ------------------------------------------------------------------ digest
@@ -711,16 +685,6 @@ pub struct SourceKindDto {
     pub added: bool,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchKeyDto {
-    /// `brave` / `tavily`.
-    pub provider: &'static str,
-    pub label: &'static str,
-    /// A key is in the OS keyring. The key itself never leaves it.
-    pub saved: bool,
-}
-
 // ------------------------------------------------------------------ runs and edits
 
 /// How a run that did not fail ended.
@@ -792,7 +756,7 @@ mod tests {
     use crate::engine::{Core, Paths, Secrets};
 
     use super::{
-        overview, parse_provider, provider_name, run_result, sections, ChartDto, DigestBodyDto,
+        overview, run_result, sections, ChartDto, DigestBodyDto,
     };
     use crate::engine::prefs::Preferences;
     use crate::trends::demo;
@@ -1199,14 +1163,6 @@ mod tests {
     }
 
     #[test]
-    fn search_providers_round_trip() {
-        for name in ["brave", "tavily"] {
-            assert_eq!(parse_provider(name).map(provider_name), Some(name));
-        }
-        assert!(parse_provider("bing").is_none());
-    }
-
-    #[test]
     fn the_demo_data_reads_back_as_one_digest_with_citations() {
         let dir = tempfile::tempdir().expect("a temp dir");
         let core =
@@ -1216,14 +1172,6 @@ mod tests {
         assert!(empty.summary.starts_with("No digest yet"));
         assert_eq!(empty.source_kinds.len(), 4);
         assert!(empty.source_kinds.iter().all(|k| !k.added));
-        assert_eq!(
-            empty
-                .search_keys
-                .iter()
-                .map(|k| k.saved)
-                .collect::<Vec<_>>(),
-            [false, false]
-        );
 
         demo::seed_demo(&core).expect("the demo data");
         let seen = overview(&core, None, Cadence::Weekly).expect("an overview");
