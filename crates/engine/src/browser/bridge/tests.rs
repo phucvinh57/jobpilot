@@ -46,7 +46,7 @@ impl Fake {
     }
 
     async fn send(&mut self, v: Value) {
-        self.ws.send(Message::Text(v.to_string())).await.unwrap();
+        self.ws.send(Message::Text(v.to_string().into())).await.unwrap();
     }
 
     /// The first message: `paired` says the extension holds a token; `nonce` is its nonce.

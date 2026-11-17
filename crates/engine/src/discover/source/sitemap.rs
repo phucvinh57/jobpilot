@@ -98,19 +98,16 @@ pub(crate) fn parse(xml: &str) -> Result<Sitemap> {
                 depth = depth.saturating_sub(1);
             }
             Event::Text(t) if !field.is_empty() => {
-                if let Ok(t) = t.decode() {
-                    text.push_str(&t);
-                }
+                text.push_str(&t.xml10_content());
             }
             Event::CData(c) if !field.is_empty() => {
-                if let Ok(c) = c.decode() {
-                    text.push_str(&c);
-                }
+                text.push_str(&c.xml10_content());
             }
             Event::GeneralRef(r) if !field.is_empty() => {
                 if let Ok(Some(ch)) = r.resolve_char_ref() {
                     text.push(ch);
-                } else if let Ok(name) = r.decode() {
+                } else {
+                    let name = r.xml10_content();
                     text.push_str(match name.as_ref() {
                         "amp" => "&",
                         "lt" => "<",
@@ -132,8 +129,7 @@ pub(crate) fn parse(xml: &str) -> Result<Sitemap> {
 }
 
 /// An element name without its namespace prefix.
-fn local_name(raw: &[u8]) -> String {
-    let name = String::from_utf8_lossy(raw);
+fn local_name(name: &str) -> String {
     name.rsplit(':').next().unwrap_or_default().to_string()
 }
 

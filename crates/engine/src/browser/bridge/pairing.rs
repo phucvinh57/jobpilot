@@ -11,8 +11,8 @@
 
 use std::time::Duration;
 
-use hmac::{Hmac, Mac};
-use rand::{Rng, RngCore};
+use hmac::{Hmac, KeyInit, Mac};
+use rand::{Rng, RngExt};
 use sha2::Sha256;
 
 /// The keyring entry of the token.
@@ -27,7 +27,8 @@ const EXT: &str = "jobpilot-ext:";
 /// 32 random bytes as 64 lower-case hex characters.
 fn random_hex() -> String {
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    // The thread-local CSPRNG (ChaCha, seeded and reseeded from the OS).
+    rand::rng().fill_bytes(&mut bytes);
     hex(&bytes)
 }
 
@@ -48,7 +49,7 @@ pub fn is_nonce(nonce: &str) -> bool {
 
 /// A new 6-digit pairing code.
 pub fn new_code() -> String {
-    format!("{:06}", rand::thread_rng().gen_range(0..1_000_000u32))
+    format!("{:06}", rand::rng().random_range(0..1_000_000u32))
 }
 
 /// `a == b` in time that depends only on the lengths.
@@ -76,7 +77,7 @@ fn mac(token: &str, prefix: &str, nonce: &str) -> Option<Hmac<Sha256>> {
         return None;
     }
     // HMAC takes a key of any length, so this only fails for the empty token refused above.
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(token.as_bytes()).ok()?;
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(token.as_bytes()).ok()?;
     mac.update(prefix.as_bytes());
     mac.update(nonce.as_bytes());
     Some(mac)

@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use rand::distributions::Alphanumeric;
-use rand::Rng;
+use rand::distr::Alphanumeric;
+use rand::RngExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -54,7 +54,7 @@ impl Pkce {
 
 /// Random URL-safe string (PKCE verifier, `state`).
 pub fn random_string(len: usize) -> String {
-    rand::thread_rng().sample_iter(Alphanumeric).take(len).map(char::from).collect()
+    rand::rng().sample_iter(Alphanumeric).take(len).map(char::from).collect()
 }
 
 /// The consent-screen URL to open in the browser.
@@ -357,7 +357,7 @@ fn cache() -> &'static Mutex<HashMap<String, Cached>> {
 }
 
 fn cache_key(refresh_token: &str) -> String {
-    format!("{:x}", Sha256::digest(refresh_token.as_bytes()))
+    Sha256::digest(refresh_token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub(crate) fn cache_get(refresh_token: &str) -> Option<String> {

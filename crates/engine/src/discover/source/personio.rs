@@ -166,7 +166,7 @@ fn parse_positions(xml: &str) -> Result<Vec<Position>> {
                     text.push(' ');
                     continue;
                 }
-                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let name = e.name().as_ref().to_string();
                 match (stack.last().map(String::as_str), name.as_str()) {
                     (None, "workzag-jobs") => seen_root = true,
                     (Some("workzag-jobs"), "position") => current = Some(Position::default()),
@@ -203,19 +203,16 @@ fn parse_positions(xml: &str) -> Result<Vec<Position>> {
                 }
             }
             Event::Text(t) => {
-                if let Ok(t) = t.decode() {
-                    text.push_str(&t);
-                }
+                text.push_str(&t.xml10_content());
             }
             Event::CData(c) => {
-                if let Ok(c) = c.decode() {
-                    text.push_str(&c);
-                }
+                text.push_str(&c.xml10_content());
             }
             Event::GeneralRef(r) => {
                 if let Ok(Some(ch)) = r.resolve_char_ref() {
                     text.push(ch);
-                } else if let Ok(name) = r.decode() {
+                } else {
+                    let name = r.xml10_content();
                     text.push_str(match name.as_ref() {
                         "amp" => "&",
                         "lt" => "<",

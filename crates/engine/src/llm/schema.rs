@@ -59,7 +59,7 @@ pub fn parse_and_validate(validator: &jsonschema::Validator, text: &str) -> std:
         .iter_errors(&value)
         .take(MAX_REPORTED_ERRORS + 1)
         .map(|e| {
-            let path = e.instance_path.to_string();
+            let path = e.instance_path().to_string();
             let path = if path.is_empty() { "(root)".to_string() } else { path };
             format!("- {path}: {e}")
         })
