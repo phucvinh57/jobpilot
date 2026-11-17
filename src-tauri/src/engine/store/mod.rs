@@ -4,7 +4,8 @@
 //! touching the others: `applications`/`events`/`status`, `providers`, `sessions`, `emails`, `kv`
 //! (shared settings), `preferences`, `chat` (preference chat), `sources`, `leads` (discovery),
 //! `trends` (trend items + reports), `graph` (graph checkpoints), `profile` (the user's documents
-//! and the profile read from them) and `answers` (remembered application answers).
+//! and the profile read from them), `answers` (remembered application answers) and
+//! `source_suggestions` (job sources the "Suggest sources" search found).
 //!
 //! Schema changes: append a new entry to [`MIGRATIONS`] (never edit an existing one).
 
@@ -20,6 +21,7 @@ mod preferences;
 mod profile;
 mod providers;
 mod sessions;
+mod source_suggestions;
 mod sources;
 mod status;
 mod trends;
@@ -41,6 +43,7 @@ pub use graph::{
 };
 pub use providers::{NewProvider, Provider, ProviderKind};
 pub use sessions::{NewSession, Session};
+pub use source_suggestions::{NewSuggestion, SourceSuggestion, SuggestionState};
 pub use sources::{NewSource, Source, SourcePurpose};
 pub use status::Status;
 pub use trends::{NewReport, NewTrendItem, Report, TrendItem};
@@ -241,6 +244,22 @@ const MIGRATIONS: &[&str] = &[
     "
     UPDATE sessions SET status = 'new', domains_json = '[]', last_verified_at = NULL;
     ",
+    // 9: job sources the "Suggest sources" search found and checked (`discover::suggest`); an
+    // added or dismissed one is never suggested again
+    "
+    CREATE TABLE source_suggestions (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind     TEXT NOT NULL,
+        input    TEXT NOT NULL,
+        name     TEXT NOT NULL DEFAULT '',
+        jobs     INTEGER NOT NULL DEFAULT 0,
+        matching INTEGER NOT NULL DEFAULT 0,
+        query    TEXT NOT NULL DEFAULT '',
+        state    TEXT NOT NULL DEFAULT 'new' CHECK (state IN ('new', 'added', 'dismissed')),
+        found_at TEXT NOT NULL,
+        UNIQUE(kind, input)
+    );
+    ",
 ];
 
 #[derive(Clone)]
@@ -404,6 +423,7 @@ mod tests {
         store.add_profile_source(&NewProfileSource::text("Note", "I build APIs."), usize::MAX).unwrap();
         store.save_profile("basics: {name: A}\n", "hash", &[]).unwrap();
         store.save_answer("why", "Why us?", "Because.").unwrap();
+        store.upsert_suggestion(&NewSuggestion { kind: "lever".into(), input: "jobs.lever.co/acme".into(), ..Default::default() }).unwrap();
 
         // Reopening applies nothing twice.
         drop(store);

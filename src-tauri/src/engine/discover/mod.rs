@@ -33,6 +33,8 @@
 //! - [`manual`]: [`Core::add_lead`], a job the user pasted (link, file or text) added to the Job list as a lead.
 //! - [`schedule`]: the optional daily run (`discover_daily_enabled`, `set_discover_daily`, `discover_due`).
 //! - [`sources`]: add, enable, bind a session to and remove job sources (`Core::job_sources`, ...).
+//! - [`suggest`]: "Suggest sources": web searches in the user's Chrome -> checked job boards and
+//!   careers pages stored as suggestions (`Core::suggest_sources`, `Core::source_suggestions`, ...).
 //! - [`limits`]: the per-host delay, pages per run, and the three-challenges rule. Every request
 //!   (adapters and posting fetch) goes through the shared safe client, [`crate::engine::net::http`].
 //!
@@ -56,6 +58,7 @@ pub mod score;
 pub mod source;
 pub mod sources;
 pub mod state;
+pub mod suggest;
 #[cfg(test)]
 mod tests;
 
