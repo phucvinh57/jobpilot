@@ -26,6 +26,7 @@ import { checkingText, rowAddress, rowName, sourceTag, statusLine } from "@/lib/
 import type { SessionOption, Source, SourceKind } from "@/types/discovery";
 import { useBoardSuggestion } from "@/hooks/discovery/useBoardSuggestion";
 import { useJobSources } from "@/hooks/discovery/useJobSources";
+import { SuggestedSources } from "./SuggestedSources";
 
 function SourceRow({
   source,
@@ -273,6 +274,7 @@ export function JobSourcesSection() {
         <p className="text-body text-muted">No sources yet. Add a company board, a job page or Hacker News.</p>
       )}
       <LoadError error={v.loadError} title="The job sources could not be read" onRetry={v.reload} />
+      <SuggestedSources data={data} />
       <AddSourceDialog
         key={openings}
         open={formOpen}

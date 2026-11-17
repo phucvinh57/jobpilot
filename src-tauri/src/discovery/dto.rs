@@ -10,7 +10,7 @@ use crate::engine::discover::{DismissedJob, RunSummary, WaitingSource};
 use crate::engine::graph::WaitReason;
 use crate::engine::health;
 use crate::engine::pipeline::JdInput;
-use crate::engine::store::{Application, Lead, Session, Source};
+use crate::engine::store::{Application, Lead, Session, Source, SourceSuggestion};
 use serde::{Deserialize, Serialize};
 
 use super::rules::host_of;
@@ -449,6 +449,87 @@ pub struct JobSourcesDto {
     /// "Search daily while JobPilot is open".
     pub daily: bool,
     pub kinds: Vec<SourceKindDto>,
+    /// Job sources the "Suggest sources" search found and checked, waiting for the user (most
+    /// matching postings first).
+    pub suggestions: Vec<SourceSuggestionDto>,
+    /// The "Suggest sources" search is paused at a page the user must deal with in Chrome.
+    pub suggest_waiting: bool,
+}
+
+/// A job source the "Suggest sources" search found and checked, for the user to add or dismiss.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSuggestionDto {
+    /// What `discovery_add_suggestion` and `discovery_dismiss_suggestion` take.
+    pub id: i64,
+    /// The source kind it would be added as (`greenhouse`, `career_page`, ...).
+    pub kind: String,
+    /// The kind's label (`Greenhouse`, `Job page`); the kind itself when unknown.
+    pub label: String,
+    /// The name the check read (the board's company, the page's host).
+    pub name: String,
+    /// The host of its address (never the whole address, like [`SourceDto`]).
+    pub host: String,
+    /// Postings the check found.
+    pub jobs: u32,
+    /// Of those, postings whose title fits the wanted roles.
+    pub matching: u32,
+}
+
+impl From<&SourceSuggestion> for SourceSuggestionDto {
+    fn from(s: &SourceSuggestion) -> Self {
+        let label = crate::engine::discover::JOB_SOURCE_KINDS
+            .iter()
+            .find(|(kind, _)| *kind == s.kind)
+            .map_or(s.kind.as_str(), |(_, label)| label);
+        Self {
+            id: s.id,
+            kind: s.kind.clone(),
+            label: label.to_string(),
+            name: s.name.clone(),
+            host: host_of(&s.input),
+            jobs: s.jobs,
+            matching: s.matching,
+        }
+    }
+}
+
+/// How "Suggest sources" (or its "Continue") ended this time: the suggestions waiting for the user
+/// now, and whether the search is paused at a page the user must deal with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestRunDto {
+    pub suggestions: Vec<SourceSuggestionDto>,
+    pub waiting: bool,
+}
+
+/// How "Add all" ended: how many suggestions were added, and the first failure (the others were
+/// still tried).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddAllDto {
+    pub added: usize,
+    pub failed: usize,
+    pub error: Option<CommandError>,
+}
+
+impl AddAllDto {
+    /// Tally the outcome of adding each suggestion, keeping the first failure.
+    pub fn tally<T>(results: impl IntoIterator<Item = anyhow::Result<T>>) -> Self {
+        let mut out = Self { added: 0, failed: 0, error: None };
+        for result in results {
+            match result {
+                Ok(_) => out.added += 1,
+                Err(e) => {
+                    out.failed += 1;
+                    if out.error.is_none() {
+                        out.error = Some(CommandError::from(e));
+                    }
+                }
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -683,5 +764,59 @@ mod tests {
         let failed = SearchFinishedDto::new(Err(anyhow::anyhow!("connection refused")));
         assert!(failed.summary.is_none());
         assert_eq!(failed.error.map(|e| e.problem.kind), Some("network"));
+    }
+
+    fn suggestion(kind: &str, input: &str) -> crate::engine::store::SourceSuggestion {
+        crate::engine::store::SourceSuggestion {
+            id: 12,
+            kind: kind.into(),
+            input: input.into(),
+            name: "Demo Robotics".into(),
+            jobs: 14,
+            matching: 3,
+            query: "\"robotics engineer\" site:boards.greenhouse.io".into(),
+            state: crate::engine::store::SuggestionState::New,
+            found_at: Utc.with_ymd_and_hms(2026, 11, 14, 8, 0, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_suggestion_carries_its_label_and_only_the_host() {
+        let dto = super::SourceSuggestionDto::from(&suggestion("greenhouse", "https://boards.greenhouse.io/demo-robotics?token=x"));
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "id": 12, "kind": "greenhouse", "label": "Greenhouse", "name": "Demo Robotics",
+                "host": "boards.greenhouse.io", "jobs": 14, "matching": 3,
+            }),
+            "camelCase, the host only (never the address or the query)"
+        );
+        let page = super::SourceSuggestionDto::from(&suggestion("career_page", "https://example.com/careers"));
+        assert_eq!((page.label.as_str(), page.host.as_str()), ("Job page", "example.com"));
+        let odd = super::SourceSuggestionDto::from(&suggestion("someday", "jobs.odd.test/x"));
+        assert_eq!(odd.label, "someday", "an unknown kind shows as it is");
+    }
+
+    #[test]
+    fn add_all_counts_and_keeps_the_first_failure() {
+        let results: Vec<anyhow::Result<()>> =
+            vec![Ok(()), Err(anyhow::anyhow!("first refusal")), Ok(()), Err(anyhow::anyhow!("second refusal"))];
+        let dto = super::AddAllDto::tally(results);
+        assert_eq!((dto.added, dto.failed), (2, 2));
+        assert_eq!(dto.error.map(|e| e.message).as_deref(), Some("first refusal"));
+        let none = super::AddAllDto::tally(Vec::<anyhow::Result<()>>::new());
+        assert_eq!((none.added, none.failed, none.error), (0, 0, None));
+        let json = serde_json::to_value(super::AddAllDto::tally(vec![anyhow::Ok(())])).unwrap();
+        assert_eq!(json, serde_json::json!({ "added": 1, "failed": 0, "error": null }));
+    }
+
+    #[test]
+    fn a_suggest_run_says_whether_it_waits() {
+        let dto = super::SuggestRunDto { suggestions: vec![super::SourceSuggestionDto::from(&suggestion("lever", "jobs.lever.co/demo-health"))], waiting: true };
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["waiting"], serde_json::json!(true));
+        assert_eq!(json["suggestions"][0]["host"], serde_json::json!("jobs.lever.co"));
+        assert_eq!(json["suggestions"][0]["label"], serde_json::json!("Lever"));
     }
 }

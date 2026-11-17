@@ -1,10 +1,12 @@
 //! Sample answers for UI work (`JOBPILOT_DEMO=1`): a job page on `example.com` points to a
 //! Greenhouse board, so the add form's suggestion can be seen without the network, and is added
-//! without the check that reads it. Nothing is fetched.
+//! without the check that reads it; "Suggest sources" finds three canned sources without any
+//! search. Nothing is fetched.
 
 use url::Url;
 
 use crate::engine::discover::source::{detect_boards, BoardHint};
+use crate::engine::store::NewSuggestion;
 
 /// The page every `example.com` job page "is" in demo mode.
 const DEMO_PAGE: &str = r#"<iframe title="Jobs" src="https://boards.greenhouse.io/embed/job_board?for=example"></iframe>"#;
@@ -31,6 +33,29 @@ fn demo_skips_check(kind: &str, url: &str) -> bool {
     kind.trim() == "career_page" && example_page(url).is_some()
 }
 
+/// What "Suggest sources" finds in demo mode: `Some` only with `JOBPILOT_DEMO` set; `None` means
+/// "search the web".
+pub fn suggestions() -> Option<Vec<NewSuggestion>> {
+    std::env::var_os("JOBPILOT_DEMO")?;
+    Some(demo_suggestions())
+}
+
+fn demo_suggestions() -> Vec<NewSuggestion> {
+    let one = |kind: &str, input: &str, name: &str, jobs: u32, matching: u32| NewSuggestion {
+        kind: kind.into(),
+        input: input.into(),
+        name: name.into(),
+        jobs,
+        matching,
+        query: "demo".into(),
+    };
+    vec![
+        one("greenhouse", "boards.greenhouse.io/demo-robotics", "Demo Robotics", 14, 3),
+        one("lever", "jobs.lever.co/demo-health", "Demo Health", 6, 2),
+        one("career_page", "https://example.com/careers", "example.com", 4, 4),
+    ]
+}
+
 /// `url` as an address on `example.com` (or a subdomain of it); `None` for any other.
 fn example_page(url: &str) -> Option<Url> {
     let raw = url.trim();
@@ -50,6 +75,15 @@ mod tests {
         assert_eq!(hints, [BoardHint { kind: "greenhouse", input: "boards.greenhouse.io/example".into() }]);
         for other in ["https://acme.test/careers", "https://example.com.evil.test/", "not a url"] {
             assert_eq!(demo_hints(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn the_demo_suggestions_pass_the_address_check() {
+        let list = demo_suggestions();
+        assert_eq!(list.len(), 3);
+        for s in &list {
+            assert!(crate::engine::discover::source::check_source(&s.kind, &s.input).is_ok(), "{}", s.input);
         }
     }
 

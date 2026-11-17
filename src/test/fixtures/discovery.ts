@@ -2,7 +2,16 @@
 
 import type { Insight } from "@/components/InsightBrief";
 
-import type { Criterion, FailedPrepare, JobSources, Lead, Queue, Source, Waiting } from "@/types/discovery";
+import type {
+  Criterion,
+  FailedPrepare,
+  JobSources,
+  Lead,
+  Queue,
+  Source,
+  SourceSuggestion,
+  Waiting,
+} from "@/types/discovery";
 
 export const INSIGHT: Insight = {
   domain: "B2B payments",
@@ -53,6 +62,25 @@ export const SOURCE: Source = {
   lastRunAt: new Date(Date.now() - 3_600_000).toISOString(),
   lastStatus: "ok",
 };
+
+export const SUGGESTION: SourceSuggestion = {
+  id: 11,
+  kind: "greenhouse",
+  label: "Greenhouse",
+  name: "Demo Robotics",
+  host: "boards.greenhouse.io",
+  jobs: 14,
+  matching: 3,
+};
+
+/** Three suggestions as the shell lists them (most matching first). */
+export function suggestions(): SourceSuggestion[] {
+  return [
+    SUGGESTION,
+    { id: 12, kind: "lever", label: "Lever", name: "Demo Health", host: "jobs.lever.co", jobs: 6, matching: 2 },
+    { id: 13, kind: "career_page", label: "Job page", name: "example.com", host: "example.com", jobs: 4, matching: 4 },
+  ];
+}
 
 export const WAITING: Waiting = {
   thread: "discover:1:2",
@@ -114,6 +142,8 @@ export function jobSources(extra: Partial<JobSources> = {}): JobSources {
       { kind: "hn_hiring", label: "HN Who is hiring", hint: "No address needed" },
       { kind: "career_page", label: "Job page", hint: "Any page that lists jobs, e.g. https://acme.com/careers" },
     ],
+    suggestions: [],
+    suggestWaiting: false,
     ...extra,
   };
 }
