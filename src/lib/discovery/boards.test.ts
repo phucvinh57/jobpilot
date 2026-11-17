@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { MAX_SUGGESTIONS, shownSuggestions, suggestionText, suggestTarget } from "./boards";
 
-describe("the board behind a careers page", () => {
-  it("is only looked for on a careers page with an address", () => {
+describe("the board behind a job page", () => {
+  it("is only looked for on a job page with an address", () => {
     expect(suggestTarget("career_page", " acme.com/careers ")).toBe("acme.com/careers");
     expect(suggestTarget("greenhouse", "acme.com/careers")).toBeUndefined();
     expect(suggestTarget("career_page", "")).toBeUndefined();

@@ -240,7 +240,10 @@ pub async fn discovery_job_sources(core: State<'_, Arc<Core>>) -> CommandResult<
     .await
 }
 
-/// Add a job source. The adapter of `kind` must accept `url`; a blank `name` becomes the board name.
+/// Add a job source. The adapter of `kind` must accept `url`, and the source is read once first: a
+/// job page that lists no jobs, or a board that does not exist, is refused with the reason (a board
+/// address given as a job page is added as that board). A blank `name` becomes the board name or
+/// the host. Takes seconds (a page may be rendered in the user's browser).
 #[tauri::command]
 pub async fn discovery_add_source(
     core: State<'_, Arc<Core>>,
@@ -249,15 +252,18 @@ pub async fn discovery_add_source(
     url: String,
 ) -> CommandResult<SourceDto> {
     let core = core.inner().clone();
-    run_sync(move || {
-        Ok(SourceDto::from(
-            &core.add_job_source(&kind, &name, &url, None)?,
-        ))
+    run(async move {
+        let source = if super::demo::skips_check(&kind, &url) {
+            core.add_job_source(&kind, &name, &url, None)?
+        } else {
+            core.add_job_source_checked(&kind, &name, &url, None).await?
+        };
+        Ok(SourceDto::from(&source))
     })
     .await
 }
 
-/// The job boards a careers page points to (one plain read of the page, no browser), for the add
+/// The job boards a job page points to (one plain read of the page, no browser), for the add
 /// form to offer as sources instead. Read-only: nothing is added and no board is read.
 #[tauri::command]
 pub async fn discovery_suggest_boards(

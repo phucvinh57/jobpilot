@@ -12,7 +12,7 @@
 //! | `workday` | `https://acme.wd5.myworkdayjobs.com/[en-US/]External` | the board page's own job search (POST), one query per wanted role |
 //! | `hn_hiring` | unused | HN Algolia, the latest "Who is hiring?" thread, one comment per candidate |
 //! | `yc` | `https://www.ycombinator.com/jobs` (default) or a workatastartup.com page | the job links of the listing page; the browser (and a bound session) when the page needs it |
-//! | `career_page` | a careers page | its `JobPosting` JSON-LD, else the same-site links that look like postings; else the site's `sitemap.xml`; else the browser (a page drawn by JavaScript) |
+//! | `career_page` | any page that lists jobs (a careers page, a job board's search) | its `JobPosting` JSON-LD, else the same-site links that look like postings; else the site's `sitemap.xml`; else the browser (a page drawn by JavaScript) |
 //!
 //! The API adapters read through [`Http`] and a base URL, so tests answer from saved fixture JSON; the
 //! page adapters read through [`Pages`] (plain HTTP, then the user's browser), so tests answer from
@@ -164,43 +164,63 @@ pub fn adapter_for_pages(source: &Source, http: Arc<dyn Http>, pages: Arc<dyn Pa
     Ok(match source.kind.as_str() {
         "yc" => Arc::new(Yc::new(pages, source)?),
         "career_page" => {
-            let company = match source.name.trim() {
-                "" => web::normalize_page_url(&source.url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default(),
-                name => name.to_string(),
-            };
-            Arc::new(CareerPage::new(pages, source, &company)?)
+            Arc::new(CareerPage::new(pages, source, &page_company(source))?)
         }
         _ => return adapter_for(source, http),
     })
 }
 
+/// A new source's address as [`check_source`] accepted it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedSource {
+    /// The kind to store: the one asked for, or the board's when a job page's address is a
+    /// company board (`boards.greenhouse.io/acme` pasted as a job page is a `greenhouse` source).
+    pub kind: String,
+    /// The address to store (an empty one becomes the kind's default where there is one).
+    pub url: String,
+    /// A name for it when the user gave none (the board name, the host or the kind's title).
+    pub name: String,
+}
+
+/// The company a job page's postings belong to when the page does not say: the source's name, else
+/// its host.
+pub(crate) fn page_company(source: &Source) -> String {
+    match source.name.trim() {
+        "" => web::normalize_page_url(&source.url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default(),
+        name => name.to_string(),
+    }
+}
+
 /// Check a new source before it is stored: the adapter that would read it must accept its address.
-/// Returns the address to store (an empty one becomes the kind's default where there is one) and a
-/// name for it when the user gave none.
-pub fn check_source(kind: &str, url: &str) -> Result<(String, String)> {
+/// A job page (`career_page`) may be any http(s) page of a real site; one whose address is a company
+/// board ([`boards::hint_for`]) becomes that board's source, which reads it better. Nothing is read
+/// here (see `Core::check_job_source` for the check that reads).
+pub fn check_source(kind: &str, url: &str) -> Result<CheckedSource> {
     let url = url.trim();
-    let slug_of = |hosts: &[&str], what: &str| -> Result<(String, String)> {
-        let slug = board_slug(url, hosts).context(what.to_string())?;
-        Ok((url.to_string(), slug))
-    };
+    let checked = |url: &str, name: String| Ok(CheckedSource { kind: kind.to_string(), url: url.to_string(), name });
+    let slug_of = |hosts: &[&str], what: &str| -> Result<CheckedSource> { checked(url, board_slug(url, hosts).context(what.to_string())?) };
     match kind {
         "greenhouse" => slug_of(&["greenhouse.io"], "Greenhouse source"),
         "lever" => slug_of(&["lever.co"], "Lever source"),
         "ashby" => slug_of(&["ashbyhq.com"], "Ashby source"),
         "smartrecruiters" => slug_of(&["smartrecruiters.com"], "SmartRecruiters source"),
-        "recruitee" => Ok((url.to_string(), board_host(url, recruitee::HOSTS).context("Recruitee source")?.0)),
-        "personio" => Ok((url.to_string(), board_host(url, personio::HOSTS).context("Personio source")?.0)),
-        "hn_hiring" => Ok((String::new(), "Hacker News: Who is hiring".to_string())),
-        "workday" => Ok((url.to_string(), workday::Board::parse(url).context("Workday source")?.tenant)),
+        "recruitee" => checked(url, board_host(url, recruitee::HOSTS).context("Recruitee source")?.0),
+        "personio" => checked(url, board_host(url, personio::HOSTS).context("Personio source")?.0),
+        "hn_hiring" => checked("", "Hacker News: Who is hiring".to_string()),
+        "workday" => checked(url, workday::Board::parse(url).context("Workday source")?.tenant),
         "yc" => {
             let url = if url.is_empty() { yc::DEFAULT_URL } else { url };
             yc::check_url(url)?;
-            Ok((url.to_string(), "Y Combinator jobs".to_string()))
+            checked(url, "Y Combinator jobs".to_string())
         }
         "career_page" => {
-            let parsed = web::normalize_page_url(url).context("career page source")?;
-            web::check_site(&parsed).context("career page source")?;
-            Ok((url.to_string(), parsed.host_str().unwrap_or_default().trim_start_matches("www.").to_string()))
+            let parsed = web::normalize_page_url(url).context("job page source")?;
+            // `hint_for` only names a board whose address passes the board kind's own check.
+            if let Some(board) = boards::hint_for(&parsed) {
+                return check_source(board.kind, &board.input);
+            }
+            web::check_site(&parsed).context("job page source")?;
+            checked(url, parsed.host_str().unwrap_or_default().trim_start_matches("www.").to_string())
         }
         other => bail!("no adapter for source kind `{other}` yet"),
     }
@@ -543,29 +563,69 @@ mod tests {
         assert!(err(add("nope", "")).contains("no adapter"));
     }
 
+    /// `(url, name)` of a check that kept the kind asked for.
+    fn checked(kind: &str, url: &str) -> (String, String) {
+        let c = check_source(kind, url).unwrap();
+        assert_eq!(c.kind, kind, "{url}");
+        (c.url, c.name)
+    }
+
     #[test]
     fn a_new_source_is_checked_and_named_before_it_is_stored() {
-        assert_eq!(check_source("greenhouse", " https://boards.greenhouse.io/acme ").unwrap(), ("https://boards.greenhouse.io/acme".into(), "acme".into()));
-        assert_eq!(check_source("lever", "acme").unwrap(), ("acme".into(), "acme".into()));
-        assert_eq!(check_source("ashby", "jobs.ashbyhq.com/acme").unwrap().1, "acme");
-        assert_eq!(check_source("hn_hiring", "ignored").unwrap().0, "");
-        assert_eq!(
-            check_source("workday", " acme.wd5.myworkdayjobs.com/en-US/External ").unwrap(),
-            ("acme.wd5.myworkdayjobs.com/en-US/External".into(), "acme".into())
-        );
-        assert_eq!(check_source("smartrecruiters", "https://jobs.smartrecruiters.com/AcmeGroup").unwrap().1, "AcmeGroup");
-        assert_eq!(check_source("smartrecruiters", "AcmeGroup").unwrap(), ("AcmeGroup".into(), "AcmeGroup".into()));
-        assert_eq!(check_source("recruitee", " https://acme.recruitee.com/ ").unwrap(), ("https://acme.recruitee.com/".into(), "acme".into()));
-        assert_eq!(check_source("personio", "acme.jobs.personio.com").unwrap().1, "acme");
-        assert_eq!(check_source("personio", "acme").unwrap().1, "acme");
-        assert_eq!(check_source("yc", "").unwrap(), (yc::DEFAULT_URL.into(), "Y Combinator jobs".into()));
-        assert_eq!(check_source("career_page", "https://www.acme.test/careers").unwrap(), ("https://www.acme.test/careers".into(), "acme.test".into()));
-        for (kind, url) in [("greenhouse", ""), ("lever", "https://evil.test/acme"), ("career_page", "javascript:x"), ("yc", "https://evil.test"), ("linkedin", "https://www.linkedin.com/jobs"),
+        assert_eq!(checked("greenhouse", " https://boards.greenhouse.io/acme "), ("https://boards.greenhouse.io/acme".into(), "acme".into()));
+        assert_eq!(checked("lever", "acme"), ("acme".into(), "acme".into()));
+        assert_eq!(checked("ashby", "jobs.ashbyhq.com/acme").1, "acme");
+        assert_eq!(checked("hn_hiring", "ignored").0, "");
+        assert_eq!(checked("workday", " acme.wd5.myworkdayjobs.com/en-US/External "), ("acme.wd5.myworkdayjobs.com/en-US/External".into(), "acme".into()));
+        assert_eq!(checked("smartrecruiters", "https://jobs.smartrecruiters.com/AcmeGroup").1, "AcmeGroup");
+        assert_eq!(checked("smartrecruiters", "AcmeGroup"), ("AcmeGroup".into(), "AcmeGroup".into()));
+        assert_eq!(checked("recruitee", " https://acme.recruitee.com/ "), ("https://acme.recruitee.com/".into(), "acme".into()));
+        assert_eq!(checked("personio", "acme.jobs.personio.com").1, "acme");
+        assert_eq!(checked("personio", "acme").1, "acme");
+        assert_eq!(checked("yc", ""), (yc::DEFAULT_URL.into(), "Y Combinator jobs".into()));
+        assert_eq!(checked("career_page", "https://www.acme.test/careers"), ("https://www.acme.test/careers".into(), "acme.test".into()));
+        for (kind, url) in [("greenhouse", ""), ("lever", "https://evil.test/acme"), ("career_page", "javascript:x"), ("career_page", "https://co.uk/jobs"), ("career_page", "localhost/jobs"),
+            ("yc", "https://evil.test"), ("linkedin", "https://www.linkedin.com/jobs"),
             ("smartrecruiters", ""), ("smartrecruiters", ".."), ("smartrecruiters", "https://smartrecruiters.com.evil.test/Acme"),
             ("recruitee", ""), ("recruitee", "recruitee.com.evil.test"), ("recruitee", "a.b.recruitee.com"), ("recruitee", "https://evil.test/o/x"),
             ("personio", ".."), ("personio", "acme.jobs.personio.de.evil.test"), ("personio", "acme.personio.de"), ("personio", "jobs.personio.de"),
             ("workday", ""), ("workday", "https://acme.wd5.myworkdayjobs.com/.."), ("workday", "myworkdayjobs.com.evil.test/External")] {
             assert!(check_source(kind, url).is_err(), "{kind} {url}");
         }
+    }
+
+    #[test]
+    fn any_page_of_a_real_site_is_a_job_page() {
+        for (url, name) in [
+            ("https://www.linkedin.com/jobs/search?keywords=rust", "linkedin.com"),
+            ("https://acme.github.io/", "acme.github.io"),
+            ("https://github.io/jobs", "github.io"),
+            ("https://apply.workable.com/acme/", "apply.workable.com"),
+            ("https://www.greenhouse.io/careers", "greenhouse.io"),
+        ] {
+            assert_eq!(checked("career_page", url), (url.to_string(), name.to_string()));
+        }
+    }
+
+    #[test]
+    fn a_company_board_pasted_as_a_job_page_becomes_that_boards_source() {
+        for (url, kind, input, name) in [
+            ("https://boards.greenhouse.io/acme", "greenhouse", "boards.greenhouse.io/acme", "acme"),
+            ("boards.greenhouse.io/acme/jobs/4011001", "greenhouse", "boards.greenhouse.io/acme", "acme"),
+            ("https://jobs.lever.co/acme", "lever", "jobs.lever.co/acme", "acme"),
+            ("https://jobs.ashbyhq.com/acme", "ashby", "jobs.ashbyhq.com/acme", "acme"),
+            ("https://jobs.smartrecruiters.com/AcmeGroup", "smartrecruiters", "jobs.smartrecruiters.com/AcmeGroup", "AcmeGroup"),
+            ("https://acme.recruitee.com/", "recruitee", "acme.recruitee.com", "acme"),
+            ("https://acme.jobs.personio.de/", "personio", "acme.jobs.personio.de", "acme"),
+            ("https://acme.wd5.myworkdayjobs.com/en-US/External", "workday", "https://acme.wd5.myworkdayjobs.com/External", "acme"),
+        ] {
+            assert_eq!(
+                check_source("career_page", url).unwrap(),
+                CheckedSource { kind: kind.into(), url: input.into(), name: name.into() },
+                "{url}"
+            );
+        }
+        // A board's domain without a company board in the address is just a page.
+        assert_eq!(check_source("career_page", "https://boards.greenhouse.io/").unwrap().kind, "career_page");
     }
 }

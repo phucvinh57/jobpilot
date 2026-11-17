@@ -43,11 +43,9 @@ describe("Settings > Job sources", () => {
     expect(within(first).getByRole("button", { name: "LinkedIn" }).getAttribute("aria-pressed")).toBe("false");
 
     // A source with no name shows its kind; a paused one needs the user, whatever its status says.
-    const second = screen.getByRole("listitem", { name: "Career page: needs you: continue it from Jobs" });
+    const second = screen.getByRole("listitem", { name: "Job page: needs you: continue it from Jobs" });
     expect(within(second).getByText("needs you")).toBeTruthy();
-    expect(within(second).getByRole("switch", { name: "Search Career page" }).getAttribute("aria-checked")).toBe(
-      "false",
-    );
+    expect(within(second).getByRole("switch", { name: "Search Job page" }).getAttribute("aria-checked")).toBe("false");
     expect(within(second).getByRole("button", { name: "LinkedIn" }).getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -60,7 +58,7 @@ describe("Settings > Job sources", () => {
 
     await user.click(within(first).getByRole("button", { name: "Work account" }));
     expect(mocked.setSourceSession).toHaveBeenCalledWith(1, 6);
-    const second = screen.getByRole("listitem", { name: /^Career page/ });
+    const second = screen.getByRole("listitem", { name: /^Job page/ });
     await user.click(within(second).getByRole("button", { name: "Private (no sign-in)" }));
     expect(mocked.setSourceSession).toHaveBeenCalledWith(2, null);
 
@@ -121,10 +119,10 @@ describe("Settings > Job sources", () => {
     const dialog = await screen.findByRole("dialog", { name: "Add source" });
     expect(within(dialog).getByText("Board URL or name, e.g. boards.greenhouse.io/acme")).toBeTruthy();
 
-    await user.click(within(dialog).getByRole("button", { name: "Career page" }));
-    expect(within(dialog).getByText("Careers page, e.g. https://acme.com/careers")).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "Job page" }));
+    expect(within(dialog).getByText("Any page that lists jobs, e.g. https://acme.com/careers")).toBeTruthy();
     await user.type(within(dialog).getByLabelText("Name"), "Beta");
-    await user.type(within(dialog).getByLabelText("Board name or address"), "beta.test/careers");
+    await user.type(within(dialog).getByLabelText("Address"), "beta.test/careers");
     const add = within(dialog).getByRole("button", { name: "Add" });
     expect(add.className, "the dialog's main button").toContain("bg-accent");
     await user.click(add);
@@ -134,13 +132,51 @@ describe("Settings > Job sources", () => {
     expect(within(toast).getByText("Beta")).toBeTruthy();
   });
 
+  it("says it checks the page while Add runs, and keeps Add disabled", async () => {
+    const user = userEvent.setup();
+    let finish: (source: typeof SOURCE) => void = () => {};
+    mocked.addSource.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    renderWithToasts(<JobSourcesSection />);
+    await user.click(await screen.findByRole("button", { name: "Add source" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add source" });
+    await user.click(within(dialog).getByRole("button", { name: "Job page" }));
+    expect(within(dialog).getByLabelText("Address")).toBeTruthy();
+    await user.type(within(dialog).getByLabelText("Address"), "beta.test/jobs");
+    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    const checking = await within(dialog).findByRole("button", { name: "Checking the page…" });
+    expect((checking as HTMLButtonElement).disabled).toBe(true);
+    await user.click(checking);
+    expect(mocked.addSource).toHaveBeenCalledTimes(1);
+    finish({ ...SOURCE, id: 3, name: "beta.test", kind: "career_page" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByRole("status", { name: "Source added" })).toBeTruthy();
+  });
+
+  it("shows why a page was refused under the form", async () => {
+    const user = userEvent.setup();
+    mocked.addSource.mockRejectedValue(new CommandError("no job postings found on this page"));
+    renderWithToasts(<JobSourcesSection />);
+    await user.click(await screen.findByRole("button", { name: "Add source" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add source" });
+    await user.click(within(dialog).getByRole("button", { name: "Job page" }));
+    await user.type(within(dialog).getByLabelText("Address"), "beta.test/about");
+    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    const error = await within(dialog).findByRole("alert");
+    expect(error.textContent).toContain("Not added: no job postings found on this page");
+    expect(within(dialog).getByRole("button", { name: "Add" })).toBeTruthy();
+  });
+
   it("adds with Enter, and opens the dialog empty again", async () => {
     const user = userEvent.setup();
     mocked.addSource.mockResolvedValue({ ...SOURCE, id: 3, name: "", kind: "greenhouse" });
     renderWithToasts(<JobSourcesSection />);
     await user.click(await screen.findByRole("button", { name: "Add source" }));
     let dialog = await screen.findByRole("dialog", { name: "Add source" });
-    await user.type(within(dialog).getByLabelText("Board name or address"), "acme{Enter}");
+    await user.type(within(dialog).getByLabelText("Address"), "acme{Enter}");
     expect(mocked.addSource).toHaveBeenCalledWith("greenhouse", "", "acme");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     // A source with no name is named by its kind.
@@ -148,18 +184,18 @@ describe("Settings > Job sources", () => {
 
     await user.click(screen.getByRole("button", { name: "Add source" }));
     dialog = await screen.findByRole("dialog", { name: "Add source" });
-    expect((within(dialog).getByLabelText("Board name or address") as HTMLInputElement).value).toBe("");
+    expect((within(dialog).getByLabelText("Address") as HTMLInputElement).value).toBe("");
   });
 
-  it("offers the job board behind a careers page with a plain button", async () => {
+  it("offers the job board behind a job page with a plain button", async () => {
     const user = userEvent.setup();
     const board = { kind: "greenhouse", label: "Greenhouse", input: "boards.greenhouse.io/beta" };
     mocked.suggestBoards.mockImplementation((url) => Promise.resolve(url === "beta.test/careers" ? [board] : []));
     mocked.addSource.mockResolvedValue({ ...SOURCE, id: 3, name: "beta", kind: "greenhouse" });
     renderWithToasts(<JobSourcesSection />);
     await user.click(await screen.findByRole("button", { name: "Add source" }));
-    await user.click(screen.getByRole("button", { name: "Career page" }));
-    const address = screen.getByLabelText("Board name or address");
+    await user.click(screen.getByRole("button", { name: "Job page" }));
+    const address = screen.getByLabelText("Address");
     await user.type(address, "beta.test/careers");
     await user.tab();
 
@@ -181,12 +217,12 @@ describe("Settings > Job sources", () => {
     const user = userEvent.setup();
     renderWithToasts(<JobSourcesSection />);
     await user.click(await screen.findByRole("button", { name: "Add source" }));
-    await user.type(screen.getByLabelText("Board name or address"), "boards.greenhouse.io/acme");
+    await user.type(screen.getByLabelText("Address"), "boards.greenhouse.io/acme");
     await user.tab();
-    expect(mocked.suggestBoards, "a board kind is not a careers page").not.toHaveBeenCalled();
+    expect(mocked.suggestBoards, "a board kind is not a job page").not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Career page" }));
-    await user.click(screen.getByLabelText("Board name or address"));
+    await user.click(screen.getByRole("button", { name: "Job page" }));
+    await user.click(screen.getByLabelText("Address"));
     await user.tab();
     await waitFor(() => expect(mocked.suggestBoards).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("group", { name: /lists its jobs on/ })).toBeNull();
@@ -197,8 +233,8 @@ describe("Settings > Job sources", () => {
     mocked.suggestBoards.mockRejectedValue(new CommandError("network is unreachable"));
     renderWithToasts(<JobSourcesSection />);
     await user.click(await screen.findByRole("button", { name: "Add source" }));
-    await user.click(screen.getByRole("button", { name: "Career page" }));
-    await user.type(screen.getByLabelText("Board name or address"), "beta.test/careers");
+    await user.click(screen.getByRole("button", { name: "Job page" }));
+    await user.type(screen.getByLabelText("Address"), "beta.test/careers");
     await user.tab();
     await waitFor(() => expect(mocked.suggestBoards).toHaveBeenCalled());
     expect(screen.queryByRole("group", { name: /lists its jobs on/ })).toBeNull();
@@ -206,7 +242,7 @@ describe("Settings > Job sources", () => {
 
     // The failure is not remembered: leaving the field again asks again.
     mocked.suggestBoards.mockResolvedValue([{ kind: "lever", label: "Lever", input: "jobs.lever.co/beta" }]);
-    await user.click(screen.getByLabelText("Board name or address"));
+    await user.click(screen.getByLabelText("Address"));
     await user.tab();
     expect(await screen.findByRole("group", { name: /lists its jobs on Lever/ })).toBeTruthy();
     expect(mocked.suggestBoards).toHaveBeenCalledTimes(2);
@@ -235,7 +271,7 @@ describe("Settings > Job sources", () => {
   it("says there are no sources yet, once the list has been read", async () => {
     mocked.readJobSources.mockResolvedValue(jobSources({ sources: [], waiting: [] }));
     renderWithToasts(<JobSourcesSection />);
-    expect(await screen.findByText("No sources yet. Add a company board, a careers page or Hacker News.")).toBeTruthy();
+    expect(await screen.findByText("No sources yet. Add a company board, a job page or Hacker News.")).toBeTruthy();
   });
 
   it("says when the list could not be read, with a Retry", async () => {

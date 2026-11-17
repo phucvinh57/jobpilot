@@ -18,7 +18,6 @@ use async_trait::async_trait;
 use regex::Regex;
 use url::Url;
 
-use super::boards::{kind_for_host, BoardHint};
 use super::{html_to_text, one_line, Candidate};
 use crate::engine::browser::challenge::ChallengeFound;
 use crate::engine::browser::render::Renderer;
@@ -210,10 +209,10 @@ const PLATFORM_ROOTS: [&str; 24] = [
     "wordpress.com", "wixsite.com", "squarespace.com", "webflow.io", "notion.site", "myshopify.com", "carrd.co", "glitch.me",
 ];
 
-/// Why `host` (without `www.`) cannot be the address of a site whose subdomains are all "the same
-/// site": it is a public suffix, a hosting platform or a job board shared by many companies. `None`
-/// for a company's own domain, a subdomain of a platform that is one customer's, and an IP address.
-pub(crate) fn shared_host(host: &str) -> Option<&'static str> {
+/// Why `host` (without `www.`) cannot be the address of a site at all: a single-word name or a
+/// public suffix (`co.uk`). `None` for any other name (a company's own domain, a hosting platform, a
+/// job board) and an IP address.
+pub(crate) fn not_a_site(host: &str) -> Option<&'static str> {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     if host.parse::<std::net::IpAddr>().is_ok() {
         return None;
@@ -226,37 +225,44 @@ pub(crate) fn shared_host(host: &str) -> Option<&'static str> {
     if registrable_domain(&probe) == probe {
         return Some("a public domain ending shared by many sites");
     }
-    if PLATFORM_ROOTS.contains(&host.as_str()) {
-        return Some("a hosting platform shared by many sites");
-    }
-    if is_ats_host(&host) {
-        return Some("a job board shared by many companies");
-    }
     None
 }
 
-/// Fail for an address whose site cannot be told from other companies' sites ([`shared_host`]),
-/// and for a job board's address ([`kind_for_host`]): the message names the source to add instead.
+/// Is `host` (without `www.`) shared by many companies, so that its subdomains are other sites: a
+/// hosting platform's own name (`github.io`, while `acme.github.io` is one customer's) or a job board
+/// or aggregator (`linkedin.com`, `boards.greenhouse.io`, `apply.workable.com`)? Such a page is a job
+/// source like any other, but only its exact host is "the same site" ([`same_site`]).
+pub(crate) fn is_shared_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    PLATFORM_ROOTS.contains(&host.as_str()) || is_ats_host(&host)
+}
+
+/// Fail for an address that is not a site at all ([`not_a_site`]). Any other page may be a job
+/// source: a company's careers page, a job board, an aggregator's search page. (A board address
+/// pasted as a job page becomes that board's source in [`super::check_source`].)
 pub(crate) fn check_site(url: &Url) -> Result<()> {
     let host = url.host_str().unwrap_or_default();
-    if let Some(kind) = kind_for_host(host) {
-        let label = BoardHint { kind, input: String::new() }.label();
-        bail!("`{host}` is a {label} job board shared by many companies: add it as a {label} source, not as a careers page");
-    }
-    match shared_host(&bare_host(url)) {
+    match not_a_site(&bare_host(url)) {
         None => Ok(()),
-        Some(why) => bail!("`{host}` is {why}: add the company's own careers page"),
+        Some(why) => bail!("`{host}` is {why}: enter the address of a page that lists jobs"),
     }
 }
 
 /// Is `link` on the site `site`, the address the user **configured**? The same host (ignoring
 /// `www.`), or a subdomain of it (`jobs.acme.com` under `acme.com`). The parent of a configured
-/// subdomain, its sibling subdomains and look-alike names (`notacme.com`) are other sites, and a
-/// `site` that is a public suffix, a hosting platform or a job board ([`shared_host`]) has no
-/// same-site links at all. Redirects and links found on a page do not move `site`.
+/// subdomain, its sibling subdomains and look-alike names (`notacme.com`) are other sites. On a host
+/// shared by many companies ([`is_shared_host`]: `linkedin.com`, `github.io`) only that exact host
+/// counts, never a subdomain (another tenant); a `site` that is no site at all ([`not_a_site`]) has
+/// no same-site links. Redirects and links found on a page do not move `site`.
 pub(crate) fn same_site(site: &Url, link: &Url) -> bool {
     let (site, link) = (bare_host(site), bare_host(link));
-    !site.is_empty() && shared_host(&site).is_none() && (link == site || link.ends_with(&format!(".{site}")))
+    if site.is_empty() || not_a_site(&site).is_some() {
+        return false;
+    }
+    if is_shared_host(&site) {
+        return link == site;
+    }
+    link == site || link.ends_with(&format!(".{site}"))
 }
 
 /// Path words that mark a place where jobs live.
@@ -336,7 +342,7 @@ pub(crate) fn page_url(page: &Page) -> Result<Url> {
 pub(crate) fn normalize_page_url(raw: &str) -> Result<Url> {
     let raw = raw.trim();
     if raw.is_empty() {
-        bail!("no page address is set: enter the address of the careers page");
+        bail!("no page address is set: enter the address of a page that lists jobs");
     }
     let with_scheme = if raw.contains("://") { raw.to_string() } else { format!("https://{raw}") };
     let url = Url::parse(&with_scheme).map_err(|_| anyhow!("`{raw}` is not a valid address"))?;
@@ -496,48 +502,48 @@ mod tests {
     }
 
     #[test]
-    fn a_public_suffix_a_platform_or_a_job_board_is_not_a_site() {
-        // Nothing is "the same site" as one of these: they hold many unrelated companies.
+    fn a_public_suffix_or_a_single_word_is_not_a_site() {
+        // Nothing is "the same site" as one of these, and none of them is a job page.
+        for none in ["https://co.uk/", "https://com.vn/", "https://com/", "https://localhost/", "https://intranet/"] {
+            let s = url(none);
+            let host = s.host_str().unwrap();
+            assert!(!same_site(&s, &s), "{none}");
+            assert!(!same_site(&s, &url(&format!("https://evil.{host}/jobs/1"))), "{none}: a subdomain of it");
+            let err = check_site(&s).unwrap_err().to_string();
+            assert!(err.contains("page that lists jobs"), "{none}: {err}");
+        }
+        assert!(not_a_site("acme.com").is_none() && not_a_site("co.uk").is_some() && not_a_site("greenhouse.io").is_none());
+        assert!(not_a_site("127.0.0.1").is_none(), "an address is left to the network guard");
+    }
+
+    #[test]
+    fn a_shared_host_is_a_job_page_whose_site_is_its_exact_host() {
+        // Platforms and job boards hold many unrelated companies: any page of them may be a job
+        // source, but its subdomains are other tenants.
         for shared in [
-            "https://co.uk/", "https://com.vn/", "https://com/", "https://localhost/", "https://intranet/", "https://github.io/jobs",
-            "https://vercel.app/", "https://www.netlify.app/", "https://herokuapp.com/", "https://boards.greenhouse.io/acme",
-            "https://jobs.lever.co/acme", "https://www.linkedin.com/jobs", "https://acme.wd1.myworkdayjobs.com/en-US/careers",
+            "https://github.io/jobs", "https://vercel.app/", "https://www.netlify.app/", "https://herokuapp.com/",
+            "https://boards.greenhouse.io/acme", "https://jobs.lever.co/acme", "https://www.linkedin.com/jobs",
+            "https://apply.workable.com/acme/", "https://acme.wd1.myworkdayjobs.com/en-US/careers",
         ] {
             let s = url(shared);
-            let host = s.host_str().unwrap();
-            assert!(!same_site(&s, &s), "{shared}");
+            let host = s.host_str().unwrap().trim_start_matches("www.").to_string();
+            assert!(check_site(&s).is_ok(), "{shared}");
+            assert!(is_shared_host(&host), "{shared}");
+            assert!(same_site(&s, &s), "{shared}: its own pages");
+            assert!(same_site(&s, &url(&format!("https://www.{host}/jobs/view/1"))), "{shared}: with www.");
             assert!(!same_site(&s, &url(&format!("https://evil.{host}/jobs/1"))), "{shared}: a subdomain of it");
-            let err = check_site(&s).unwrap_err().to_string();
-            assert!(err.contains("careers page"), "{shared}: {err}");
         }
+        assert!(same_site(&url("https://www.linkedin.com/jobs/search?keywords=rust"), &url("https://linkedin.com/jobs/view/123")));
+        assert!(!same_site(&url("https://www.linkedin.com/jobs"), &url("https://de.linkedin.com/jobs/view/123")));
         // A customer's own subdomain on a platform, and a company domain under a public suffix, are sites.
         assert!(same_site(&url("https://acme.github.io/"), &url("https://acme.github.io/jobs/1")));
         assert!(!same_site(&url("https://acme.github.io/"), &url("https://evil.github.io/jobs/1")), "another tenant of the platform");
         assert!(same_site(&url("https://acme.co.uk/careers"), &url("https://jobs.acme.co.uk/1")));
         assert!(!same_site(&url("https://acme.co.uk/careers"), &url("https://other.co.uk/1")));
-        for ok in ["https://acme.test/careers", "https://acme.github.io/", "https://careers.acme.co.uk/", "http://127.0.0.1:8080/jobs"] {
+        for ok in ["https://acme.test/careers", "https://acme.github.io/", "https://careers.acme.co.uk/", "http://127.0.0.1:8080/jobs", "https://greenhouse.io.acme.test/careers"] {
             assert!(check_site(&url(ok)).is_ok(), "{ok}");
         }
-        assert!(shared_host("acme.com").is_none() && shared_host("co.uk").is_some() && shared_host("greenhouse.io").is_some());
-    }
-
-    #[test]
-    fn a_board_typed_as_a_careers_page_is_refused_naming_its_source() {
-        for (address, label) in [
-            ("https://boards.greenhouse.io/acme", "Greenhouse"),
-            ("https://jobs.lever.co/acme", "Lever"),
-            ("https://jobs.ashbyhq.com/acme", "Ashby"),
-            ("https://jobs.smartrecruiters.com/Acme", "SmartRecruiters"),
-            ("https://acme.recruitee.com/", "Recruitee"),
-            ("https://acme.jobs.personio.de/", "Personio"),
-            ("https://acme.wd5.myworkdayjobs.com/External", "Workday"),
-        ] {
-            let err = check_site(&url(address)).unwrap_err().to_string();
-            assert!(err.contains(&format!("add it as a {label} source")), "{address}: {err}");
-        }
-        let err = check_site(&url("https://www.linkedin.com/jobs")).unwrap_err().to_string();
-        assert!(err.contains("job board shared by many companies") && err.contains("careers page"), "{err}");
-        assert!(check_site(&url("https://greenhouse.io.acme.test/careers")).is_ok(), "a look-alike is just another site");
+        assert!(!is_shared_host("acme.github.io") && !is_shared_host("acme.com") && !is_shared_host("greenhouse.io.acme.test"));
     }
 
     #[test]

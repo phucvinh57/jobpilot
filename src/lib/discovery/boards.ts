@@ -1,9 +1,10 @@
-// Settings > Job sources: the job board behind a careers page, offered as a source to add instead.
+// Settings > Job sources: the job board behind a job page, offered as a source to add instead.
 // The shell finds it (one plain read of the page); nothing here reads a page or adds a source.
 
 import type { BoardHint } from "@/types/discovery";
 
-/** The kind whose address is a careers page: the only one that gets board suggestions. */
+/** The kind whose address is a job page (any page that lists jobs): the only one that gets board
+ *  suggestions. */
 export const CAREER_PAGE = "career_page";
 
 /** How long the address must rest before the page is checked (leaving the field checks at once;

@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { compactAgo, kindLabel, rowAddress, rowName, sourceTag, statusLine, STATUS_CHARS } from "./sources";
+import {
+  checkingText,
+  compactAgo,
+  kindLabel,
+  rowAddress,
+  rowName,
+  sourceTag,
+  statusLine,
+  STATUS_CHARS,
+} from "./sources";
 import type { SourceKind } from "@/types/discovery";
 
 const KINDS: SourceKind[] = [
   { kind: "greenhouse", label: "Greenhouse", hint: "" },
   { kind: "yc", label: "Y Combinator", hint: "" },
-  { kind: "career_page", label: "Career page", hint: "" },
+  { kind: "career_page", label: "Job page", hint: "" },
 ];
 
 const NOW = new Date("2026-11-14T12:00:00Z");
@@ -55,7 +64,7 @@ describe("a source's status line", () => {
 
 describe("a source row", () => {
   it("kinds have labels and unknown ones show as they are", () => {
-    expect(kindLabel(KINDS, "career_page")).toBe("Career page");
+    expect(kindLabel(KINDS, "career_page")).toBe("Job page");
     expect(kindLabel(KINDS, "yc")).toBe("Y Combinator");
     expect(kindLabel(KINDS, "linkedin")).toBe("linkedin");
   });
@@ -76,5 +85,14 @@ describe("a source row", () => {
     expect(sourceTag("other", false)).toEqual({ text: "idle", tone: "neutral" });
     expect(sourceTag("needsYou", false)).toEqual({ text: "needs you", tone: "warn" });
     expect(sourceTag("ok", true)).toEqual({ text: "needs you", tone: "warn" });
+  });
+});
+
+describe("the add button while a source is checked", () => {
+  it("says what is read", () => {
+    expect(checkingText("career_page")).toBe("Checking the page…");
+    expect(checkingText("greenhouse")).toBe("Checking the board…");
+    expect(checkingText("hn_hiring")).toBe("Adding…");
+    expect(checkingText("yc")).toBe("Adding…");
   });
 });

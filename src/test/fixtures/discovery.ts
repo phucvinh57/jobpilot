@@ -112,7 +112,7 @@ export function jobSources(extra: Partial<JobSources> = {}): JobSources {
     kinds: [
       { kind: "greenhouse", label: "Greenhouse", hint: "Board URL or name, e.g. boards.greenhouse.io/acme" },
       { kind: "hn_hiring", label: "HN Who is hiring", hint: "No address needed" },
-      { kind: "career_page", label: "Career page", hint: "Careers page, e.g. https://acme.com/careers" },
+      { kind: "career_page", label: "Job page", hint: "Any page that lists jobs, e.g. https://acme.com/careers" },
     ],
     ...extra,
   };

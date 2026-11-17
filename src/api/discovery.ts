@@ -180,7 +180,7 @@ export async function addSource(kind: string, name: string, url: string): Promis
   return source;
 }
 
-/** The job boards a careers page points to (the shell reads the page once; nothing is added). */
+/** The job boards a job page points to (the shell reads the page once; nothing is added). */
 export function suggestBoards(url: string): Promise<BoardHint[]> {
   return invoke<BoardHint[]>("discovery_suggest_boards", { url });
 }

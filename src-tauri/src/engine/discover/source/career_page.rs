@@ -1,4 +1,5 @@
-//! `career_page`: a careers page the user added. The candidates come from the first of these that
+//! `career_page`: a job page the user added: a company's careers page, or any other page that lists
+//! jobs (a job board's search, an aggregator). The candidates come from the first of these that
 //! gives any, in order of cost:
 //!
 //! 1. the page read plain: its schema.org `JobPosting` JSON-LD ([`super::jsonld`]), else its links
@@ -47,16 +48,26 @@ pub struct CareerPage {
 }
 
 impl CareerPage {
-    /// `company` names the postings (the page does not say). `Err` for an address that is not an
-    /// http(s) page.
+    /// `company` names the postings whose JSON-LD does not say (an aggregator's page lists many
+    /// companies). `Err` for an address that is not an http(s) page of a real site.
     pub fn new(pages: Arc<dyn Pages>, source: &Source, company: &str) -> Result<Self> {
-        let url = normalize_page_url(&source.url).context("career page source")?;
-        check_site(&url).context("career page source")?;
+        let url = normalize_page_url(&source.url).context("job page source")?;
+        check_site(&url).context("job page source")?;
         Ok(Self { pages, source: source.clone(), url, company: company.to_string(), listing: Cached::new(LISTING_TTL), hints: Mutex::new(Vec::new()) })
     }
 
     async fn postings(&self) -> Result<Arc<Vec<Candidate>>> {
         self.listing.get_or_load(|| self.read()).await
+    }
+
+    /// One read of the page for the add check (`discover::check`), without the role filter or the
+    /// cache: every posting found, and the job boards the pages it read point to (kept whether or
+    /// not the read failed, so a page that embeds a board can name it even when the browser could
+    /// not render it).
+    pub(crate) async fn read_for_check(&self) -> (Result<Vec<Candidate>>, Vec<BoardHint>) {
+        let mut hints = Vec::new();
+        let read = self.read_pages(&mut hints).await;
+        (read, hints)
     }
 
     /// The candidates, trying the plain page, the sitemap and the browser in turn (see the module
@@ -143,7 +154,9 @@ impl CareerPage {
                 continue;
             }
             let Some(title) = (if p.title.is_empty() { title_from_url(url) } else { Some(p.title.clone()) }) else { continue };
-            found.push(Candidate { url: url.to_string(), title, company: self.company.clone(), location: p.location.clone(), snippet: String::new() });
+            // An aggregator's page lists many companies: the posting's own `hiringOrganization` first.
+            let company = if p.company.is_empty() { self.company.clone() } else { p.company.clone() };
+            found.push(Candidate { url: url.to_string(), title, company, location: p.location.clone(), snippet: String::new() });
         }
         info!(postings = total, candidates = found.len(), closed = closed.len(), "career page: JSON-LD postings read");
         found
@@ -377,15 +390,29 @@ mod tests {
     }
 
     #[test]
-    fn a_site_shared_by_many_companies_is_not_accepted_as_a_careers_page() {
+    fn any_page_of_a_real_site_is_accepted_as_a_job_page() {
         let fake = pages(FakePages::new());
-        for shared in ["https://boards.greenhouse.io/acme", "https://jobs.lever.co/acme", "https://www.linkedin.com/jobs", "https://github.io/careers", "https://co.uk/careers", "https://localhost/careers"] {
-            let err = CareerPage::new(fake.clone(), &source(shared), "Acme").err().expect(shared);
-            let text = format!("{err:#}");
-            assert!(text.starts_with("career page source") && text.contains("careers page"), "{shared}: {text}");
+        for page in ["https://www.linkedin.com/jobs", "https://github.io/careers", "https://acme.github.io/careers", "https://careers.acme.co.uk/", "https://boards.greenhouse.io/acme"] {
+            assert!(CareerPage::new(fake.clone(), &source(page), "Acme").is_ok(), "{page}");
         }
-        assert!(CareerPage::new(fake.clone(), &source("https://acme.github.io/careers"), "Acme").is_ok());
-        assert!(CareerPage::new(fake, &source("https://careers.acme.co.uk/"), "Acme").is_ok());
+        for none in ["https://co.uk/careers", "https://localhost/careers"] {
+            let err = CareerPage::new(fake.clone(), &source(none), "Acme").err().expect(none);
+            let text = format!("{err:#}");
+            assert!(text.starts_with("job page source") && text.contains("page that lists jobs"), "{none}: {text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_aggregator_page_names_each_postings_own_company() {
+        let html = r#"<script type="application/ld+json">[
+            {"@type":"JobPosting","title":"Rust Engineer","url":"/jobs/view/1","hiringOrganization":{"@type":"Organization","name":"Beta Corp"}},
+            {"@type":"JobPosting","title":"Data Engineer","url":"/jobs/view/2"}
+        ]</script>"#;
+        let list = "https://www.linkedin.com/jobs/search?keywords=rust";
+        let fake = pages(FakePages::new().plain(list, html));
+        let adapter = CareerPage::new(fake, &source(list), "linkedin.com").unwrap();
+        let found: Vec<_> = adapter.search(&Preferences::default(), &ctx(None, 20)).await.unwrap().candidates.into_iter().map(|c| (c.title, c.company)).collect();
+        assert_eq!(found, [("Rust Engineer".to_string(), "Beta Corp".to_string()), ("Data Engineer".to_string(), "linkedin.com".to_string())]);
     }
 
     #[test]
@@ -393,7 +420,7 @@ mod tests {
         let fake = pages(FakePages::new());
         for bad in ["", "ftp://x.test/careers", "javascript:alert(1)"] {
             let err = CareerPage::new(fake.clone(), &source(bad), "Acme").err().expect(bad);
-            assert!(format!("{err:#}").starts_with("career page source"), "{err:#}");
+            assert!(format!("{err:#}").starts_with("job page source"), "{err:#}");
         }
     }
 }
