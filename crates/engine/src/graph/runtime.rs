@@ -356,6 +356,11 @@ impl Graphs {
     /// `run` / `resume` call returns [`Outcome::Cancelled`]. The thread id is free at once: it can
     /// be run again right away. Child threads a node started with [`run_each`](Self::run_each) are
     /// dropped with it but keep their rows (as threads the app closed on): cancel them by id.
+    ///
+    /// A run counts from the moment its `run` / `resume` future is first polled: a cancel that
+    /// comes before that (a run handed to `runtime::spawn` that has not started yet) finds no such
+    /// thread and does nothing, and the run then starts as usual. Cancel a run once it reports
+    /// progress ([`subscribe`](Self::subscribe)) or from the task that awaits it.
     pub fn cancel(&self, thread: &str) -> Result<()> {
         let graph = self.inner.store.graph_thread(thread)?.map(|t| t.graph);
         // The token first: once it fires no checkpoint or status of that run is written, so the
