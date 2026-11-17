@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast::error::RecvError;
 
 use super::nodes::{self, Challenge, ChallengeKind, Challenged};
 use super::*;
@@ -735,15 +736,30 @@ fn cancelling_in_the_middle_of_a_busy_run_leaves_no_thread_behind() {
     runtime::block_on(async {
         for i in 0..30u64 {
             let thread = format!("busy{i}");
+            let mut events = graphs.subscribe();
             let run = {
                 let (graphs, busy, thread) = (graphs.clone(), busy.clone(), thread.clone());
                 runtime::spawn(async move { graphs.run(&busy, &thread, Flow::default()).await })
             };
+            // Cancel only once the run has started: a cancel that comes before the spawned task
+            // reaches `run` finds no such thread and does nothing, and the run that starts after it
+            // is a new one that rightly ends `Done` with its row kept. Events are sent only from a
+            // started run; falling behind (`Lagged`) means some were sent, and they are this
+            // thread's: the previous run was awaited before this subscription.
+            loop {
+                match events.recv().await {
+                    Ok(p) if p.thread == thread => break,
+                    Ok(_) => {}
+                    Err(RecvError::Lagged(_)) => break,
+                    Err(e) => panic!("progress stream closed: {e}"),
+                }
+            }
             tokio::time::sleep(Duration::from_micros(i * 150)).await;
             graphs.cancel(&thread).unwrap();
             let outcome = run.await.unwrap().unwrap();
             assert!(matches!(outcome, Outcome::Cancelled | Outcome::Done(_)), "{outcome:?}");
-            assert!(graphs.status(&thread).unwrap().is_none(), "no rows left for {thread}");
+            let left = graphs.status(&thread).unwrap();
+            assert!(left.is_none(), "no rows left for {thread} after {outcome:?}: {left:?}");
         }
     });
 }
