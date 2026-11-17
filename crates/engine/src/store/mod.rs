@@ -312,7 +312,8 @@ impl Store {
 
 fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    for (i, sql) in MIGRATIONS.iter().enumerate().skip(usize::try_from(applied).unwrap_or(0)) {
+    let applied = usize::try_from(applied).with_context(|| format!("the database schema version {applied} is invalid"))?;
+    for (i, sql) in MIGRATIONS.iter().enumerate().skip(applied) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql).with_context(|| format!("migration {}", i + 1))?;
         tx.pragma_update(None, "user_version", i as i64 + 1)?;
