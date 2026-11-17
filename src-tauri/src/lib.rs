@@ -27,7 +27,7 @@ const WINDOW: &str = "main";
 pub fn run() -> anyhow::Result<()> {
     // Logs go to stderr and `<data dir>/logs/`, with secrets redacted.
     let paths = Paths::from_env()?;
-    let _log = logging::init(&paths);
+    let _log = logging::init(&paths, env!("CARGO_CRATE_NAME"));
     tracing::info!(
         "JobPilot {} starting, data in {}",
         env!("CARGO_PKG_VERSION"),

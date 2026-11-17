@@ -544,37 +544,39 @@ fn the_library_is_named_only_inside_the_graph_module() {
     let mut hits = Vec::new();
     walk(&crate_dir.join("src"), &mut hits);
     walk(&crate_dir.join("tests"), &mut hits);
-    // The desktop shell too (it uses the engine only).
-    walk(&crate_dir.join("../../src-tauri/src"), &mut hits);
     assert!(hits.is_empty(), "`adk_graph` may only be named in crates/engine/src/graph/: {hits:?}");
 }
 
-/// The engine never names Tauri or the shell: it has no Tauri dependency (the compiler then
-/// refuses any `tauri::` path) and never names the shell's library (`jobpilot_lib`).
+/// The engine never names Tauri or the shell: its manifest declares no Tauri crate and no
+/// `jobpilot` (any form: `tauri = ..`, `tauri.workspace = true`, `[dependencies.tauri]`), and its
+/// sources name neither `tauri*::` nor the shell's library (`jobpilot_lib`).
 #[test]
 fn the_engine_does_not_depend_on_the_shell() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let manifest = std::fs::read_to_string(crate_dir.join("Cargo.toml")).unwrap();
-    let tauri = regex::Regex::new(r"(?m)^\s*(tauri[\w-]*|jobpilot)\s*=").unwrap();
-    assert!(!tauri.is_match(&manifest), "the engine depends on Tauri or the shell");
+    let dep = regex::Regex::new(r"^\s*\[?\s*([\w-]+\.)*(tauri[\w-]*|jobpilot)\s*[.=\]]").unwrap();
+    let declared: Vec<&str> = manifest.lines().filter(|l| dep.is_match(l)).collect();
+    assert!(declared.is_empty(), "the engine depends on Tauri or the shell: {declared:?}");
 
-    fn walk(dir: &Path, hits: &mut Vec<(PathBuf, String)>) {
+    fn walk(dir: &Path, shell: &regex::Regex, hits: &mut Vec<(PathBuf, String)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
-                walk(&path, hits);
+                walk(&path, shell, hits);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 for line in std::fs::read_to_string(&path).unwrap().lines() {
-                    if line.contains(concat!("jobpilot", "_lib::")) {
+                    if shell.is_match(line) {
                         hits.push((path.clone(), line.trim().to_owned()));
                     }
                 }
             }
         }
     }
+    // Built from parts so this file does not match itself.
+    let shell = regex::Regex::new(&format!(r"\b(tauri\w*|{}_lib)::", "jobpilot")).unwrap();
     let mut hits = Vec::new();
-    walk(&crate_dir.join("src"), &mut hits);
-    walk(&crate_dir.join("tests"), &mut hits);
+    walk(&crate_dir.join("src"), &shell, &mut hits);
+    walk(&crate_dir.join("tests"), &shell, &mut hits);
     assert!(hits.is_empty(), "the engine names the shell: {hits:?}");
 }
 

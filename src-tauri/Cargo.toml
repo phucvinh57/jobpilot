@@ -21,14 +21,14 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-chrono = { version = "0.4", features = ["serde"] }
-url = "2"
+chrono.workspace = true
+url.workspace = true
 # Everything except the UI (`crates/engine`).
 jobpilot-engine = { path = "../crates/engine" }
 
 [dev-dependencies]
-tempfile = "3"
-# The engine's test helpers (a `Core` in a temp dir, the test profile) for the contexts' unit tests.
+tempfile.workspace = true
+# The engine's test helpers (the test profile) for the contexts' unit tests.
 jobpilot-engine = { path = "../crates/engine", features = ["test-util"] }
 
 [features]

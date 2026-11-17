@@ -21,8 +21,8 @@ use crate::Paths;
 pub const LOG_FILE: &str = "jobpilot.log";
 /// Daily files kept on disk.
 const KEEP_FILES: usize = 14;
-/// Default filter: our crates (the engine and the desktop shell) at info, everything else at warn.
-const DEFAULT_FILTER: &str = "warn,jobpilot_engine=info,jobpilot_lib=info";
+/// Default filter: the engine at info, everything else at warn (the caller adds its own crate).
+const DEFAULT_FILTER: &str = "warn,jobpilot_engine=info";
 
 /// Keep this alive for the life of the program: dropping it flushes the file writer.
 pub struct LogGuard {
@@ -30,9 +30,14 @@ pub struct LogGuard {
 }
 
 /// Install the global subscriber. Safe to call more than once (later calls do nothing).
-/// A log directory that cannot be created only disables the file sink.
-pub fn init(paths: &Paths) -> LogGuard {
-    let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
+/// A log directory that cannot be created only disables the file sink. `app_target` is the
+/// calling crate's log target (`jobpilot_lib`), logged at info like the engine; `RUST_LOG`
+/// replaces the whole default filter.
+pub fn init(paths: &Paths, app_target: &str) -> LogGuard {
+    let filter = || {
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(format!("{DEFAULT_FILTER},{app_target}=info")))
+    };
 
     let (file_writer, guard) = match file_writer(&paths.logs_dir) {
         Ok((writer, guard)) => (Some(writer), Some(guard)),

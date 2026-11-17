@@ -1,6 +1,6 @@
 //! What the view calls: run the digest, read the reports, see which source waits for the user.
 //!
-//! ```ignore
+//! ```text
 //! // "Collect & build digest": collect, then the digest (a source at a login or captcha pauses it).
 //! let outcome = core.collect_trends_and_digest(Period::current_week()).await?;
 //! // After the user dealt with the page: carry on (collection, then the digest).

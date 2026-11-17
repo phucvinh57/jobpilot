@@ -21,7 +21,7 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 jsonschema = { version = "0.26", default-features = false }
 dirs = "6"
 regex = "1"
-chrono = { version = "0.4", features = ["serde"] }
+chrono.workspace = true
 sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
@@ -35,21 +35,21 @@ async-trait = "0.1"
 tokio-util = "0.7"
 # The browser bridge: the JobPilot extension connects to a WebSocket server on 127.0.0.1 (no TLS).
 tokio-tungstenite = { version = "0.23", default-features = false, features = ["connect", "handshake"] }
-url = "2"
+url.workspace = true
 quick-xml = "0.41"
 encoding_rs = "0.8"
 notify-rust = "4"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry", "tracing-log"] }
 tracing-appender = "0.2.5"
 # Only with the `test-browser` feature (the browser test kit's temp dirs).
-tempfile = { version = "3", optional = true }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [features]
-# Test helpers for the desktop shell's unit tests (a `Core` in a temp dir, the test profile); the
-# shell turns it on in its dev-dependencies only, so it is never part of a release package.
+# Test helpers for the desktop shell's unit tests (`profile::TEST_PROFILE`, `profile::set_test_profile`);
+# the shell turns it on in its dev-dependencies only, so it is never part of a release package.
 test-util = []
 # The browser test kit (`browser::bridge::testkit`: Chromium with the built extension) for the
 # integration tests under `tests/`; never part of a release package:
