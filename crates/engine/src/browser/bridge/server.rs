@@ -102,7 +102,7 @@ impl Callback for Upgrade<'_> {
 }
 
 async fn connection(bridge: Bridge, stream: TcpStream, origin: &str) -> Result<()> {
-    let config = WebSocketConfig { max_message_size: Some(MAX_MESSAGE), max_frame_size: Some(MAX_MESSAGE), ..Default::default() };
+    let config = WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE)).max_frame_size(Some(MAX_MESSAGE));
     let ws = tokio_tungstenite::accept_hdr_async_with_config(stream, Upgrade { origin }, Some(config)).await.context("the WebSocket upgrade failed")?;
     let (mut sink, mut incoming) = ws.split();
 
@@ -114,7 +114,7 @@ async fn connection(bridge: Bridge, stream: TcpStream, origin: &str) -> Result<(
             match out {
                 Out::Msg(msg) => {
                     let Ok(text) = serde_json::to_string(&msg) else { continue };
-                    if sink.send(Message::Text(text)).await.is_err() {
+                    if sink.send(Message::Text(text.into())).await.is_err() {
                         break;
                     }
                 }

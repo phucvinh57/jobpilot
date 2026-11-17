@@ -311,11 +311,11 @@ impl Store {
 }
 
 fn migrate(conn: &mut Connection) -> Result<()> {
-    let applied: usize = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    for (i, sql) in MIGRATIONS.iter().enumerate().skip(applied) {
+    let applied: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    for (i, sql) in MIGRATIONS.iter().enumerate().skip(usize::try_from(applied).unwrap_or(0)) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql).with_context(|| format!("migration {}", i + 1))?;
-        tx.pragma_update(None, "user_version", i + 1)?;
+        tx.pragma_update(None, "user_version", i as i64 + 1)?;
         tx.commit()?;
     }
     Ok(())
@@ -397,8 +397,8 @@ mod tests {
         }
 
         let store = Store::open(&path).unwrap();
-        let version: usize = store.with_conn(|c| Ok(c.pragma_query_value(None, "user_version", |r| r.get(0))?)).unwrap();
-        assert_eq!(version, MIGRATIONS.len());
+        let version: i64 = store.with_conn(|c| Ok(c.pragma_query_value(None, "user_version", |r| r.get(0))?)).unwrap();
+        assert_eq!(version as usize, MIGRATIONS.len());
 
         let app = store.get_application_by_slug("old-app").unwrap().unwrap();
         assert_eq!((app.company.as_str(), app.status, app.insight_json.as_deref()), ("Acme", Status::Applied, None));

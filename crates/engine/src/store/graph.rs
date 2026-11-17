@@ -259,9 +259,9 @@ mod tests {
         assert_eq!(store.kv_get("keep").unwrap().as_deref(), Some("me"));
         save(&store, &row("t", 0));
         assert!(store.graph_thread("t").unwrap().is_some());
-        let version: usize =
+        let version: i64 =
             store.with_conn(|c| Ok(c.pragma_query_value(None, "user_version", |r| r.get(0))?)).unwrap();
-        assert_eq!(version, super::super::MIGRATIONS.len());
+        assert_eq!(version as usize, super::super::MIGRATIONS.len());
     }
 
     #[test]

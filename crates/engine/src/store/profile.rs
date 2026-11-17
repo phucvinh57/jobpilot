@@ -63,7 +63,7 @@ pub fn sources_hash(sources: &[ProfileSource]) -> String {
         hasher.update((source.text.len() as u64).to_le_bytes());
         hasher.update(source.text.as_bytes());
     }
-    format!("{:x}", hasher.finalize())
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 const SOURCE_COLUMNS: &str = "id, name, kind, text, chars, truncated, created_at";

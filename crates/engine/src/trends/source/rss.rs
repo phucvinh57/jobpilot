@@ -78,8 +78,8 @@ fn atom_href(e: &BytesStart) -> Option<String> {
     for attr in e.attributes().with_checks(false).flatten() {
         let value = attr.normalized_value(XmlVersion::Implicit1_0).ok().map(|v| v.into_owned());
         match attr.key.as_ref() {
-            b"href" => href = value,
-            b"rel" => rel = value,
+            "href" => href = value,
+            "rel" => rel = value,
             _ => {}
         }
     }
@@ -87,7 +87,7 @@ fn atom_href(e: &BytesStart) -> Option<String> {
 }
 
 fn name_of(e: &BytesStart) -> String {
-    String::from_utf8_lossy(e.name().as_ref()).into_owned()
+    e.name().as_ref().to_string()
 }
 
 /// The entries of an RSS or Atom document, in document order.
@@ -149,19 +149,16 @@ pub fn parse_feed(xml: &str) -> Result<Vec<Entry>> {
                 }
             }
             Event::Text(t) if draft.is_some() && nest >= 1 => {
-                if let Ok(t) = t.decode() {
-                    text.push_str(&t);
-                }
+                text.push_str(&t.xml10_content());
             }
             Event::CData(c) if draft.is_some() && nest >= 1 => {
-                if let Ok(c) = c.decode() {
-                    text.push_str(&c);
-                }
+                text.push_str(&c.xml10_content());
             }
             Event::GeneralRef(r) if draft.is_some() && nest >= 1 => {
                 if let Ok(Some(ch)) = r.resolve_char_ref() {
                     text.push(ch);
-                } else if let Ok(name) = r.decode() {
+                } else {
+                    let name = r.xml10_content();
                     // `&amp;` `&lt;` and the HTML names some feeds use without declaring them.
                     text.push_str(&decode_entities(&format!("&{name};")));
                 }
