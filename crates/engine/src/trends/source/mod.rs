@@ -111,15 +111,25 @@ pub(crate) fn join(base: &str, path: &str) -> String {
     format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'))
 }
 
-/// New items only: not in the store, not seen earlier in `items`, at most `cap`.
-pub(crate) fn take_new(ctx: &Ctx, items: Vec<Item>, cap: usize) -> Vec<Item> {
+/// New items only: not in the store, not seen earlier in `items`.
+pub(crate) fn new_items(ctx: &Ctx, items: Vec<Item>) -> Vec<Item> {
     let mut seen = HashSet::new();
-    items.into_iter().filter(|i| !ctx.is_known(&i.url) && seen.insert(i.url.clone())).take(cap).collect()
+    items.into_iter().filter(|i| !ctx.is_known(&i.url) && seen.insert(i.url.clone())).collect()
+}
+
+/// The new items (see [`new_items`]) up to `cap`, and how many new items past `cap` were cut. The
+/// collector records the count (`SourceOutcome::cut`), so a cap never hides data silently.
+pub(crate) fn take_new(ctx: &Ctx, items: Vec<Item>, cap: usize) -> (Vec<Item>, usize) {
+    let mut new = new_items(ctx, items);
+    let cut = new.len().saturating_sub(cap);
+    new.truncate(cap);
+    (new, cut)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trends::testutil::{ctx, Fixtures};
 
     #[test]
     fn kinds_round_trip_and_urls_normalise() {
@@ -131,5 +141,26 @@ mod tests {
         assert_eq!(normalize_url("https://a.test/x?y=1#frag").unwrap(), "https://a.test/x?y=1");
         assert!(normalize_url("mailto:a@b.c").is_err());
         assert_eq!(join("https://a.test/api/", "/meta.json"), "https://a.test/api/meta.json");
+    }
+
+    fn item(url: &str) -> Item {
+        Item { url: url.into(), title: url.into(), published_at: None, text: format!("# {url}") }
+    }
+
+    #[tokio::test]
+    async fn take_new_skips_known_and_repeated_items_and_counts_what_the_cap_cuts() {
+        let fx = Fixtures::start().await;
+        let ctx = ctx(&fx, &["https://a.test/known"]);
+        let items = || ["https://a.test/1", "https://a.test/known", "https://a.test/2", "https://a.test/1", "https://a.test/3", "https://a.test/4"].map(item).to_vec();
+
+        let (kept, cut) = take_new(&ctx, items(), 2);
+        assert_eq!(kept.iter().map(|i| i.url.as_str()).collect::<Vec<_>>(), ["https://a.test/1", "https://a.test/2"]);
+        assert_eq!(cut, 2, "the known and the repeated item are not cut, they were never new");
+
+        let (kept, cut) = take_new(&ctx, items(), 4);
+        assert_eq!((kept.len(), cut), (4, 0), "everything new fits");
+        let (kept, cut) = take_new(&ctx, items(), 0);
+        assert_eq!((kept.len(), cut), (0, 4));
+        assert_eq!(new_items(&ctx, items()).len(), 4);
     }
 }

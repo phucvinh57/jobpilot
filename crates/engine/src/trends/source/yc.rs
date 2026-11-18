@@ -53,7 +53,9 @@ struct Company {
     top_company: Option<bool>,
 }
 
-pub async fn collect(ctx: &Ctx) -> Result<Vec<Item>> {
+/// The new companies of the newest batches as items (hiring and top companies first), and how many
+/// new companies past `max_items` were cut.
+pub async fn collect(ctx: &Ctx) -> Result<(Vec<Item>, usize)> {
     let l = ctx.limits();
     let meta: Meta = ctx.http.get(&join(&ctx.endpoints().yc, "meta.json"), &[]).await?.json("the YC directory")?;
     let slugs = newest_batches(&meta, l.yc_batches);
@@ -196,7 +198,8 @@ mod tests {
         fx.route("/yc/batches/summer-2026.json", 404, "text/plain", "missing");
         let ctx = ctx(&fx, &[]);
 
-        let items = collect(&ctx).await.unwrap();
+        let (items, cut) = collect(&ctx).await.unwrap();
+        assert_eq!(cut, 0);
         let urls: Vec<_> = items.iter().map(|i| i.url.as_str()).collect();
         assert_eq!(
             urls,
@@ -226,8 +229,9 @@ mod tests {
         let mut config = (*c.config).clone();
         config.limits.max_items = 1;
         c.config = std::sync::Arc::new(config);
-        let items = collect(&c).await.unwrap();
+        let (items, cut) = collect(&c).await.unwrap();
         assert_eq!(items.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["Top Co"]);
+        assert_eq!(cut, 1, "Tire Swing is new and did not fit; the known Hirey was never new");
     }
 
     #[tokio::test]

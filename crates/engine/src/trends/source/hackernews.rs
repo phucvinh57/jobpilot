@@ -3,16 +3,21 @@
 //! monthly threads, so the digest's skill window is full from the first run; an older thread read
 //! in full is not downloaded again until its comment count changes).
 //!
+//! Nothing is cut silently. The period's stories are read page by page until the last page, up to
+//! `hn_story_pages`; every new posting of a hiring thread is kept. What the page cap or the time
+//! budget leaves unread is counted in [`Hn::cut`].
+//!
 //! A story's item is the story itself (its link, or the HN thread for text posts): the title and
 //! the numbers are the text; the linked article is not fetched.
 
 use std::collections::HashSet;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 
-use super::{join, normalize_url, take_new, Ctx, Item};
+use super::{join, new_items, normalize_url, Ctx, Item};
 use crate::trends::text::{first_line, html_to_text};
 
 /// Permalink of an HN item (story or comment).
@@ -24,6 +29,12 @@ const MIN_POSTING_CHARS: usize = 40;
 struct Search {
     #[serde(default)]
     hits: Vec<Hit>,
+    /// Pages the whole result has at this page size (0 when the answer does not say).
+    #[serde(default, rename = "nbPages")]
+    nb_pages: usize,
+    /// Hits the whole result has, over all pages.
+    #[serde(default, rename = "nbHits")]
+    nb_hits: usize,
 }
 
 #[derive(Deserialize)]
@@ -57,10 +68,14 @@ pub struct Hn {
     /// Stories and hiring postings, new ones only.
     pub items: Vec<Item>,
     /// Hiring threads this run read in full, newest first, as [`settled_key`]s: not the newest
-    /// selected thread, downloaded, and none of their new postings cut by `hiring_posts`. Once their
-    /// postings are stored, the collector saves them, and a later run passes them back to
-    /// [`collect`] so they are not downloaded again while their comment count stays the same.
+    /// selected thread, and downloaded. Once their postings are stored, the collector saves them,
+    /// and a later run passes them back to [`collect`] so they are not downloaded again while their
+    /// comment count stays the same.
     pub settled: Vec<String>,
+    /// What this run left unread, counted: period stories past the page cap or the time budget
+    /// (the hits the answer says are left, else 1), and one for each older hiring thread the time
+    /// budget kept from starting (its postings are unknown; a later run reads it).
+    pub cut: usize,
 }
 
 /// How a settled thread is remembered: its id and its comment count when it was read
@@ -86,22 +101,30 @@ fn key_of(thread: &Hit) -> Option<String> {
 
 /// Stories and hiring postings. A part that fails is left out; the adapter fails only when every
 /// part did. `settled` holds the [`settled_key`]s of hiring threads an earlier run read in full.
+/// Every new story is kept: the page cap bounds them, not `max_items`.
 pub async fn collect(ctx: &Ctx, settled: &HashSet<String>) -> Result<Hn> {
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let mut items = Vec::new();
     let mut failures = Vec::new();
-    for part in [front_page(ctx).await, period_stories(ctx).await] {
-        match part {
-            Ok(found) => items.extend(found),
-            Err(e) => failures.push(e),
-        }
+    let mut cut = 0;
+    match front_page(ctx).await {
+        Ok(found) => items.extend(found),
+        Err(e) => failures.push(e),
     }
-    let mut items = take_new(ctx, items, ctx.limits().max_items);
+    match period_stories(ctx, started).await {
+        Ok((found, unread)) => {
+            items.extend(found);
+            cut += unread;
+        }
+        Err(e) => failures.push(e),
+    }
+    let mut items = new_items(ctx, items);
     let mut now_settled = Vec::new();
     match hiring_posts(ctx, settled, started).await {
         Ok(found) => {
             items.extend(found.items);
             now_settled = found.settled;
+            cut += found.cut;
         }
         Err(e) => failures.push(e),
     }
@@ -109,9 +132,9 @@ pub async fn collect(ctx: &Ctx, settled: &HashSet<String>) -> Result<Hn> {
         Some(first) if items.is_empty() => Err(first),
         Some(_) => {
             tracing::warn!(kept = items.len(), "a Hacker News request failed; the other parts are kept");
-            Ok(Hn { items, settled: now_settled })
+            Ok(Hn { items, settled: now_settled, cut })
         }
-        None => Ok(Hn { items, settled: now_settled }),
+        None => Ok(Hn { items, settled: now_settled, cut }),
     }
 }
 
@@ -121,25 +144,64 @@ async fn front_page(ctx: &Ctx) -> Result<Vec<Item>> {
     stories(ctx, &url).await
 }
 
-async fn period_stories(ctx: &Ctx) -> Result<Vec<Item>> {
+/// The period's stories with `points >= hn_min_points`, newest first, read page by page until the
+/// last page (`nbPages`), at most `hn_story_pages` pages. Like [`hiring_posts`] it stops starting
+/// pages once [`BACKFILL_SHARE`] of the source's time has passed since `started` (the first page is
+/// always read) and keeps what is in hand. Returns the stories and how many hits were left unread:
+/// the page cap, the time budget or a failing later page cut them. The count is what the answer
+/// says is left (`nbHits`), else 1. A failing first page is an error.
+async fn period_stories(ctx: &Ctx, started: Instant) -> Result<(Vec<Item>, usize)> {
     let l = ctx.limits();
+    let budget = l.source_timeout.mul_f64(BACKFILL_SHARE);
     let filters = format!(
         "created_at_i>={},created_at_i<{},points>={}",
         ctx.period.start().timestamp(),
         ctx.period.end().timestamp(),
         l.hn_min_points
     );
-    let url = api_url(
-        ctx,
-        "search_by_date",
-        &[("tags", "story"), ("numericFilters", &filters), ("hitsPerPage", &l.hn_period_stories.to_string())],
-    )?;
-    stories(ctx, &url).await
+    let size = l.hn_period_stories.to_string();
+    let mut items = Vec::new();
+    // Hits read so far, and the total the last answer gave.
+    let (mut read, mut total) = (0usize, 0usize);
+    for page in 0..l.hn_story_pages.max(1) {
+        if page > 0 && started.elapsed() >= budget {
+            tracing::warn!(page, read, "time is running out: the rest of the period's stories is left unread");
+            break;
+        }
+        let number = page.to_string();
+        let url = api_url(
+            ctx,
+            "search_by_date",
+            &[("tags", "story"), ("numericFilters", &filters), ("hitsPerPage", &size), ("page", &number)],
+        )?;
+        let answer = match search(ctx, &url).await {
+            Ok(answer) => answer,
+            Err(e) if page == 0 => return Err(e),
+            Err(_) => {
+                tracing::warn!(page, read, "a page of the period's stories could not be read; the pages before it are kept");
+                break;
+            }
+        };
+        read += answer.hits.len();
+        total = answer.nb_hits;
+        // An empty page that is not the last: nothing more will come.
+        let last = page + 1 >= answer.nb_pages || answer.hits.is_empty();
+        items.extend(answer.hits.into_iter().filter_map(story_item));
+        if last {
+            return Ok((items, 0));
+        }
+    }
+    let cut = total.saturating_sub(read).max(1);
+    tracing::warn!(pages = l.hn_story_pages, read, cut, "the period's stories were not all read");
+    Ok((items, cut))
+}
+
+async fn search(ctx: &Ctx, url: &str) -> Result<Search> {
+    ctx.http.get(url, &[]).await?.json("Hacker News")
 }
 
 async fn stories(ctx: &Ctx, url: &str) -> Result<Vec<Item>> {
-    let search: Search = ctx.http.get(url, &[]).await?.json("Hacker News")?;
-    Ok(search.hits.into_iter().filter_map(story_item).collect())
+    Ok(search(ctx, url).await?.hits.into_iter().filter_map(story_item).collect())
 }
 
 fn story_item(hit: Hit) -> Option<Item> {
@@ -159,38 +221,40 @@ fn story_item(hit: Hit) -> Option<Item> {
 }
 
 /// The newest "Who is hiring" threads that started before the period ended (at most
-/// [`CollectLimits::hiring_threads`](crate::trends::CollectLimits), newest first), one item
-/// per posting. Reading several monthly threads fills the skill window on the first run; postings
-/// already stored are skipped (`take_new`), so a later run reads only what is new. At most
-/// `hiring_posts` new postings per thread. A thread that cannot be read is left out; this part
-/// fails only when every thread did.
+/// [`CollectLimits::hiring_threads_for`](crate::trends::CollectLimits) the period, newest first),
+/// one item per posting. Reading several monthly threads fills the skill window on the first run;
+/// postings already stored are skipped (`new_items`), so a later run reads only what is new. Every
+/// new posting of a thread is kept. A thread that cannot be read is left out; this part fails only
+/// when every thread did.
 ///
 /// An older thread whose [`settled_key`] is in `settled` (same id, same comment count) is not
 /// downloaded: it still takes its place in the window, its postings are already stored. The newest
 /// selected thread is always read, since it still gets new postings. [`Hn::settled`] lists the
-/// older threads read in full this run.
-async fn hiring_posts(ctx: &Ctx, settled: &HashSet<String>, started: std::time::Instant) -> Result<Hn> {
+/// older threads read in full this run; [`Hn::cut`] counts the older threads the time budget kept
+/// from starting.
+async fn hiring_posts(ctx: &Ctx, settled: &HashSet<String>, started: Instant) -> Result<Hn> {
     let l = ctx.limits();
     // The whole source runs under `source_timeout`, and a timeout loses everything it read: stop
     // starting threads once two thirds of it are spent, and keep what is in hand.
     let budget = l.source_timeout.mul_f64(BACKFILL_SHARE);
     let end = ctx.period.end().timestamp();
+    let wanted = l.hiring_threads_for(&ctx.period);
     // The bot posts three threads a month ("Who is hiring", "Who wants to be hired", "Freelancer"):
-    // ask for enough to see `hiring_threads` hiring ones, only threads that started before the end.
-    let hits = l.hiring_threads.saturating_mul(3).saturating_add(3).clamp(12, 100).to_string();
+    // ask for enough to see `wanted` hiring ones, only threads that started before the end.
+    let hits = wanted.saturating_mul(3).saturating_add(3).clamp(12, 100).to_string();
     let before_end = format!("created_at_i<{end}");
     let list = api_url(
         ctx,
         "search_by_date",
         &[("tags", "story,author_whoishiring"), ("numericFilters", &before_end), ("hitsPerPage", &hits)],
     )?;
-    let threads: Search = ctx.http.get(&list, &[]).await?.json("Hacker News")?;
-    let threads = hiring_threads(threads.hits, end, l.hiring_threads);
+    let threads = search(ctx, &list).await?;
+    let threads = hiring_threads(threads.hits, end, wanted);
 
     let is_settled = |t: &Hit| key_of(t).is_some_and(|k| settled.contains(&k));
     let mut items = Vec::new();
     let mut now_settled = Vec::new();
-    let (mut read, mut skipped, mut first_error) = (0usize, 0usize, None);
+    let (mut read, mut skipped, mut cut, mut first_error) = (0usize, 0usize, 0usize, None);
     for (n, thread) in threads.iter().enumerate() {
         let newest = n == 0;
         if !newest && is_settled(thread) {
@@ -198,15 +262,15 @@ async fn hiring_posts(ctx: &Ctx, settled: &HashSet<String>, started: std::time::
             continue;
         }
         if !newest && started.elapsed() >= budget {
-            let left = threads[n..].iter().filter(|t| !is_settled(t)).count();
-            tracing::warn!(left, "time is running out: the older hiring threads are left for a later run");
+            cut = threads[n..].iter().filter(|t| !is_settled(t)).count();
+            tracing::warn!(left = cut, "time is running out: the older hiring threads are left for a later run");
             break;
         }
         match thread_posts(ctx, thread).await {
-            Ok((found, complete)) => {
+            Ok(found) => {
                 read += 1;
                 items.extend(found);
-                if !newest && complete {
+                if !newest {
                     now_settled.extend(key_of(thread));
                 }
             }
@@ -216,10 +280,10 @@ async fn hiring_posts(ctx: &Ctx, settled: &HashSet<String>, started: std::time::
             }
         }
     }
-    tracing::info!(threads = threads.len(), read, skipped, postings = items.len(), "hiring threads read");
+    tracing::info!(threads = threads.len(), read, skipped, postings = items.len(), cut, "hiring threads read");
     match first_error {
         Some(e) if read == 0 => Err(e),
-        _ => Ok(Hn { items, settled: now_settled }),
+        _ => Ok(Hn { items, settled: now_settled, cut }),
     }
 }
 
@@ -240,10 +304,10 @@ fn hiring_threads(hits: Vec<Hit>, end: i64, max: usize) -> Vec<Hit> {
     threads
 }
 
-/// The new postings of one thread (at most `hiring_posts`), and whether that is all of them (the
-/// cap cut none). Each keeps the thread's title in its text header (`# Hacker News, <title>`): the
-/// digest recognises hiring postings by it.
-async fn thread_posts(ctx: &Ctx, thread: &Hit) -> Result<(Vec<Item>, bool)> {
+/// The new postings of one thread, all of them (it arrives in one response). Each keeps the
+/// thread's title in its text header (`# Hacker News, <title>`): the digest recognises hiring
+/// postings by it.
+async fn thread_posts(ctx: &Ctx, thread: &Hit) -> Result<Vec<Item>> {
     let title = thread.title.clone().unwrap_or_default();
     let full: Thread = ctx
         .http
@@ -265,12 +329,7 @@ async fn thread_posts(ctx: &Ctx, thread: &Hit) -> Result<(Vec<Item>, bool)> {
             text: format!("# Hacker News, {title}\n\n{text}"),
         })
     });
-    // One more than the cap: a thread with more new postings than that is not read in full.
-    let cap = ctx.limits().hiring_posts;
-    let mut new = take_new(ctx, postings.collect(), cap.saturating_add(1));
-    let complete = new.len() <= cap;
-    new.truncate(cap);
-    Ok((new, complete))
+    Ok(new_items(ctx, postings.collect()))
 }
 
 fn api_url(ctx: &Ctx, path: &str, query: &[(&str, &str)]) -> Result<String> {
@@ -290,7 +349,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::trends::testutil::{ctx, Fixtures};
+    use crate::trends::period::Period;
+    use crate::trends::testutil::{ctx, Fixtures, Paged};
 
     const FRONT: &str = r#"{"hits": [
         {"objectID": "1", "title": "Rust 2.0 released", "url": "https://blog.example.com/rust-2#intro", "points": 450, "num_comments": 210, "created_at_i": 1794000000, "story_text": null},
@@ -373,10 +433,12 @@ mod tests {
         assert!(items[1].text.contains("Looking for SRE roles & teams."), "{}", items[1].text);
         assert_eq!(items[2].url, "https://news.ycombinator.com/item?id=4", "a link that is not http(s) is never cited: the thread is");
 
-        period_stories(&ctx).await.unwrap();
+        let (stories, cut) = period_stories(&ctx, Instant::now()).await.unwrap();
+        assert_eq!((stories.len(), cut), (2, 0), "the answer has no nbPages: one page, nothing cut");
         let hit = &fx.hits_on("/hn/search")[0];
         assert!(hit.target.contains("tags=front_page") && hit.target.contains("hitsPerPage=30"), "{}", hit.target);
         let by_date = &fx.hits_on("/hn/search_by_date")[0];
+        assert!(by_date.target.contains("hitsPerPage=100") && by_date.target.contains("page=0"), "{}", by_date.target);
         // 2026-W46 = 2026-11-09 .. 2026-11-16 (UTC)
         assert!(by_date.target.contains("created_at_i%3E%3D1794182400"), "{}", by_date.target);
         assert!(by_date.target.contains("created_at_i%3C1794787200"), "{}", by_date.target);
@@ -421,22 +483,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hiring_threads_and_postings_per_thread_are_capped() {
+    async fn the_number_of_hiring_threads_is_capped_and_known_postings_are_skipped() {
         let fx = Fixtures::start().await;
         hiring_fixtures(&fx);
 
         let two = ctx_with(&fx, &[], |l| l.hiring_threads = 2);
-        let posts = hiring_posts(&two, &HashSet::new(), Instant::now()).await.unwrap().items;
-        assert_eq!(posts.len(), 4);
+        let found = hiring_posts(&two, &HashSet::new(), Instant::now()).await.unwrap();
+        assert_eq!(found.items.len(), 4);
+        assert_eq!(found.cut, 0, "a thread outside the window is not a cut");
         assert!(fx.hits_on("/hn/items/904").is_empty(), "the third newest thread is not read");
 
-        // The cap is per thread, and it counts only new postings.
-        let one = ctx_with(&fx, &["https://news.ycombinator.com/item?id=7001"], |l| l.hiring_posts = 1);
-        let posts = hiring_posts(&one, &HashSet::new(), Instant::now()).await.unwrap().items;
+        // A posting that is stored is skipped; every other one is kept.
+        let known = ctx_with(&fx, &["https://news.ycombinator.com/item?id=7001"], |_| {});
+        let posts = hiring_posts(&known, &HashSet::new(), Instant::now()).await.unwrap().items;
         assert_eq!(
             urls(&posts),
-            ["https://news.ycombinator.com/item?id=7005", "https://news.ycombinator.com/item?id=8001", "https://news.ycombinator.com/item?id=9001"]
+            [
+                "https://news.ycombinator.com/item?id=7005",
+                "https://news.ycombinator.com/item?id=8001",
+                "https://news.ycombinator.com/item?id=8002",
+                "https://news.ycombinator.com/item?id=9001"
+            ]
         );
+    }
+
+    #[tokio::test]
+    async fn a_year_reads_more_hiring_threads_than_a_month() {
+        let fx = Fixtures::start().await;
+        hiring_fixtures(&fx);
+        let december = r#"{"id": 901, "children": [{"id": 6001, "created_at_i": 1796300100, "text": "Wayne | Security Engineer | Gotham | Rust, Linux, eBPF, Kubernetes", "children": []}]}"#;
+        fx.route("/hn/items/901", 200, "application/json", december);
+
+        let mut month = ctx_with(&fx, &[], |l| l.hiring_threads = 2);
+        month.period = Period::parse("2026-M11").unwrap();
+        let posts = hiring_posts(&month, &HashSet::new(), Instant::now()).await.unwrap().items;
+        assert_eq!(posts.len(), 4, "a month reads `hiring_threads` threads: November and October");
+        assert!(fx.hits_on("/hn/items/901").is_empty(), "December starts after the month ends");
+
+        // The same limits, a year: 2 * 4 threads, so the window reaches September and December's
+        // thread (it starts before the year ends) is in it.
+        let mut year = ctx_with(&fx, &[], |l| l.hiring_threads = 2);
+        year.period = Period::parse("2026").unwrap();
+        let posts = hiring_posts(&year, &HashSet::new(), Instant::now()).await.unwrap().items;
+        assert_eq!(posts.len(), 6, "December, November, October and September");
+        let lists = fx.hits_on("/hn/search_by_date");
+        assert!(lists[0].target.contains("hitsPerPage=12"), "2 threads, the smallest list: {}", lists[0].target);
+        assert!(lists[1].target.contains("hitsPerPage=27"), "8 threads: {}", lists[1].target);
+
+        // The default: 6 threads a month, 24 a year (75 hits: three listed a month, and slack).
+        let mut default_year = ctx(&fx, &[]);
+        default_year.period = Period::parse("2026").unwrap();
+        hiring_posts(&default_year, &HashSet::new(), Instant::now()).await.unwrap();
+        let lists = fx.hits_on("/hn/search_by_date");
+        assert!(lists[2].target.contains("hitsPerPage=75"), "{}", lists[2].target);
+    }
+
+    #[tokio::test]
+    async fn a_thread_with_hundreds_of_postings_is_kept_whole() {
+        let fx = Fixtures::start().await;
+        hiring_fixtures(&fx);
+        let comments: Vec<String> = (0..450)
+            .map(|n| format!(r#"{{"id": {}, "created_at_i": 1793635303, "text": "Company {n} | Backend Engineer | REMOTE | Rust, Go, Kafka, Postgres", "children": []}}"#, 20_000 + n))
+            .collect();
+        fx.route("/hn/items/902", 200, "application/json", format!(r#"{{"id": 902, "children": [{}]}}"#, comments.join(",")));
+
+        let found = hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap();
+        assert_eq!(found.items.len(), 450 + 3, "all 450 of November, and October's two and September's one");
+        assert_eq!(found.cut, 0);
+        assert_eq!(found.items[449].url, "https://news.ycombinator.com/item?id=20449", "the last posting is there, in thread order");
     }
 
     #[tokio::test]
@@ -447,6 +561,7 @@ mod tests {
         let posts = hiring_posts(&spent, &HashSet::new(), Instant::now()).await.unwrap();
         assert!(!posts.items.is_empty(), "the newest thread is always read");
         assert!(fx.hits_on("/hn/items/903").is_empty(), "the older threads are left for a later run");
+        assert_eq!(posts.cut, 2, "October and September were left unread, and that is counted");
         assert!(posts.settled.is_empty(), "a thread not read is not settled: {:?}", posts.settled);
     }
 
@@ -508,12 +623,16 @@ mod tests {
         let all = hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap();
         assert_eq!(all.settled, ["903@2", "904@1"], "every older thread, newest first; not the newest");
 
-        // October has two new postings and the cap is one: cut, so not settled. September has one.
-        let capped = hiring_posts(&ctx_with(&fx, &[], |l| l.hiring_posts = 1), &HashSet::new(), Instant::now()).await.unwrap();
-        assert_eq!(capped.settled, ["904@1"]);
-        // The cap counts only new postings: with one of October's stored, the other fits.
-        let known = ctx_with(&fx, &["https://news.ycombinator.com/item?id=8001"], |l| l.hiring_posts = 1);
+        // A thread is read in full whether or not its postings are new: one of October's is stored.
+        let known = ctx(&fx, &["https://news.ycombinator.com/item?id=8001"]);
         assert_eq!(hiring_posts(&known, &HashSet::new(), Instant::now()).await.unwrap().settled, ["903@2", "904@1"]);
+        // A thread of hundreds of postings is settled too: nothing was cut.
+        let comments: Vec<String> = (0..450)
+            .map(|n| format!(r#"{{"id": {}, "created_at_i": 1790867000, "text": "Company {n} | Backend Engineer | REMOTE | Rust, Go, Kafka", "children": []}}"#, 30_000 + n))
+            .collect();
+        fx.route("/hn/items/903", 200, "application/json", format!(r#"{{"id": 903, "children": [{}]}}"#, comments.join(",")));
+        assert_eq!(hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap().settled, ["903@2", "904@1"]);
+        fx.route("/hn/items/903", 200, "application/json", THREAD_OCT);
 
         // A thread that fails to load is not settled.
         fx.route("/hn/items/903", 500, "text/plain", "boom");
@@ -564,6 +683,115 @@ mod tests {
         // No hiring thread before the end: nothing, not an error.
         fx.route("/hn/search_by_date", 200, "application/json", r#"{"hits": []}"#);
         assert!(hiring_posts(&ctx(&fx, &[]), &HashSet::new(), Instant::now()).await.unwrap().items.is_empty());
+    }
+
+    /// One answer of the period's search as Algolia pages it: `n` stories from id `first`, of
+    /// `hits` over `pages` pages in all (`hits` 0 leaves `nbHits` at 0, as if the answer lacked it).
+    fn stories_page(first: u32, n: u32, pages: usize, hits: usize) -> String {
+        let stories: Vec<String> = (first..first + n)
+            .map(|id| format!(r#"{{"objectID": "{id}", "title": "Story {id}", "url": "https://s.example.com/{id}", "points": 200, "num_comments": 5, "created_at_i": 1794300000}}"#))
+            .collect();
+        format!(r#"{{"hits": [{}], "nbHits": {hits}, "nbPages": {pages}, "hitsPerPage": {n}}}"#, stories.join(","))
+    }
+
+    /// `count` answers of two stories each, the whole result being `pages` pages of `hits` hits.
+    fn story_pages(count: u32, pages: usize, hits: usize) -> Vec<String> {
+        (0..count).map(|p| stories_page(p * 2, 2, pages, hits)).collect()
+    }
+
+    /// A context whose Hacker News endpoint is the paged server, with `limits` changed.
+    async fn paged_ctx(paged: &Paged, limits: impl FnOnce(&mut crate::trends::CollectLimits)) -> Ctx {
+        let fx = Fixtures::start().await;
+        let mut c = ctx_with(&fx, &[], limits);
+        let mut config = (*c.config).clone();
+        config.endpoints.hackernews = format!("{}/hn", paged.base());
+        c.config = Arc::new(config);
+        c
+    }
+
+    fn titles(items: &[Item]) -> Vec<&str> {
+        items.iter().map(|i| i.title.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn the_periods_stories_are_read_page_by_page_to_the_last_page() {
+        // Four pages exist, the first answer says there are three: the fourth is never asked for.
+        let paged = Paged::start(story_pages(4, 3, 6)).await;
+        let c = paged_ctx(&paged, |_| {}).await;
+
+        let (stories, cut) = period_stories(&c, Instant::now()).await.unwrap();
+        assert_eq!(titles(&stories), ["Story 0", "Story 1", "Story 2", "Story 3", "Story 4", "Story 5"]);
+        assert_eq!(cut, 0, "the last page was reached");
+        let targets = paged.targets();
+        assert_eq!(targets.len(), 3, "{targets:?}");
+        for (n, target) in targets.iter().enumerate() {
+            assert!(target.starts_with("/hn/search_by_date?") && target.ends_with(&format!("page={n}")), "{target}");
+            assert!(target.contains("hitsPerPage=100") && target.contains("points%3E%3D100"), "{target}");
+        }
+
+        // An answer without nbPages is a single page.
+        let single = Paged::start(vec![stories_page(0, 2, 0, 0), stories_page(2, 2, 0, 0)]).await;
+        let (stories, cut) = period_stories(&paged_ctx(&single, |_| {}).await, Instant::now()).await.unwrap();
+        assert_eq!((stories.len(), cut, single.targets().len()), (2, 0, 1));
+    }
+
+    #[tokio::test]
+    async fn the_page_cap_stops_paging_and_what_is_left_is_counted() {
+        let paged = Paged::start(story_pages(5, 5, 10)).await;
+        let c = paged_ctx(&paged, |l| l.hn_story_pages = 2).await;
+
+        let (stories, cut) = period_stories(&c, Instant::now()).await.unwrap();
+        assert_eq!(titles(&stories), ["Story 0", "Story 1", "Story 2", "Story 3"]);
+        assert_eq!(cut, 6, "10 hits, 4 read");
+        assert_eq!(paged.targets().len(), 2, "no third page is asked for");
+
+        // An answer that does not say how many hits there are: one cut marker.
+        let unknown = Paged::start(story_pages(5, 5, 0)).await;
+        let (stories, cut) = period_stories(&paged_ctx(&unknown, |l| l.hn_story_pages = 2).await, Instant::now()).await.unwrap();
+        assert_eq!((stories.len(), cut), (4, 1));
+
+        // A cap of 0 still reads the first page.
+        let (stories, _) = period_stories(&paged_ctx(&paged, |l| l.hn_story_pages = 0).await, Instant::now()).await.unwrap();
+        assert_eq!(stories.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_time_budget_stops_paging_after_the_first_page() {
+        let paged = Paged::start(story_pages(5, 5, 10)).await;
+        let spent = paged_ctx(&paged, |l| l.source_timeout = Duration::ZERO).await;
+        let (stories, cut) = period_stories(&spent, Instant::now()).await.unwrap();
+        assert_eq!(titles(&stories), ["Story 0", "Story 1"], "the first page is always read, what is in hand is kept");
+        assert_eq!(cut, 8);
+        assert_eq!(paged.targets().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failing_later_page_keeps_the_earlier_pages_and_a_failing_first_page_is_an_error() {
+        // Only the first page is served; the answer says there are three.
+        let paged = Paged::start(story_pages(1, 3, 6)).await;
+        let (stories, cut) = period_stories(&paged_ctx(&paged, |_| {}).await, Instant::now()).await.unwrap();
+        assert_eq!((stories.len(), cut), (2, 4), "page 1 is a 404: the first page is kept and the other 4 hits are counted");
+
+        let none = Paged::start(vec![]).await;
+        let err = period_stories(&paged_ctx(&none, |_| {}).await, Instant::now()).await.unwrap_err().to_string();
+        assert!(err.contains("HTTP 404"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn collect_keeps_every_story_beyond_max_items_and_reports_the_cut() {
+        // The same pages answer the front page and the hiring list too (no `page` means page 0):
+        // stories 0 and 1 are on the front page and on page 0 of the period.
+        let paged = Paged::start(story_pages(3, 3, 6)).await;
+        let c = paged_ctx(&paged, |l| {
+            l.hn_story_pages = 2;
+            l.max_items = 1;
+        })
+        .await;
+
+        let hn = collect(&c, &HashSet::new()).await.unwrap();
+        assert_eq!(titles(&hn.items), ["Story 0", "Story 1", "Story 2", "Story 3"], "max_items does not cap the stories; the page cap does");
+        assert_eq!(hn.cut, 2, "6 hits, 4 read");
+        assert!(hn.settled.is_empty());
     }
 
     #[tokio::test]
