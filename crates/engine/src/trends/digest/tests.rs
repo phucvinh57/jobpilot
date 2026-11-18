@@ -961,3 +961,17 @@ fn reports_list_the_latest_period_first_and_delete() {
     assert!(core.trend_digest(week.id).unwrap().is_none());
     assert_eq!(core.trend_reports().unwrap().len(), 4);
 }
+
+#[test]
+fn a_longer_period_reads_more_items() {
+    let base = DigestLimits::default();
+    let of = |label: &str| base.for_period(&Period::parse(label).unwrap());
+    assert_eq!(of("2026-W46"), base, "the configured limits are a week's");
+    let sizes: Vec<usize> = ["2026-W46", "2026-M11", "2026-Q4", "2026"].iter().map(|l| of(l).max_items).collect();
+    assert_eq!(sizes, [1, 2, 4, 8].map(|k| base.max_items * k));
+    let year = of("2026");
+    assert_eq!(of("2026-M11").evidence_chars, base.evidence_chars * 2);
+    assert_eq!(year.evidence_chars, 160_000, "the evidence stops at what one prompt holds");
+    assert_eq!(year.extract_budget, base.extract_budget * 8);
+    assert_eq!((year.batch_items, year.concurrency, year.item_chars), (base.batch_items, base.concurrency, base.item_chars));
+}

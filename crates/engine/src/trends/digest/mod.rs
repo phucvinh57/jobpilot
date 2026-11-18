@@ -401,7 +401,8 @@ pub struct DigestState {
 /// Size and time limits of a digest run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DigestLimits {
-    /// Items of the period the digest reads (spread over the sources, newest first).
+    /// Items a weekly digest reads (spread over the sources, newest first); a longer period reads
+    /// more ([`for_period`](Self::for_period), which also grows `evidence_chars` and `extract_budget`).
     pub max_items: usize,
     /// Items per extraction call.
     pub batch_items: usize,
@@ -418,7 +419,38 @@ pub struct DigestLimits {
 
 impl Default for DigestLimits {
     fn default() -> Self {
-        Self { max_items: 120, batch_items: 6, concurrency: 3, item_chars: 4_000, evidence_chars: 20_000, extract_budget: Duration::from_secs(600) }
+        Self { max_items: 240, batch_items: 6, concurrency: 3, item_chars: 4_000, evidence_chars: 40_000, extract_budget: Duration::from_secs(1_200) }
+    }
+}
+
+impl DigestLimits {
+    /// These limits for a digest of `period`: a longer period reads more items, so the item cap,
+    /// the extraction budget and the evidence grow together by [`period_factor`]. The limits as
+    /// configured are those of a week. The evidence stops growing at [`MAX_EVIDENCE_CHARS`] (or
+    /// the configured size when that is larger) so the prompt still fits one model call: past it,
+    /// the claims per item shrink and the last items are counted but not cited.
+    pub fn for_period(&self, period: &Period) -> Self {
+        let factor = period_factor(period).max(1);
+        Self {
+            max_items: self.max_items.saturating_mul(factor),
+            evidence_chars: self.evidence_chars.saturating_mul(factor).min(MAX_EVIDENCE_CHARS.max(self.evidence_chars)),
+            extract_budget: self.extract_budget.saturating_mul(u32::try_from(factor).unwrap_or(u32::MAX)),
+            ..self.clone()
+        }
+    }
+}
+
+/// The most evidence a longer period grows to: about 40k tokens.
+const MAX_EVIDENCE_CHARS: usize = 160_000;
+
+/// How many times the weekly limits a digest of `period` gets. Less than the calendar ratio: the
+/// evidence must still fit one prompt, and a longer period has more repeats to leave out.
+fn period_factor(period: &Period) -> usize {
+    match period {
+        Period::Week { .. } => 1,
+        Period::Month { .. } => 2,
+        Period::Quarter { .. } => 4,
+        Period::Year { .. } => 8,
     }
 }
 
@@ -471,7 +503,8 @@ impl DigestEnv {
 /// Add the digest nodes to `graph` (`extract` ... `save_report`, ending at END). The caller connects
 /// something to `extract`.
 pub(crate) fn add_nodes(graph: GraphDef<TrendRun>, env: Arc<DigestEnv>) -> GraphDef<TrendRun> {
-    let timeout = env.config.limits.extract_budget + NODE_MARGIN;
+    // The graph is built before the period is known: the timeout covers the longest one.
+    let timeout = env.config.limits.for_period(&Period::Year { year: 0 }).extract_budget + NODE_MARGIN;
     graph
         .node("extract", {
             let env = env.clone();
