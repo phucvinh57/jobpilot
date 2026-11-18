@@ -128,6 +128,19 @@ impl Store {
         })
     }
 
+    /// The `rest_json` of a thread's newest checkpoint, without its state (which can be large): for a
+    /// caller that only needs what the checkpoint says about the run (the nodes it is at).
+    pub fn graph_latest_rest(&self, thread: &str) -> Result<Option<String>> {
+        self.with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT rest_json FROM graph_checkpoints WHERE thread = ?1 ORDER BY seq DESC LIMIT 1",
+                [thread],
+                |r| r.get(0),
+            )
+            .optional()?)
+        })
+    }
+
     pub fn graph_checkpoint_by_id(&self, id: &str) -> Result<Option<GraphCheckpointRow>> {
         self.with_conn(|c| {
             Ok(c.query_row(
@@ -274,6 +287,8 @@ mod tests {
         save(&store, &row("other", 0));
 
         assert_eq!(store.graph_latest_checkpoint("t").unwrap().unwrap().step, 3);
+        assert_eq!(store.graph_latest_rest("t").unwrap().as_deref(), Some("{}"));
+        assert!(store.graph_latest_rest("nope").unwrap().is_none());
         assert_eq!(store.graph_checkpoint_by_id("t-1").unwrap().unwrap().state_json, r#"{"step":1}"#);
         assert_eq!(store.graph_checkpoints("t").unwrap().len(), 4);
 

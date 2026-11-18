@@ -9,6 +9,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { Toaster } from "@/components/layout/Toaster";
 import { Caption } from "@/components/ui/kit";
 import { JobsPage } from "@/pages/JobsPage";
+import { startActivity } from "@/stores/activity";
 import { useNav, type Screen } from "@/stores/nav";
 import { startShell } from "@/stores/shell";
 
@@ -40,6 +41,7 @@ export function App() {
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => startShell(), []);
+  useEffect(() => startActivity(), []);
 
   // Drop a .md/.txt/.html/.pdf file anywhere on the window to add it as a Lead: navigation shows
   // the Leads stage, whose lifecycle reads the file (it checks the type and reports a refusal).

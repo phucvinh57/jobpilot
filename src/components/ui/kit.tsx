@@ -5,6 +5,7 @@
 import { cva } from "class-variance-authority";
 import { Check, ChevronDown, LoaderCircle, X, type LucideIcon } from "lucide-react";
 import {
+  useEffect,
   useId,
   useRef,
   useState,
@@ -12,6 +13,7 @@ import {
   type InputHTMLAttributes,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type TextareaHTMLAttributes,
 } from "react";
@@ -326,6 +328,148 @@ export function HealthDot({ state }: { state: "ok" | "warn" | "checking" }) {
         state === "ok" ? "bg-ok" : state === "warn" ? "bg-warn" : "bg-bar-grey",
       )}
     />
+  );
+}
+
+/** How long the pointer rests on a hover card's trigger before it opens, and how long after it
+ *  left both the trigger and the card it closes. */
+const HOVER_OPEN_MS = 120;
+const HOVER_CLOSE_MS = 150;
+
+/** What a hover card's trigger button takes (spread it on the `<button>`). */
+export interface HoverCardTriggerProps {
+  ref: (element: HTMLButtonElement | null) => void;
+  "aria-haspopup": "dialog";
+  "aria-expanded": boolean;
+  "aria-controls": string | undefined;
+  onClick: () => void;
+  onPointerEnter: (event: ReactPointerEvent) => void;
+  onPointerLeave: (event: ReactPointerEvent) => void;
+}
+
+/** A card next to a trigger button: a short list or a few details about what the trigger shows.
+ *
+ *  - The pointer opens it: resting on the trigger (or the card), closed shortly after it left both.
+ *  - A press on the trigger (a click, Enter or Space) toggles it, pinned: it stays open without
+ *    the pointer and takes the focus, so Tab goes through what it holds. Escape closes it and puts
+ *    the focus back on the trigger; so does a press or a focus anywhere else (without the focus).
+ *
+ *  `trigger` renders the button from the props it must carry; `children` may be a function that
+ *  gets `close` (for a row that acts and closes the card). `label` names the card. */
+export function HoverCard({
+  label,
+  trigger,
+  children,
+  id,
+}: {
+  label: string;
+  trigger: (props: HoverCardTriggerProps) => ReactNode;
+  children: ReactNode | ((close: () => void) => ReactNode);
+  id?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  // Opened by a press: the pointer leaving does not close it.
+  const pinned = useRef(false);
+  const triggerEl = useRef<HTMLButtonElement | null>(null);
+  const contentEl = useRef<HTMLDivElement | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const later = (ms: number, next: boolean) => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      pinned.current = false;
+      setOpen(next);
+    }, ms);
+  };
+  const close = (refocus: boolean) => {
+    clearTimeout(timer.current);
+    pinned.current = false;
+    setOpen(false);
+    if (refocus) {
+      triggerEl.current?.focus();
+    }
+  };
+  const pointerIn = (event: ReactPointerEvent) => {
+    if (event.pointerType === "touch") {
+      return;
+    }
+    clearTimeout(timer.current);
+    if (!open) {
+      later(HOVER_OPEN_MS, true);
+    }
+  };
+  const pointerOut = (event: ReactPointerEvent) => {
+    if (event.pointerType === "touch") {
+      return;
+    }
+    clearTimeout(timer.current);
+    if (open && !pinned.current) {
+      later(HOVER_CLOSE_MS, false);
+    }
+  };
+  const press = () => {
+    clearTimeout(timer.current);
+    if (open && pinned.current) {
+      close(false);
+      return;
+    }
+    pinned.current = true;
+    if (open) {
+      // Already shown under the pointer: pinning it moves the focus in.
+      contentEl.current?.focus();
+    } else {
+      setOpen(true);
+    }
+  };
+  const onTrigger = (target: EventTarget | null) => target instanceof Node && !!triggerEl.current?.contains(target);
+
+  return (
+    <Popover open={open} onOpenChange={(next) => !next && close(false)}>
+      <PopoverAnchor asChild>
+        {trigger({
+          ref: (element) => {
+            triggerEl.current = element;
+          },
+          "aria-haspopup": "dialog",
+          "aria-expanded": open,
+          "aria-controls": open ? id : undefined,
+          onClick: press,
+          onPointerEnter: pointerIn,
+          onPointerLeave: pointerOut,
+        })}
+      </PopoverAnchor>
+      <PopoverContent
+        ref={contentEl}
+        id={id}
+        role="dialog"
+        aria-label={label}
+        tabIndex={-1}
+        onPointerEnter={pointerIn}
+        onPointerLeave={pointerOut}
+        // Under the pointer the focus stays where it is; pinned, the card takes it.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          if (pinned.current) {
+            contentEl.current?.focus();
+          }
+        }}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onEscapeKeyDown={(event) => {
+          event.preventDefault();
+          close(true);
+        }}
+        // The trigger is not "outside": its own press toggles the card.
+        onInteractOutside={(event) => {
+          if (onTrigger(event.target)) {
+            event.preventDefault();
+          }
+        }}
+        className="w-72 border border-border bg-surface p-0 text-ink shadow-md"
+      >
+        {typeof children === "function" ? children(() => close(true)) : children}
+      </PopoverContent>
+    </Popover>
   );
 }
 

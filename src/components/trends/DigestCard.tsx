@@ -1,33 +1,23 @@
-import { ChartPie, Check, FileDown } from "lucide-react";
+import { ChartPie, Check } from "lucide-react";
 
-import { Button, Caption, CiteChip, EmptyState, Heading, LinkButton, SectionLabel, Tag } from "@/components/ui/kit";
+import { Button, Caption, CiteChip, EmptyState, LinkButton, SectionLabel, Tag } from "@/components/ui/kit";
 
-import { digestHint, termsLine } from "@/lib/trends/format";
+import { termsLine } from "@/lib/trends/format";
 import { addAccessibleName, addLabel, addTooltip, canAdd } from "@/lib/trends/preferences";
 import type { Citation, Digest, Gap, Point, Wishes } from "@/types/trends";
 import type { PreferenceAdds } from "@/hooks/trends/usePreferenceAdds";
 import { openLink } from "@/api/shell";
 
-/** The latest digest: numbered points, each with the stored items it rests on. `onExportPdf`: save
- *  it as a PDF (no button without it). */
-export function DigestCard({
-  digest,
-  adds,
-  onExportPdf,
-  exporting = false,
-}: {
-  digest: Digest | null;
-  adds: PreferenceAdds;
-  onExportPdf?: () => void;
-  exporting?: boolean;
-}) {
+/** The digest of a report: numbered points, each with the stored items it rests on. (Its title,
+ *  when it was made and its actions are in the header of the report view.) */
+export function DigestCard({ digest, adds }: { digest: Digest | null; adds: PreferenceAdds }) {
   if (digest === null) {
     return (
       <div id="trends-digest" role="group" aria-label="Digest">
         <EmptyState
           icon={ChartPie}
           title="No digest yet"
-          body={'Add sources, then press "Collect & build digest". You need an AI provider (Settings > AI providers).'}
+          body={'Add sources, then press "New research". You need an AI provider (Settings > AI providers).'}
         />
       </div>
     );
@@ -38,17 +28,6 @@ export function DigestCard({
       aria-label={digest.title}
       className="flex flex-col gap-4 border border-border bg-surface p-5"
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <Heading>{digest.title}</Heading>
-          <Caption>{digestHint(digest.when, digest.itemsRead)}</Caption>
-        </div>
-        {onExportPdf && (
-          <Button id="trends-export-pdf" size="compact" icon={FileDown} busy={exporting} onClick={onExportPdf}>
-            Export PDF
-          </Button>
-        )}
-      </div>
       <DigestBody digest={digest} adds={adds} />
     </section>
   );
