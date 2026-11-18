@@ -83,7 +83,7 @@ beforeEach(() => {
   mocks.invoke.mockResolvedValue(undefined);
   mocks.progress.clear();
   mocks.api.overview.mockResolvedValue(overviewFixture());
-  useRuns.setState({ running: undefined, step: undefined, notice: undefined });
+  useRuns.setState({ running: undefined, step: undefined, saved: undefined });
 });
 
 afterEach(cleanup);
@@ -386,10 +386,31 @@ describe("the Trends screen", () => {
       result.getByText(/Hacker News: 4 new item\(s\) · YC companies: timed out, left out of this run/),
     ).toBeTruthy();
     expect(step()).toBeUndefined();
-    // The new report opens for the user who waited on the list.
-    await waitFor(() => expect(mocks.api.overview).toHaveBeenLastCalledWith(4, "weekly"));
-    expect(await screen.findByRole("button", { name: "Back to Trends" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Rewrite digest" }).hasAttribute("disabled")).toBe(false);
+    // The list stays: the toast and the row say it, the report is opened by the user.
+    expect(screen.getByRole("heading", { level: 1, name: "Trends" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Reports" })).toBeTruthy();
+    expect(mocks.api.overview).not.toHaveBeenCalledWith(4, "weekly");
+    expect(newResearch().hasAttribute("disabled")).toBe(false);
+  });
+
+  it("keeps a dialog of the list open when a run ends behind it", async () => {
+    const user = await shown();
+    const run = deferred<RunResult>();
+    mocks.api.runJob.mockReturnValue(run.promise);
+    await startResearch(user);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click(screen.getByRole("tab", { name: "Sources" }));
+    await user.click(screen.getByRole("button", { name: "Web page" }));
+    expect(await screen.findByRole("dialog", { name: "Add Web page" })).toBeTruthy();
+
+    await act(async () => run.resolve(DONE));
+    // (The screen behind a modal dialog is hidden from the accessibility tree, the toast with it.)
+    const name = "Digest ready: 8 point(s) from 6 item(s).";
+    expect(await screen.findByRole("status", { name, hidden: true })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Add Web page" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Sources", hidden: true }).getAttribute("aria-selected")).toBe("true");
+    expect(mocks.api.overview).not.toHaveBeenCalledWith(4, "weekly");
   });
 
   it("says the step above the list while the period being built has no row yet", async () => {
@@ -442,9 +463,11 @@ describe("the Trends screen", () => {
     mocks.api.runJob.mockReturnValueOnce(run.promise);
     await user.click(screen.getByRole("button", { name: "Rewrite digest" }));
     expect(mocks.api.runJob).toHaveBeenCalledWith({ kind: "regenerate", period: "2026-W46" });
-    for (const name of ["Export PDF", "Rewrite digest", "Rerun"]) {
+    // No second run meanwhile; saving the report as a PDF is not a run.
+    for (const name of ["Rewrite digest", "Rerun"]) {
       expect(screen.getByRole("button", { name }).hasAttribute("disabled"), name).toBe(true);
     }
+    expect(screen.getByRole("button", { name: "Export PDF" }).hasAttribute("disabled")).toBe(false);
     expect(step()).toBe("Starting");
     await act(async () => run.resolve(DONE));
     expect(await screen.findByRole("status", { name: "Digest ready: 8 point(s) from 6 item(s)." })).toBeTruthy();
@@ -456,6 +479,28 @@ describe("the Trends screen", () => {
     expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "collect", period: "2026-W46" });
   });
 
+  it("says the step in the open report only for a run of its own period", async () => {
+    await opened();
+    act(() => useRuns.setState({ running: { kind: "collect", period: "2026-M11" }, step: "Counting skills" }));
+    expect(step(), "another period is being built").toBeUndefined();
+    // Still one run at a time.
+    for (const name of ["Rewrite digest", "Rerun"]) {
+      expect(screen.getByRole("button", { name }).hasAttribute("disabled"), name).toBe(true);
+    }
+    expect(screen.getByRole("button", { name: "Export PDF" }).hasAttribute("disabled")).toBe(false);
+
+    act(() => useRuns.setState({ running: { kind: "collect", period: "2026-W46" }, step: "Counting skills" }));
+    expect(step()).toBe("Counting skills");
+    act(() => useRuns.setState({ running: undefined, step: undefined }));
+  });
+
+  it("stays on the open report when a run of another period saves one", async () => {
+    await opened();
+    act(() => useRuns.setState({ saved: { period: "2026-M11", reportId: 5 } }));
+    expect(screen.getByRole("heading", { level: 1, name: "Weekly digest 2026-W46" })).toBeTruthy();
+    expect(mocks.api.overview).not.toHaveBeenCalledWith(5, "weekly");
+  });
+
   it("explains a failed run in a toast, offers the fix and Retry carries on where it stopped", async () => {
     const user = await shown();
     mocks.api.runJob.mockRejectedValueOnce(network());
@@ -464,7 +509,7 @@ describe("the Trends screen", () => {
     const toast = await screen.findByRole("alert", { name: "The run did not finish" });
     expect(within(toast).getByText("connection refused")).toBeTruthy();
     expect(within(toast).getByText("The connection failed. Check your network and try again.")).toBeTruthy();
-    expect(useRuns.getState().notice, "told once, then forgotten").toBeUndefined();
+    expect(screen.getAllByRole("alert", { name: "The run did not finish" }), "told once").toHaveLength(1);
 
     mocks.api.runJob.mockResolvedValueOnce(DONE);
     await user.click(within(toast).getByRole("button", { name: "Retry" }));
@@ -485,21 +530,36 @@ describe("the Trends screen", () => {
     expect(within(again.closest("li") as HTMLElement).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("toasts a run that failed while the screen was closed when the user comes back, once", async () => {
+  it("toasts a run that failed while the user is on another screen, there and once, with Retry", async () => {
     const user = await shown();
     const run = deferred<RunResult>();
-    mocks.api.runJob.mockReturnValue(run.promise);
+    mocks.api.runJob.mockReturnValueOnce(run.promise);
     await startResearch(user);
     cleanup();
-    await act(async () => run.reject(network()));
-    expect(useRuns.getState().notice?.kind).toBe("error");
-
-    await shown();
-    expect(await screen.findByRole("alert", { name: "The run did not finish" })).toBeTruthy();
-    cleanup();
     act(() => useToasts.getState().clear());
+
+    // On another screen: the failure is said there, at once.
+    render(<p>Jobs</p>);
+    await act(async () => run.reject(network()));
+    const toast = await screen.findByRole("alert", { name: "The run did not finish" });
+    expect(within(toast).getByText("connection refused")).toBeTruthy();
+    expect(useRuns.getState().running).toBeUndefined();
+
+    // Coming back to Trends does not say it a second time.
+    cleanup();
     await shown();
-    expect(screen.queryByRole("alert", { name: "The run did not finish" }), "not a second time").toBeNull();
+    expect(screen.getAllByRole("alert", { name: "The run did not finish" })).toHaveLength(1);
+    cleanup();
+
+    // Retry works from the other screen too.
+    render(<p>Jobs</p>);
+    mocks.api.runJob.mockResolvedValueOnce(DONE);
+    await user.click(
+      within(screen.getByRole("alert", { name: "The run did not finish" })).getByRole("button", { name: "Retry" }),
+    );
+    expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "resume", period: "2026-W46" });
+    expect(await screen.findByRole("status", { name: "Digest ready: 8 point(s) from 6 item(s)." })).toBeTruthy();
+    expect(screen.queryByRole("alert", { name: "The run did not finish" })).toBeNull();
   });
 
   it("points to Settings and tells the setup banner when there is no AI provider", async () => {
@@ -541,6 +601,30 @@ describe("the Trends screen", () => {
 
     await user.click(within(banner).getByRole("button", { name: "Build digest without it" }));
     expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "regenerate", period: "2026-W46" });
+  });
+
+  it("keeps a source that needs the user in reach on the Sources tab and in an open report", async () => {
+    mocks.api.overview.mockResolvedValue(overviewFixture({ challenges: [challengeFixture()] }));
+    const user = await shown();
+    const name = "Example annual report needs you to sign in (2026-W46)";
+    const waiting = { status: "waiting", reportId: null, headline: "Still waiting.", details: [] };
+    mocks.api.runJob.mockResolvedValue(waiting);
+
+    await user.click(screen.getByRole("tab", { name: "Sources" }));
+    expect(screen.queryByRole("region", { name: "Reports" })).toBeNull();
+    await user.click(within(screen.getByRole("group", { name })).getByRole("button", { name: "Continue" }));
+    expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "resume", period: "2026-W46" });
+    await screen.findByRole("status", { name: "Still waiting." });
+
+    await user.click(screen.getByRole("tab", { name: "Reports" }));
+    await user.click(row("Week of 2 November (2026-W45)"));
+    await screen.findByRole("button", { name: "Back to Trends" });
+    const banner = await screen.findByRole("group", { name });
+    expect(banner.closest("main")?.getAttribute("aria-label")).toBe("Trends report");
+    await user.click(within(banner).getByRole("button", { name: "Build digest without it" }));
+    expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "regenerate", period: "2026-W46" });
+    // One banner, not one per place.
+    expect(screen.getAllByRole("group", { name })).toHaveLength(1);
   });
 
   it("does not offer a page that is not a web address", async () => {

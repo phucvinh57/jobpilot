@@ -76,12 +76,38 @@ describe("startActivity", () => {
     emit(step("nodeStarted", "discover:r1"));
     await vi.advanceTimersByTimeAsync(REREAD_MS / 2);
     emit(step("nodeStarted", "discover:r1"));
-    await vi.advanceTimersByTimeAsync(REREAD_MS / 2);
+    await vi.advanceTimersByTimeAsync(REREAD_MS / 2 - 1);
     expect(shell.activity).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(REREAD_MS);
+    // The read is due one interval after the first step of the burst, whatever came after it.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(shell.activity).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(REREAD_MS * 2);
     expect(shell.activity).toHaveBeenCalledTimes(2);
     // The CV is still at the step that reported: its text stays.
     expect(statuses()).toEqual(["Preparing a CV: Tailoring the CV", "Job search: Searching the sources"]);
+    stop();
+  });
+
+  it("keeps reading under a steady stream of steps: once per interval, and once after the last", async () => {
+    vi.mocked(shell.activity).mockResolvedValue([CV]);
+    const stop = startActivity();
+    await settle();
+    expect(shell.activity).toHaveBeenCalledTimes(1);
+
+    // A step every fifth of the interval, for four intervals: a read at the end of each.
+    const gap = REREAD_MS / 5;
+    for (let n = 0; n < 20; n++) {
+      emit(step("nodeStarted", "lead:4"));
+      await vi.advanceTimersByTimeAsync(gap);
+    }
+    expect(shell.activity).toHaveBeenCalledTimes(5);
+
+    // The last step of a stream is read too.
+    emit(step("nodeStarted", "lead:4"));
+    await vi.advanceTimersByTimeAsync(REREAD_MS);
+    expect(shell.activity).toHaveBeenCalledTimes(6);
+    await vi.advanceTimersByTimeAsync(REREAD_MS * 2);
+    expect(shell.activity).toHaveBeenCalledTimes(6);
     stop();
   });
 

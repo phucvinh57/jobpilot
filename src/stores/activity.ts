@@ -7,8 +7,9 @@ import { onGraphProgress } from "@/api/events";
 import { activity } from "@/api/shell";
 import { loaded, NO_ACTIVITY, onProgress, type ActivityState } from "@/lib/activity";
 
-/** How long the list waits after a graph step before it is read again: steps come in bursts. */
-export const REREAD_MS = 200;
+/** The list is read again at most once in this long, however many graph steps arrive (they come
+ *  in bursts), and never later than this after a step. */
+export const REREAD_MS = 250;
 
 export const useActivity = create<ActivityState>(() => NO_ACTIVITY);
 
@@ -27,7 +28,10 @@ function read(): void {
   );
 }
 
-/** Start following the background jobs: one read, then every graph step. Returns the teardown. */
+/** Start following the background jobs: one read, then one after graph steps. A step asks for a
+ *  read `REREAD_MS` later unless one is already due: the steps in between are covered by that read,
+ *  so a steady stream of steps reads once per interval instead of putting the read off. Returns
+ *  the teardown. */
 export function startActivity(): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   read();
@@ -36,9 +40,11 @@ export function startActivity(): () => void {
     if (step.state !== useActivity.getState()) {
       useActivity.setState(step.state);
     }
-    if (step.reread) {
-      clearTimeout(timer);
-      timer = setTimeout(read, REREAD_MS);
+    if (step.reread && timer === undefined) {
+      timer = setTimeout(() => {
+        timer = undefined;
+        read();
+      }, REREAD_MS);
     }
   });
   return () => {

@@ -34,7 +34,7 @@ beforeEach(() => {
     }
   }
   mocks.api.overview.mockResolvedValue(overviewFixture());
-  useRuns.setState({ running: undefined, step: undefined, notice: undefined });
+  useRuns.setState({ running: undefined, step: undefined, saved: undefined });
 });
 
 afterEach(cleanup);

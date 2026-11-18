@@ -49,7 +49,7 @@ beforeEach(() => {
     ),
   );
   mocks.api.runJob.mockResolvedValue({ status: "done", reportId: 5, headline: "Digest ready.", details: [] });
-  useRuns.setState({ running: undefined, step: undefined, notice: undefined });
+  useRuns.setState({ running: undefined, step: undefined, saved: undefined });
 });
 
 afterEach(cleanup);
@@ -131,9 +131,10 @@ describe("Reports", () => {
     await user.click(reports().getByRole("button", { name: "Reports period: Monthly" }));
     await user.click(reports().getByRole("button", { name: "Rerun November 2026 (2026-M11)" }));
     expect(mocks.api.runJob).toHaveBeenCalledWith({ kind: "collect", period: "2026-M11" });
-    // The run saved report 5: it is opened.
-    await waitFor(() => expect(mocks.api.overview).toHaveBeenLastCalledWith(5, "monthly"));
-    await user.click(await screen.findByRole("button", { name: "Back to Trends" }));
+    // The run saved report 5: the toast says it, the list stays.
+    expect(await screen.findByRole("status", { name: "Digest ready." })).toBeTruthy();
+    expect(mocks.api.overview).not.toHaveBeenCalledWith(5, "monthly");
+    expect(screen.getByRole("heading", { level: 1, name: "Trends" })).toBeTruthy();
 
     act(() => useRuns.setState({ running: { kind: "collect", period: "2026-W46" }, step: "Starting" }));
     expect(

@@ -95,9 +95,10 @@ function HealthLine() {
 }
 
 /** The background jobs (searches, CVs being written, market research), right of the title: a
- *  spinner and a count while there are any, nothing otherwise. Hovering or focusing it lists them
- *  with what each does now; a row opens the screen that shows the job, and pressing the indicator
- *  itself opens the first job that waits for the user (else the first job). */
+ *  spinner and a count while there are any, nothing otherwise. Resting the pointer on it lists
+ *  them with what each does now; pressing it (a click, Enter or Space) opens the same list and
+ *  moves the focus into it, so the rows are reached with Tab (Escape closes it). The indicator
+ *  itself goes nowhere: a row opens the screen that shows its job and closes the list. */
 function ActivityIndicator() {
   const items = useActivity((s) => s.items);
   const show = useNav((s) => s.show);
@@ -113,17 +114,16 @@ function ActivityIndicator() {
       show(item.screen);
     }
   };
-  const first = items.find((item) => item.state === "waiting") ?? items[0];
   return (
     <HoverCard
       id="activity-list"
       label="Background jobs"
-      trigger={
+      trigger={(card) => (
         <button
           id="activity"
           type="button"
           aria-label={activityLabel(items)}
-          onClick={() => first && open(first)}
+          {...card}
           className={clsx(
             "ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 px-1.5 text-small font-semibold tabular-nums transition-colors hover:bg-track",
             waiting > 0 ? "text-warn" : "text-muted hover:text-ink",
@@ -132,28 +132,33 @@ function ActivityIndicator() {
           {waiting < items.length ? <Spinner className="size-3.5" /> : <HealthDot state="warn" />}
           <span>{items.length}</span>
         </button>
-      }
+      )}
     >
-      <ul aria-label="Background jobs" className="flex max-h-80 flex-col overflow-y-auto py-1">
-        {items.map((item, n) => (
-          <li key={item.id}>
-            <button
-              id={`activity-item-${n + 1}`}
-              type="button"
-              onClick={() => open(item)}
-              className="flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left hover:bg-track"
-            >
-              <span className="flex h-5 w-4 shrink-0 items-center justify-center">
-                {item.state === "waiting" ? <HealthDot state="warn" /> : <Spinner className="size-3.5 text-muted" />}
-              </span>
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-body font-medium text-ink">{item.title}</span>
-                <Caption className="truncate">{item.status}</Caption>
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      {(close) => (
+        <ul className="flex max-h-80 flex-col overflow-y-auto py-1">
+          {items.map((item, n) => (
+            <li key={item.id}>
+              <button
+                id={`activity-item-${n + 1}`}
+                type="button"
+                onClick={() => {
+                  open(item);
+                  close();
+                }}
+                className="flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left hover:bg-track"
+              >
+                <span className="flex h-5 w-4 shrink-0 items-center justify-center">
+                  {item.state === "waiting" ? <HealthDot state="warn" /> : <Spinner className="size-3.5 text-muted" />}
+                </span>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-body font-medium text-ink">{item.title}</span>
+                  <Caption className="truncate">{item.status}</Caption>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </HoverCard>
   );
 }

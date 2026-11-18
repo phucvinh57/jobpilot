@@ -22,7 +22,9 @@ const TABS: readonly { value: Tab; label: string }[] = [
  *  your background, then your wishes against the market, from the sources you add. The list has
  *  two tabs, the saved reports and the sources; "New research" (the one primary button) asks for
  *  the period in a dialog, collects its items, then asks the AI provider for a digest. A click on a
- *  report opens it: every point links to the stored items it rests on. */
+ *  report opens it: every point links to the stored items it rests on. A collection that waits for
+ *  the user (a login, a captcha) is a banner at the top of the list, on both tabs, and of an open
+ *  report: wherever the user is on this screen, they can continue it. */
 export function TrendsPage() {
   const t = useTrends();
   const { data, report } = t;
@@ -30,6 +32,9 @@ export function TrendsPage() {
   const [creating, setCreating] = useState(false);
 
   const loadError = <LoadError error={t.loadError} title="The saved data could not be read" onRetry={t.reload} />;
+  const challenges = data && (
+    <Challenges challenges={data.challenges} busy={t.busy} onContinue={t.resume} onWithout={t.regenerateFor} />
+  );
 
   if (report) {
     return (
@@ -40,15 +45,15 @@ export function TrendsPage() {
           chart={report.chart}
           row={report.row}
           adds={t.adds}
-          step={t.running?.step}
-          busy={t.busy}
+          running={t.running}
           exporting={t.exporting}
           onBack={t.back}
           onExport={t.exportPdf}
-          onRegenerate={(period) => void t.regenerateFor(period)}
-          onRerun={(period) => void t.rerun(period)}
+          onRegenerate={t.regenerateFor}
+          onRerun={t.rerun}
         >
           {loadError}
+          {challenges}
         </ReportView>
       </div>
     );
@@ -74,31 +79,24 @@ export function TrendsPage() {
         }
       >
         {loadError}
+        {challenges}
         <div id="trends-tabs">
           <Tabs<Tab> label="Trends" tabs={TABS} value={tab} onChange={setTab} />
         </div>
         {data ? (
           tab === "reports" ? (
-            <>
-              <Challenges
-                challenges={data.challenges}
-                busy={t.busy}
-                onContinue={(period) => void t.resume(period)}
-                onWithout={(period) => void t.regenerateFor(period)}
-              />
-              <Reports
-                reports={data.history}
-                cadence={t.cadence}
-                onCadence={t.chooseCadence}
-                running={t.running}
-                exporting={t.exporting}
-                deleting={t.deleting}
-                onOpen={t.pickReport}
-                onRerun={(period) => void t.rerun(period)}
-                onExport={t.exportPdf}
-                onDelete={t.remove}
-              />
-            </>
+            <Reports
+              reports={data.history}
+              cadence={t.cadence}
+              onCadence={t.chooseCadence}
+              running={t.running}
+              exporting={t.exporting}
+              deleting={t.deleting}
+              onOpen={t.pickReport}
+              onRerun={t.rerun}
+              onExport={t.exportPdf}
+              onDelete={t.remove}
+            />
           ) : (
             <SourcesSection sources={data.sources} kinds={data.sourceKinds} />
           )

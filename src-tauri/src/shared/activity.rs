@@ -3,19 +3,16 @@
 //!
 //! Pure rules over what `core.graphs` reports; the read itself is `shell::shared_activity`.
 
+use jobpilot_engine::discover::promote::PREPARE_GRAPH;
+use jobpilot_engine::discover::suggest::SUGGEST_GRAPH;
 use jobpilot_engine::discover::{parse_source_thread, DISCOVERY_GRAPH, SOURCE_GRAPH};
 use jobpilot_engine::graph::WaitReason;
+use jobpilot_engine::pipeline::insight::GRAPH as INSIGHT_GRAPH;
+use jobpilot_engine::prefs::chat_graph::GRAPH as PREFS_CHAT_GRAPH;
+use jobpilot_engine::trends::collect::GRAPH as TRENDS_GRAPH;
+use jobpilot_engine::trends::digest::DIGEST_GRAPH as TRENDS_DIGEST_GRAPH;
 use jobpilot_engine::trends::Period;
 use serde::Serialize;
-
-/// Graph names owned by modules that export no constant for them (`discover::promote`,
-/// `discover::suggest`, `pipeline::insight`, `prefs::chat_graph`, `trends`).
-const PREPARE_GRAPH: &str = "prepare_cv";
-const SUGGEST_GRAPH: &str = "source_suggest";
-const INSIGHT_GRAPH: &str = "insight";
-const PREFS_CHAT_GRAPH: &str = "prefs_chat";
-const TRENDS_GRAPH: &str = "trends";
-const TRENDS_DIGEST_GRAPH: &str = "trends_digest";
 
 /// What a running job says before its first node is known, and for a node without a label.
 const STARTING: &str = "Starting";
@@ -59,7 +56,8 @@ pub fn period_title(period: Period) -> String {
     }
 }
 
-/// What a node of `graph` does, in the words the screens use for the same step. `None` for a node
+/// What a node of `graph` does, in the words the screens use for the same step (the trends labels
+/// are those of the web app's `src/lib/trends/jobs.ts`: change both together). `None` for a node
 /// that says nothing of its own (a router, an unknown node).
 fn node_label(graph: &str, node: &str) -> Option<&'static str> {
     let label = match (graph, node) {
@@ -92,6 +90,7 @@ fn node_label(graph: &str, node: &str) -> Option<&'static str> {
         (TRENDS_GRAPH, "plan") => "Planning the sources",
         (TRENDS_GRAPH, "hackernews" | "yc" | "feeds") => "Reading the sources",
         (TRENDS_GRAPH, "store_items") => "Storing the items",
+        (TRENDS_GRAPH, "wait_human") => "Checking for sources that need you",
         (TRENDS_GRAPH | TRENDS_DIGEST_GRAPH, "extract") => "Reading the items with your AI provider",
         (TRENDS_GRAPH | TRENDS_DIGEST_GRAPH, "count") => "Counting skills",
         (TRENDS_GRAPH | TRENDS_DIGEST_GRAPH, "synthesize") => "Writing the digest",
@@ -161,7 +160,8 @@ fn screen(graph: &str) -> &'static str {
 }
 
 /// The list the sidebar shows, from every running and waiting thread: running jobs first, then
-/// those waiting for the user, each group in the order given.
+/// those waiting for the user, each group by thread id. The order does not depend on the one given
+/// nor on how far a job is, so a line keeps its place while the jobs run.
 ///
 /// - The preference chat is left out: it waits whenever a chat is open.
 /// - A running source search is part of its "Job search" line while that whole run is listed;
@@ -187,8 +187,9 @@ pub fn activity(jobs: &[Job]) -> Vec<ActivityDto> {
 
     let mut seen_periods: Vec<&str> = Vec::new();
     let mut listed = Vec::new();
-    let by_state = jobs.iter().filter(|j| j.waiting.is_none()).chain(jobs.iter().filter(|j| j.waiting.is_some()));
-    for job in by_state.filter(|j| shown(j)) {
+    let mut ordered: Vec<&Job> = jobs.iter().filter(|j| shown(j)).collect();
+    ordered.sort_by(|a, b| (a.waiting.is_some(), &a.thread).cmp(&(b.waiting.is_some(), &b.thread)));
+    for job in ordered {
         if let Some(period) = trends_period(job) {
             if seen_periods.contains(&period) {
                 continue;
@@ -287,9 +288,9 @@ mod tests {
             running("prepare_cv", "lead:4", &[]),
             running("insight", "insight-1-0", &["router"]),
         ]);
-        assert_eq!(list[0].status, "Starting");
-        assert_eq!(list[1].title, "Reading about the company");
-        assert_eq!(list[1].status, "Working");
+        assert_eq!(list[0].title, "Reading about the company");
+        assert_eq!(list[0].status, "Working");
+        assert_eq!(list[1].status, "Starting");
         assert_eq!(step_label("prepare_cv", &["promote"]), "Creating the application");
         assert_eq!(step_label("prepare_cv", &["extract"]), "Working", "labels are per graph");
         // A fan-out: the first node with a label speaks.
@@ -389,6 +390,45 @@ mod tests {
             ]
         );
         assert_eq!(paused[1].screen, "trends");
+    }
+
+    #[test]
+    fn the_order_is_running_then_waiting_each_by_thread_whatever_order_is_given() {
+        let jobs = [
+            waiting("trends", "trends:2026-Q4", login()),
+            running("prepare_cv", "lead:9", &["generate"]),
+            waiting("source_run", "discover:r1:7", login()),
+            running("discovery", "discover:r2", &["plan"]),
+            running("prepare_cv", "lead:4", &["promote"]),
+        ];
+        let ids = |list: &[ActivityDto]| list.iter().map(|a| a.id.clone()).collect::<Vec<_>>();
+        let expected = ["discover:r2", "lead:4", "lead:9", "discover:r1:7", "trends:2026-Q4"];
+        assert_eq!(ids(&activity(&jobs)), expected);
+        let mut reversed = jobs.to_vec();
+        reversed.reverse();
+        assert_eq!(ids(&activity(&reversed)), expected);
+    }
+
+    #[test]
+    fn the_trends_steps_read_as_on_the_trends_screen() {
+        // The labels of `src/lib/trends/jobs.ts` (`stepLabel`), word for word.
+        for (node, label) in [
+            ("plan", "Planning the sources"),
+            ("hackernews", "Reading the sources"),
+            ("yc", "Reading the sources"),
+            ("feeds", "Reading the sources"),
+            ("store_items", "Storing the items"),
+            ("wait_human", "Checking for sources that need you"),
+            ("extract", "Reading the items with your AI provider"),
+            ("count", "Counting skills"),
+            ("synthesize", "Writing the digest"),
+            ("enforce_citations", "Checking the citations"),
+            ("save_report", "Saving the digest"),
+        ] {
+            assert_eq!(step_label("trends", &[node]), label, "{node}");
+        }
+        assert_eq!(step_label("trends_digest", &["synthesize"]), "Writing the digest");
+        assert_eq!(step_label("source_run", &["wait_human"]), "Checking for pages that need you");
     }
 
     #[test]

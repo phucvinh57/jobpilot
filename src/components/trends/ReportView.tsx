@@ -1,7 +1,7 @@
 import { FileDown, PenLine, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { Button, Caption, Page } from "@/components/ui/kit";
+import { Button, Caption, Heading, LinkButton, Page } from "@/components/ui/kit";
 
 import { digestHint, reportName } from "@/lib/trends/format";
 import type { Chart, Digest, ReportRow } from "@/types/trends";
@@ -12,15 +12,16 @@ import { SkillChart } from "./SkillChart";
 
 /** One saved report: its digest with the skill chart beside it. Opened from a row of the list;
  *  the breadcrumb goes back. Its actions are all secondary: save it as a PDF, write the digest
- *  again from the stored items, or collect its period again. */
+ *  again from the stored items, or collect its period again. The last two start a run, so they
+ *  wait while any run is in flight; the step of a run is said here only when it builds this
+ *  report's period. */
 export function ReportView({
   loading,
   digest,
   chart,
   row,
   adds,
-  step,
-  busy,
+  running,
   exporting,
   onBack,
   onExport,
@@ -35,39 +36,33 @@ export function ReportView({
   /** Its row in the list (its period); `undefined` when it is not there. */
   row: ReportRow | undefined;
   adds: PreferenceAdds;
-  /** The step of the run in flight. */
-  step: string | undefined;
-  /** A trends run is in flight: no second one. */
-  busy: boolean;
+  /** The trends run in flight (no second one meanwhile): the period it builds and its step. */
+  running: { period: string; step: string } | undefined;
   exporting: boolean;
   onBack: () => void;
   onExport: (id: number, period: string) => void;
   onRegenerate: (period: string) => void;
   onRerun: (period: string) => void;
-  /** Above the report (a failed read). */
+  /** Above the report (a failed read, a collection that waits for the user). */
   children?: ReactNode;
 }) {
   const title = digest?.title ?? row?.title ?? "Report";
   const shown = !loading && digest !== null && row !== undefined ? row : undefined;
+  const busy = running !== undefined;
+  const step = running !== undefined && row?.period === running.period ? running.step : undefined;
   return (
     <Page
       label="Trends report"
       title={
         <div className="flex min-w-0 flex-col gap-1">
           <div className="flex min-w-0 items-center gap-1.5 text-small text-muted">
-            <button
-              id="trends-back"
-              type="button"
-              aria-label="Back to Trends"
-              onClick={onBack}
-              className="cursor-pointer text-accent hover:underline"
-            >
+            <LinkButton id="trends-back" aria-label="Back to Trends" onClick={onBack} className="shrink-0">
               Trends
-            </button>
+            </LinkButton>
             <span aria-hidden>/</span>
             <span className="min-w-0 truncate">{row ? reportName(row) : title}</span>
           </div>
-          <h1 className="font-heading text-h1 font-semibold text-ink">{title}</h1>
+          <Heading level="h1">{title}</Heading>
         </div>
       }
       subtitle={
@@ -85,7 +80,7 @@ export function ReportView({
             size="compact"
             icon={FileDown}
             busy={exporting}
-            disabled={!shown || busy}
+            disabled={!shown}
             onClick={() => shown && onExport(shown.id, shown.period)}
           >
             Export PDF

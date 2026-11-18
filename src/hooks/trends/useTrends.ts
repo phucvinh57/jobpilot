@@ -2,7 +2,7 @@
 // retry, rerun a saved report), pick the period, open a saved report and go back to the list,
 // export or delete one, add a topic to the preferences.
 
-import { useCallback, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { useGraphProgress } from "@/hooks/useGraphProgress";
@@ -43,8 +43,7 @@ export function useTrends() {
 
   const running = useRuns((s) => s.running);
   const step = useRuns((s) => s.step);
-  const failed = useRuns((s) => s.notice);
-  const clearFailure = useRuns((s) => s.clearFailure);
+  const saved = useRuns((s) => s.saved);
   useGraphProgress(useRuns.getState().follow);
 
   // The open report, once its digest has been read (until then `data` still holds the list's).
@@ -56,23 +55,18 @@ export function useTrends() {
   const place = useRef({ selected, period: shownRow?.period });
   place.current = { selected, period: shownRow?.period };
 
-  const start = useCallback(async (job: Job) => {
-    const end = await useRuns.getState().start(job);
-    // The new report opens for a user who waited on the list, or who looks at the one it replaces.
-    // (After leaving the screen this instance is gone and nothing opens: the toast told them.)
+  // A run that saved a report replaces the report of its period: a user who looks at that one
+  // (Rewrite digest, Rerun) goes on to the new one. Nothing opens from the list, where a dialog may
+  // be open: the toast and the refreshed row say it. (How a run ended, a failure with its Retry
+  // included, is a toast of the runs store.)
+  useEffect(() => {
     const now = place.current;
-    if (end?.reportId != null && (now.selected === undefined || now.period === job.period)) {
-      setSelected(end.reportId);
+    if (saved && now.selected !== undefined && now.period === saved.period) {
+      setSelected(saved.reportId);
     }
-  }, []);
+  }, [saved]);
 
-  // A run that did not finish is a toast with Retry (carrying on where it stopped), shown once:
-  // then the store forgets it. One that failed while the screen was closed toasts on return.
-  useErrorToast(failed?.error, {
-    title: "The run did not finish",
-    onRetry: failed && (() => void start(failed.retry)),
-    clear: clearFailure,
-  });
+  const start = (job: Job) => void useRuns.getState().start(job);
 
   const adds = usePreferenceAdds(data, say);
 
@@ -120,7 +114,7 @@ export function useTrends() {
       if (period === undefined || busy) {
         return false;
       }
-      void start({ kind: "collect", period: period.label });
+      start({ kind: "collect", period: period.label });
       toast.ok("Research started", `${period.title} (${period.label})`);
       return true;
     },

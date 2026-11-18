@@ -91,9 +91,15 @@ fn from_row(row: GraphCheckpointRow) -> Result<Checkpoint> {
     })
 }
 
-/// The nodes a saved checkpoint goes on with: the ones running after it was saved.
-pub(crate) fn pending_nodes(row: &GraphCheckpointRow) -> Result<Vec<String>> {
-    let rest: Rest = serde_json::from_str(&row.rest_json).context("reading the saved checkpoint")?;
+/// The nodes a saved checkpoint goes on with (the ones running after it was saved), from its
+/// `rest_json` alone: the state is not needed, so it is not read.
+pub(crate) fn pending_nodes(rest_json: &str) -> Result<Vec<String>> {
+    /// Only the field asked for: the other parts of [`Rest`] are skipped, not built.
+    #[derive(Deserialize)]
+    struct Pending {
+        pending_nodes: Vec<String>,
+    }
+    let rest: Pending = serde_json::from_str(rest_json).context("reading the saved checkpoint")?;
     Ok(rest.pending_nodes)
 }
 
