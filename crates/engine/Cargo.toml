@@ -17,7 +17,6 @@ tracing.workspace = true
 serde_yaml = "0.9"
 rusqlite = { version = "0.43", features = ["bundled", "chrono"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
-keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 jsonschema = { version = "0.61", default-features = false }
 dirs = "7"
 regex = "1"
@@ -55,3 +54,12 @@ test-util = []
 # integration tests under `tests/`; never part of a release package:
 # `cargo test -p jobpilot-engine --features test-browser --test e2e_discovery -- --ignored`.
 test-browser = ["dep:tempfile"]
+
+# The OS keyring: keyring v3 silently falls back to an in-memory mock on a platform without its
+# backend feature, so every supported OS names its own store here (on any other OS there is no
+# keyring crate, so the build fails instead).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }

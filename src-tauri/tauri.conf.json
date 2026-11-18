@@ -30,8 +30,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb"],
-    "icon": ["../assets/icons/jobpilot-48.png", "../assets/icons/jobpilot-256.png"],
+    "targets": ["deb", "app", "dmg"],
+    "icon": [
+      "../assets/icons/jobpilot-48.png",
+      "../assets/icons/jobpilot-128.png",
+      "../assets/icons/jobpilot-256.png",
+      "../assets/icons/jobpilot-512.png"
+    ],
     "category": "Productivity",
     "resources": { "../extension/dist": "extension" },
     "shortDescription": "Tailored CVs, applications in your own browser, Gmail status tracking",
@@ -42,6 +47,9 @@
         "desktopTemplate": "../assets/jobpilot.desktop",
         "recommends": ["google-chrome-stable | chromium | chromium-browser", "gnome-keyring | kwalletd6 | kwalletd5"]
       }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
     }
   }
 }

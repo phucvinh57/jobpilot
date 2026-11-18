@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Build release packages into release/ with the Tauri bundler: a .deb and an AppImage.
+# Build release packages into release/ with the Tauri bundler: a .deb and an AppImage on Linux,
+# a zipped .app and a .dmg on macOS.
 # Usage: scripts/package.sh            (run from anywhere; BUNDLES=deb for the .deb only)
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 dist="$root/release"
-bundles="${BUNDLES:-deb,appimage}"
+if [[ $(uname -s) == Darwin ]]; then default_bundles="app,dmg"; else default_bundles="deb,appimage"; fi
+bundles="${BUNDLES:-$default_bundles}"
 mkdir -p "$dist"
 
 echo "==> web app dependencies"
@@ -19,12 +21,20 @@ echo "==> release build and packages ($bundles)"
 # linuxdeploy on first use.
 # A bundle that fails (the AppImage needs linuxdeploy to work on this machine) does not hide the
 # ones that were built: they are still copied, and the script ends with the failure.
+bundle="$root/target/release/bundle"
+# Packages left by an earlier build must not be copied as if this build made them.
+rm -rf "$bundle"/deb "$bundle"/appimage "$bundle"/macos "$bundle"/dmg
 status=0
 bun run tauri build --bundles "$bundles" || status=$?
 
 echo "==> copy to release/"
 found=0
-for pkg in "$root"/target/release/bundle/deb/*.deb "$root"/target/release/bundle/appimage/*.AppImage; do
+# A .app is a directory: zip it (ditto keeps its symlinks and extended attributes).
+for app in "$bundle"/macos/*.app; do
+    [[ -e $app ]] || continue
+    ditto -c -k --keepParent "$app" "$app.zip" || status=$?
+done
+for pkg in "$bundle"/deb/*.deb "$bundle"/appimage/*.AppImage "$bundle"/dmg/*.dmg "$bundle"/macos/*.app.zip; do
     [[ -e $pkg ]] || continue
     cp -f "$pkg" "$dist/"
     found=$((found + 1))

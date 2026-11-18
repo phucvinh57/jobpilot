@@ -1,6 +1,6 @@
 # JobPilot
 
-Desktop app (Rust core, Tauri + React UI, Linux) that turns a job description into a CV tailored from what you tell it about your work (an old CV, a LinkedIn export, a few notes), lets you edit it, fills and submits the application in a tab of your own Chrome (through the JobPilot extension) **only after you confirm**, and tracks replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider.
+Desktop app (Rust core, Tauri + React UI, Linux and macOS) that turns a job description into a CV tailored from what you tell it about your work (an old CV, a LinkedIn export, a few notes), lets you edit it, fills and submits the application in a tab of your own Chrome (through the JobPilot extension) **only after you confirm**, and tracks replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider.
 
 Flow: paste a JD link (or file) -> Generate CV -> edit / Approve CV -> Review & Submit -> Submit -> status follows your Gmail replies. JobPilot can also find jobs for you (see "Finding jobs").
 
@@ -10,6 +10,7 @@ Flow: paste a JD link (or file) -> Generate CV -> edit / Approve CV -> Review & 
 - [`typst`](https://typst.app) CLI: `cargo install --locked typst-cli` (the app tells you if it is missing)
 - Chrome or Chromium (or another Chromium browser, version 125+) with the JobPilot extension (`extension/`, see Setup)
 - Linux with Wayland or X11, WebKitGTK 4.1 (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev` to build), and a Secret Service (gnome-keyring / KWallet, libdbus) for the keyring
+- or macOS 11+ with Xcode's command line tools (`xcode-select --install`); secrets go to the Keychain, and `brew install typst` works too. `scripts/package.sh` builds an unsigned `.app` and `.dmg`: macOS quarantines them when downloaded, so open it with right-click > Open (or `xattr -dr com.apple.quarantine JobPilot.app`)
 
 ## Run
 
