@@ -79,7 +79,7 @@ pub(crate) async fn send_json(req: RequestBuilder, who: &str, secret: Option<&st
     })
 }
 
-fn describe_net_error(e: &reqwest::Error) -> String {
+pub(crate) fn describe_net_error(e: &reqwest::Error) -> String {
     if e.is_timeout() {
         return "the request timed out".into();
     }

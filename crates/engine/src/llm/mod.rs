@@ -35,7 +35,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
 use crate::store::{NewProvider, Protocol, Provider, ProviderKind, Store};
-use crate::Core;
+use crate::{Core, Secrets};
 
 pub use anthropic::AnthropicClient;
 pub use message::{Message, Role};
@@ -109,9 +109,18 @@ pub fn from_provider(provider: &Provider, api_key: Option<String>) -> Box<dyn Ll
                 .with_json_mode(&provider.json_mode)
                 .with_fallback(fallback),
         ),
-        // Hook for the Codex client (`codex`): it replaces this placeholder.
-        Protocol::CodexResponses => Box::new(Unavailable::new(&provider.name, "Codex sign-in is not available yet")),
+        // The Codex client needs the keyring (its tokens): see `client_for`.
+        Protocol::CodexResponses => Box::new(Unavailable::new(&provider.name, codex::NOT_SIGNED_IN)),
     }
+}
+
+/// [`from_provider`], except that a saved Codex provider (`id != 0`) gets the real
+/// [`codex::CodexClient`], which reads its sign-in tokens from `secrets`.
+pub(crate) fn client_for(secrets: &Secrets, provider: &Provider, api_key: Option<String>) -> Box<dyn Llm> {
+    if provider.kind == ProviderKind::Codex && provider.id != 0 {
+        return Box::new(codex::CodexClient::new(provider, secrets.clone()));
+    }
+    from_provider(provider, api_key)
 }
 
 /// A client that cannot work; every call fails with `"{name}: {reason}"`.
@@ -274,7 +283,14 @@ impl Core {
             .get_provider(provider_id)?
             .with_context(|| format!("AI provider {provider_id} no longer exists"))?;
         let key = self.provider_api_key(provider_id)?;
-        Ok(persisting_json_mode(self.store.clone(), &provider, from_provider(&provider, key)))
+        Ok(persisting_json_mode(self.store.clone(), &provider, client_for(&self.secrets, &provider, key)))
+    }
+
+    /// Client for a provider as entered in a form (test it, load its models), with `api_key` as
+    /// given: like [`from_provider`], except that a saved Codex provider (`provider.id != 0`) uses
+    /// its ChatGPT sign-in from the keyring.
+    pub fn llm_for_form(&self, provider: &Provider, api_key: Option<String>) -> Box<dyn Llm> {
+        client_for(&self.secrets, provider, api_key)
     }
 
     /// Client for the default provider.
@@ -334,7 +350,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::{Paths, Secrets};
+    use crate::Paths;
 
     fn schema() -> Value {
         json!({"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]})
@@ -517,7 +533,7 @@ mod tests {
     async fn codex_and_compatible_without_url_fail_plainly() {
         let codex = from_provider(&draft("Codex", ProviderKind::Codex), None);
         let err = codex.complete_json("S", "U", &schema()).await.unwrap_err().to_string();
-        assert_eq!(err, "Codex: Codex sign-in is not available yet");
+        assert_eq!(err, "Codex: not signed in: press Sign in with ChatGPT in Settings > AI providers");
         let mut compatible = draft("Local", ProviderKind::OpenAiCompatible);
         compatible.base_url = " ".into();
         let err = from_provider(&compatible, None).list_models().await.unwrap_err().to_string();
