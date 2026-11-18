@@ -1,6 +1,6 @@
 # JobPilot
 
-Desktop app (Rust core, Tauri + React UI, Linux and macOS) that turns a job description into a CV tailored from what you tell it about your work (an old CV, a LinkedIn export, a few notes), lets you edit it, fills and submits the application in a tab of your own Chrome (through the JobPilot extension) **only after you confirm**, and tracks replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider.
+Desktop app (Rust core, Tauri + React UI, Linux, macOS, and Windows 11 x64) that turns a job description into a CV tailored from what you tell it about your work (an old CV, a LinkedIn export, a few notes), lets you edit it, fills and submits the application in a tab of your own Chrome (through the JobPilot extension) **only after you confirm**, and tracks replies from Gmail. Works with any OpenAI- or Anthropic-compatible provider.
 
 Flow: paste a JD link (or file) -> Generate CV -> edit / Approve CV -> Review & Submit -> Submit -> status follows your Gmail replies. JobPilot can also find jobs for you (see "Finding jobs").
 
@@ -12,6 +12,8 @@ Flow: paste a JD link (or file) -> Generate CV -> edit / Approve CV -> Review & 
 - Linux with Wayland or X11, WebKitGTK 4.1 (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev` to build), and a Secret Service (gnome-keyring / KWallet, libdbus) for the keyring
 - or macOS 11+ with Xcode's command line tools (`xcode-select --install`); secrets go to the Keychain, and `brew install typst` works too. `scripts/package.sh` builds an unsigned `.app` and `.dmg`: macOS quarantines them when downloaded, so open it with right-click > Open (or `xattr -dr com.apple.quarantine JobPilot.app`)
 
+- On Windows 11 x64, install the Rust MSVC toolchain and Visual Studio Build Tools with **Desktop development with C++** and a Windows SDK. JobPilot uses Microsoft Edge WebView2 and Windows Credential Manager.
+
 ## Run
 
 ```
@@ -22,6 +24,21 @@ cargo run -p jobpilot --release
 ```
 
 Throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory cargo run -p jobpilot`. Sample data: `JOBPILOT_DEMO=1`.
+
+### Windows PowerShell
+
+Install Typst separately. Open a new PowerShell window after installing it so the shell can find it.
+
+```powershell
+rustup default stable-x86_64-pc-windows-msvc
+winget install --id Typst.Typst
+bun install --frozen-lockfile
+bun run build
+bun run ext:build
+cargo run -p jobpilot --release
+```
+
+If you installed Typst to a custom location, set `$env:JOBPILOT_TYPST` to the full path to `typst.exe`. JobPilot also looks on `PATH`, in Cargo’s `bin` directory, and in your WinGet Links directory. To run with sample data, set `$env:JOBPILOT_DEMO = "1"` before launching. For disposable local state, set `$env:JOBPILOT_DATA_DIR = "$env:TEMP\jobpilot-demo"` and `$env:JOBPILOT_SECRETS = "memory"`.
 
 ## Setup (Settings and Profile)
 
@@ -50,11 +67,19 @@ Throwaway state: `JOBPILOT_DATA_DIR=/tmp/jp JOBPILOT_SECRETS=memory cargo run -p
 scripts/package.sh
 ```
 
-Writes a `.deb` and an AppImage to `release/` (`BUNDLES=deb` for the `.deb` only). The `typst` CLI is not bundled.
+On Linux, this writes a `.deb` and an AppImage to `release/` (`BUNDLES=deb` for the `.deb` only). On macOS, it writes a zipped `.app` and a `.dmg`.
+
+On Windows, build the x64 installer from PowerShell after installing dependencies.
+
+```powershell
+bun run tauri build --target x86_64-pc-windows-msvc
+```
+
+Run the unsigned `*-setup.exe` from `target\x86_64-pc-windows-msvc\release\bundle\nsis\`. It installs JobPilot for the current user and downloads WebView2 if needed. Launch JobPilot from the Start menu. To install the bundled Chrome extension, copy the folder path shown in **Settings > Connections > Browser** and paste it into Chrome’s **Load unpacked** picker. Install Typst separately on each machine that will generate PDFs.
 
 ## Where data lives
 
-Under `$XDG_DATA_HOME/jobpilot` (usually `~/.local/share/jobpilot`, override with `JOBPILOT_DATA_DIR`):
+The default directory is `$XDG_DATA_HOME/jobpilot` (usually `~/.local/share/jobpilot`) on Linux, `~/Library/Application Support/jobpilot` on macOS, and `%APPDATA%\jobpilot` on Windows. Set `JOBPILOT_DATA_DIR` to override it.
 
 | Path | Content |
 | --- | --- |
@@ -87,5 +112,17 @@ bun run ext:build && JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-engine -- --ig
 JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-engine --features test-browser --test e2e_discovery -- --include-ignored  # + dry-run apply
 cargo test -p jobpilot-engine --test e2e_discovery                      # source -> lead -> CV -> approve, fake provider and board
 ```
+
+On Windows, use PowerShell for the individual checks.
+
+```powershell
+bun run check
+bun run build
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+typst compile --root . --input data=assets/prompts/example-cv.yaml assets/cv.typ "$env:TEMP\jobpilot-example.pdf"
+```
+
+Use Git Bash for `scripts/check.sh` and `scripts/risk.sh`. Keep Typst on Git Bash’s `PATH` for the example render. For the browser dry-run fixture, set `$env:JOBPILOT_CHROME` to a Chromium or Chrome for Testing executable and run `cargo test -p jobpilot-engine --features test-browser --test e2e_discovery -- --ignored` after building the extension.
 
 See `AGENTS.md` for the module map, conventions and how to check the UI visually.

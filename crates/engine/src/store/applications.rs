@@ -286,10 +286,20 @@ impl Store {
         })
     }
 
-    /// `base`, or `base-2`, `base-3`, ... whichever is not taken yet.
+    /// `base`, or `base-2`, `base-3`, ... whichever is available as a new application folder.
     pub fn unique_slug(&self, base: &str) -> Result<String> {
-        let mut candidate = base.to_string();
         let mut n = 1;
+        let mut candidate = base.to_string();
+        // The generated base contains only ASCII letters, digits, and hyphens. A numeric suffix
+        // makes a DOS device name usable as a directory.
+        #[cfg(windows)]
+        if matches!(
+            base.to_ascii_lowercase().as_bytes(),
+            b"con" | b"prn" | b"aux" | b"nul" | [b'c', b'o', b'm', b'1'..=b'9'] | [b'l', b'p', b't', b'1'..=b'9']
+        ) {
+            n += 1;
+            candidate = format!("{base}-{n}");
+        }
         while self.get_application_by_slug(&candidate)?.is_some() {
             n += 1;
             candidate = format!("{base}-{n}");
@@ -302,6 +312,20 @@ impl Store {
 mod tests {
     use super::{clean_round, ROUND_MAX_CHARS};
     use crate::store::{NewApplication, Status, Store};
+
+    #[cfg(windows)]
+    #[test]
+    fn new_application_slugs_avoid_device_names() {
+        let store = Store::open_in_memory().unwrap();
+        for base in ["con", "Prn", "aux", "nul", "com1", "LPT9"] {
+            let slug = store.unique_slug(base).unwrap();
+            assert_eq!(slug, format!("{base}-2"));
+            store.create_application(&NewApplication { slug, ..Default::default() }).unwrap();
+            assert_eq!(store.unique_slug(base).unwrap(), format!("{base}-3"));
+        }
+        assert_eq!(store.unique_slug("console").unwrap(), "console");
+        assert_eq!(store.unique_slug("com10").unwrap(), "com10");
+    }
 
     fn store_with_app() -> (tempfile::TempDir, Store, i64) {
         let dir = tempfile::tempdir().unwrap();

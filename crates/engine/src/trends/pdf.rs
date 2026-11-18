@@ -248,19 +248,22 @@ mod tests {
 
     #[tokio::test]
     async fn a_saved_report_exports_as_a_pdf() {
-        let (dir, core) = crate::trends::tests::core();
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::Paths::new(dir.path().join("Dữ liệu xu hướng"));
+        let core = Core::open_at(paths, crate::Secrets::memory()).unwrap();
         let saved = core.save_trend_digest(&Period::parse("2026-Q4").unwrap(), &sample()).unwrap();
-        let out = core.export_trend_report_pdf(saved.id, &dir.path().join("market")).await.unwrap();
-        assert_eq!(out, dir.path().join("market.pdf"));
+        let dest = dir.path().join("Báo cáo thị trường");
+        let out = core.export_trend_report_pdf(saved.id, &dest).await.unwrap();
+        assert_eq!(out, dest.with_extension("pdf"));
         let bytes = std::fs::read(&out).unwrap();
         assert!(bytes.starts_with(b"%PDF"), "a PDF");
         let links = crate::pipeline::ingest::pdf_links(&bytes);
         assert!(links.iter().any(|l| l == "https://acme.test/rust"), "{links:?}");
         assert!(!links.iter().any(|l| l.starts_with("javascript")), "{links:?}");
         assert!(!core.paths.data_dir.join("tmp").read_dir().unwrap().any(|_| true), "the work folder is removed");
-        // `market.pdf` exists now: a bare `market` from the dialog must not replace it silently...
-        let err = core.export_trend_report_pdf(saved.id, &dir.path().join("market")).await.unwrap_err();
-        assert!(err.to_string().contains("market.pdf already exists"), "{err}");
+        // An extensionless name from the dialog must not silently replace an existing PDF.
+        let err = core.export_trend_report_pdf(saved.id, &dest).await.unwrap_err();
+        assert!(err.to_string().contains("Báo cáo thị trường.pdf already exists"), "{err}");
         // ...while the name the dialog confirmed is replaced.
         core.export_trend_report_pdf(saved.id, &out).await.unwrap();
 

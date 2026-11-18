@@ -326,6 +326,7 @@ async fn a_wrong_token_is_asked_to_pair_and_a_declined_pairing_is_rejected() {
     // Declined even after the extension consented.
     let code = bridge.status().pairing_code.unwrap();
     ext.consent(&code).await;
+    until("extension consent", || bridge.shared.state().pairing.as_ref().is_some_and(|p| p.consented)).await;
     bridge.decline_pairing().unwrap();
     assert_eq!(ext.recv().await, json!({"type":"rejected","reason":"declined"}));
     assert_eq!(ext.next().await, None);

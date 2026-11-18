@@ -8,13 +8,14 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tokio::process::Command;
-
 use crate::browser::{INCOGNITO_NOT_ALLOWED, NOT_CONNECTED};
-use crate::pipeline::render::typst_binary;
+use crate::pipeline::render::{typst_binary, typst_command};
 use crate::Core;
 
 /// The command that installs the Typst CLI.
+#[cfg(windows)]
+pub const TYPST_INSTALL_HINT: &str = "winget install --id Typst.Typst";
+#[cfg(not(windows))]
 pub const TYPST_INSTALL_HINT: &str = "cargo install --locked typst-cli";
 
 /// Why a site cannot be used without the user: something only they may do in the visible browser.
@@ -182,8 +183,8 @@ impl Health {
 
 /// Run `typst --version`; `None` when it is missing or broken.
 pub async fn typst_version() -> Option<String> {
-    let mut cmd = Command::new(typst_binary());
-    cmd.arg("--version").kill_on_drop(true).stdin(std::process::Stdio::null());
+    let mut cmd = typst_command(&typst_binary());
+    cmd.arg("--version");
     let out = tokio::time::timeout(Duration::from_secs(10), cmd.output()).await.ok()?.ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -227,7 +228,7 @@ mod tests {
         let incognito = BridgeError::IncognitoNotAllowed.to_string();
         assert_eq!(classify(&incognito), Problem::NoBrowser { incognito: true }, "{incognito}");
         assert!(Problem::Network.retryable() && !Problem::NoProvider.retryable());
-        assert!(Problem::NoTypst.advice().unwrap().contains("cargo install --locked typst-cli"));
+        assert!(Problem::NoTypst.advice().unwrap().contains(TYPST_INSTALL_HINT));
         assert_eq!(Problem::NoBrowser { incognito: false }.settings_section(), Some("Browser"));
         assert!(Problem::NoBrowser { incognito: false }.advice().unwrap().contains("Connect the JobPilot extension"));
         assert!(Problem::NoBrowser { incognito: true }.advice().unwrap().contains("Allow in Incognito"));

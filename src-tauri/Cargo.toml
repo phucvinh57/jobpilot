@@ -36,7 +36,7 @@ jobpilot-engine = { path = "../crates/engine", features = ["test-util"] }
 # shows the built UI; `bun run tauri dev` turns it off (`--no-default-features`) and loads Vite on :1420.
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
-# UI checks without a person at the screen: the webview snapshots itself and runs a script
+# Linux UI checks: the webview snapshots itself and runs a script
 # (`src/devtools.rs`). Never part of a release package.
 dev-tools = ["dep:webkit2gtk", "dep:gtk", "dep:cairo-rs"]
 
