@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "JobPilot",
+  "productName": "Job Pilot",
   "mainBinaryName": "jobpilot",
-  "identifier": "dev.jobpilot.app",
+  "identifier": "dev.phucvinh57.jobpilot",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -30,7 +30,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage"],
+    "targets": ["deb"],
     "icon": ["../assets/icons/jobpilot-48.png", "../assets/icons/jobpilot-256.png"],
     "category": "Productivity",
     "resources": { "../extension/dist": "extension" },

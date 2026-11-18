@@ -1,19 +1,23 @@
 // The root component: sidebar on the left, the current page on the right.
 
 import clsx from "clsx";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { onFileDrop } from "@/api/events";
 import { SetupBanner } from "@/components/layout/SetupBanner";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Toaster } from "@/components/layout/Toaster";
-import { ApplicationPage } from "@/pages/ApplicationPage";
+import { Caption } from "@/components/ui/kit";
 import { JobsPage } from "@/pages/JobsPage";
-import { ProfilePage } from "@/pages/ProfilePage";
-import { SettingsPage } from "@/pages/SettingsPage";
-import { TrendsPage } from "@/pages/TrendsPage";
 import { useNav, type Screen } from "@/stores/nav";
 import { startShell } from "@/stores/shell";
+
+const ApplicationPage = lazy(() =>
+  import("@/pages/ApplicationPage").then(({ ApplicationPage }) => ({ default: ApplicationPage })),
+);
+const ProfilePage = lazy(() => import("@/pages/ProfilePage").then(({ ProfilePage }) => ({ default: ProfilePage })));
+const SettingsPage = lazy(() => import("@/pages/SettingsPage").then(({ SettingsPage }) => ({ default: SettingsPage })));
+const TrendsPage = lazy(() => import("@/pages/TrendsPage").then(({ TrendsPage }) => ({ default: TrendsPage })));
 
 function CurrentScreen({ screen }: { screen: Screen }) {
   switch (screen) {
@@ -68,7 +72,9 @@ export function App() {
       <div className="flex h-full min-w-0 flex-1 flex-col">
         <SetupBanner />
         <div className="min-h-0 flex-1" key={screen}>
-          <CurrentScreen screen={screen} />
+          <Suspense fallback={<Caption className="block p-6">Loading…</Caption>}>
+            <CurrentScreen screen={screen} />
+          </Suspense>
         </div>
       </div>
       <Toaster />
