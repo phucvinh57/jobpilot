@@ -9,13 +9,18 @@
 //! (fixture servers under a name the extension's literal-address rule does not block).
 //!
 //! [`launch`] leaves the extension out of Incognito, as an unpacked extension is until the user says
-//! otherwise; [`launch_incognito`] seeds the profile's preferences with "Allow in Incognito" (what the
-//! toggle on chrome://extensions stores), so `Profile::Private` tabs work. [`TestBrowser::attach`]
+//! otherwise; [`launch_incognito`] turns on "Allow in Incognito" in the temporary profile's
+//! chrome://extensions page, so `Profile::Private` tabs work. [`TestBrowser::attach`]
 //! makes `core.browser()` return the test browser's bridge, for code that takes a `Core`.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use futures::{SinkExt, StreamExt};
+use serde_json::{json, Value};
+use tokio_tungstenite::tungstenite::Message;
 
 use super::{Bridge, BridgeConfig, EXTENSION_ID};
 use crate::Secrets;
@@ -100,15 +105,9 @@ pub async fn launch_with(bridge: Bridge, incognito: bool) -> Option<TestBrowser>
     copy_dir(&dist, &ext).expect("copy the extension");
     // `autoConsent` (tests only, honoured only from the packaged config.json): the extension says
     // Pair to the code itself, as the user would in its popup; the bridge approves on the app side.
-    let config = serde_json::json!({ "port": port, "autoConsent": true });
+    let config = json!({ "port": port, "autoConsent": true });
     std::fs::write(ext.join("config.json"), config.to_string()).expect("write config.json");
     let profile = dirs.path().join("profile");
-    if incognito {
-        // What the "Allow in Incognito" switch on chrome://extensions stores.
-        let prefs = serde_json::json!({ "extensions": { "settings": { EXTENSION_ID: { "incognito": true } } } });
-        std::fs::create_dir_all(profile.join("Default")).expect("create the profile");
-        std::fs::write(profile.join("Default/Preferences"), prefs.to_string()).expect("write the preferences");
-    }
 
     let mut cmd = tokio::process::Command::new(&chrome);
     cmd.arg("--headless=new")
@@ -121,21 +120,90 @@ pub async fn launch_with(bridge: Bridge, incognito: bool) -> Option<TestBrowser>
         .stdout(Stdio::null())
         .stderr(if std::env::var_os("JOBPILOT_TEST_CHROME_LOG").is_some() { Stdio::inherit() } else { Stdio::null() })
         .kill_on_drop(true);
+    if incognito {
+        // Chrome assigns a free loopback port and records it in this temporary profile.
+        cmd.arg("--remote-debugging-port=0");
+    }
     if std::env::var_os("JOBPILOT_NO_SANDBOX").is_some() {
         cmd.arg("--no-sandbox");
     }
     let child = cmd.spawn().unwrap_or_else(|e| panic!("start {}: {e}", chrome.display()));
     let browser = TestBrowser { bridge, child, _dirs: dirs };
 
+    let devtools_port = profile.join("DevToolsActivePort");
+    let mut configured = false;
     for _ in 0..300 {
         let status = browser.bridge.status();
-        if status.connected {
+        if status.connected && (!incognito || status.incognito_allowed) {
             assert_eq!(status.incognito_allowed, incognito, "the extension's Incognito access: {status:?}");
             return Some(browser);
+        }
+        if incognito && !configured && status.connected && devtools_port.is_file() {
+            tokio::time::timeout(Duration::from_secs(10), allow_incognito(&devtools_port))
+                .await
+                .expect("timed out enabling Incognito")
+                .expect("enable Incognito in chrome://extensions");
+            // Toggling Incognito reloads the extension. Its next hello reports the new setting.
+            configured = true;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("the extension did not connect within 30 s (status: {:?})", browser.bridge.status());
+}
+
+/// Use the same WebUI API as the "Allow in Incognito" toggle. Chromium can discard extension
+/// settings written directly into a fresh profile because it protects those preferences.
+async fn allow_incognito(port_file: &Path) -> Result<()> {
+    let address = tokio::fs::read_to_string(port_file).await?;
+    let port: u16 = address.lines().next().context("missing DevTools port")?.parse()?;
+    let http = reqwest::Client::builder().no_proxy().build()?;
+    let base = format!("http://127.0.0.1:{port}/json");
+    let page: Value = http
+        .put(format!("{base}/new?chrome%3A%2F%2Fextensions%2F"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let id = page["id"].as_str().context("DevTools did not return a page id")?;
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/devtools/page/{id}")).await?;
+    // Developer mode allows Chromium to reload the unpacked extension after changing permission.
+    let expression = format!(
+        r#"(async () => {{
+          const settings = globalThis.chrome?.developerPrivate;
+          if (!settings) return false;
+          await settings.updateProfileConfiguration({{ inDeveloperMode: true }});
+          await settings.updateExtensionConfiguration({{ extensionId: "{EXTENSION_ID}", incognitoAccess: true }});
+          return true;
+        }})()"#
+    );
+    for request_id in 1..=20 {
+        let call = json!({
+            "id": request_id,
+            "method": "Runtime.evaluate",
+            "params": { "expression": expression, "awaitPromise": true, "returnByValue": true }
+        });
+        ws.send(Message::Text(call.to_string().into())).await?;
+        let reply = loop {
+            let message = ws.next().await.context("DevTools closed the connection")??;
+            if let Message::Text(text) = message {
+                let reply: Value = serde_json::from_str(&text)?;
+                if reply["id"] == request_id {
+                    break reply;
+                }
+            }
+        };
+        if reply["result"]["exceptionDetails"].is_object() {
+            bail!("Chromium could not configure the fixture extension: {}", reply["result"]["exceptionDetails"]);
+        }
+        if reply["result"]["result"]["value"] == true {
+            http.get(format!("{base}/close/{id}")).send().await?.error_for_status()?;
+            return Ok(());
+        }
+        // The new page can still be navigating when DevTools accepts the WebSocket.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    bail!("chrome://extensions did not expose its settings API")
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
