@@ -62,7 +62,7 @@ src-tauri/ (package `jobpilot`, lib `jobpilot_lib`)   Tauri v2 shell, split by b
   src/lib.rs           composition root: logging, `Core`, demo seed, mail autostart, the window (app id `jobpilot`), the extension bridge, `apply::close_all` on exit;
                        routes a command to its context by name prefix (`<context>_<name>`)
   src/shared/          shared kernel: `error` (CommandError { problem, message } via `health::classify`, `run` / `run_sync`), `events`
-                       (`shared:data-changed`, `shared:graph-progress` bridge), `insight` (company brief read model), `topics` (preference-list rules that Profile and Trends share), `shell` (health line,
+                       (`shared:data-changed`, `shared:graph-progress` bridge), `insight` (company brief read model), `topics` (preference-list rules that Profile and Trends share), `activity` (the sidebar's background jobs: running and waiting graph runs, titles and step labels), `shell` (health line,
                        setup banner, badges, appearance, `shared_open_url`: the only way a link leaves the app)
   src/<context>/       `dto.rs` read models (serde camelCase; core types stay free of serde/Tauri; never a secret),
                        `rules.rs` pure rules + unit tests (`primary_for`, `stage_for`, queue ordering, timeline grouping, ...),
@@ -74,16 +74,17 @@ lefthook.yml           git hooks: pre-commit Biome on staged files, pre-push `sc
 src/                   React + Vite + TypeScript + Tailwind; feature folders (applications, discovery, integrations, profile, trends) inside each kind
   main.tsx, App.tsx    entry and screen switch (file drop)
   pages/               JobsPage (header, stage bar Leads | CVs | Applied | In progress | Done, the stage's list, right-side drawer for the
-                       open lead or application), ApplicationPage (the drawer's "Open full view"), TrendsPage, ProfilePage (About you +
+                       open lead or application), ApplicationPage (the drawer's "Open full view"), TrendsPage (New research dialog,
+                       tabs Reports | Sources, a report opens from its row), ProfilePage (About you +
                        Preferences), SettingsPage (Connections, Job sources, Appearance)
   components/          `ui/kit.tsx` (design kit: Page, Card, Section, Banner, Button, Chip, Tag, Segmented, Tabs, StageBar, DataTable,
-                       Drawer, Dialog, Combobox, FormMessage, ToastCard, ScoreBadge, Stepper, ...), `ui/primitives/` (shadcn/ui, square:
+                       Drawer, Dialog, HoverCard, Combobox, FormMessage, ToastCard, ScoreBadge, Stepper, ...), `ui/primitives/` (shadcn/ui, square:
                        no rounded corners; only the kit imports them, Biome enforces it), `layout/` (Sidebar, SetupBanner, Toaster),
                        ProblemHelp (LoadError, FormError, ProblemActions), InsightBrief,
                        `<feature>/` (drawers, tabs, stages, settings sections)
   hooks/               `useAsync` (`useQuery`, `useAction`), `useGraphProgress`, `useErrorToast`, `<feature>/` (screen state, loading, Problem)
   stores/              zustand: `nav` (screen, Jobs stage, drawer `{ kind: "lead" | "app", id }`, Jobs badge), `shell` (health line, banner,
-                       appearance), `today` (the Leads queue), `toast` (`toast.ok` / `toast.error`)
+                       appearance), `activity` (background jobs beside the app title, `shared_activity`), `today` (the Leads queue), `toast` (`toast.ok` / `toast.error`)
   api/                 `bridge.ts` (the only Tauri imports: invoke / listen / file picker; imported only inside `api/`), `events.ts`
                        (what the rest may subscribe to: data changed, graph progress, file drop), `shell.ts` (`shared_*`: status,
                        appearance, `openLink`), one file of typed command calls per feature

@@ -25,3 +25,15 @@ export interface ShellStatus {
   newLeads: number;
   applications: number;
 }
+
+/** A background job (`shared_activity`): a graph run that is running or waiting for the user. */
+export interface Activity {
+  /** The graph thread: progress events of this thread belong to this job. */
+  id: string;
+  title: string;
+  /** What it does now, or what it needs from the user. */
+  status: string;
+  state: "running" | "waiting";
+  /** The screen that shows it (`settings`: Job sources). */
+  screen: "jobs" | "trends" | "settings";
+}

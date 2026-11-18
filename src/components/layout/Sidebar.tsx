@@ -1,12 +1,15 @@
-// Left column: the logo, navigation (Jobs, Trends, Profile), Settings and the health line.
+// Left column: the logo with the background jobs, navigation (Jobs, Trends, Profile), Settings and the health line.
 
 import clsx from "clsx";
 import { ArrowUpRight, ChartPie, Inbox, Settings, UserRound, type LucideIcon } from "lucide-react";
 
-import { Heading, HealthDot } from "@/components/ui/kit";
+import { Caption, Heading, HealthDot, HoverCard, Spinner } from "@/components/ui/kit";
+import { activityLabel, waitingCount } from "@/lib/activity";
+import { useActivity } from "@/stores/activity";
 import { useNav, type Screen } from "@/stores/nav";
 import { useShell } from "@/stores/shell";
 import { jobsBadge, navScreen, spokenBadge, type NavBadge } from "@/stores/nav";
+import type { Activity } from "@/types/shell";
 
 /** One entry of the navigation: icon, label, an optional count badge (shown from 1). */
 function NavItem({
@@ -91,6 +94,70 @@ function HealthLine() {
   );
 }
 
+/** The background jobs (searches, CVs being written, market research), right of the title: a
+ *  spinner and a count while there are any, nothing otherwise. Hovering or focusing it lists them
+ *  with what each does now; a row opens the screen that shows the job, and pressing the indicator
+ *  itself opens the first job that waits for the user (else the first job). */
+function ActivityIndicator() {
+  const items = useActivity((s) => s.items);
+  const show = useNav((s) => s.show);
+  const openSettings = useNav((s) => s.openSettings);
+  if (items.length === 0) {
+    return null;
+  }
+  const waiting = waitingCount(items);
+  const open = (item: Activity) => {
+    if (item.screen === "settings") {
+      openSettings("Job sources");
+    } else {
+      show(item.screen);
+    }
+  };
+  const first = items.find((item) => item.state === "waiting") ?? items[0];
+  return (
+    <HoverCard
+      id="activity-list"
+      label="Background jobs"
+      trigger={
+        <button
+          id="activity"
+          type="button"
+          aria-label={activityLabel(items)}
+          onClick={() => first && open(first)}
+          className={clsx(
+            "ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 px-1.5 text-small font-semibold tabular-nums transition-colors hover:bg-track",
+            waiting > 0 ? "text-warn" : "text-muted hover:text-ink",
+          )}
+        >
+          {waiting < items.length ? <Spinner className="size-3.5" /> : <HealthDot state="warn" />}
+          <span>{items.length}</span>
+        </button>
+      }
+    >
+      <ul aria-label="Background jobs" className="flex max-h-80 flex-col overflow-y-auto py-1">
+        {items.map((item, n) => (
+          <li key={item.id}>
+            <button
+              id={`activity-item-${n + 1}`}
+              type="button"
+              onClick={() => open(item)}
+              className="flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left hover:bg-track"
+            >
+              <span className="flex h-5 w-4 shrink-0 items-center justify-center">
+                {item.state === "waiting" ? <HealthDot state="warn" /> : <Spinner className="size-3.5 text-muted" />}
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-body font-medium text-ink">{item.title}</span>
+                <Caption className="truncate">{item.status}</Caption>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </HoverCard>
+  );
+}
+
 export function Sidebar() {
   const screen = useNav((s) => s.screen);
   const needsYou = useNav((s) => s.needsYou);
@@ -106,6 +173,7 @@ export function Sidebar() {
           <ArrowUpRight aria-hidden className="size-3.5 text-on-fill" />
         </span>
         <Heading>JobPilot</Heading>
+        <ActivityIndicator />
       </div>
       <nav aria-label="Navigation" className="flex flex-col gap-0.5">
         <NavItem

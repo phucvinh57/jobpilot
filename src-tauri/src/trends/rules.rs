@@ -14,6 +14,8 @@ use jobpilot_engine::trends::{
 };
 use chrono::{Local, NaiveDate};
 
+/// How a period is named (`Week of 9 November`): the sidebar's job list names it the same way.
+pub use crate::shared::activity::period_title;
 pub use crate::shared::topics::Presence;
 use crate::shared::topics::{self, presence_in, with_item};
 
@@ -70,15 +72,6 @@ impl Cadence {
     }
 }
 
-/// `Week of 9 November`, `November 2026`, `Q4 2026` or `2026`.
-pub fn period_title(period: Period) -> String {
-    match period {
-        Period::Week { .. } => format!("Week of {}", period.start().format("%-d %B")),
-        Period::Month { .. } => period.start().format("%B %Y").to_string(),
-        Period::Quarter { year, quarter } => format!("Q{quarter} {year}"),
-        Period::Year { year } => year.to_string(),
-    }
-}
 
 /// What the page header says under the title: the period of the digest shown and how much it read.
 pub fn header_summary(shown: Option<&Digest>, current: Period) -> String {

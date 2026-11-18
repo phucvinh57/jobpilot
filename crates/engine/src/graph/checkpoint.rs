@@ -91,6 +91,12 @@ fn from_row(row: GraphCheckpointRow) -> Result<Checkpoint> {
     })
 }
 
+/// The nodes a saved checkpoint goes on with: the ones running after it was saved.
+pub(crate) fn pending_nodes(row: &GraphCheckpointRow) -> Result<Vec<String>> {
+    let rest: Rest = serde_json::from_str(&row.rest_json).context("reading the saved checkpoint")?;
+    Ok(rest.pending_nodes)
+}
+
 fn failed(e: anyhow::Error) -> GraphError {
     GraphError::CheckpointError(format!("{e:#}"))
 }

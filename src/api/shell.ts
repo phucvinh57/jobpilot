@@ -2,12 +2,17 @@
 // link leaves the app.
 
 import type { Appearance } from "@/lib/theme";
-import type { ShellStatus } from "@/types/shell";
+import type { Activity, ShellStatus } from "@/types/shell";
 
 import { invoke } from "./bridge";
 
 export function shellStatus(): Promise<ShellStatus> {
   return invoke<ShellStatus>("shared_status");
+}
+
+/** The background jobs: graph runs that are running or waiting for the user. */
+export function activity(): Promise<Activity[]> {
+  return invoke<Activity[]>("shared_activity");
 }
 
 /** The saved appearance, as stored (parse it with `parseAppearance`). */

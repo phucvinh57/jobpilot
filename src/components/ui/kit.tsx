@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/primitives/badge";
 import { Button as ButtonPrimitive } from "@/components/ui/primitives/button";
 import { Card as CardPrimitive } from "@/components/ui/primitives/card";
 import { Dialog as DialogRoot, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/primitives/dialog";
+import { HoverCard as HoverCardRoot, HoverCardContent, HoverCardTrigger } from "@/components/ui/primitives/hover-card";
 import { Input } from "@/components/ui/primitives/input";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/primitives/popover";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/primitives/sheet";
@@ -326,6 +327,35 @@ export function HealthDot({ state }: { state: "ok" | "warn" | "checking" }) {
         state === "ok" ? "bg-ok" : state === "warn" ? "bg-warn" : "bg-bar-grey",
       )}
     />
+  );
+}
+
+/** A card that opens next to `trigger` while the pointer is over it or the keyboard focus is on
+ *  it: a short list or a few details about what the trigger shows. `trigger` is one element that
+ *  takes a ref (a `<button>`); `label` names the card. */
+export function HoverCard({
+  label,
+  trigger,
+  children,
+  id,
+}: {
+  label: string;
+  trigger: ReactNode;
+  children: ReactNode;
+  id?: string;
+}) {
+  return (
+    <HoverCardRoot openDelay={120} closeDelay={150}>
+      <HoverCardTrigger asChild>{trigger}</HoverCardTrigger>
+      <HoverCardContent
+        id={id}
+        role="group"
+        aria-label={label}
+        className="w-72 border border-border bg-surface p-0 text-ink shadow-md"
+      >
+        {children}
+      </HoverCardContent>
+    </HoverCardRoot>
   );
 }
 

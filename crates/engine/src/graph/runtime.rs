@@ -397,6 +397,31 @@ impl Graphs {
             .collect())
     }
 
+    /// Threads running in this process right now, least recently updated first: with
+    /// [`waiting`](Self::waiting), what the "background jobs" list shows. A thread the app closed
+    /// on is stored as running but is not listed.
+    pub fn running(&self) -> Result<Vec<ThreadInfo>> {
+        let threads: Vec<String> = self.active().keys().cloned().collect();
+        let mut running = Vec::with_capacity(threads.len());
+        for thread in threads {
+            // A run that has not saved its first checkpoint yet has no row: it is listed a moment later.
+            if let Some(info) = self.status(&thread)?.filter(|i| i.status == ThreadStatus::Running) {
+                running.push(info);
+            }
+        }
+        running.sort_by(|a, b| (a.updated_at, &a.thread).cmp(&(b.updated_at, &b.thread)));
+        Ok(running)
+    }
+
+    /// The nodes `thread` is at: those running now (several after a fan-out), or the one a waiting
+    /// or failed thread stopped at. Empty for a finished or unknown thread.
+    pub fn current_nodes(&self, thread: &str) -> Result<Vec<String>> {
+        match self.inner.store.graph_latest_checkpoint(thread)? {
+            Some(row) => super::checkpoint::pending_nodes(&row),
+            None => Ok(Vec::new()),
+        }
+    }
+
     fn info(&self, t: crate::store::GraphThread) -> ThreadInfo {
         let detail = t.detail_json.as_deref();
         let status = match t.status.as_str() {
