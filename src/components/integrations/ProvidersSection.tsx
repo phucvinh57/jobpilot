@@ -8,7 +8,7 @@ import { useProviders, type ProvidersCard } from "@/hooks/integrations/useProvid
 import { ProviderDialog } from "./ProviderDialog";
 
 const HINT =
-  "OpenAI- or Anthropic-compatible endpoints; API keys are kept in the OS keyring. The provider tagged default is used for generation.";
+  "OpenAI, Anthropic, any compatible endpoint, or Codex with your ChatGPT sign-in; keys and sign-ins are kept in the OS keyring. The provider tagged default is used for generation.";
 
 /** A provider: a click opens its dialog; one that is not the default can become it. */
 function ProviderRow({ provider, card }: { provider: Provider; card: ProvidersCard }) {

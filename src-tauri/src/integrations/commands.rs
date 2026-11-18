@@ -9,7 +9,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use jobpilot_engine::llm;
+use jobpilot_engine::llm::{self, Llm};
+use jobpilot_engine::store::{Provider, ProviderKind};
 use jobpilot_engine::mail::{self, SECRET_CLIENT_SECRET};
 use jobpilot_engine::redact::redact;
 use jobpilot_engine::Core;
@@ -34,13 +35,38 @@ fn scrub<T>(result: CommandResult<T>) -> CommandResult<T> {
 
 // ------------------------------------------------------------------ services
 
-fn providers(core: &Core) -> Result<ProvidersDto> {
-    Ok(ProvidersDto::new(&core.store.list_providers()?))
+/// The ChatGPT account a Codex provider is signed in with (`None` for the other kinds, or when the
+/// keyring cannot be read: the dialog then offers to sign in, which is what is needed).
+fn codex_account(core: &Core, provider: &Provider) -> Option<String> {
+    if provider.kind != ProviderKind::Codex {
+        return None;
+    }
+    match core.codex_account(provider.id) {
+        Ok(account) => account,
+        Err(e) => {
+            tracing::warn!(provider = provider.id, "reading the Codex sign-in failed: {e:#}");
+            None
+        }
+    }
 }
 
-/// Whether a key is saved for provider `id`: a keyring that cannot be read says no (the form then
-/// asks for a key, which is what is needed).
+fn providers(core: &Core) -> Result<ProvidersDto> {
+    Ok(ProvidersDto::new(&core.store.list_providers()?, |p| codex_account(core, p)))
+}
+
+/// Whether a key is saved for provider `id` (for Codex: whether it is signed in): a keyring that
+/// cannot be read says no (the form then asks for a key, which is what is needed).
 fn provider_has_key(core: &Core, id: i64) -> bool {
+    let codex = match core.store.get_provider(id) {
+        Ok(provider) => provider.filter(|p| p.kind == ProviderKind::Codex),
+        Err(e) => {
+            tracing::warn!("reading provider {id} failed: {e:#}");
+            None
+        }
+    };
+    if let Some(provider) = codex {
+        return codex_account(core, &provider).is_some();
+    }
     match core.provider_api_key(id) {
         Ok(key) => key.is_some(),
         Err(e) => {
@@ -50,55 +76,52 @@ fn provider_has_key(core: &Core, id: i64) -> bool {
     }
 }
 
-fn save_provider(core: &Core, input: &ProviderInput) -> Result<ProviderDto> {
-    let provider = provider_from_form(
-        input.id,
-        &input.kind,
-        &input.name,
-        &input.base_url,
-        &input.model,
-        input.json_object,
-    )?;
-    let key = typed_key(input.api_key.clone());
-    let saved = core.save_provider(&provider, key.as_deref())?;
-    tracing::info!(provider = saved.id, "AI provider saved");
-    Ok(ProviderDto::from(&saved))
+/// The provider the form describes, and the stored row of a saved one (`None` for a new one).
+fn provider_of(core: &Core, input: &ProviderInput) -> Result<(Provider, Option<Provider>)> {
+    let saved = if input.id != 0 { core.store.get_provider(input.id)? } else { None };
+    let provider = provider_from_form(input.id, &input.kind, &input.name, &input.base_url, &input.model, saved.as_ref())?;
+    Ok((provider, saved))
 }
 
-/// The key to use for a form: the one typed, else the one saved for provider `id`.
-fn key_for(core: &Core, id: i64, typed: Option<String>) -> Result<Option<String>> {
+fn save_provider(core: &Core, input: &ProviderInput) -> Result<ProviderDto> {
+    let (provider, _) = provider_of(core, input)?;
+    // A Codex provider signs in: a key typed for another kind before switching is not kept.
+    let key = if rules::uses_key(provider.kind) { typed_key(input.api_key.clone()) } else { None };
+    let saved = core.save_provider(&provider, key.as_deref())?;
+    tracing::info!(provider = saved.id, "AI provider saved");
+    Ok(ProviderDto::new(&saved, codex_account(core, &saved)))
+}
+
+/// The key to use for `form`: the one typed, else the one saved for that provider, but only while
+/// the form still has the saved row's kind and base URL (a saved key never goes to another host).
+fn key_for(core: &Core, form: &Provider, saved: Option<&Provider>, typed: Option<String>) -> Result<Option<String>> {
     match typed_key(typed) {
         Some(key) => Ok(Some(key)),
-        None if id != 0 => core.provider_api_key(id),
-        None => Ok(None),
+        None => match saved {
+            Some(row) if llm::same_endpoint(row, form) => core.provider_api_key(row.id),
+            _ => Ok(None),
+        },
     }
 }
 
+/// The client for a form: a saved Codex provider uses its stored ChatGPT sign-in.
+fn client_for(core: &Core, input: &ProviderInput) -> Result<Box<dyn Llm>> {
+    let (provider, saved) = provider_of(core, input)?;
+    let key = if rules::uses_key(provider.kind) {
+        key_for(core, &provider, saved.as_ref(), input.api_key.clone())?
+    } else {
+        None
+    };
+    Ok(core.llm_for_form(&provider, key))
+}
+
 async fn test_provider(core: &Core, input: &ProviderInput) -> Result<()> {
-    let provider = provider_from_form(
-        input.id,
-        &input.kind,
-        &input.name,
-        &input.base_url,
-        &input.model,
-        input.json_object,
-    )?;
-    let key = key_for(core, input.id, input.api_key.clone())?;
-    let client = llm::from_provider(&provider, key);
+    let client = client_for(core, input)?;
     llm::test_llm(client.as_ref()).await
 }
 
 async fn list_models(core: &Core, input: &ProviderInput) -> Result<Vec<String>> {
-    let provider = provider_from_form(
-        input.id,
-        &input.kind,
-        &input.name,
-        &input.base_url,
-        &input.model,
-        input.json_object,
-    )?;
-    let key = key_for(core, input.id, input.api_key.clone())?;
-    llm::from_provider(&provider, key).list_models().await
+    client_for(core, input)?.list_models().await
 }
 
 /// The connection to the user's browser and the sites they are signed in to.
@@ -179,6 +202,48 @@ pub async fn integrations_list_models(
 ) -> CommandResult<Vec<String>> {
     let core = core.inner().clone();
     scrub(run(async move { list_models(&core, &input).await }).await)
+}
+
+/// Sign the saved Codex provider in with ChatGPT in the system browser; resolves with the
+/// account's email, or fails when the user cancels or the sign-in times out.
+#[tauri::command]
+pub async fn integrations_codex_sign_in(core: CoreState<'_>, id: i64) -> CommandResult<String> {
+    let core = core.inner().clone();
+    scrub(
+        run(async move {
+            let account = core.codex_sign_in(id).await?;
+            tracing::info!(provider = id, "Codex provider signed in");
+            Ok(account)
+        })
+        .await,
+    )
+}
+
+/// Abort a Codex sign-in that waits for the browser.
+#[tauri::command]
+pub async fn integrations_codex_cancel_sign_in(core: CoreState<'_>) -> CommandResult<()> {
+    core.inner().codex_cancel_sign_in();
+    Ok(())
+}
+
+/// Reuse the Codex CLI's login for the saved Codex provider; resolves with the account's email.
+#[tauri::command]
+pub async fn integrations_codex_import_cli(core: CoreState<'_>, id: i64) -> CommandResult<String> {
+    let core = core.inner().clone();
+    scrub(
+        run_sync(move || {
+            let account = core.codex_import_cli_login(id)?;
+            tracing::info!(provider = id, "Codex CLI login imported");
+            Ok(account)
+        })
+        .await,
+    )
+}
+
+/// Whether a Codex CLI login is there to reuse.
+#[tauri::command]
+pub async fn integrations_codex_cli_available() -> CommandResult<bool> {
+    run_sync(|| Ok(llm::codex::cli_login_available())).await
 }
 
 /// Make the provider the default one (the one used for generation).
@@ -338,6 +403,10 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         integrations_list_models,
         integrations_make_default,
         integrations_remove_provider,
+        integrations_codex_sign_in,
+        integrations_codex_cancel_sign_in,
+        integrations_codex_import_cli,
+        integrations_codex_cli_available,
         integrations_browser,
         integrations_approve_pairing,
         integrations_decline_pairing,
@@ -360,7 +429,8 @@ mod tests {
     use jobpilot_engine::{Core, Paths, Secrets};
 
     use super::{
-        browser_section, gmail, provider_has_key, providers, save_provider, scrub, ProviderInput,
+        browser_section, client_for, gmail, key_for, provider_has_key, provider_of, providers, save_provider,
+        scrub, ProviderInput,
     };
     use crate::shared::CommandError;
 
@@ -376,11 +446,10 @@ mod tests {
     fn input(id: i64, key: Option<&str>) -> ProviderInput {
         ProviderInput {
             id,
-            kind: "openai".into(),
+            kind: "openai_compatible".into(),
             name: "Local".into(),
             base_url: "http://localhost:11434/v1".into(),
             model: "llama3".into(),
-            json_object: false,
             api_key: key.map(str::to_string),
         }
     }
@@ -456,6 +525,73 @@ mod tests {
             !provider_has_key(&core, 999),
             "an unknown provider has no key"
         );
+    }
+
+    #[test]
+    fn a_save_keeps_the_learned_json_mode_until_the_address_changes() {
+        let (_dir, core) = core();
+        let first = save_provider(&core, &input(0, None)).unwrap();
+        let mut row = core.store.get_provider(first.id).unwrap().unwrap();
+        row.json_mode = "json_object".into();
+        core.store.update_provider(&row).unwrap();
+
+        save_provider(&core, &ProviderInput { name: "Renamed".into(), ..input(first.id, None) }).unwrap();
+        assert_eq!(core.store.get_provider(first.id).unwrap().unwrap().json_mode, "json_object");
+
+        let moved = ProviderInput { base_url: "http://localhost:8080/v1".into(), ..input(first.id, None) };
+        save_provider(&core, &moved).unwrap();
+        assert_eq!(core.store.get_provider(first.id).unwrap().unwrap().json_mode, "json_schema");
+    }
+
+    #[test]
+    fn a_codex_provider_signs_in_instead_of_keeping_a_key() {
+        let (_dir, core) = core();
+        let codex = |id: i64, key: Option<&str>| ProviderInput {
+            kind: "codex".into(),
+            name: "Codex".into(),
+            base_url: String::new(),
+            model: String::new(),
+            ..input(id, key)
+        };
+        // The engine says what to do (the shell has no checks of its own).
+        assert_eq!(core.codex_import_cli_login(0).unwrap_err().to_string(), "Save the provider, then sign in.");
+
+        let saved = save_provider(&core, &codex(0, Some(API_KEY))).unwrap();
+        assert_eq!((saved.kind, saved.account.as_deref()), ("codex", None));
+        assert_eq!(saved.base_url, jobpilot_engine::llm::default_base_url(jobpilot_engine::store::ProviderKind::Codex));
+        assert_eq!(core.provider_api_key(saved.id).unwrap(), None, "a key typed for another kind is not kept");
+        assert!(!provider_has_key(&core, saved.id), "not signed in");
+
+        let other = save_provider(&core, &input(0, None)).unwrap();
+        assert_eq!(
+            core.codex_import_cli_login(other.id).unwrap_err().to_string(),
+            "Only a Codex provider signs in with ChatGPT."
+        );
+    }
+
+    #[test]
+    fn a_saved_key_goes_only_to_the_endpoint_it_was_saved_for() {
+        let (_dir, core) = core();
+        let saved = save_provider(&core, &input(0, Some(API_KEY))).unwrap();
+        let key = |form: &ProviderInput| {
+            let (provider, row) = provider_of(&core, form).unwrap();
+            key_for(&core, &provider, row.as_ref(), form.api_key.clone()).unwrap()
+        };
+        assert_eq!(key(&input(saved.id, None)).as_deref(), Some(API_KEY), "same kind and address");
+        let moved = ProviderInput { base_url: "https://evil.example/v1".into(), ..input(saved.id, None) };
+        assert_eq!(key(&moved), None, "another address: no saved key");
+        let other_kind = ProviderInput { kind: "anthropic_compatible".into(), ..input(saved.id, None) };
+        assert_eq!(key(&other_kind), None, "another kind: no saved key");
+        let official = ProviderInput { kind: "openai".into(), ..input(saved.id, None) };
+        assert_eq!(key(&official), None, "an official kind is another host");
+        let typed = ProviderInput { base_url: "https://evil.example/v1".into(), ..input(saved.id, Some("sk-typed")) };
+        assert_eq!(key(&typed).as_deref(), Some("sk-typed"));
+        assert!(client_for(&core, &moved).is_ok());
+
+        // Saving the moved form without a key forgets the saved one.
+        save_provider(&core, &moved).unwrap();
+        assert_eq!(core.provider_api_key(saved.id).unwrap(), None);
+        assert!(!provider_has_key(&core, saved.id));
     }
 
     #[test]

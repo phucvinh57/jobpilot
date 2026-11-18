@@ -3,29 +3,70 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use super::Store;
 
-/// Wire protocol of an AI provider.
+/// Type of AI provider, as the user picks it in Settings > AI providers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ProviderKind {
-    /// OpenAI-compatible `/chat/completions` (OpenAI, OpenRouter, Groq, Ollama, ...).
+    /// Any OpenAI-compatible `/chat/completions` endpoint (OpenRouter, Groq, Ollama, LM Studio, ...);
+    /// the user enters the base URL.
     #[default]
+    OpenAiCompatible,
+    /// The official OpenAI API (`https://api.openai.com/v1`).
     OpenAi,
-    /// Anthropic-compatible `/v1/messages`.
+    /// Any Anthropic-compatible `/v1/messages` endpoint; the user enters the base URL.
+    AnthropicCompatible,
+    /// The official Anthropic API (`https://api.anthropic.com`).
     Anthropic,
+    /// OpenAI Codex through the user's ChatGPT sign-in (fixed backend URL, no API key).
+    Codex,
+}
+
+/// Wire protocol a [`ProviderKind`] speaks (selects the client in `llm`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Protocol {
+    /// `POST {base}/chat/completions`.
+    ChatCompletions,
+    /// `POST {base}/v1/messages`.
+    Messages,
+    /// The Codex backend's `POST /responses` (streamed).
+    CodexResponses,
 }
 
 impl ProviderKind {
+    /// Every kind, in the order the UI offers them.
+    pub const ALL: [ProviderKind; 5] = [
+        ProviderKind::OpenAiCompatible,
+        ProviderKind::AnthropicCompatible,
+        ProviderKind::OpenAi,
+        ProviderKind::Anthropic,
+        ProviderKind::Codex,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
+            ProviderKind::OpenAiCompatible => "openai_compatible",
             ProviderKind::OpenAi => "openai",
+            ProviderKind::AnthropicCompatible => "anthropic_compatible",
             ProviderKind::Anthropic => "anthropic",
+            ProviderKind::Codex => "codex",
         }
     }
+
     pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "openai" => Some(ProviderKind::OpenAi),
-            "anthropic" => Some(ProviderKind::Anthropic),
-            _ => None,
+        Self::ALL.into_iter().find(|k| k.as_str() == s)
+    }
+
+    pub fn protocol(self) -> Protocol {
+        match self {
+            ProviderKind::OpenAiCompatible | ProviderKind::OpenAi => Protocol::ChatCompletions,
+            ProviderKind::AnthropicCompatible | ProviderKind::Anthropic => Protocol::Messages,
+            ProviderKind::Codex => Protocol::CodexResponses,
         }
+    }
+
+    /// An official service with a fixed base URL (OpenAI, Anthropic, Codex); the compatible kinds
+    /// need the user's base URL.
+    pub fn is_official(self) -> bool {
+        matches!(self, ProviderKind::OpenAi | ProviderKind::Anthropic | ProviderKind::Codex)
     }
 }
 
@@ -37,7 +78,9 @@ pub struct Provider {
     pub kind: ProviderKind,
     pub base_url: String,
     pub model: String,
-    /// `json_schema` (default) or `json_object` fallback; interpreted by `llm`.
+    /// The *learned* JSON mode of the endpoint, written by the engine (`llm`), never by the user:
+    /// `json_schema` (default), `json_object` (the endpoint refused a schema) or `prompt` (no
+    /// `response_format` at all; the schema is in the system prompt).
     pub json_mode: String,
     pub is_default: bool,
 }
@@ -119,6 +162,19 @@ impl Store {
         })
     }
 
+    /// Save the JSON mode the engine learned for provider `id`, only while its row still has
+    /// `kind` and `base_url` (the endpoint the client that learned it was built for). Returns
+    /// whether the row was updated.
+    pub fn set_provider_json_mode(&self, id: i64, kind: ProviderKind, base_url: &str, mode: &str) -> Result<bool> {
+        self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE providers SET json_mode = ?1 WHERE id = ?2 AND kind = ?3 AND base_url = ?4",
+                params![mode, id, kind.as_str(), base_url],
+            )?;
+            Ok(n == 1)
+        })
+    }
+
     /// Exactly one default at a time.
     pub fn set_default_provider(&self, id: i64) -> Result<()> {
         self.with_tx(|tx| {
@@ -134,5 +190,57 @@ impl Store {
             c.execute("DELETE FROM providers WHERE id = ?1", [id])?;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_learned_json_mode_is_saved_only_for_the_same_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).unwrap();
+        let new = NewProvider {
+            name: "Local".into(),
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: "http://localhost:11434/v1".into(),
+            model: "m".into(),
+        };
+        let p = store.add_provider(&new).unwrap();
+        let mode = |id| store.get_provider(id).unwrap().unwrap().json_mode;
+
+        assert!(store.set_provider_json_mode(p.id, p.kind, &p.base_url, "json_object").unwrap());
+        assert_eq!(mode(p.id), "json_object");
+
+        // The user moved the provider meanwhile: the old client's mode is not written.
+        store.update_provider(&Provider { base_url: "http://localhost:8080/v1".into(), json_mode: "json_schema".into(), ..p.clone() }).unwrap();
+        assert!(!store.set_provider_json_mode(p.id, p.kind, &p.base_url, "prompt").unwrap());
+        assert_eq!(mode(p.id), "json_schema");
+        // Another kind at the same address: not written either.
+        let moved = store.get_provider(p.id).unwrap().unwrap();
+        assert!(!store.set_provider_json_mode(p.id, ProviderKind::AnthropicCompatible, &moved.base_url, "prompt").unwrap());
+        assert!(!store.set_provider_json_mode(999, p.kind, &moved.base_url, "prompt").unwrap());
+        assert_eq!(mode(p.id), "json_schema");
+        // Name and model are never touched.
+        assert!(store.set_provider_json_mode(p.id, p.kind, &moved.base_url, "prompt").unwrap());
+        let row = store.get_provider(p.id).unwrap().unwrap();
+        assert_eq!((row.name.as_str(), row.model.as_str(), row.json_mode.as_str()), ("Local", "m", "prompt"));
+    }
+
+    #[test]
+    fn kinds_round_trip_and_map_to_protocols() {
+        for kind in ProviderKind::ALL {
+            assert_eq!(ProviderKind::parse(kind.as_str()), Some(kind));
+        }
+        assert_eq!(ProviderKind::parse("bogus"), None);
+        assert_eq!(ProviderKind::default(), ProviderKind::OpenAiCompatible);
+        assert_eq!(ProviderKind::OpenAi.protocol(), Protocol::ChatCompletions);
+        assert_eq!(ProviderKind::OpenAiCompatible.protocol(), Protocol::ChatCompletions);
+        assert_eq!(ProviderKind::Anthropic.protocol(), Protocol::Messages);
+        assert_eq!(ProviderKind::AnthropicCompatible.protocol(), Protocol::Messages);
+        assert_eq!(ProviderKind::Codex.protocol(), Protocol::CodexResponses);
+        let official: Vec<_> = ProviderKind::ALL.into_iter().filter(|k| k.is_official()).collect();
+        assert_eq!(official, [ProviderKind::OpenAi, ProviderKind::Anthropic, ProviderKind::Codex]);
     }
 }

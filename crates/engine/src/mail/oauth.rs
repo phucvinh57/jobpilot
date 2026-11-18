@@ -89,13 +89,18 @@ pub enum Redirect {
 /// Parse the request line of the redirect, e.g. `GET /?code=abc&state=xyz HTTP/1.1`.
 /// `Err` when a `code`/`error` arrives with the wrong `state`.
 pub fn parse_redirect(request: &str, expected_state: &str) -> Result<Redirect> {
+    parse_redirect_at(request, "/", expected_state)
+}
+
+/// [`parse_redirect`] for a redirect that arrives at `path` (e.g. `/auth/callback`).
+pub(crate) fn parse_redirect_at(request: &str, path: &str, expected_state: &str) -> Result<Redirect> {
     let line = request.lines().next().unwrap_or("");
     let mut parts = line.split_whitespace();
     let (Some("GET"), Some(target)) = (parts.next(), parts.next()) else { return Ok(Redirect::Ignore) };
     let Ok(url) = url::Url::parse("http://127.0.0.1").and_then(|base| base.join(target)) else {
         return Ok(Redirect::Ignore);
     };
-    if url.path() != "/" {
+    if url.path() != path {
         return Ok(Redirect::Ignore);
     }
     let params: HashMap<String, String> = url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
@@ -114,12 +119,26 @@ pub fn parse_redirect(request: &str, expected_state: &str) -> Result<Redirect> {
     }
 }
 
-const PAGE_OK: &str = "<!doctype html><meta charset=utf-8><title>JobPilot</title>\
+/// The small page the browser shows after the redirect, and who is named in a denial error.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RedirectSite<'a> {
+    /// Path the redirect arrives at (`/` for Gmail).
+    pub path: &'a str,
+    /// Heading of the success page (`Gmail connected`).
+    pub done: &'a str,
+    /// Who refused, in the denial error (`Google`).
+    pub issuer: &'a str,
+}
+
+const GMAIL_SITE: RedirectSite<'static> = RedirectSite { path: "/", done: "Gmail connected", issuer: "Google" };
+
+fn page(heading: &str) -> String {
+    format!(
+        "<!doctype html><meta charset=utf-8><title>JobPilot</title>\
 <body style=\"font-family:sans-serif;margin:4em auto;max-width:28em\">\
-<h2>Gmail connected</h2><p>You can close this tab and return to JobPilot.</p></body>";
-const PAGE_DENIED: &str = "<!doctype html><meta charset=utf-8><title>JobPilot</title>\
-<body style=\"font-family:sans-serif;margin:4em auto;max-width:28em\">\
-<h2>Sign-in was not completed</h2><p>You can close this tab and return to JobPilot.</p></body>";
+<h2>{heading}</h2><p>You can close this tab and return to JobPilot.</p></body>"
+    )
+}
 
 async fn respond(stream: &mut TcpStream, status: &str, body: &str) {
     let head = format!(
@@ -151,18 +170,28 @@ async fn read_request_head(stream: &mut TcpStream) -> Option<String> {
 /// Accept connections until the redirect arrives (other requests get a 404), reply with a small
 /// "you can close this tab" page and return the authorization code.
 pub async fn wait_for_redirect(listener: &TcpListener, state: &str, timeout: Duration) -> Result<String> {
+    wait_for_redirect_at(listener, GMAIL_SITE, state, timeout).await
+}
+
+/// [`wait_for_redirect`] for a redirect to `site.path`, with `site`'s wording.
+pub(crate) async fn wait_for_redirect_at(
+    listener: &TcpListener,
+    site: RedirectSite<'_>,
+    state: &str,
+    timeout: Duration,
+) -> Result<String> {
     let wait = async {
         loop {
             let (mut stream, _) = listener.accept().await.context("the local sign-in listener failed")?;
             let Some(head) = read_request_head(&mut stream).await else { continue };
-            match parse_redirect(&head, state) {
+            match parse_redirect_at(&head, site.path, state) {
                 Ok(Redirect::Code(code)) => {
-                    respond(&mut stream, "200 OK", PAGE_OK).await;
+                    respond(&mut stream, "200 OK", &page(site.done)).await;
                     return Ok(code);
                 }
                 Ok(Redirect::Denied(reason)) => {
-                    respond(&mut stream, "200 OK", PAGE_DENIED).await;
-                    bail!("Google sign-in was not completed ({reason})");
+                    respond(&mut stream, "200 OK", &page("Sign-in was not completed")).await;
+                    bail!("{} sign-in was not completed ({reason})", site.issuer);
                 }
                 Ok(Redirect::Ignore) => respond(&mut stream, "404 Not Found", "").await,
                 Err(_) => respond(&mut stream, "400 Bad Request", "").await,
@@ -433,6 +462,12 @@ mod tests {
         assert_eq!(parse_redirect("GET / HTTP/1.1\r\n\r\n", "xyz").unwrap(), Redirect::Ignore);
         assert_eq!(parse_redirect("POST /?code=a&state=xyz HTTP/1.1\r\n\r\n", "xyz").unwrap(), Redirect::Ignore);
         assert_eq!(parse_redirect("", "xyz").unwrap(), Redirect::Ignore);
+
+        // Another callback path: only that path counts.
+        let cb = "GET /auth/callback?code=c1&state=xyz HTTP/1.1\r\n\r\n";
+        assert_eq!(parse_redirect_at(cb, "/auth/callback", "xyz").unwrap(), Redirect::Code("c1".into()));
+        assert_eq!(parse_redirect(cb, "xyz").unwrap(), Redirect::Ignore);
+        assert_eq!(parse_redirect_at(ok, "/auth/callback", "xyz").unwrap(), Redirect::Ignore);
     }
 
     async fn fetch(port: u16, request: &str) -> String {

@@ -27,6 +27,17 @@ describe("problemActions", () => {
     ]);
   });
 
+  it("sends a provider that must sign in again to Settings > AI providers", () => {
+    const signIn = problem({ kind: "providerSignIn", settingsSection: "AI providers" });
+    expect(problemActions(signIn, true)).toEqual(["settings"]);
+    expect(needsRecheck(signIn), "the setup is complete: only the sign-in is missing").toBe(false);
+    const e = toCommandError({ message: "Codex: The Codex CLI login is gone: sign in again", problem: signIn });
+    expect([e.message, e.problem.kind]).toEqual([
+      "Codex: The Codex CLI login is gone: sign in again",
+      "providerSignIn",
+    ]);
+  });
+
   it("sends a missing profile to Profile > About you", () => {
     expect(problemActions(problem({ kind: "noProfile", settingsSection: "About you" }), true)).toEqual(["settings"]);
   });

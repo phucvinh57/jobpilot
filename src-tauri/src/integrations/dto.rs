@@ -6,12 +6,11 @@
 use std::fmt;
 
 use jobpilot_engine::browser::BridgeStatus;
-use jobpilot_engine::llm;
 use jobpilot_engine::mail::{GmailState, ReportSummary};
 use jobpilot_engine::store::{Provider, ProviderKind, Session};
 use serde::{Deserialize, Serialize};
 
-use super::rules::{host, kind_defaults, kind_label, KINDS};
+use super::rules::{host, kind_defaults, kind_label, needs_base_url, signs_in, uses_key, KINDS};
 
 // ------------------------------------------------------------------ providers
 
@@ -21,18 +20,20 @@ use super::rules::{host, kind_defaults, kind_label, KINDS};
 pub struct ProviderDto {
     pub id: i64,
     pub name: String,
-    /// `openai` / `anthropic`.
+    /// `openai_compatible` / `anthropic_compatible` / `openai` / `anthropic` / `codex`.
     pub kind: &'static str,
     pub kind_label: &'static str,
     pub base_url: String,
     pub model: String,
-    /// The endpoint lacks `json_schema` support: ask for a JSON object instead.
-    pub json_object: bool,
     pub is_default: bool,
+    /// Codex: the email of the ChatGPT account it is signed in with (`None`: not signed in, or
+    /// another kind). Never a token.
+    pub account: Option<String>,
 }
 
-impl From<&Provider> for ProviderDto {
-    fn from(p: &Provider) -> Self {
+impl ProviderDto {
+    /// `account`: the signed-in ChatGPT account of a Codex provider.
+    pub fn new(p: &Provider, account: Option<String>) -> Self {
         Self {
             id: p.id,
             name: p.name.clone(),
@@ -40,9 +41,15 @@ impl From<&Provider> for ProviderDto {
             kind_label: kind_label(p.kind),
             base_url: p.base_url.clone(),
             model: p.model.clone(),
-            json_object: p.json_mode == llm::openai::JSON_MODE_OBJECT,
             is_default: p.is_default,
+            account,
         }
+    }
+}
+
+impl From<&Provider> for ProviderDto {
+    fn from(p: &Provider) -> Self {
+        Self::new(p, None)
     }
 }
 
@@ -53,8 +60,15 @@ pub struct KindDto {
     pub kind: &'static str,
     pub label: &'static str,
     pub name: &'static str,
+    /// The fixed address of an official kind; `""` for a compatible kind (the user enters it).
     pub base_url: &'static str,
     pub model: &'static str,
+    /// The form asks for a base URL (the compatible kinds).
+    pub needs_base_url: bool,
+    /// The form asks for an API key (every kind but Codex).
+    pub has_key_field: bool,
+    /// The provider signs in with ChatGPT instead (Codex).
+    pub sign_in: bool,
 }
 
 impl From<ProviderKind> for KindDto {
@@ -66,6 +80,9 @@ impl From<ProviderKind> for KindDto {
             name,
             base_url,
             model,
+            needs_base_url: needs_base_url(kind),
+            has_key_field: uses_key(kind),
+            sign_in: signs_in(kind),
         }
     }
 }
@@ -78,9 +95,10 @@ pub struct ProvidersDto {
 }
 
 impl ProvidersDto {
-    pub fn new(providers: &[Provider]) -> Self {
+    /// `account(provider)`: the signed-in account of a Codex provider (`None` for the others).
+    pub fn new(providers: &[Provider], account: impl Fn(&Provider) -> Option<String>) -> Self {
         Self {
-            providers: providers.iter().map(ProviderDto::from).collect(),
+            providers: providers.iter().map(|p| ProviderDto::new(p, account(p))).collect(),
             kinds: KINDS.map(KindDto::from).to_vec(),
         }
     }
@@ -97,7 +115,6 @@ pub struct ProviderInput {
     pub name: String,
     pub base_url: String,
     pub model: String,
-    pub json_object: bool,
     /// Typed in the form; empty or missing keeps the saved key.
     pub api_key: Option<String>,
 }
@@ -260,7 +277,7 @@ mod tests {
         Provider {
             id: 3,
             name: "Local".into(),
-            kind: ProviderKind::OpenAi,
+            kind: ProviderKind::OpenAiCompatible,
             base_url: "http://localhost:11434/v1".into(),
             model: "llama3".into(),
             json_mode: jobpilot_engine::llm::openai::JSON_MODE_OBJECT.into(),
@@ -299,16 +316,38 @@ mod tests {
         let dto = ProviderDto::from(&provider());
         let json = serde_json::to_value(&dto).unwrap();
         assert_no_secret_fields(&json, "provider");
-        assert_eq!(json["kind"], "openai");
+        assert_eq!(json["kind"], "openai_compatible");
         assert_eq!(json["kindLabel"], "OpenAI-compatible");
-        assert_eq!(json["jsonObject"], true);
         assert_eq!(json["isDefault"], true);
-        assert!(json.get("apiKey").is_none());
+        assert!(json["account"].is_null());
+        assert!(json.get("apiKey").is_none() && json.get("jsonObject").is_none() && json.get("jsonMode").is_none());
 
-        let all = serde_json::to_value(ProvidersDto::new(&[provider()])).unwrap();
+        let codex = Provider {
+            id: 4,
+            name: "Codex".into(),
+            kind: ProviderKind::Codex,
+            ..provider()
+        };
+        let all = serde_json::to_value(ProvidersDto::new(&[provider(), codex], |p| {
+            (p.kind == ProviderKind::Codex).then(|| "me@example.com".to_string())
+        }))
+        .unwrap();
         assert_no_secret_fields(&all, "providers");
-        assert_eq!(all["kinds"][1]["kind"], "anthropic");
-        assert_eq!(all["kinds"][1]["name"], "Anthropic");
+        assert_eq!(all["providers"][1]["account"], "me@example.com");
+        assert!(all["providers"][0]["account"].is_null());
+        let kinds: Vec<&str> = all["kinds"].as_array().unwrap().iter().map(|k| k["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["openai_compatible", "anthropic_compatible", "openai", "anthropic", "codex"]);
+        let flags = |i: usize| {
+            let k = &all["kinds"][i];
+            (k["needsBaseUrl"].as_bool(), k["hasKeyField"].as_bool(), k["signIn"].as_bool())
+        };
+        assert_eq!(flags(0), (Some(true), Some(true), Some(false)), "OpenAI-compatible");
+        assert_eq!(flags(1), (Some(true), Some(true), Some(false)), "Anthropic-compatible");
+        assert_eq!(flags(2), (Some(false), Some(true), Some(false)), "OpenAI");
+        assert_eq!(flags(3), (Some(false), Some(true), Some(false)), "Anthropic");
+        assert_eq!(flags(4), (Some(false), Some(false), Some(true)), "Codex");
+        assert_eq!(all["kinds"][3]["name"], "Anthropic");
+        assert_eq!(all["kinds"][0]["baseUrl"], "", "a compatible kind has no address of its own");
     }
 
     #[test]
@@ -382,7 +421,7 @@ mod tests {
     #[test]
     fn the_typed_key_is_never_printed() {
         let input: ProviderInput = serde_json::from_str(
-            r#"{"id":0,"kind":"openai","name":"X","baseUrl":"","model":"","jsonObject":false,"apiKey":"sk-VERY-SECRET-1234"}"#,
+            r#"{"id":0,"kind":"openai","name":"X","baseUrl":"","model":"","apiKey":"sk-VERY-SECRET-1234"}"#,
         )
         .unwrap();
         assert_eq!(input.api_key.as_deref(), Some("sk-VERY-SECRET-1234"));

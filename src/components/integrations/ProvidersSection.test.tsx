@@ -5,35 +5,13 @@ import { CommandError } from "@/lib/problem";
 import { renderWithToasts } from "@/test/render";
 
 import * as api from "@/api/providers";
-import type { Provider, Providers } from "@/types/integrations";
+import { aiProvider, PROVIDER_KINDS } from "@/test/fixtures/integrations";
 import { ProvidersSection } from "./ProvidersSection";
 
 vi.mock("@/api/providers");
 
-const KINDS: Providers["kinds"] = [
-  { kind: "openai", label: "OpenAI-compatible", name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "" },
-  {
-    kind: "anthropic",
-    label: "Anthropic",
-    name: "Anthropic",
-    baseUrl: "https://api.anthropic.com",
-    model: "claude-sonnet-4-5",
-  },
-];
-
-function provider(patch: Partial<Provider> = {}): Provider {
-  return {
-    id: 1,
-    name: "Local",
-    kind: "openai",
-    kindLabel: "OpenAI-compatible",
-    baseUrl: "http://localhost:11434/v1",
-    model: "llama3",
-    jsonObject: false,
-    isDefault: true,
-    ...patch,
-  };
-}
+const KINDS = PROVIDER_KINDS;
+const provider = aiProvider;
 
 beforeEach(() => {
   vi.mocked(api.loadProviders).mockResolvedValue({
@@ -52,6 +30,7 @@ beforeEach(() => {
   });
   vi.mocked(api.hasKey).mockResolvedValue(true);
   vi.mocked(api.listModels).mockResolvedValue([]);
+  vi.mocked(api.codexCliAvailable).mockResolvedValue(false);
 });
 
 afterEach(cleanup);
@@ -113,8 +92,8 @@ describe("ProvidersSection", () => {
       id: 1,
       name: "Local",
       apiKey: "sk-typed-secret",
-      jsonObject: false,
     });
+    expect(vi.mocked(api.saveProvider).mock.calls[0]?.[0]).not.toHaveProperty("jsonObject");
     expect(await screen.findByRole("status", { name: "Provider saved" })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.queryByDisplayValue("sk-typed-secret")).toBeNull();
@@ -133,20 +112,138 @@ describe("ProvidersSection", () => {
     render();
     fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
     const dialog = await screen.findByRole("dialog", { name: "Add provider" });
-    expect((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("OpenAI");
+    expect((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Local model");
     expect(within(dialog).queryByRole("button", { name: "Delete" }), "nothing to delete yet").toBeNull();
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(within(dialog).getByLabelText("API key")).toBeTruthy();
+    expect(
+      within(dialog).getByRole("textbox", { name: "Base URL" }),
+      "a compatible kind asks for its address",
+    ).toBeTruthy();
+    expect(within(dialog).queryByRole("checkbox"), "the JSON mode is not the user's").toBeNull();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Type: Anthropic" }));
     expect((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Anthropic");
     expect((within(dialog).getByRole("combobox", { name: "Model" }) as HTMLInputElement).value).toBe(
       "claude-sonnet-4-5",
     );
+  });
+
+  it("offers the five kinds", async () => {
+    render();
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add provider" });
+    const picker = within(dialog).getByRole("group", { name: "Type" });
     expect(
-      within(dialog).queryByLabelText("Endpoint lacks json_schema support: use json_object mode"),
-      "only OpenAI-compatible endpoints",
-    ).toBeNull();
+      within(picker)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["OpenAI-compatible", "Anthropic-compatible", "OpenAI", "Anthropic", "Codex (ChatGPT)"]);
+  });
+
+  it("shows the fixed address of an official kind instead of a Base URL box, and asks for its key", async () => {
+    render();
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add provider" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Type: OpenAI" }));
+    expect(within(dialog).queryByRole("textbox", { name: "Base URL" })).toBeNull();
+    expect(within(dialog).getByText("Address: https://api.openai.com/v1")).toBeTruthy();
+    const key = within(dialog).getByLabelText("API key") as HTMLInputElement;
+    expect(key.placeholder).toBe("API key");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Type: Anthropic-compatible" }));
+    expect(within(dialog).getByRole("textbox", { name: "Base URL" })).toBeTruthy();
+  });
+
+  it("signs Codex in with ChatGPT instead of a key or an address", async () => {
+    vi.mocked(api.codexCliAvailable).mockResolvedValue(true);
+    render();
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add provider" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Type: Codex (ChatGPT)" }));
+    expect(within(dialog).queryByLabelText("API key")).toBeNull();
+    expect(within(dialog).queryByRole("textbox", { name: "Base URL" })).toBeNull();
+    expect(within(dialog).getByText("Not signed in")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Sign in with ChatGPT" })).toBeTruthy();
+    expect(await within(dialog).findByRole("button", { name: "Use my Codex CLI login" })).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "Unofficial: uses your ChatGPT plan through the Codex backend. It may stop working without notice.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() => expect(api.listModels).toHaveBeenCalled());
+    expect(vi.mocked(api.listModels).mock.calls.at(-1)?.[0], "the fixed list of Codex models").toMatchObject({
+      kind: "codex",
+      apiKey: null,
+    });
+    const primaries = within(dialog)
+      .getAllByRole("button")
+      .filter((b) => b.id === "save-provider");
+    expect(primaries).toHaveLength(1);
+  });
+
+  it("saves a new Codex provider first, then signs it in and says with which account", async () => {
+    vi.mocked(api.saveProvider).mockResolvedValue(
+      provider({ id: 9, name: "Codex", kind: "codex", kindLabel: "Codex (ChatGPT)", isDefault: false }),
+    );
+    let finish: (account: string) => void = () => undefined;
+    vi.mocked(api.codexSignIn).mockReturnValue(
+      new Promise<string>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    vi.mocked(api.codexCancelSignIn).mockResolvedValue(undefined);
+    render();
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add provider" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Type: Codex (ChatGPT)" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sign in with ChatGPT" }));
+
+    await waitFor(() => expect(api.codexSignIn).toHaveBeenCalledWith(9));
+    expect(vi.mocked(api.saveProvider).mock.calls[0]?.[0]).toMatchObject({ id: 0, kind: "codex" });
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Cancel sign-in" }));
+    expect(api.codexCancelSignIn).toHaveBeenCalled();
+
+    finish("me@example.com");
+    expect(await within(dialog).findByText("Signed in as me@example.com")).toBeTruthy();
+    expect(screen.getByRole("dialog"), "the dialog stays open on the saved provider").toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
+  });
+
+  it("saves an edited provider before signing in, and shows in the form why the sign-in failed", async () => {
+    const codex = provider({ id: 5, name: "Codex", kind: "codex", kindLabel: "Codex (ChatGPT)" });
+    vi.mocked(api.saveProvider).mockResolvedValue(codex);
+    vi.mocked(api.codexSignIn).mockRejectedValue(new CommandError("the sign-in was cancelled"));
+    vi.mocked(api.loadProviders).mockResolvedValue({ providers: [codex], kinds: KINDS });
+    render();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Codex" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit Codex" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "My Codex" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sign in with ChatGPT" }));
+    expect(await within(dialog).findByText("Could not sign in: the sign-in was cancelled")).toBeTruthy();
+    expect(vi.mocked(api.saveProvider).mock.calls[0]?.[0], "the form is saved first").toMatchObject({
+      id: 5,
+      kind: "codex",
+      name: "My Codex",
+    });
+    expect(api.codexSignIn).toHaveBeenCalledWith(5);
+  });
+
+  it("no longer says a key is saved once the kind changes, and tests without it", async () => {
+    vi.mocked(api.testProvider).mockResolvedValue(undefined);
+    render();
+    const dialog = await openLocal();
+    expect(await within(dialog).findByText("A key is saved in your system keyring.")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Type: Anthropic-compatible" }));
+    expect(within(dialog).queryByText("A key is saved in your system keyring.")).toBeNull();
+    expect(within(dialog).getByLabelText("API key")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(api.testProvider).toHaveBeenCalled());
+    expect(vi.mocked(api.testProvider).mock.calls[0]?.[0], "another kind: not with the saved key").toMatchObject({
+      id: 0,
+      kind: "anthropic_compatible",
+      apiKey: null,
+    });
   });
 
   it("tests the provider and says in the form that it works, or why it does not", async () => {

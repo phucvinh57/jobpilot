@@ -1,7 +1,15 @@
 // Why something failed, in terms the user can act on. The classification is done by the shell
 // (`engine::health`); the web app only shows it.
 
-export type ProblemKind = "noProvider" | "noProfile" | "noTypst" | "noBrowser" | "network" | "needsHuman" | "other";
+export type ProblemKind =
+  | "noProvider"
+  | "providerSignIn"
+  | "noProfile"
+  | "noTypst"
+  | "noBrowser"
+  | "network"
+  | "needsHuman"
+  | "other";
 
 export interface Problem {
   kind: ProblemKind;

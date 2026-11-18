@@ -1,41 +1,26 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  accountLine,
   deleteLabel,
+  fieldsOf,
   draftOf,
   inputOf,
+  keyIsSaved,
   keyLabel,
   modelsHint,
-  modelsInputOf,
   modelsSignature,
+  probeInputOf,
   providersStatus,
   switchKind,
 } from "./providers";
-import type { KindDefaults, Provider } from "@/types/integrations";
+import { aiProvider, PROVIDER_KINDS } from "@/test/fixtures/integrations";
+import type { Provider } from "@/types/integrations";
 
-const KINDS: KindDefaults[] = [
-  { kind: "openai", label: "OpenAI-compatible", name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "" },
-  {
-    kind: "anthropic",
-    label: "Anthropic",
-    name: "Anthropic",
-    baseUrl: "https://api.anthropic.com",
-    model: "claude-sonnet-4-5",
-  },
-];
+const KINDS = PROVIDER_KINDS;
 
 function provider(patch: Partial<Provider> = {}): Provider {
-  return {
-    id: 3,
-    name: "Local",
-    kind: "openai",
-    kindLabel: "OpenAI-compatible",
-    baseUrl: "http://localhost:11434/v1",
-    model: "llama3",
-    jsonObject: true,
-    isDefault: false,
-    ...patch,
-  };
+  return aiProvider({ id: 3, isDefault: false, ...patch });
 }
 
 describe("the provider form", () => {
@@ -43,12 +28,13 @@ describe("the provider form", () => {
     const draft = draftOf(undefined, KINDS);
     expect(draft).toMatchObject({
       id: 0,
-      kind: "openai",
-      name: "OpenAI",
-      baseUrl: "https://api.openai.com/v1",
+      kind: "openai_compatible",
+      name: "Local model",
+      baseUrl: "",
       model: "",
       apiKey: "",
       hasKey: false,
+      account: null,
     });
     expect(draft.models).toEqual([]);
   });
@@ -58,12 +44,12 @@ describe("the provider form", () => {
     expect(draft).toMatchObject({
       id: 3,
       name: "Local",
-      jsonObject: true,
       isDefault: true,
       hasKey: true,
       apiKey: "",
       confirmDelete: false,
     });
+    expect(draftOf(provider({ kind: "codex", account: "me@example.com" }), KINDS).account).toBe("me@example.com");
   });
 
   it("changes the kind and keeps what the user typed", () => {
@@ -75,38 +61,65 @@ describe("the provider form", () => {
       baseUrl: "https://api.anthropic.com",
       model: "claude-sonnet-4-5",
     });
+    // Back to a compatible kind: the fixed address is not kept, the user enters theirs.
+    expect(switchKind(fresh, "anthropic_compatible", KINDS)).toMatchObject({
+      name: "Anthropic-compatible",
+      baseUrl: "",
+      model: "",
+    });
 
     // Typed values stay; empty ones are filled.
     const typed = { ...draftOf(undefined, KINDS), name: "My proxy", baseUrl: "http://proxy.local/v1", model: "  " };
-    const switched = switchKind(typed, "anthropic", KINDS);
+    const switched = switchKind(typed, "anthropic_compatible", KINDS);
     expect(switched.name).toBe("My proxy");
     expect(switched.baseUrl).toBe("http://proxy.local/v1");
-    expect(switched.model).toBe("claude-sonnet-4-5");
+    expect(switched.model).toBe("");
+  });
+
+  it("gives an official kind its own address, whatever was typed", () => {
+    const typed = { ...draftOf(undefined, KINDS), baseUrl: "http://proxy.local/v1" };
+    expect(switchKind(typed, "openai", KINDS).baseUrl).toBe("https://api.openai.com/v1");
+    expect(switchKind(typed, "codex", KINDS)).toMatchObject({
+      name: "Codex",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      model: "gpt-5-codex",
+    });
   });
 
   it("forgets the loaded models when the kind changes, and does nothing for the same kind", () => {
     const draft = { ...draftOf(undefined, KINDS), models: ["gpt-4o"] };
-    expect(switchKind(draft, "openai", KINDS)).toBe(draft);
+    expect(switchKind(draft, "openai_compatible", KINDS)).toBe(draft);
     expect(switchKind(draft, "anthropic", KINDS).models).toEqual([]);
+  });
+
+  it("knows which fields each kind has", () => {
+    expect(fieldsOf(KINDS, "openai_compatible")).toEqual({ needsBaseUrl: true, hasKeyField: true, signIn: false });
+    expect(fieldsOf(KINDS, "openai")).toEqual({ needsBaseUrl: false, hasKeyField: true, signIn: false });
+    expect(fieldsOf(KINDS, "codex")).toEqual({ needsBaseUrl: false, hasKeyField: false, signIn: true });
+    expect(fieldsOf([], "codex"), "kinds not read yet: every field").toEqual({
+      needsBaseUrl: true,
+      hasKeyField: true,
+      signIn: false,
+    });
+  });
+
+  it("says which ChatGPT account Codex is signed in with", () => {
+    expect(accountLine("me@example.com")).toBe("Signed in as me@example.com");
+    expect(accountLine(null)).toBe("Not signed in");
   });
 
   it("is sent trimmed, with the key only when one was typed", () => {
     const draft = { ...draftOf(provider(), KINDS), name: " Local ", apiKey: "  sk-1  " };
     expect(inputOf(draft)).toEqual({
       id: 3,
-      kind: "openai",
+      kind: "openai_compatible",
       name: "Local",
       baseUrl: "http://localhost:11434/v1",
       model: "llama3",
-      jsonObject: true,
       apiKey: "sk-1",
     });
     expect(inputOf({ ...draft, apiKey: "   " }).apiKey).toBeNull();
-  });
-
-  it("sends json_object only for OpenAI-compatible endpoints", () => {
-    const anthropic = { ...draftOf(provider({ kind: "anthropic" }), KINDS), jsonObject: true };
-    expect(inputOf(anthropic).jsonObject).toBe(false);
+    expect(inputOf(draft), "the JSON mode is the engine's, never the form's").not.toHaveProperty("jsonObject");
   });
 
   it("labels the delete button as a two-step action", () => {
@@ -115,9 +128,16 @@ describe("the provider form", () => {
     expect(deleteLabel({ id: 4, confirmDelete: true })).toBe("Click again to delete");
   });
 
-  it("says when a saved key stays", () => {
-    expect(keyLabel({ hasKey: false })).toBe("API key");
-    expect(keyLabel({ hasKey: true })).toBe("API key (leave empty to keep the saved one)");
+  it("says when a saved key stays: only while the kind and address are the saved ones", () => {
+    const saved = draftOf(provider(), KINDS, true);
+    expect(keyIsSaved(saved)).toBe(true);
+    expect(keyLabel(saved)).toBe("API key (leave empty to keep the saved one)");
+    expect(keyLabel({ ...saved, hasKey: false })).toBe("API key");
+    const otherKind = switchKind(saved, "anthropic_compatible", KINDS);
+    expect(keyIsSaved(otherKind), "another kind").toBe(false);
+    expect(keyLabel(otherKind)).toBe("API key");
+    expect(keyIsSaved({ ...saved, baseUrl: "http://elsewhere/v1" }), "another address").toBe(false);
+    expect(keyIsSaved({ ...draftOf(undefined, KINDS), hasKey: true }), "never saved").toBe(false);
   });
 });
 
@@ -135,26 +155,19 @@ describe("the card", () => {
     expect(modelsHint(false, 12)).toBe("12 models available: pick one or type an id.");
   });
 
-  it("sends the saved key only to the address it was saved with when listing the models", () => {
+  it("sends the saved key only to the endpoint it was saved for when testing or listing the models", () => {
     const saved = draftOf(
-      {
-        id: 4,
-        name: "OpenAI",
-        kind: "openai",
-        kindLabel: "OpenAI-compatible",
-        baseUrl: "https://api.openai.com/v1",
-        model: "gpt-4o",
-        jsonObject: false,
-        isDefault: true,
-      },
+      provider({ id: 4, name: "Proxy", baseUrl: "https://api.openai.com/v1", model: "gpt-4o", isDefault: true }),
       KINDS,
       true,
     );
-    expect(modelsInputOf(saved).id, "same address: the saved key").toBe(4);
+    expect(probeInputOf(saved).id, "same kind and address: the saved key").toBe(4);
     const moved = { ...saved, baseUrl: "https://api.openai.co/v1" };
-    expect(modelsInputOf(moved).id, "edited address: no saved key").toBe(0);
-    expect(modelsInputOf({ ...moved, apiKey: "sk-typed" })).toMatchObject({ id: 4, apiKey: "sk-typed" });
-    expect(modelsInputOf({ ...saved, baseUrl: " https://api.openai.com/v1 " }).id, "spaces do not count").toBe(4);
+    expect(probeInputOf(moved).id, "edited address: no saved key").toBe(0);
+    expect(probeInputOf({ ...moved, apiKey: "sk-typed" })).toMatchObject({ id: 4, apiKey: "sk-typed" });
+    expect(probeInputOf({ ...saved, baseUrl: " https://api.openai.com/v1 " }).id, "spaces do not count").toBe(4);
+    expect(probeInputOf({ ...saved, kind: "anthropic_compatible" }).id, "edited kind: no saved key").toBe(0);
+    expect(probeInputOf(draftOf(undefined, KINDS)).id, "a new provider has none").toBe(0);
   });
 
   it("lists the models again only when the id, kind, address or key change", () => {
