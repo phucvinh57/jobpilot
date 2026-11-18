@@ -26,7 +26,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
-use chrono::{DateTime, Datelike, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use futures::StreamExt;
 use regex::Regex;
 
@@ -304,12 +304,16 @@ impl Doc {
     }
 }
 
-/// Months of skill counts for a digest of `period`: a year's own twelve, else [`MONTHS`] (enough
-/// for a direction, even for a week or a month).
-pub(crate) fn window_months(period: &Period) -> usize {
+/// The months of skill counts for a digest of `period` built on `today`: [`MONTHS`] ending with the
+/// period's last month. The current year ends with its month that has begun: the months to come
+/// hold no postings, and a window with an empty half has no direction.
+pub(crate) fn window_for(period: &Period, today: NaiveDate) -> Vec<String> {
     match period {
-        Period::Year { .. } => 12,
-        Period::Week { .. } | Period::Month { .. } | Period::Quarter { .. } => MONTHS,
+        Period::Year { year } if today.year() == *year => {
+            let month = Period::Month { year: *year, month: today.month() };
+            month_window(&month, MONTHS)
+        }
+        _ => month_window(period, MONTHS),
     }
 }
 
@@ -630,7 +634,7 @@ fn month_of(time: DateTime<Utc>) -> String {
 }
 
 pub(super) async fn count(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendRun> {
-    let months = month_window(&s.period, window_months(&s.period));
+    let months = window_for(&s.period, Utc::now().date_naive());
     let in_window = |month: &str| months.iter().any(|m| m == month);
 
     // A backfilled Hacker News source holds thousands of postings: read a few at a time.
@@ -793,11 +797,17 @@ mod tests {
         assert_eq!(month_window(&w1, 3), ["2025-11", "2025-12", "2026-01"], "W01 ends on 2026-01-04");
         let q4 = Period::parse("2026-Q4").unwrap();
         assert_eq!(month_window(&q4, 6), ["2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12"]);
+        let today = NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
         let nov = Period::parse("2026-M11").unwrap();
-        assert_eq!(month_window(&nov, window_months(&nov)), ["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"]);
+        assert_eq!(window_for(&nov, today), ["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"]);
         let year = Period::parse("2026").unwrap();
-        let months = month_window(&year, window_months(&year));
-        assert_eq!((months.len(), months[0].as_str(), months[11].as_str()), (12, "2026-01", "2026-12"), "a year counts its own months");
+        assert_eq!(
+            window_for(&year, today),
+            ["2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03"],
+            "the current year ends with the month that has begun"
+        );
+        let past = Period::parse("2025").unwrap();
+        assert_eq!(window_for(&past, today).last().map(String::as_str), Some("2025-12"), "a past year ends with December");
     }
 
     #[test]

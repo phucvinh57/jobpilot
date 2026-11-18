@@ -36,6 +36,7 @@ export function reportRowFixture(patch: Partial<ReportRow> = {}): ReportRow {
     periodTitle: known.title,
     cadence: known.cadence,
     points: 6,
+    rerun: true,
     ...patch,
   };
 }

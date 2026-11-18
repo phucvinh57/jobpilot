@@ -48,7 +48,7 @@
 //! ids and counts, never item text.
 
 mod api;
-mod cite;
+pub(crate) mod cite;
 mod count;
 mod extract;
 mod synthesize;

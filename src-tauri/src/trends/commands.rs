@@ -175,12 +175,7 @@ pub async fn trends_export_pdf(core: Cx<'_>, id: i64, path: String) -> CommandRe
 #[tauri::command]
 pub async fn trends_delete_report(core: Cx<'_>, id: i64) -> CommandResult<()> {
     let core = core.inner().clone();
-    run_sync(move || {
-        core.delete_trend_report(id)?;
-        tracing::info!(report = id, "trends: report deleted");
-        Ok(())
-    })
-    .await
+    run_sync(move || core.delete_trend_report(id)).await
 }
 
 /// This context's commands; `lib.rs` routes every `trends_*` call here.

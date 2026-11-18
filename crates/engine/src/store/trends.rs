@@ -137,21 +137,18 @@ impl Store {
     /// id stays the same; `created_at` becomes now).
     pub fn add_report(&self, new: &NewReport) -> Result<Report> {
         let citations = if new.citations_json.is_empty() { "[]" } else { &new.citations_json };
-        self.with_conn(|c| {
-            c.execute(
+        let id: i64 = self.with_conn(|c| {
+            Ok(c.query_row(
                 "INSERT INTO reports (kind, period, title, body_md, citations_json, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(kind, period) DO UPDATE SET title = excluded.title, body_md = excluded.body_md,
-                     citations_json = excluded.citations_json, created_at = excluded.created_at",
+                 ON CONFLICT(kind, period) WHERE period != '' DO UPDATE SET title = excluded.title, body_md = excluded.body_md,
+                     citations_json = excluded.citations_json, created_at = excluded.created_at
+                 RETURNING id",
                 params![new.kind, new.period, new.title, new.body_md, citations, now()],
-            )?;
-            Ok(c.query_row(
-                &format!("SELECT {REPORT_COLS} FROM reports WHERE kind = ?1 AND period = ?2"),
-                params![new.kind, new.period],
-                Report::from_row,
-            )
-            .optional()?)
-        })?
+                |row| row.get(0),
+            )?)
+        })?;
+        self.get_report(id)?
         .context("report vanished after insert")
     }
 

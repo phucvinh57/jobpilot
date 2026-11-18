@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use chrono::{Datelike, Days};
 use serde_json::{json, Value};
 
+use super::digest::cite::link_destination;
 use super::digest::{DigestData, Section};
 use super::period::Period;
 use crate::pipeline::render;
@@ -29,39 +29,25 @@ pub const TRENDS_TEMPLATE: &str = include_str!("../../../../assets/trends.typ");
 /// Skills in the PDF's table.
 const PDF_SKILLS: usize = 12;
 
-const MONTHS: [&str; 12] =
-    ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-
 fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// A stored address kept as a link only when it is http(s); `""` otherwise.
+/// A stored address kept as a link only when it is http(s) (the digest's own rule,
+/// [`link_destination`]); `""` otherwise.
 fn http_url(url: &str) -> String {
-    url::Url::parse(url.trim())
-        .ok()
-        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
-        .map(|u| u.to_string())
-        .unwrap_or_default()
+    link_destination(url.trim()).unwrap_or_default()
 }
 
-/// What the period covers, in words: `Week 46, 2026 (9 Nov – 15 Nov 2026)`, `November 2026`,
-/// `Q4 2026 (October – December)`, `Year 2026`. The label itself when it cannot be read.
+/// What the period covers, in words, as the app names it: `Week of 9 November 2026`,
+/// `November 2026`, `Q4 2026`, `2026`. The label itself when it cannot be read.
 pub fn period_title(label: &str) -> String {
     let Some(period) = Period::parse(label) else { return one_line(label) };
-    let month_name = |m: u32| MONTHS.get(m.saturating_sub(1) as usize).copied().unwrap_or("?");
     match period {
-        Period::Week { year, week } => {
-            let first = period.start().date_naive();
-            let last = period.end().date_naive().checked_sub_days(Days::new(1)).unwrap_or(first);
-            format!("Week {week}, {year} ({} – {})", first.format("%-d %b"), last.format("%-d %b %Y"))
-        }
-        Period::Month { year, month } => format!("{} {year}", month_name(month)),
-        Period::Quarter { year, quarter } => {
-            let first = (quarter - 1) * 3 + 1;
-            format!("Q{quarter} {year} ({} – {})", month_name(first), month_name(first + 2))
-        }
-        Period::Year { year } => format!("Year {year}"),
+        Period::Week { .. } => format!("Week of {}", period.start().format("%-d %B %Y")),
+        Period::Month { .. } => period.start().format("%B %Y").to_string(),
+        Period::Quarter { year, quarter } => format!("Q{quarter} {year}"),
+        Period::Year { year } => year.to_string(),
     }
 }
 
@@ -122,7 +108,7 @@ pub fn export_json(report: &Report, data: &DigestData) -> Value {
     json!({
         "title": one_line(&report.title),
         "period_title": period_title(&report.period),
-        "generated": format!("{} {} {}", created.day(), MONTHS[created.month0() as usize], created.year()),
+        "generated": created.format("%-d %B %Y").to_string(),
         "items_read": data.items_read,
         "dropped": data.dropped,
         "sections": sections,
@@ -153,7 +139,12 @@ impl Core {
 
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
         let work = self.paths.data_dir.join("tmp").join(format!("report-{report_id}-{}-{nonce}", std::process::id()));
-        let result = render_into(&work, &json, &pdf_path(dest)).await;
+        let out = pdf_path(dest);
+        if out != dest && tokio::fs::try_exists(&out).await.unwrap_or(false) {
+            let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            bail!("{name} already exists: choose it in the save dialog to replace it, or pick another name");
+        }
+        let result = render_into(&work, &json, &out).await;
         if let Err(e) = tokio::fs::remove_dir_all(&work).await {
             tracing::warn!(report = report_id, "removing the pdf work folder failed: {e}");
         }
@@ -234,21 +225,21 @@ mod tests {
             json!([
                 { "n": 1, "title": "Rust at Acme", "url": "https://acme.test/rust" },
                 { "n": 2, "title": "Evil #set page(width: 1pt)", "url": "" },
-                { "n": 3, "title": "Funding round", "url": "http://news.test/a?b=(c)" },
+                { "n": 3, "title": "Funding round", "url": "http://news.test/a?b=%28c%29" },
             ])
         );
         assert_eq!(v["skills"][0]["counts"], json!([{ "month": "2026-10", "count": 2 }, { "month": "2026-11", "count": 5 }]));
         assert_eq!(v["skills"][0]["direction"], "rising");
         assert_eq!(v["months"], "2026-10 to 2026-11");
-        assert_eq!((v["period_title"].as_str(), v["generated"].as_str()), (Some("Q4 2026 (October – December)"), Some("18 November 2026")));
+        assert_eq!((v["period_title"].as_str(), v["generated"].as_str()), (Some("Q4 2026"), Some("18 November 2026")));
         assert_eq!((v["items_read"].as_u64(), v["dropped"].as_u64()), (Some(12), Some(1)));
     }
 
     #[test]
     fn periods_read_as_words_and_dest_gets_a_pdf_extension() {
-        assert_eq!(period_title("2026-W46"), "Week 46, 2026 (9 Nov – 15 Nov 2026)");
+        assert_eq!(period_title("2026-W46"), "Week of 9 November 2026");
         assert_eq!(period_title("2026-M11"), "November 2026");
-        assert_eq!(period_title("2026"), "Year 2026");
+        assert_eq!(period_title("2026"), "2026");
         assert_eq!(period_title("odd\nlabel"), "odd label");
         assert_eq!(pdf_path(Path::new("/x/report")), Path::new("/x/report.pdf"));
         assert_eq!(pdf_path(Path::new("/x/report.PDF")), Path::new("/x/report.PDF"));
@@ -267,6 +258,11 @@ mod tests {
         assert!(links.iter().any(|l| l == "https://acme.test/rust"), "{links:?}");
         assert!(!links.iter().any(|l| l.starts_with("javascript")), "{links:?}");
         assert!(!core.paths.data_dir.join("tmp").read_dir().unwrap().any(|_| true), "the work folder is removed");
+        // `market.pdf` exists now: a bare `market` from the dialog must not replace it silently...
+        let err = core.export_trend_report_pdf(saved.id, &dir.path().join("market")).await.unwrap_err();
+        assert!(err.to_string().contains("market.pdf already exists"), "{err}");
+        // ...while the name the dialog confirmed is replaced.
+        core.export_trend_report_pdf(saved.id, &out).await.unwrap();
 
         let err = core.export_trend_report_pdf(9999, &dir.path().join("x")).await.unwrap_err();
         assert!(err.to_string().contains("no such report"));

@@ -69,8 +69,10 @@ export function useTrends() {
 
   const exportAction = useAction(async (id: number, period: string) => {
     const fileName = reportFileName(period);
-    if (await api.exportPdf(id, fileName)) {
-      toast.ok("Saved PDF", fileName);
+    const written = await api.exportPdf(id, fileName);
+    if (written !== null) {
+      // The name the user chose in the dialog, not the suggested one.
+      toast.ok("Saved PDF", written.split(/[\\/]/).pop() || written);
     }
   });
   useErrorToast(exportAction.error, { title: "The report could not be saved as PDF", clear: exportAction.clearError });

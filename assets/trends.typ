@@ -92,7 +92,7 @@
   text(size: 9pt, fill: muted, "Documents mentioning the skill, " + data.months + " (counted by the app, not by the model).")
   v(2pt)
   let top = calc.max(1, ..data.skills.map(s => s.total))
-  let spark(counts) = {
+  let spark(counts) = if counts.len() == 0 { [] } else {
     let peak = calc.max(1, ..counts.map(c => c.count))
     box(height: 11pt, grid(
       columns: counts.len(),

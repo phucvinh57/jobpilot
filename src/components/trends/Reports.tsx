@@ -83,7 +83,7 @@ export function Reports({
               icon={RefreshCw}
               aria-label={`Rerun ${name}`}
               title="Collect this period again and rebuild its report (it replaces this one)"
-              disabled={busy}
+              disabled={busy || !r.rerun}
               onClick={() => onRerun(r.period)}
             >
               Rerun

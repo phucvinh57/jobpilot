@@ -43,6 +43,7 @@ beforeEach(() => {
           reportRowFixture({ id: 5, title: "Monthly digest 2026-M11", period: "2026-M11", points: 8 }),
           reportRowFixture(),
           reportRowFixture({ id: 2, title: "Weekly digest 2026-W45", when: "2026-11-07 09:00", period: "2026-W45" }),
+          reportRowFixture({ id: 1, title: "Old digest", period: "2026-X1", periodTitle: "2026-X1", rerun: false }),
         ],
       }),
     ),
@@ -69,7 +70,7 @@ const rowNames = () =>
 describe("Reports", () => {
   it("shows the reports of one cadence, following the one chosen above", async () => {
     const user = await shown();
-    expect(rowNames()).toEqual(["Week of 9 November (2026-W46)", "Week of 2 November (2026-W45)"]);
+    expect(rowNames()).toEqual(["Week of 9 November (2026-W46)", "Week of 2 November (2026-W45)", "2026-X1"]);
 
     // Its own filter.
     await user.click(reports().getByRole("button", { name: "Reports period: Yearly" }));
@@ -105,9 +106,22 @@ describe("Reports", () => {
     );
   });
 
+  it("offers no rerun for a report whose period cannot be read", async () => {
+    await shown();
+    expect(
+      reports()
+        .getByRole("button", { name: /^Rerun .*2026-W45/ })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    const rerun = reports()
+      .getAllByRole("button", { name: /^Rerun/ })
+      .find((b) => b.id === "trends-report-1-rerun");
+    expect(rerun?.hasAttribute("disabled")).toBe(true);
+  });
+
   it("saves a report as a PDF, and says nothing when the save was cancelled", async () => {
     const user = await shown();
-    mocks.api.exportPdf.mockResolvedValueOnce(false);
+    mocks.api.exportPdf.mockResolvedValueOnce(null);
     await user.click(reports().getByRole("button", { name: "Export PDF of Week of 2 November (2026-W45)" }));
     expect(mocks.api.exportPdf).toHaveBeenCalledWith(2, "jobpilot-market-insight-2026-W45.pdf");
     await waitFor(() =>
@@ -117,10 +131,11 @@ describe("Reports", () => {
     );
     expect(screen.queryByRole("status", { name: "Saved PDF" })).toBeNull();
 
-    mocks.api.exportPdf.mockResolvedValueOnce(true);
+    // The user renamed it in the dialog: the toast names the file written.
+    mocks.api.exportPdf.mockResolvedValueOnce("/home/me/Docs/early-november.pdf");
     await user.click(reports().getByRole("button", { name: "Export PDF of Week of 2 November (2026-W45)" }));
     const note = await screen.findByRole("status", { name: "Saved PDF" });
-    expect(within(note).getByText("jobpilot-market-insight-2026-W45.pdf")).toBeTruthy();
+    expect(within(note).getByText("early-november.pdf")).toBeTruthy();
   });
 
   it("says in a toast why a PDF could not be saved", async () => {

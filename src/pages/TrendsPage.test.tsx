@@ -441,7 +441,7 @@ describe("the Trends screen", () => {
   });
 
   it("saves the shown report as a PDF from the digest", async () => {
-    mocks.api.exportPdf.mockResolvedValue(true);
+    mocks.api.exportPdf.mockResolvedValue("/tmp/jobpilot-market-insight-2026-W46.pdf");
     const user = await shown();
     await user.click(screen.getByRole("button", { name: "Export PDF" }));
     expect(mocks.api.exportPdf).toHaveBeenCalledWith(3, "jobpilot-market-insight-2026-W46.pdf");

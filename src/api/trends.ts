@@ -54,14 +54,14 @@ export async function addToPreferences(field: PrefField, topic: string): Promise
   return added;
 }
 
-/** Save report `id` as a PDF where the user picks; `false` when they cancelled the file picker. */
-export async function exportPdf(id: number, fileName: string): Promise<boolean> {
+/** Save report `id` as a PDF where the user picks: the path written, or `null` when they cancelled
+ *  the file picker. */
+export async function exportPdf(id: number, fileName: string): Promise<string | null> {
   const path = await pickSavePath("Save report as PDF", fileName, [{ name: "PDF", extensions: ["pdf"] }]);
   if (path === null) {
-    return false;
+    return null;
   }
-  await invoke<string>("trends_export_pdf", { id, path });
-  return true;
+  return invoke<string>("trends_export_pdf", { id, path });
 }
 
 /** Delete a saved report (its period can be collected again). */

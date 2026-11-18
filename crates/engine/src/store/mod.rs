@@ -261,10 +261,12 @@ const MIGRATIONS: &[&str] = &[
     );
     ",
     // 10: one report per period (`trends`): rerunning a period replaces its report, so keep the
-    // newest row of each (kind, period) and let the unique index hold it from now on
+    // newest row of each (kind, period) and let the unique index hold it from now on (a row
+    // without a period names none, so those are left alone)
     "
-    DELETE FROM reports WHERE id NOT IN (SELECT MAX(id) FROM reports GROUP BY kind, period);
-    CREATE UNIQUE INDEX reports_period ON reports(kind, period);
+    DELETE FROM reports WHERE period != ''
+        AND id NOT IN (SELECT MAX(id) FROM reports WHERE period != '' GROUP BY kind, period);
+    CREATE UNIQUE INDEX reports_period ON reports(kind, period) WHERE period != '';
     ",
 ];
 

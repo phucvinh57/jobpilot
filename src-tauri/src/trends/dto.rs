@@ -603,6 +603,8 @@ pub struct ReportRowDto {
     pub cadence: String,
     /// Points the digest holds (0 for a report this version cannot read back).
     pub points: usize,
+    /// Its period can be collected again ("Rerun"); `false` for a row whose period cannot be read.
+    pub rerun: bool,
 }
 
 impl ReportRowDto {
@@ -618,6 +620,7 @@ impl ReportRowDto {
             period_title: period.map_or_else(|| report.period.clone(), period_title),
             cadence: period.map_or_else(|| report.kind.clone(), |p| Cadence::of(p).as_str().to_string()),
             points,
+            rerun: period.is_some(),
         }
     }
 }

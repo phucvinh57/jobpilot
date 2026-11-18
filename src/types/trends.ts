@@ -209,6 +209,8 @@ export interface ReportRow {
   cadence: Cadence;
   /** Points in the report. */
   points: number;
+  /** Its period can be collected again (`false` for a row whose period cannot be read). */
+  rerun: boolean;
 }
 
 /** A collection paused at a login, captcha or block page. */
