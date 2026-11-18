@@ -54,8 +54,9 @@ export function overviewFixture(patch: Partial<Overview> = {}): Overview {
         kind: "data",
         dropped: 1,
         uncatalogued: [
-          { term: "Temporal", items: 5 },
-          { term: "dbt", items: 4 },
+          { term: "Temporal", items: 5, kind: "hiring postings", rising: true },
+          { term: "dbt", items: 4, kind: "hiring postings", rising: false },
+          { term: "vector databases", items: 14, kind: "Hacker News stories", rising: false },
         ],
         sections: [
           {
@@ -185,6 +186,8 @@ export function localScope(patch: Partial<ChartScope> = {}): ChartScope {
         share: "21%",
         description:
           "124 in total · 20 so far this month · last month 20.0% of documents, about the same as the month before (21.2%)",
+        now: "21.5%",
+        range: "18.0% to 25.4%",
         presence: "absent",
         direction: { label: "steady", tone: "accent" },
         inProfile: true,
@@ -197,6 +200,8 @@ export function localScope(patch: Partial<ChartScope> = {}): ChartScope {
         share: "13%",
         description:
           "79 in total · 15 so far this month · last month 14.5% of documents, up from 13.5% the month before",
+        now: "14.4%",
+        range: "11.2% to 18.3%",
         presence: "added",
         direction: { label: "rising", tone: "ok" },
         inProfile: false,
@@ -209,6 +214,8 @@ export function localScope(patch: Partial<ChartScope> = {}): ChartScope {
         share: "9.4%",
         description:
           "56 in total · 13 so far this month · last month 10.9% of documents, up from 9.6% the month before",
+        now: "11.2%",
+        range: "8.6% to 14.4%",
         presence: "absent",
         direction: { label: "rising", tone: "ok" },
         inProfile: true,
@@ -235,6 +242,8 @@ export function globalScope(patch: Partial<ChartScope> = {}): ChartScope {
         percent: 20,
         share: "20%",
         description: "427 in total · 70 so far this month",
+        now: "20.1%",
+        range: "18.5% to 21.8%",
         presence: "absent",
         direction: { label: "steady", tone: "accent" },
         inProfile: true,
@@ -246,6 +255,8 @@ export function globalScope(patch: Partial<ChartScope> = {}): ChartScope {
         percent: 5,
         share: "4.6%",
         description: "96 in total · 10 so far this month",
+        now: "3.2%",
+        range: "2.4% to 4.2%",
         presence: "avoided",
         direction: { label: "falling", tone: "warn" },
         inProfile: true,
@@ -265,9 +276,22 @@ export function chartFixture(patch: Partial<Chart> = {}): Chart {
     marks: true,
     pipeline:
       "Your own leads, for comparison: 26 over the window; they name Rust, Go, Kubernetes most. They are not counted in the market above.",
+    coverage: [
+      "Counted 2106 hiring postings over 2026-06 to 2026-11.",
+      "Not compared with the period before (too few items or too uneven): YC companies.",
+    ],
+    partial: false,
     ...patch,
   };
 }
+
+/** What a report whose counts did not see everything says under its chart. */
+export const PARTIAL_COVERAGE = [
+  "Counted 2106 hiring postings over 2026-06 to 2026-11.",
+  "14 Hacker News items could not be read; some may have been postings.",
+  "In this run the sources left 120 items unread.",
+  "Not compared with the period before (too few items or too uneven): YC companies.",
+];
 
 /** A chart of a report saved before the app knew the user's place and background. */
 export function oldChartFixture(): Chart {
@@ -288,6 +312,8 @@ export function oldChartFixture(): Chart {
             percent: 29,
             share: "29%",
             description: "117 in total · 19 this month, about the same as last month (28.6%)",
+            now: null,
+            range: null,
             presence: "absent",
             direction: null,
             inProfile: false,
@@ -299,6 +325,8 @@ export function oldChartFixture(): Chart {
             percent: 13,
             share: "13%",
             description: "52 in total · 15 this month, up from 17.6% last month",
+            now: null,
+            range: null,
             presence: "added",
             direction: null,
             inProfile: false,
@@ -312,6 +340,8 @@ export function oldChartFixture(): Chart {
     toMonth: "2026-11",
     marks: false,
     pipeline: null,
+    coverage: [],
+    partial: false,
   };
 }
 
@@ -340,8 +370,20 @@ function gapSection(): DigestSection {
           hint: "In your profile, and rising or steadily asked for.",
           empty: "No skill of your profile is in steady demand here yet.",
           skills: [
-            { skill: "Python", share: "21%", direction: { label: "steady", tone: "accent" } },
-            { skill: "Rust", share: "9.4%", direction: { label: "rising", tone: "ok" } },
+            {
+              skill: "Python",
+              share: "21%",
+              now: "21.5%",
+              range: "18.0% to 25.4%",
+              direction: { label: "steady", tone: "accent" },
+            },
+            {
+              skill: "Rust",
+              share: "9.4%",
+              now: "13.0%",
+              range: "9.0% to 22.0%",
+              direction: { label: "rising", tone: "ok" },
+            },
           ],
         },
         {
@@ -349,7 +391,15 @@ function gapSection(): DigestSection {
           title: "Learn next",
           hint: "Not in your profile, and rising or often asked for in your field.",
           empty: "Nothing your field asks for is missing from your profile.",
-          skills: [{ skill: "Kubernetes", share: "13%", direction: { label: "rising", tone: "ok" } }],
+          skills: [
+            {
+              skill: "Kubernetes",
+              share: "13%",
+              now: "14.4%",
+              range: "11.2% to 18.3%",
+              direction: { label: "rising", tone: "ok" },
+            },
+          ],
         },
         {
           bucket: "at_risk",

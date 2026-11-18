@@ -4,13 +4,15 @@
 //! title, link, date and body. A feed that carries only teasers has the entry's page fetched too,
 //! within the per-run cap and the per-host delay.
 
+use std::collections::HashSet;
+
 use anyhow::{bail, Result};
 use chrono::{DateTime, Duration, Utc};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 
 use super::page::{fetch_text, make_item};
-use super::{normalize_url, take_new, Ctx, Item};
+use super::{normalize_url, Ctx, Item};
 use crate::trends::http::public_http_url;
 use crate::trends::text::{cap, decode_entities, html_to_text, parse_date};
 
@@ -172,8 +174,10 @@ pub fn parse_feed(xml: &str) -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
-/// New entries of the feed at `feed_url` as items.
-pub async fn collect(ctx: &Ctx, feed_url: &str) -> Result<Vec<Item>> {
+/// New entries of the feed at `feed_url` as items, and how many new entries were cut: past
+/// `max_items` an entry is not read (its page is not fetched), only counted. An entry whose body and
+/// title both turn out empty is not an item, so the count can be one or two high.
+pub async fn collect(ctx: &Ctx, feed_url: &str) -> Result<(Vec<Item>, usize)> {
     let l = ctx.limits();
     let resp = ctx.http.get(feed_url, &[("Accept", ACCEPT)]).await?;
     let base = url::Url::parse(&resp.url)?;
@@ -183,18 +187,20 @@ pub async fn collect(ctx: &Ctx, feed_url: &str) -> Result<Vec<Item>> {
     let cutoff = ctx.period.start() - Duration::days(BACKLOG_DAYS);
 
     let mut items: Vec<Item> = Vec::new();
-    let mut fetched = 0;
+    let mut seen = HashSet::new();
+    let (mut fetched, mut cut) = (0, 0);
     for entry in entries {
-        if items.len() >= l.max_items {
-            break;
-        }
         if entry.published.is_some_and(|p| p < cutoff) {
             continue;
         }
         let Some(url) = entry.link.as_deref().and_then(|link| base.join(link).ok()).and_then(|u| normalize_url(u.as_str()).ok()) else {
             continue;
         };
-        if ctx.is_known(&url) || items.iter().any(|i| i.url == url) {
+        if ctx.is_known(&url) || !seen.insert(url.clone()) {
+            continue;
+        }
+        if items.len() >= l.max_items {
+            cut += 1;
             continue;
         }
         let mut body = html_to_text(&entry.body);
@@ -211,7 +217,7 @@ pub async fn collect(ctx: &Ctx, feed_url: &str) -> Result<Vec<Item>> {
         }
         items.push(make_item(url, Some(&entry.title), entry.published, cap(&body, l.max_text_chars)));
     }
-    Ok(take_new(ctx, items, l.max_items))
+    Ok((items, cut))
 }
 
 #[cfg(test)]
@@ -329,7 +335,8 @@ mod tests {
         fx.route("/posts/teaser", 200, "text/html", page);
         let ctx = ctx(&fx, &[&format!("{}/posts/guid", fx.base())]);
 
-        let items = collect(&ctx, &format!("{}/feed.xml", fx.base())).await.unwrap();
+        let (items, cut) = collect(&ctx, &format!("{}/feed.xml", fx.base())).await.unwrap();
+        assert_eq!(cut, 0, "nothing past the cap");
         let urls: Vec<_> = items.iter().map(|i| i.url.clone()).collect();
         // Entries: scaling (absolute), teaser (relative to the feed), old (too old), guid (known),
         // no link.
@@ -348,7 +355,7 @@ mod tests {
         let fx = Fixtures::start().await;
         fx.route("/feed.xml", 200, "application/rss+xml", RSS.replace("https://blog.test", fx.base()));
         fx.route("/posts/teaser", 500, "text/plain", "boom");
-        let items = collect(&ctx(&fx, &[]), &format!("{}/feed.xml", fx.base())).await.unwrap();
+        let (items, _) = collect(&ctx(&fx, &[]), &format!("{}/feed.xml", fx.base())).await.unwrap();
         let teaser = items.iter().find(|i| i.title == "Teaser only").unwrap();
         assert!(teaser.text.contains("A short note & a link"), "{}", teaser.text);
 
@@ -357,5 +364,34 @@ mod tests {
         assert!(err.contains("not an RSS or Atom feed"), "{err}");
         fx.route("/gone.xml", 404, "text/plain", "x");
         assert!(collect(&ctx(&fx, &[]), &format!("{}/gone.xml", fx.base())).await.unwrap_err().to_string().contains("HTTP 404"));
+    }
+
+    #[tokio::test]
+    async fn entries_past_the_item_cap_are_counted_not_fetched() {
+        let fx = Fixtures::start().await;
+        let body = "x".repeat(TEASER_CHARS + 1);
+        let entry = |n: u32, day: u32| {
+            format!(
+                "<item><title>Post {n}</title><link>{}/posts/{n}</link><pubDate>{day:02} Nov 2026 12:00:00 GMT</pubDate><description>{body}</description></item>",
+                fx.base()
+            )
+        };
+        // Newest first after the sort: 1, 2, 3, 4, 5 (5 is listed twice, 6 is stored already).
+        let entries = [entry(1, 14), entry(2, 13), entry(3, 12), entry(4, 11), entry(5, 10), entry(5, 10), entry(6, 10)].concat();
+        fx.route("/feed.xml", 200, "application/rss+xml", format!(r#"<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title>{entries}</channel></rss>"#));
+        let known = format!("{}/posts/6", fx.base());
+        let mut c = ctx(&fx, &[&known]);
+        let mut config = (*c.config).clone();
+        config.limits.max_items = 2;
+        c.config = std::sync::Arc::new(config);
+
+        let (items, cut) = collect(&c, &format!("{}/feed.xml", fx.base())).await.unwrap();
+        assert_eq!(items.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["Post 1", "Post 2"]);
+        assert_eq!(cut, 3, "posts 3, 4 and 5; the repeated entry and the stored one were never new");
+
+        // With room for all of them nothing is cut.
+        let roomy = ctx(&fx, &[&known]);
+        let (items, cut) = collect(&roomy, &format!("{}/feed.xml", fx.base())).await.unwrap();
+        assert_eq!((items.len(), cut), (5, 0));
     }
 }

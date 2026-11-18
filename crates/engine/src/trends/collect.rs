@@ -4,7 +4,7 @@
 //! ```text
 //! START -> plan -> { hackernews, yc, feeds } -> store_items -> wait_human
 //!       -> END                                                        (collection only)
-//!       -> extract -> count -> synthesize -> enforce_citations -> save_report -> END   (with the digest)
+//!       -> count -> extract -> synthesize -> enforce_citations -> save_report -> END   (with the digest)
 //! ```
 //!
 //! - `plan` reads the enabled trend sources. Only their ids go into the state.
@@ -29,7 +29,7 @@
 //!
 //! # The digest
 //!
-//! After `wait_human` a route (`TrendRun::digest.enabled`) leads to `extract` or to END. The
+//! After `wait_human` a route (`TrendRun::digest.enabled`) leads to `count` or to END. The
 //! digest nodes read their items from the store, so what the other collectors stored is enough
 //! when one source waits at a challenge (see [`super::digest`]).
 
@@ -66,8 +66,8 @@ const NODE_MARGIN: Duration = Duration::from_secs(30);
 /// one per thread. `hackernews::collect` does not download them again while the count is the same
 /// (and always reads the newest thread); only `store_items` writes it.
 pub const HN_SETTLED_KEY: &str = "trends.hn_settled_threads";
-/// How many settled threads kv keeps (the newest): two years of monthly threads, more than any
-/// `hiring_threads` window.
+/// How many settled threads kv keeps (the newest): two years of monthly threads, as many as the
+/// widest window (`CollectLimits::hiring_threads_for` a year).
 const HN_SETTLED_KEEP: usize = 24;
 
 /// The graph thread of a period.
@@ -120,6 +120,12 @@ pub struct SourceOutcome {
     pub status: SourceStatus,
     /// New items (not known before this run) the source gave.
     pub items: usize,
+    /// New items the source exposed but this run left unread: past a cap (`max_items`, the Hacker
+    /// News page cap) or its time budget. Counted, never silent; what a source cannot count (a
+    /// hiring thread left unread) counts as 1. 0 when nothing was cut, and for a source that did
+    /// not finish. A checkpoint saved before this field existed loads with 0.
+    #[serde(default)]
+    pub cut: usize,
 }
 
 /// What `store_items` did.
@@ -228,7 +234,7 @@ pub fn graph(
         .edge(START, "plan")
         .parallel("plan", &["hackernews", "yc", "feeds"], "store_items")
         .edge("store_items", "wait_human")
-        .route("wait_human", |s| if s.digest.enabled { "extract" } else { END }, &["extract", END])
+        .route("wait_human", |s| if s.digest.enabled { "count" } else { END }, &["count", END])
         .node_timeout("hackernews", collector_timeout)
         .node_timeout("yc", collector_timeout)
         .node_timeout("feeds", collector_timeout);
@@ -279,19 +285,20 @@ async fn group(env: Arc<Env>, mut s: TrendRun, group: SourceKind) -> Result<Tren
         // Deleted since the plan, or not of this group any more: nothing to do.
         let Some(source) = env.store.get_source(id)?.filter(|src| src.enabled) else { continue };
         let Some(kind) = SourceKind::parse(&source.kind) else { continue };
-        // Hacker News also names the hiring threads it read in full (set inside `work`).
+        // Hacker News also names the hiring threads it read in full (set inside `work`). Every
+        // adapter gives its new items and how many more a cap cut (a page is one item: none).
         let mut settled = Vec::new();
         let work = async {
             match kind {
                 SourceKind::HackerNews => {
                     hackernews::collect(&ctx, &saved_settled).await.map(|hn| {
                         settled = hn.settled;
-                        hn.items
+                        (hn.items, hn.cut)
                     })
                 }
                 SourceKind::Yc => yc::collect(&ctx).await,
                 SourceKind::Rss => rss::collect(&ctx, &source.url).await,
-                SourceKind::Page => page::collect(&ctx, &source.url).await,
+                SourceKind::Page => page::collect(&ctx, &source.url).await.map(|items| (items, 0)),
             }
         };
         let done = attempt(&env, deadline, &source, kind.as_str(), work).await;
@@ -346,18 +353,19 @@ impl Attempt {
     }
 }
 
-/// Run `work` for a source under its timeout (and what is left of the collector's budget), save the
-/// text of what it found, and record the result on the source row. Never fails: whatever goes
-/// wrong is the source's outcome.
+/// Run `work` (the new items and how many more a cap cut) for a source under its timeout (and what
+/// is left of the collector's budget), save the text of what it found, and record the result on the
+/// source row. Never fails: whatever goes wrong is the source's outcome.
 async fn attempt<Fut>(env: &Env, deadline: Instant, source: &Source, kind: &str, work: Fut) -> Attempt
 where
-    Fut: Future<Output = Result<Vec<Item>>>,
+    Fut: Future<Output = Result<(Vec<Item>, usize)>>,
 {
     let started = Instant::now();
     let budget = deadline.saturating_duration_since(started).min(env.config.limits.source_timeout);
     let result = if budget.is_zero() { None } else { tokio::time::timeout(budget, work).await.ok() };
 
     let mut items = Vec::new();
+    let mut cut = 0;
     let mut challenge = None;
     let status = match result {
         None => SourceStatus::TimedOut,
@@ -368,9 +376,10 @@ where
             }
             None => SourceStatus::Failed { error: short(&e) },
         },
-        Some(Ok(found)) => match write_items(env, source, found).await {
+        Some(Ok((found, unread))) => match write_items(env, source, found).await {
             Ok(written) => {
                 items = written;
+                cut = unread;
                 SourceStatus::Ok
             }
             Err(e) => SourceStatus::Failed { error: short(&e) },
@@ -399,10 +408,10 @@ where
     if matches!(status, SourceStatus::Failed { .. } | SourceStatus::TimedOut) {
         tracing::warn!(source_id, kind, status = label, ms, "trend source left out");
     } else {
-        tracing::info!(source_id, kind, status = label, items = items.len(), ms, "trend source collected");
+        tracing::info!(source_id, kind, status = label, items = items.len(), cut, ms, "trend source collected");
     }
     let count = items.len();
-    Attempt { outcome: SourceOutcome { source_id: Some(source_id), kind: kind.into(), status, items: count }, items, challenge }
+    Attempt { outcome: SourceOutcome { source_id: Some(source_id), kind: kind.into(), status, items: count, cut }, items, challenge }
 }
 
 /// Tells a login or bot wall from an ordinary failure, by status code (no browser). API adapters

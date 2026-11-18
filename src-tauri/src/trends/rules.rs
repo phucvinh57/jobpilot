@@ -7,7 +7,8 @@ use jobpilot_engine::graph::nodes::ChallengeKind;
 use jobpilot_engine::prefs::Preferences;
 use jobpilot_engine::store::{Report, Source};
 use jobpilot_engine::trends::digest::{
-    Direction, GapBucket, GapScope, ScopeCounts, WishKind, WishSignal, MARKET_SCAN_VERSION,
+    level_text, Direction, GapBucket, GapScope, GapSkill, ScopeCounts, Stratum, WishKind,
+    WishSignal, MARKET_SCAN_VERSION,
 };
 use jobpilot_engine::trends::{
     Digest, Period, Section, SkillCount, SkillCounts, SourceKind, SourceStatus, TrendRun,
@@ -230,28 +231,94 @@ pub fn month_label(month: &str) -> String {
 }
 
 /// What a scope of the chart says about its own data, when something needs saying: the local
-/// market was too thin for the gap, or no skill has a direction yet.
+/// market was too thin for the gap, or no skill has a direction yet. With a few hundred postings a
+/// month most skills read "unclear": that is usual, not a failure, so the note points at what the
+/// data does support, the shares (with their ranges when the report has them: `ranges`).
 pub fn scope_note(
     scope: GapScope,
     counts: &ScopeCounts,
     gap_scope: GapScope,
     knows: bool,
+    ranges: bool,
 ) -> Option<String> {
     if !knows {
         return None;
     }
     if scope == GapScope::Local && gap_scope == GapScope::Global {
         return Some(
-            "Too little local data to tell directions: your gap is judged on the global market."
-                .into(),
+            "Too little local data for your gap: it is judged on the global market.".into(),
         );
     }
     let unclear = counts
         .skills
         .iter()
         .all(|s| s.direction == Direction::Unclear);
-    (!counts.skills.is_empty() && unclear)
-        .then(|| "Too few postings yet to tell which way a skill is going.".into())
+    (!counts.skills.is_empty() && unclear).then(|| {
+        if ranges {
+            "No clear movement in the postings yet: the shares, with their ranges, are what to read."
+        } else {
+            "No clear movement in the postings yet: the shares are what to read."
+        }
+        .into()
+    })
+}
+
+/// A skill's level in the period's own months in words: its share (`9.4%`) and the 95% range of
+/// that share (`7.1% to 12.3%`). `None` for a report saved before the tests, and when the
+/// period's months held no posting to take a share of.
+pub fn skill_level(skill: &SkillCount, target_months: u32) -> Option<(String, String)> {
+    level_text(
+        target_months,
+        skill.target_permille,
+        skill.low_permille,
+        skill.high_permille,
+    )
+}
+
+/// The same for a skill of the gap (its share of the field's postings in the period's months).
+pub fn gap_level(skill: &GapSkill, target_months: u32) -> Option<(String, String)> {
+    level_text(
+        target_months,
+        skill.target_permille,
+        skill.low_permille,
+        skill.high_permille,
+    )
+}
+
+/// What the counts say about how much they saw, one sentence per fact (the engine's own
+/// sentences, so the prompt, the markdown, the PDF and the screen agree). Empty for a report saved
+/// before the tests: it carries no coverage, and saying "no posting was counted" would be false.
+pub fn coverage_lines(counts: &SkillCounts) -> Vec<String> {
+    if counts.target_months == 0 {
+        return Vec::new();
+    }
+    counts.coverage.lines(&counts.months)
+}
+
+/// Is the coverage worth a warning, not only a line: do the skill counts miss postings (some that
+/// could not be read, or a month without any)? What a source left unread in the run are stories
+/// and feed entries, which the skill counts never read, and a kind of item too thin to compare is
+/// the usual case: both are said in a line, neither is a warning.
+pub fn coverage_is_partial(counts: &SkillCounts) -> bool {
+    let coverage = &counts.coverage;
+    counts.target_months > 0
+        && (coverage.postings_unreadable > 0 || !coverage.months_without_postings.is_empty())
+}
+
+/// The kind of item a term was found in, in words. Empty for a report saved before the tests: its
+/// terms came from a mix of kinds, and no kind can be claimed for them.
+pub fn term_kind(target_months: u32, stratum: Stratum) -> String {
+    if target_months == 0 {
+        return String::new();
+    }
+    match stratum {
+        Stratum::HiringPosting => "hiring postings",
+        Stratum::HnStory => "Hacker News stories",
+        Stratum::Yc => "YC companies",
+        Stratum::Feed => "feeds",
+        Stratum::Other => "other items",
+    }
+    .into()
 }
 
 /// The user's own leads next to the market, as one sentence: how many, and the skills they name
@@ -570,15 +637,16 @@ mod tests {
     };
 
     use jobpilot_engine::trends::digest::{
-        Direction, GapBucket, GapScope, ScopeCounts, SkillCounts, WishKind, WishSignal,
-        MARKET_SCAN_VERSION,
+        Coverage, Direction, GapBucket, GapScope, GapSkill, ScopeCounts, SkillCounts, Stratum,
+        WishKind, WishSignal, MARKET_SCAN_VERSION,
     };
 
     use super::{
-        bucket_key, bucket_words, describe, describe_source, direction_tag, header_summary,
-        is_web_url, judged_on, knows_background, latest_month_is_partial, month_label, percent,
-        percent_text, period_title, permille, pipeline_note, scope_note, section_title, status_tag,
-        summarize, target, wish_signal, Cadence, Field, Preferences, Presence, Tone, BUCKETS,
+        bucket_key, bucket_words, coverage_is_partial, coverage_lines, describe, describe_source,
+        direction_tag, gap_level, header_summary, is_web_url, judged_on, knows_background,
+        latest_month_is_partial, month_label, percent, percent_text, period_title, permille,
+        pipeline_note, scope_note, section_title, skill_level, status_tag, summarize, target,
+        term_kind, wish_signal, Cadence, Field, Preferences, Presence, Tone, BUCKETS,
     };
 
     fn period() -> Period {
@@ -637,12 +705,14 @@ mod tests {
                 kind: "hackernews".into(),
                 status: SourceStatus::Ok,
                 items: 4,
+                cut: 0,
             },
             SourceOutcome {
                 source_id: Some(2),
                 kind: "yc".into(),
                 status: SourceStatus::TimedOut,
                 items: 0,
+                cut: 0,
             },
         ];
         let (headline, lines) = summarize(&run);
@@ -887,33 +957,153 @@ mod tests {
             documents: vec![5, 5],
             skills: vec![skill(&[1, 2])],
         };
-        assert!(
-            scope_note(GapScope::Local, &unclear, GapScope::Global, true)
-                .is_some_and(|n| n.starts_with("Too little local data"))
+        assert_eq!(
+            scope_note(GapScope::Local, &unclear, GapScope::Global, true, true).as_deref(),
+            Some("Too little local data for your gap: it is judged on the global market.")
         );
-        assert!(
-            scope_note(GapScope::Global, &unclear, GapScope::Global, true)
-                .is_some_and(|n| n.starts_with("Too few postings"))
+        // With the tests "unclear" is the usual reading: the note says what the data does support.
+        assert_eq!(
+            scope_note(GapScope::Global, &unclear, GapScope::Global, true, true).as_deref(),
+            Some("No clear movement in the postings yet: the shares, with their ranges, are what to read.")
         );
         assert_eq!(
-            scope_note(GapScope::Global, &unclear, GapScope::Global, false),
+            scope_note(GapScope::Global, &unclear, GapScope::Global, true, false).as_deref(),
+            Some("No clear movement in the postings yet: the shares are what to read."),
+            "a report without ranges does not promise them"
+        );
+        assert_eq!(
+            scope_note(GapScope::Global, &unclear, GapScope::Global, false, false),
             None,
             "an old report says nothing"
         );
         let mut clear = unclear.clone();
         clear.skills[0].direction = Direction::Rising;
         assert_eq!(
-            scope_note(GapScope::Local, &clear, GapScope::Local, true),
-            None
+            scope_note(GapScope::Local, &clear, GapScope::Local, true, true),
+            None,
+            "one skill with a direction is a movement"
         );
         assert_eq!(
             scope_note(
                 GapScope::Global,
                 &ScopeCounts::default(),
                 GapScope::Global,
+                true,
                 true
             ),
             None
+        );
+    }
+
+    #[test]
+    fn a_level_is_a_share_with_its_range_and_an_old_report_has_none() {
+        let mut rust = skill(&[3, 9]);
+        rust.target_permille = 94;
+        rust.low_permille = 71;
+        rust.high_permille = 123;
+        assert_eq!(
+            skill_level(&rust, 1),
+            Some(("9.4%".to_string(), "7.1% to 12.3%".to_string()))
+        );
+        assert_eq!(skill_level(&rust, 0), None, "saved before the tests");
+        // The period's months held no posting: there is no share, not a share of zero.
+        let none = skill(&[3, 9]);
+        assert_eq!(skill_level(&none, 1), None);
+
+        let gap = GapSkill {
+            skill: "Rust".into(),
+            bucket: GapBucket::BuildOn,
+            direction: Direction::Rising,
+            share_permille: 130,
+            target_permille: 150,
+            low_permille: 90,
+            high_permille: 220,
+        };
+        assert_eq!(
+            gap_level(&gap, 3),
+            Some(("15.0%".to_string(), "9.0% to 22.0%".to_string()))
+        );
+        assert_eq!(gap_level(&gap, 0), None);
+    }
+
+    #[test]
+    fn the_coverage_is_the_engines_sentences_and_partial_only_for_what_was_not_seen() {
+        let counts = |coverage| SkillCounts {
+            months: vec!["2026-10".into(), "2026-11".into()],
+            target_months: 1,
+            coverage,
+            ..SkillCounts::default()
+        };
+        let complete = Coverage {
+            postings_counted: 92,
+            left_unread_at_source: Some(0),
+            not_comparable: vec![Stratum::Yc],
+            ..Coverage::default()
+        };
+        assert_eq!(
+            coverage_lines(&counts(complete.clone())),
+            [
+                "Counted 92 hiring postings over 2026-10 to 2026-11.",
+                "Not compared with the period before (too few items or too uneven): YC companies."
+            ]
+        );
+        assert!(
+            !coverage_is_partial(&counts(complete.clone())),
+            "a kind of item too thin to compare is the usual case"
+        );
+        assert!(!coverage_is_partial(&counts(Coverage {
+            left_unread_at_source: None,
+            ..complete.clone()
+        })));
+        // Stories a source left unread are said in a line; the skill counts never read stories.
+        let stories_left = counts(Coverage {
+            left_unread_at_source: Some(12),
+            ..complete.clone()
+        });
+        assert!(!coverage_is_partial(&stories_left));
+        assert!(coverage_lines(&stories_left)
+            .contains(&"In this run the sources left 12 items unread.".to_string()));
+        for partial in [
+            Coverage {
+                postings_unreadable: 3,
+                ..complete.clone()
+            },
+            Coverage {
+                months_without_postings: vec!["2026-10".into()],
+                ..complete.clone()
+            },
+        ] {
+            assert!(coverage_is_partial(&counts(partial)));
+        }
+
+        // A report saved before the tests carries no coverage: nothing is said, nothing is partial.
+        let old = SkillCounts {
+            months: vec!["2026-10".into()],
+            coverage: Coverage {
+                postings_unreadable: 3,
+                ..Coverage::default()
+            },
+            ..SkillCounts::default()
+        };
+        assert!(coverage_lines(&old).is_empty() && !coverage_is_partial(&old));
+    }
+
+    #[test]
+    fn a_term_names_the_kind_of_item_it_was_found_in() {
+        assert_eq!(
+            Stratum::ALL.map(|s| term_kind(1, s)),
+            [
+                "hiring postings",
+                "Hacker News stories",
+                "YC companies",
+                "feeds",
+                "other items"
+            ]
+        );
+        assert_eq!(
+            Stratum::ALL.map(|s| term_kind(0, s)),
+            ["", "", "", "", ""],
+            "the terms of an old report came from a mix of kinds"
         );
     }
 

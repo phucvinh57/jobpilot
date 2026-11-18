@@ -64,6 +64,11 @@ export interface GapSkill {
   skill: string;
   /** `18%`: its share of the field's postings over the window. */
   share: string;
+  /** `13.0%`: its share of the field's postings in the period's own months; `null` for a report
+   *  saved before the tests. */
+  now: string | null;
+  /** `9.0% to 22.0%`: the 95% range of `now`; `null` as `now`. */
+  range: string | null;
   direction: TagInfo & { label: DirectionLabel };
 }
 
@@ -121,6 +126,11 @@ export interface Term {
   term: string;
   /** Items whose topics name it. */
   items: number;
+  /** The kind of item it was found in (`hiring postings`, `Hacker News stories`, `YC companies`,
+   *  `feeds`, `other items`); empty for a report saved before the kinds were told apart. */
+  kind: string;
+  /** Tested against the period before and kept after the control of false discoveries. */
+  rising: boolean;
 }
 
 export type DigestBody =
@@ -147,6 +157,11 @@ export interface ChartSkill {
   share: string;
   /** The count, the share and its change, in words (the tooltip of the row). */
   description: string;
+  /** Its share of the scope's postings in the period's own months: `9.4%`; `null` for a report
+   *  saved before the tests. */
+  now: string | null;
+  /** The 95% range of `now`: `7.1% to 12.3%`; `null` as `now`. */
+  range: string | null;
   presence: Presence;
   /** Where its share is going; `null` for a report saved before the app measured it. */
   direction: (TagInfo & { label: DirectionLabel }) | null;
@@ -194,6 +209,12 @@ export interface Chart {
   marks: boolean;
   /** The user's own leads, for comparison (never counted in the market). */
   pipeline: string | null;
+  /** What the counts saw and did not see, one sentence per fact (empty for a report saved before
+   *  the tests). */
+  coverage: string[];
+  /** Something was not seen (postings that could not be read, items a source left unread, a month
+   *  without postings): shown as a notice, not as a plain line. */
+  partial: boolean;
 }
 
 /** A saved report (one per period: a rerun replaces it). */

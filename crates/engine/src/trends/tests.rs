@@ -296,7 +296,8 @@ fn the_state_round_trips_and_the_thread_is_named_by_period() {
     assert_eq!(thread_id(&Period::parse("2026-Q4").unwrap()), "trends:2026-Q4");
     let mut state = TrendRun::new(period());
     state.hn_settled.push("903@1".into());
-    state.outcomes.push(SourceOutcome { source_id: Some(3), kind: "page".into(), status: SourceStatus::NeedsHuman { kind: ChallengeKind::Login }, items: 0 });
+    state.outcomes.push(SourceOutcome { source_id: Some(3), kind: "page".into(), status: SourceStatus::NeedsHuman { kind: ChallengeKind::Login }, items: 0, cut: 0 });
+    state.outcomes.push(SourceOutcome { source_id: Some(1), kind: "hackernews".into(), status: SourceStatus::Ok, items: 40, cut: 7 });
     let json = serde_json::to_string(&state).unwrap();
     assert_eq!(serde_json::from_str::<TrendRun>(&json).unwrap(), state);
     // A state saved before a field existed still loads.
@@ -317,6 +318,7 @@ fn the_state_round_trips_and_the_thread_is_named_by_period() {
     )
     .unwrap();
     assert_eq!((searched.plan.hackernews.as_slice(), searched.outcomes.len()), (&[1][..], 1));
+    assert_eq!(searched.outcomes[0].cut, 0, "an outcome saved before `cut` existed loads with 0");
 }
 
 /// Two hiring threads: November (the newest) and October. `/hn/search_by_date` also serves the
@@ -416,4 +418,29 @@ async fn a_run_that_fails_before_its_items_are_stored_records_no_thread() {
     let Outcome::Done(state) = core.resume_trends_collection(period(), config(&fx)).await.unwrap() else { panic!("the retry finishes") };
     assert!(state.stored.new > 0);
     assert_eq!(settled_kv(&core), Some(vec!["903@1".to_string()]));
+}
+
+#[tokio::test]
+async fn what_a_cap_cuts_is_recorded_in_the_sources_outcome() {
+    let (_dir, core) = core();
+    let fx = fixtures().await;
+    core.add_trend_source(SourceKind::Rss, "Blog", &format!("{}/feed.xml", fx.base())).unwrap();
+    core.add_trend_source(SourceKind::Yc, "", "").unwrap();
+    let mut capped = config(&fx);
+    capped.limits.max_items = 1;
+
+    let Outcome::Done(state) = core.collect_trends_with(period(), capped).await.unwrap() else { panic!("the run finishes") };
+    // The feed has two new entries and the YC batch two companies; the cap is one.
+    for kind in ["rss", "yc"] {
+        let outcome = state.outcomes_of(kind).next().unwrap();
+        assert_eq!((&outcome.status, outcome.items, outcome.cut), (&SourceStatus::Ok, 1, 1), "{kind}: {outcome:?}");
+    }
+
+    // Without the cap nothing is cut: the stored items are known now, so the other entry of each
+    // source is all that is new.
+    let Outcome::Done(state) = core.collect_trends_with(period(), config(&fx)).await.unwrap() else { panic!("the run finishes") };
+    for kind in ["rss", "yc"] {
+        let outcome = state.outcomes_of(kind).next().unwrap();
+        assert_eq!((outcome.items, outcome.cut), (1, 0), "{kind}: {outcome:?}");
+    }
 }

@@ -52,8 +52,8 @@ pub fn period_title(label: &str) -> String {
 }
 
 /// The data `assets/trends.typ` reads: the report's sections in [`Section::ALL`] order (empty ones
-/// left out), each point with its citations numbered by first use, the most mentioned skills, and
-/// the numbered sources.
+/// left out), each point with its citations numbered by first use, the most mentioned skills, the
+/// coverage of the counts (one sentence per fact) and the numbered sources.
 pub fn export_json(report: &Report, data: &DigestData) -> Value {
     let items: HashMap<i64, &super::CitedItem> = data.items.iter().map(|i| (i.id, i)).collect();
     let mut numbers: HashMap<i64, usize> = HashMap::new();
@@ -104,6 +104,9 @@ pub fn export_json(report: &Report, data: &DigestData) -> Value {
         (Some(only), _) => only.clone(),
         _ => String::new(),
     };
+    // What the counts saw and did not see, as the markdown and the prompt say it (nothing for a
+    // report saved before the tests: it has no coverage to say).
+    let coverage = if counts.target_months > 0 { counts.coverage.lines(&counts.months) } else { Vec::new() };
     let created = report.created_at.date_naive();
     json!({
         "title": one_line(&report.title),
@@ -114,6 +117,7 @@ pub fn export_json(report: &Report, data: &DigestData) -> Value {
         "sections": sections,
         "months": months,
         "skills": skills,
+        "coverage": coverage,
         "sources": sources,
     })
 }
@@ -169,7 +173,7 @@ async fn render_into(work: &Path, json: &[u8], out: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trends::digest::{CitedItem, Direction, Point, SkillCount, SkillCounts};
+    use crate::trends::digest::{CitedItem, Coverage, Direction, Point, SkillCount, SkillCounts};
 
     fn point(section: Section, text: &str, citations: &[i64]) -> Point {
         Point { section, topic: String::new(), text: text.into(), quote: String::new(), citations: citations.to_vec() }
@@ -233,6 +237,19 @@ mod tests {
         assert_eq!(v["months"], "2026-10 to 2026-11");
         assert_eq!((v["period_title"].as_str(), v["generated"].as_str()), (Some("Q4 2026"), Some("18 November 2026")));
         assert_eq!((v["items_read"].as_u64(), v["dropped"].as_u64()), (Some(12), Some(1)));
+        assert_eq!(v["coverage"], json!([]), "counts that carry no split of the months have no coverage to say");
+    }
+
+    #[test]
+    fn json_carries_the_coverage_sentences_of_the_counts() {
+        let mut data = sample();
+        data.counts.target_months = 1;
+        data.counts.coverage = Coverage { postings_counted: 52, postings_unreadable: 2, ..Coverage::default() };
+        let v = export_json(&report("2026-Q4"), &data);
+        assert_eq!(
+            v["coverage"],
+            json!(["Counted 52 hiring postings over 2026-10 to 2026-11.", "2 Hacker News items could not be read; some may have been postings."])
+        );
     }
 
     #[test]
@@ -251,7 +268,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = crate::Paths::new(dir.path().join("Dữ liệu xu hướng"));
         let core = Core::open_at(paths, crate::Secrets::memory()).unwrap();
-        let saved = core.save_trend_digest(&Period::parse("2026-Q4").unwrap(), &sample()).unwrap();
+        // With the coverage note, which the template sets under the skills.
+        let mut data = sample();
+        data.counts.target_months = 1;
+        data.counts.coverage = Coverage { postings_counted: 7, left_unread_at_source: Some(3), ..Coverage::default() };
+        let saved = core.save_trend_digest(&Period::parse("2026-Q4").unwrap(), &data).unwrap();
         let dest = dir.path().join("Báo cáo thị trường");
         let out = core.export_trend_report_pdf(saved.id, &dest).await.unwrap();
         assert_eq!(out, dest.with_extension("pdf"));

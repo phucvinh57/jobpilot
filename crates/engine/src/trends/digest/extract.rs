@@ -1,7 +1,8 @@
 //! The `extract` node: per item, topics and claims with quotes, in batched model calls.
 //!
-//! The items are the period's items from the store, not the run's list, so the node serves both
-//! graphs and a digest can be rebuilt without collecting. What the model answered is cached next to
+//! The items are a capped pick of the period's items from the store ([`pick_items`]: chosen so that
+//! the model can cite what `count` found, which has run before), not the run's list, so the node
+//! serves both graphs and a digest can be rebuilt without collecting. What the model answered is cached next to
 //! the item's text (`<hash>.extract.json`), so a rebuild asks only about new items. A claim whose
 //! quote is not in the item's text never leaves this node.
 
@@ -16,7 +17,9 @@ use serde_json::{json, Value};
 use tokio::time::Instant;
 
 use super::cite::{haystack, quote_found};
-use super::{period_items, read_text, Claim, DigestEnv, Extraction};
+use super::count::{market_frame, Vocabulary};
+use super::pick::pick_items;
+use super::{read_text, Claim, DigestEnv, Extraction};
 use crate::llm::Llm;
 use crate::trends::collect::TrendRun;
 use crate::trends::text::{cap, truncate};
@@ -111,7 +114,8 @@ struct Cached {
 
 pub(super) async fn extract(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendRun> {
     let limits = env.config.limits.for_period(&s.period);
-    let items = period_items(&env.store, &s.period, limits.max_items).await?;
+    let vocab = Vocabulary::new(&market_frame(&env).0.skills);
+    let items = pick_items(&env.store, &vocab, &s.period, limits.max_items, s.digest.counts.as_ref()).await?;
     ensure!(
         !items.is_empty(),
         "there are no trend items for {} yet: add sources and collect first",

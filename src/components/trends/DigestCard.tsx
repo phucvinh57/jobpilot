@@ -2,7 +2,7 @@ import { ChartPie, Check } from "lucide-react";
 
 import { Button, Caption, CiteChip, EmptyState, LinkButton, SectionLabel, Tag } from "@/components/ui/kit";
 
-import { termsLine } from "@/lib/trends/format";
+import { gapSkillName, levelLine, termsLine } from "@/lib/trends/format";
 import { addAccessibleName, addLabel, addTooltip, canAdd } from "@/lib/trends/preferences";
 import type { Citation, Digest, Gap, Point, Wishes } from "@/types/trends";
 import type { PreferenceAdds } from "@/hooks/trends/usePreferenceAdds";
@@ -107,17 +107,23 @@ function GapView({ gap }: { gap: Gap }) {
             <p className="text-small text-muted">{group.empty}</p>
           ) : (
             <ul className="flex flex-wrap gap-2">
-              {group.skills.map((skill) => (
-                <li
-                  key={skill.skill}
-                  aria-label={`${skill.skill}: ${skill.share} of postings, ${skill.direction.label}`}
-                  className="flex items-center gap-1.5 border border-border bg-surface-alt py-0.5 pr-0.5 pl-2"
-                >
-                  <span className="selectable text-small font-medium text-ink">{skill.skill}</span>
-                  <span className="text-small text-muted tabular-nums">{skill.share}</span>
-                  <Tag tone={skill.direction.tone}>{skill.direction.label}</Tag>
-                </li>
-              ))}
+              {group.skills.map((skill) => {
+                const level = levelLine(skill);
+                return (
+                  <li
+                    key={skill.skill}
+                    aria-label={gapSkillName(skill)}
+                    className="flex flex-col gap-0.5 border border-border bg-surface-alt py-0.5 pr-0.5 pl-2"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="selectable text-small font-medium text-ink">{skill.skill}</span>
+                      <span className="text-small text-muted tabular-nums">{skill.share}</span>
+                      <Tag tone={skill.direction.tone}>{skill.direction.label}</Tag>
+                    </div>
+                    {level && <span className="pr-1.5 pb-0.5 text-small text-muted tabular-nums">{level}</span>}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

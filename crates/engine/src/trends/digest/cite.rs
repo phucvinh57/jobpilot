@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::count::Vocabulary;
-use super::{read_text, CitedItem, DigestData, DigestEnv, DigestState, Direction, GapBucket, GapScope, Point, Section, SkillCounts, WishKind};
+use super::{read_text, CitedItem, DigestData, DigestEnv, DigestState, Direction, GapBucket, GapScope, Point, Section, SkillCounts, Stratum, WishKind};
 use crate::store::{NewReport, Report};
 use crate::trends::collect::TrendRun;
 use crate::trends::period::Period;
@@ -347,8 +347,9 @@ pub(crate) fn link_destination(url: &str) -> Option<String> {
 }
 
 /// The readable digest: sections of points, each point followed by its sources as links, the
-/// quote under it, a table of the most mentioned skills, and what code computed for the user (the
-/// gap by bucket, the wishes against the market, the terms not in the list). What the model wrote
+/// quote under it, a table of the most mentioned skills (with the share of the period's own months
+/// and its range) and the coverage of the counts under it, and what code computed for the user (the
+/// gap by bucket, the wishes against the market, the terms not in the list by kind of item). What the model wrote
 /// (and the extracted terms) is escaped, and the only links are the stored addresses of the cited
 /// items.
 pub fn render_markdown(period: &Period, data: &DigestData) -> String {
@@ -386,21 +387,44 @@ pub fn render_markdown(period: &Period, data: &DigestData) -> String {
     }
     let counts = &data.counts;
     if !counts.skills.is_empty() {
-        let _ = write!(md, "## Skill frequency\n\nDocuments mentioning the skill, per month (counted by the app).\n\n| Skill |");
+        // The period's own level with its 95% range, when the counts have it (not in older reports).
+        let levels = counts.target_months > 0;
+        md.push_str("## Skill frequency\n\nDocuments mentioning the skill, per month (counted by the app).");
+        if levels {
+            md.push_str(" The last column is the share of the postings of the period's own months, with its 95% range.");
+        }
+        md.push_str("\n\n| Skill |");
         for month in &counts.months {
             let _ = write!(md, " {month} |");
         }
-        md.push_str(" Total |\n|---|");
-        md.push_str(&"---|".repeat(counts.months.len() + 1));
+        md.push_str(" Total |");
+        if levels {
+            md.push_str(" This period (95% range) |");
+        }
+        md.push_str("\n|---|");
+        md.push_str(&"---|".repeat(counts.months.len() + 1 + usize::from(levels)));
         md.push('\n');
         for skill in counts.skills.iter().take(TABLE_SKILLS) {
             let _ = write!(md, "| {} |", escape_md(&skill.skill));
             for n in &skill.by_month {
                 let _ = write!(md, " {n} |");
             }
-            let _ = writeln!(md, " {} |", skill.total);
+            let _ = write!(md, " {} |", skill.total);
+            if levels {
+                match super::level_text(counts.target_months, skill.target_permille, skill.low_permille, skill.high_permille) {
+                    Some((share, range)) => {
+                        let _ = write!(md, " {share} ({range}) |");
+                    }
+                    None => md.push_str(" - |"),
+                }
+            }
+            md.push('\n');
         }
         md.push('\n');
+    }
+    if counts.target_months > 0 {
+        // What the numbers rest on (a report saved before the tests has no coverage to say).
+        let _ = write!(md, "Coverage: {}\n\n", counts.coverage.lines(&counts.months).join(" "));
     }
     render_lens(&mut md, counts);
     if data.dropped > 0 {
@@ -450,7 +474,23 @@ fn render_lens(md: &mut String, counts: &SkillCounts) {
         md.push('\n');
     }
     if !counts.uncatalogued.is_empty() {
-        let terms: Vec<String> = counts.uncatalogued.iter().map(|t| format!("{} ({})", escape_md(&t.term), t.items)).collect();
-        let _ = write!(md, "Terms not in the list (items naming them): {}\n\n", terms.join(", "));
+        // By the kind of item each term was found in (a stratum is never mixed with another).
+        let groups: Vec<String> = Stratum::ALL
+            .iter()
+            .filter_map(|stratum| {
+                let terms: Vec<String> = counts
+                    .uncatalogued
+                    .iter()
+                    .filter(|t| t.stratum == *stratum)
+                    .map(|t| format!("{} ({}{})", escape_md(&t.term), t.items, if t.rising { ", rising" } else { "" }))
+                    .collect();
+                (!terms.is_empty()).then(|| format!("{}: {}", stratum.plural(), terms.join(", ")))
+            })
+            .collect();
+        let _ = write!(
+            md,
+            "Terms not in the list (documents naming them, by kind of item; rising: tested against the period before and kept after the control of false discoveries): {}\n\n",
+            groups.join("; ")
+        );
     }
 }

@@ -83,6 +83,24 @@ impl Period {
         period.first_day().map(|_| period)
     }
 
+    /// The period of the same kind just before this one: the week before (across the ISO year's
+    /// end too: `2027-W01` follows `2026-W53`), the month before, the quarter before, the year
+    /// before. An impossible period (a week 54) has no day to count back from and is its own
+    /// previous.
+    pub fn previous(&self) -> Self {
+        match *self {
+            Period::Week { .. } => self
+                .first_day()
+                .and_then(|monday| monday.checked_sub_days(chrono::Days::new(7)))
+                .map_or(*self, Self::week_of),
+            Period::Month { year, month } if month <= 1 => Period::Month { year: year - 1, month: 12 },
+            Period::Month { year, month } => Period::Month { year, month: month - 1 },
+            Period::Quarter { year, quarter } if quarter <= 1 => Period::Quarter { year: year - 1, quarter: 4 },
+            Period::Quarter { year, quarter } => Period::Quarter { year, quarter: quarter - 1 },
+            Period::Year { year } => Period::Year { year: year - 1 },
+        }
+    }
+
     /// The `reports.kind` a digest of this period is saved under (one of [`KINDS`](Self::KINDS)).
     pub fn kind(&self) -> &'static str {
         match self {
@@ -209,6 +227,33 @@ mod tests {
         let year = Period::parse("2026").unwrap();
         assert_eq!(year.start().to_rfc3339(), "2026-01-01T00:00:00+00:00");
         assert_eq!(year.end().to_rfc3339(), "2027-01-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn the_previous_period_is_the_one_just_before_across_year_boundaries() {
+        let previous = |label: &str| Period::parse(label).unwrap().previous().label();
+        assert_eq!(previous("2026-W46"), "2026-W45");
+        assert_eq!(previous("2026-W01"), "2025-W52", "2026-W01 starts on 2025-12-29, the week before ends the ISO year 2025");
+        assert_eq!(previous("2027-W01"), "2026-W53", "2026 has 53 ISO weeks");
+        assert_eq!(previous("2026-M11"), "2026-M10");
+        assert_eq!(previous("2026-M01"), "2025-M12");
+        assert_eq!(previous("2026-Q4"), "2026-Q3");
+        assert_eq!(previous("2026-Q1"), "2025-Q4");
+        assert_eq!(previous("2026"), "2025");
+        // Each previous period ends exactly where its successor starts, whatever the kind.
+        for label in ["2026-W01", "2026-W46", "2027-W01", "2026-M01", "2026-M11", "2026-Q1", "2026-Q4", "2026"] {
+            let period = Period::parse(label).unwrap();
+            assert_eq!(period.previous().end(), period.start(), "{label}");
+            assert_eq!(period.previous().kind(), period.kind(), "{label}");
+        }
+        // Walking back never leaves the calendar.
+        let mut period = Period::parse("2026-W03").unwrap();
+        for _ in 0..120 {
+            let before = period.previous();
+            assert!(before.start() < period.start());
+            period = before;
+        }
+        assert_eq!(period.label(), "2023-W39", "120 weeks back");
     }
 
     #[test]
