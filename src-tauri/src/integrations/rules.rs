@@ -86,15 +86,20 @@ pub fn host(url: &str) -> String {
         .to_string()
 }
 
-/// The folder of the built extension to pick in "Load unpacked": the repository's
-/// `extension/dist` when the app runs from a source checkout, else the copy bundled with the app
-/// (`<resource dir>/extension`). Only a folder that holds a `manifest.json` counts.
+/// The folder of the built extension to pick in "Load unpacked". Windows uses the copy next to
+/// the executable first so installed apps can be moved between machines and upgraded in place.
+/// Other platforms use the source checkout first. Only a folder with a `manifest.json` counts.
 pub fn extension_path(checkout: &Path, bundled: Option<PathBuf>) -> Option<PathBuf> {
-    let built = |dir: &Path| dir.join("manifest.json").is_file();
-    if built(checkout) {
-        return Some(checkout.to_path_buf());
-    }
-    bundled.filter(|dir| built(dir))
+    let checkout = Some(checkout.to_path_buf());
+    let candidates = if cfg!(windows) {
+        [bundled, checkout]
+    } else {
+        [checkout, bundled]
+    };
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|dir| dir.join("manifest.json").is_file())
 }
 
 #[cfg(test)]
@@ -194,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn the_extension_is_the_checkout_build_else_the_bundled_copy() {
+    fn the_extension_folder_has_a_manifest_and_follows_platform_preference() {
         use super::extension_path;
         let dir = tempfile::tempdir().unwrap();
         let (checkout, bundled) = (dir.path().join("repo/extension/dist"), dir.path().join("resources/extension"));
@@ -205,7 +210,12 @@ mod tests {
         assert_eq!(extension_path(&checkout, Some(bundled.clone())), Some(bundled.clone()));
         std::fs::create_dir_all(&checkout).unwrap();
         std::fs::write(checkout.join("manifest.json"), "{}").unwrap();
-        assert_eq!(extension_path(&checkout, Some(bundled)), Some(checkout.clone()));
+        let preferred = if cfg!(windows) {
+            bundled.clone()
+        } else {
+            checkout.clone()
+        };
+        assert_eq!(extension_path(&checkout, Some(bundled)), Some(preferred));
         assert_eq!(extension_path(&checkout, None), Some(checkout));
     }
 }

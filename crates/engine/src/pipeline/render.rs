@@ -16,6 +16,10 @@ use tokio::process::Command;
 pub const CV_TEMPLATE: &str = include_str!("../../../../assets/cv.typ");
 /// Env var overriding the `typst` binary.
 pub const TYPST_ENV: &str = "JOBPILOT_TYPST";
+#[cfg(windows)]
+const TYPST_EXE: &str = "typst.exe";
+#[cfg(not(windows))]
+const TYPST_EXE: &str = "typst";
 /// PNG preview resolution.
 const PREVIEW_PPI: &str = "110";
 /// The first compile downloads the `@preview` package, so allow for a slow network.
@@ -47,24 +51,39 @@ pub struct RenderResult {
     pub page_count: usize,
 }
 
-/// `JOBPILOT_TYPST`, else `typst` on `PATH`, else the usual install spots (`~/.cargo/bin` is rarely on the
-/// `PATH` of an app started from the desktop menu), else plain `typst` (which then fails with a clear message).
+/// Look for Typst in `JOBPILOT_TYPST`, on `PATH`, in Cargo's bin directory, then in the usual
+/// platform install locations. Apps launched from the desktop can have a different `PATH`.
 pub fn typst_binary() -> PathBuf {
     if let Some(path) = std::env::var_os(TYPST_ENV).filter(|v| !v.is_empty()) {
         return PathBuf::from(path);
     }
-    let on_path = std::env::var_os("PATH")
+    let path = std::env::var_os("PATH");
+    let on_path = path.as_deref().map(std::env::split_paths).into_iter().flatten().map(|dir| dir.join(TYPST_EXE));
+    let cargo = std::env::var_os("CARGO_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".cargo")))
+        .map(|c| c.join("bin").join(TYPST_EXE));
+    #[cfg(windows)]
+    let installed = dirs::data_local_dir().map(|dir| dir.join("Microsoft/WinGet/Links").join(TYPST_EXE));
+    #[cfg(not(windows))]
+    let installed = dirs::home_dir()
+        .map(|h| h.join(".local/bin/typst"))
         .into_iter()
-        .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .map(|dir| dir.join("typst"));
-    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".cargo")));
-    let usual = cargo_home
-        .map(|c| c.join("bin/typst"))
-        .into_iter()
-        .chain(dirs::home_dir().map(|h| h.join(".local/bin/typst")))
         // `/opt/homebrew/bin`: Homebrew on Apple Silicon, not on the PATH of an app opened from Finder.
         .chain(["/usr/local/bin/typst", "/usr/bin/typst", "/snap/bin/typst", "/opt/homebrew/bin/typst"].map(PathBuf::from));
-    on_path.chain(usual).find(|p| p.is_file()).unwrap_or_else(|| "typst".into())
+    on_path.chain(cargo).chain(installed).find(|p| p.is_file()).unwrap_or_else(|| TYPST_EXE.into())
+}
+
+pub(crate) fn typst_command(binary: &Path) -> Command {
+    let mut cmd = Command::new(binary);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.stdin(Stdio::null()).kill_on_drop(true);
+    cmd
 }
 
 /// Render `yaml_path` into `out_dir`: `<stem>.pdf` and `page-<n>.png`. The YAML is copied into
@@ -112,7 +131,7 @@ pub(crate) async fn compile(root: &Path, template: &Path, data_file_name: &str, 
 }
 
 async fn typst_compile(bin: &Path, root: &Path, template: &Path, data_name: &str, extra: &[&str], output: &Path) -> Result<()> {
-    let mut cmd = Command::new(bin);
+    let mut cmd = typst_command(bin);
     cmd.arg("compile")
         .arg("--root")
         .arg(root)
@@ -123,10 +142,8 @@ async fn typst_compile(bin: &Path, root: &Path, template: &Path, data_name: &str
         .arg(output)
         .current_dir(root)
         .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .stderr(Stdio::piped());
     let child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!(
@@ -211,7 +228,7 @@ mod tests {
     #[tokio::test]
     async fn renders_pdf_and_pngs_and_replaces_old_pages() {
         let dir = tempfile::tempdir().unwrap();
-        let app = dir.path().join("app");
+        let app = dir.path().join("Hồ sơ CV");
         std::fs::create_dir_all(&app).unwrap();
         let yaml = app.join("cv.yaml");
         std::fs::write(&yaml, EXAMPLE).unwrap();
@@ -226,11 +243,11 @@ mod tests {
         assert!(app.join("cv.typ").is_file(), "template copied next to the YAML");
 
         // A YAML elsewhere is copied into out_dir.
-        let elsewhere = dir.path().join("other.yaml");
+        let elsewhere = dir.path().join("CV thứ hai.yaml");
         std::fs::write(&elsewhere, EXAMPLE).unwrap();
-        let out = dir.path().join("out");
+        let out = dir.path().join("Bản xem trước");
         let r = render(&elsewhere, &out).await.unwrap();
-        assert!(out.join("other.yaml").is_file() && r.pdf.ends_with("other.pdf"));
+        assert!(out.join("CV thứ hai.yaml").is_file() && r.pdf.ends_with("CV thứ hai.pdf"));
     }
 
     #[tokio::test]

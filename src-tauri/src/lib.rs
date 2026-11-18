@@ -4,7 +4,7 @@
 
 mod applications;
 mod demo;
-#[cfg(feature = "dev-tools")]
+#[cfg(all(feature = "dev-tools", target_os = "linux"))]
 mod devtools;
 mod discovery;
 mod integrations;
@@ -85,7 +85,7 @@ pub fn run() -> anyhow::Result<()> {
                 .on_page_load(|_window, payload| {
                     if payload.event() == PageLoadEvent::Finished {
                         tracing::info!("the window is ready");
-                        #[cfg(feature = "dev-tools")]
+                        #[cfg(all(feature = "dev-tools", target_os = "linux"))]
                         devtools::run_script(&_window);
                     }
                 })
@@ -126,7 +126,7 @@ fn route() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     let profile = profile::commands::handler();
     let integrations = integrations::commands::handler();
     let trends = trends::commands::handler();
-    #[cfg(feature = "dev-tools")]
+    #[cfg(all(feature = "dev-tools", target_os = "linux"))]
     let dev = devtools::handler();
     move |invoke| match context_of(invoke.message.command()) {
         Some("discovery") => discovery(invoke),
@@ -134,7 +134,7 @@ fn route() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         Some("profile") => profile(invoke),
         Some("integrations") => integrations(invoke),
         Some("trends") => trends(invoke),
-        #[cfg(feature = "dev-tools")]
+        #[cfg(all(feature = "dev-tools", target_os = "linux"))]
         Some("dev") => dev(invoke),
         _ => shared(invoke),
     }
