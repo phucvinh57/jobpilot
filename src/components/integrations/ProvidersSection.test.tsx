@@ -210,18 +210,40 @@ describe("ProvidersSection", () => {
     expect(within(dialog).queryByRole("button", { name: "Cancel sign-in" })).toBeNull();
   });
 
-  it("shows in the form why the sign-in failed", async () => {
+  it("saves an edited provider before signing in, and shows in the form why the sign-in failed", async () => {
+    const codex = provider({ id: 5, name: "Codex", kind: "codex", kindLabel: "Codex (ChatGPT)" });
+    vi.mocked(api.saveProvider).mockResolvedValue(codex);
     vi.mocked(api.codexSignIn).mockRejectedValue(new CommandError("the sign-in was cancelled"));
-    vi.mocked(api.loadProviders).mockResolvedValue({
-      providers: [provider({ id: 5, name: "Codex", kind: "codex", kindLabel: "Codex (ChatGPT)" })],
-      kinds: KINDS,
-    });
+    vi.mocked(api.loadProviders).mockResolvedValue({ providers: [codex], kinds: KINDS });
     render();
     fireEvent.click(await screen.findByRole("button", { name: "Edit Codex" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit Codex" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "My Codex" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Sign in with ChatGPT" }));
     expect(await within(dialog).findByText("Could not sign in: the sign-in was cancelled")).toBeTruthy();
-    expect(api.saveProvider, "a saved provider is not saved again").not.toHaveBeenCalled();
+    expect(vi.mocked(api.saveProvider).mock.calls[0]?.[0], "the form is saved first").toMatchObject({
+      id: 5,
+      kind: "codex",
+      name: "My Codex",
+    });
+    expect(api.codexSignIn).toHaveBeenCalledWith(5);
+  });
+
+  it("no longer says a key is saved once the kind changes, and tests without it", async () => {
+    vi.mocked(api.testProvider).mockResolvedValue(undefined);
+    render();
+    const dialog = await openLocal();
+    expect(await within(dialog).findByText("A key is saved in your system keyring.")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Type: Anthropic-compatible" }));
+    expect(within(dialog).queryByText("A key is saved in your system keyring.")).toBeNull();
+    expect(within(dialog).getByLabelText("API key")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await waitFor(() => expect(api.testProvider).toHaveBeenCalled());
+    expect(vi.mocked(api.testProvider).mock.calls[0]?.[0], "another kind: not with the saved key").toMatchObject({
+      id: 0,
+      kind: "anthropic_compatible",
+      apiKey: null,
+    });
   });
 
   it("tests the provider and says in the form that it works, or why it does not", async () => {

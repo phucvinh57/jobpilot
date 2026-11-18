@@ -1,7 +1,7 @@
 import { Button, Caption, Combobox, Dialog, Field, FormMessage, Segmented, TextInput } from "@/components/ui/kit";
 import { FormError } from "@/components/ProblemHelp";
 
-import { accountLine, deleteLabel, fieldsOf, keyLabel, modelsHint } from "@/lib/integrations/providers";
+import { accountLine, deleteLabel, fieldsOf, keyIsSaved, keyLabel, modelsHint } from "@/lib/integrations/providers";
 import type { KindDefaults } from "@/types/integrations";
 import type { ProvidersCard } from "@/hooks/integrations/useProviders";
 
@@ -86,7 +86,10 @@ export function ProviderDialog({ card }: { card: ProvidersCard }) {
             fixedAddress && <Caption>Address: {fixedAddress}</Caption>
           )}
           {fields.hasKeyField && (
-            <Field label={keyLabel(draft)} hint={draft.hasKey ? "A key is saved in your system keyring." : undefined}>
+            <Field
+              label={keyLabel(draft)}
+              hint={keyIsSaved(draft) ? "A key is saved in your system keyring." : undefined}
+            >
               <TextInput
                 id="provider-api-key"
                 aria-label={keyLabel(draft)}

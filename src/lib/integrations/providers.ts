@@ -18,7 +18,9 @@ export interface Draft {
   hasKey: boolean;
   /** Codex: the ChatGPT account it is signed in with. */
   account: string | null;
-  /** The address saved with the provider: its saved key goes to this one only. */
+  /** The kind and address saved with the provider: its saved key goes to this endpoint only
+   *  (`null` / empty for a provider not saved yet). */
+  savedKind: ProviderKind | null;
   savedBaseUrl: string;
   /** Models loaded from the provider, for the picker. */
   models: string[];
@@ -55,6 +57,7 @@ export function draftOf(provider: Provider | undefined, kinds: readonly KindDefa
       isDefault: provider.isDefault,
       hasKey,
       account: provider.account,
+      savedKind: provider.kind,
       savedBaseUrl: provider.baseUrl,
       models: [],
       confirmDelete: false,
@@ -71,6 +74,7 @@ export function draftOf(provider: Provider | undefined, kinds: readonly KindDefa
     isDefault: false,
     hasKey: false,
     account: null,
+    savedKind: null,
     savedBaseUrl: "",
     models: [],
     confirmDelete: false,
@@ -112,13 +116,18 @@ export function inputOf(draft: Draft): ProviderInput {
   };
 }
 
-/** The form as the shell takes it to list the models. A saved key is sent only to the address it
- *  was saved with: once the address is edited, the listing goes without it (as for a new provider)
- *  unless a key is typed. */
-export function modelsInputOf(draft: Draft): ProviderInput {
+/** The form still describes the endpoint it was saved for (same kind and address): its saved key
+ *  (or sign-in) belongs to it. */
+export function sameEndpoint(draft: Pick<Draft, "id" | "kind" | "baseUrl" | "savedKind" | "savedBaseUrl">): boolean {
+  return draft.id !== 0 && draft.kind === draft.savedKind && draft.baseUrl.trim() === draft.savedBaseUrl.trim();
+}
+
+/** The form as the shell takes it to test it or list its models. A saved key is sent only to the
+ *  endpoint it was saved for: once the kind or the address is edited, the call goes without it (as
+ *  for a new provider) unless a key is typed. */
+export function probeInputOf(draft: Draft): ProviderInput {
   const input = inputOf(draft);
-  const moved = input.baseUrl !== draft.savedBaseUrl.trim();
-  return draft.id !== 0 && moved && input.apiKey === null ? { ...input, id: 0 } : input;
+  return input.apiKey === null && !sameEndpoint(draft) ? { ...input, id: 0 } : input;
 }
 
 /** What the model list depends on: it is listed again only when this changes. */
@@ -134,9 +143,19 @@ export function deleteLabel(draft: Pick<Draft, "id" | "confirmDelete">): string 
   return draft.confirmDelete ? "Click again to delete" : "Delete";
 }
 
-/** The label of the key field: a saved key stays unless a new one is typed. */
-export function keyLabel(draft: Pick<Draft, "hasKey">): string {
-  return draft.hasKey ? "API key (leave empty to keep the saved one)" : "API key";
+/** A saved key is there and still belongs to the form (a save keeps it). */
+export function keyIsSaved(
+  draft: Pick<Draft, "id" | "kind" | "baseUrl" | "savedKind" | "savedBaseUrl" | "hasKey">,
+): boolean {
+  return draft.hasKey && sameEndpoint(draft);
+}
+
+/** The label of the key field: a saved key stays unless a new one is typed (or the kind or address
+ *  changed: then it is forgotten). */
+export function keyLabel(
+  draft: Pick<Draft, "id" | "kind" | "baseUrl" | "savedKind" | "savedBaseUrl" | "hasKey">,
+): string {
+  return keyIsSaved(draft) ? "API key (leave empty to keep the saved one)" : "API key";
 }
 
 /** The sign-in line of a Codex provider. */

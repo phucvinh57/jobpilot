@@ -15,7 +15,8 @@ use serde::Serialize;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProblemDto {
-    /// `noProvider` / `noProfile` / `noTypst` / `noBrowser` / `network` / `needsHuman` / `other`.
+    /// `noProvider` / `providerSignIn` / `noProfile` / `noTypst` / `noBrowser` / `network` /
+    /// `needsHuman` / `other`.
     pub kind: &'static str,
     /// `login` / `captcha` / `blocked`, only with `needsHuman`.
     pub challenge: Option<&'static str>,
@@ -33,6 +34,7 @@ impl From<Problem> for ProblemDto {
     fn from(problem: Problem) -> Self {
         let (kind, challenge) = match problem {
             Problem::NoProvider => ("noProvider", None),
+            Problem::ProviderSignIn => ("providerSignIn", None),
             Problem::NoProfile => ("noProfile", None),
             Problem::NoTypst => ("noTypst", None),
             Problem::NoBrowser { .. } => ("noBrowser", None),
@@ -131,6 +133,15 @@ mod tests {
             (human.kind, human.challenge),
             ("needsHuman", Some("captcha"))
         );
+
+        // A Codex provider that must sign in again: Settings > AI providers, with the Codex message.
+        let message = format!("Codex: {}", jobpilot_engine::llm::codex::CLI_LOGIN_GONE);
+        let sign_in = CommandError::new(message.clone());
+        assert_eq!(
+            (sign_in.problem.kind, sign_in.problem.settings_section, sign_in.message.as_str()),
+            ("providerSignIn", Some("AI providers"), message.as_str())
+        );
+        assert!(!sign_in.problem.retryable);
 
         let other = ProblemDto::from(Problem::Other);
         assert_eq!((other.kind, other.advice), ("other", None));

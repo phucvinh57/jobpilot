@@ -1,7 +1,8 @@
-//! The Codex sign-in tokens: one JSON blob in the keyring under
-//! [`crate::llm::codex_tokens_secret`], plus the few JWT claims JobPilot reads from them.
+//! What a Codex provider is signed in with ([`Login`]: one JSON blob in the keyring under
+//! [`crate::llm::codex_tokens_secret`]), the tokens, and the few JWT claims JobPilot reads from them.
 
 use std::fmt;
+use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -86,22 +87,62 @@ impl Tokens {
         }
     }
 
-    /// Read provider `provider_id`'s tokens from the keyring (`None`: not signed in).
+}
+
+/// `source` of a [`Login::Linked`] blob.
+const SOURCE_CLI: &str = "cli";
+
+/// What a Codex provider is signed in with, as the keyring holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Login {
+    /// JobPilot's own sign-in: the tokens themselves.
+    Own(Tokens),
+    /// The Codex CLI's login, shared with the CLI: the tokens are read from (and a refresh written
+    /// back to) its `auth.json` at `path`; `email` is the account's, kept for when the file is gone.
+    Linked { path: PathBuf, email: String },
+}
+
+/// The keyring blob of [`Login::Linked`].
+#[derive(Serialize, Deserialize)]
+struct LinkedBlob {
+    source: String,
+    path: PathBuf,
+    #[serde(default)]
+    email: String,
+}
+
+impl Login {
+    /// Read provider `provider_id`'s login from the keyring (`None`: not signed in).
     pub fn load(secrets: &Secrets, provider_id: i64) -> Result<Option<Self>> {
         let Some(raw) = secrets.get(&codex_tokens_secret(provider_id))?.filter(|s| !s.trim().is_empty()) else {
             return Ok(None);
         };
         // The serde error never quotes the value; the blob itself is already registered with redact.
-        let tokens: Self = serde_json::from_str(&raw)
-            .map_err(|_| anyhow!("the stored ChatGPT sign-in of AI provider {provider_id} is unreadable"))?;
+        let unreadable = || anyhow!("the stored ChatGPT sign-in of AI provider {provider_id} is unreadable");
+        let value: Value = serde_json::from_str(&raw).map_err(|_| unreadable())?;
+        if value.get("source").and_then(Value::as_str) == Some(SOURCE_CLI) {
+            let blob: LinkedBlob = serde_json::from_value(value).map_err(|_| unreadable())?;
+            return Ok(Some(Login::Linked { path: blob.path, email: blob.email }));
+        }
+        let tokens: Tokens = serde_json::from_value(value).map_err(|_| unreadable())?;
         tokens.register();
-        Ok((!tokens.access_token.is_empty()).then_some(tokens))
+        Ok((!tokens.access_token.is_empty()).then_some(Login::Own(tokens)))
     }
 
-    /// Write the tokens to the keyring.
+    /// Write the login to the keyring.
     pub fn save(&self, secrets: &Secrets, provider_id: i64) -> Result<()> {
-        self.register();
-        let raw = serde_json::to_string(self).context("encoding the ChatGPT sign-in")?;
+        let raw = match self {
+            Login::Own(tokens) => {
+                tokens.register();
+                serde_json::to_string(tokens)
+            }
+            Login::Linked { path, email } => serde_json::to_string(&LinkedBlob {
+                source: SOURCE_CLI.into(),
+                path: path.clone(),
+                email: email.clone(),
+            }),
+        }
+        .context("encoding the ChatGPT sign-in")?;
         secrets.set(&codex_tokens_secret(provider_id), &raw)
     }
 }

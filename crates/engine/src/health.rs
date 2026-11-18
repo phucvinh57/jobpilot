@@ -11,6 +11,7 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use crate::browser::{INCOGNITO_NOT_ALLOWED, NOT_CONNECTED};
+use crate::llm::codex::SIGN_IN_ERRORS;
 use crate::pipeline::render::typst_binary;
 use crate::Core;
 
@@ -45,6 +46,9 @@ impl Challenge {
 pub enum Problem {
     /// No default AI provider is configured.
     NoProvider,
+    /// The AI provider needs the user to sign in (again): a Codex provider that is not signed in,
+    /// whose ChatGPT sign-in expired, or whose linked Codex CLI login is gone.
+    ProviderSignIn,
     /// The user has not told JobPilot about their work yet (no documents read into a profile).
     NoProfile,
     /// The `typst` binary is missing.
@@ -65,7 +69,7 @@ impl Problem {
     /// (the web app shows that one on the Profile page).
     pub fn settings_section(self) -> Option<&'static str> {
         match self {
-            Problem::NoProvider => Some("AI providers"),
+            Problem::NoProvider | Problem::ProviderSignIn => Some("AI providers"),
             Problem::NoProfile => Some("About you"),
             Problem::NoBrowser { .. } => Some("Browser"),
             _ => None,
@@ -85,6 +89,10 @@ impl Problem {
     pub fn advice(self) -> Option<String> {
         match self {
             Problem::NoProvider => Some("Add an AI provider in Settings > AI providers and make it the default.".into()),
+            Problem::ProviderSignIn => Some(
+                "Open the provider in Settings > AI providers and sign in with ChatGPT (or use your Codex CLI login) again."
+                    .into(),
+            ),
             Problem::NoProfile => Some("Add your CV or describe your work in Profile > About you.".into()),
             Problem::NoBrowser { incognito: false } => Some(
                 "Connect the JobPilot extension: open Chrome with the extension and pair it in Settings > Browser.".into(),
@@ -123,6 +131,8 @@ pub fn classify(message: &str) -> Problem {
     let has = |needles: &[&str]| needles.iter().any(|n| m.contains(n));
     if has(&["no ai provider"]) {
         Problem::NoProvider
+    } else if SIGN_IN_ERRORS.iter().any(|e| m.contains(&e.to_ascii_lowercase())) {
+        Problem::ProviderSignIn
     } else if has(&["no profile yet"]) {
         Problem::NoProfile
     } else if has(&["typst was not found"]) {
@@ -238,6 +248,24 @@ mod tests {
         assert_eq!(Problem::NoProfile.settings_section(), Some("About you"));
         assert!(Problem::NoProfile.advice().unwrap().contains("Profile > About you"));
         assert!(crate::profile::NO_PROFILE.contains("Profile > About you"));
+    }
+
+    #[test]
+    fn a_codex_sign_in_error_asks_to_sign_in_again() {
+        use crate::llm::codex::{CLI_LOGIN_GONE, NOT_SIGNED_IN, SIGN_IN_INVALID};
+        for message in [
+            format!("Codex: {NOT_SIGNED_IN}"),
+            format!("Codex: {SIGN_IN_INVALID} (HTTP 400 Bad Request: invalid_grant): press Sign in with ChatGPT"),
+            format!("Codex: {CLI_LOGIN_GONE}"),
+            format!("calling the provider: Codex: {}", CLI_LOGIN_GONE.to_uppercase()),
+        ] {
+            assert_eq!(classify(&message), Problem::ProviderSignIn, "{message}");
+        }
+        let problem = Problem::ProviderSignIn;
+        assert_eq!(problem.settings_section(), Some("AI providers"));
+        assert_eq!(problem.call_to_action(), None, "the button says \"Open Settings > AI providers\"");
+        assert!(problem.advice().is_some_and(|a| a.contains("sign in")));
+        assert!(!problem.retryable(), "nothing changes until the user signs in");
     }
 
     #[test]

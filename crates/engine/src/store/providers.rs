@@ -162,6 +162,19 @@ impl Store {
         })
     }
 
+    /// Save the JSON mode the engine learned for provider `id`, only while its row still has
+    /// `kind` and `base_url` (the endpoint the client that learned it was built for). Returns
+    /// whether the row was updated.
+    pub fn set_provider_json_mode(&self, id: i64, kind: ProviderKind, base_url: &str, mode: &str) -> Result<bool> {
+        self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE providers SET json_mode = ?1 WHERE id = ?2 AND kind = ?3 AND base_url = ?4",
+                params![mode, id, kind.as_str(), base_url],
+            )?;
+            Ok(n == 1)
+        })
+    }
+
     /// Exactly one default at a time.
     pub fn set_default_provider(&self, id: i64) -> Result<()> {
         self.with_tx(|tx| {
@@ -183,6 +196,37 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_learned_json_mode_is_saved_only_for_the_same_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).unwrap();
+        let new = NewProvider {
+            name: "Local".into(),
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: "http://localhost:11434/v1".into(),
+            model: "m".into(),
+        };
+        let p = store.add_provider(&new).unwrap();
+        let mode = |id| store.get_provider(id).unwrap().unwrap().json_mode;
+
+        assert!(store.set_provider_json_mode(p.id, p.kind, &p.base_url, "json_object").unwrap());
+        assert_eq!(mode(p.id), "json_object");
+
+        // The user moved the provider meanwhile: the old client's mode is not written.
+        store.update_provider(&Provider { base_url: "http://localhost:8080/v1".into(), json_mode: "json_schema".into(), ..p.clone() }).unwrap();
+        assert!(!store.set_provider_json_mode(p.id, p.kind, &p.base_url, "prompt").unwrap());
+        assert_eq!(mode(p.id), "json_schema");
+        // Another kind at the same address: not written either.
+        let moved = store.get_provider(p.id).unwrap().unwrap();
+        assert!(!store.set_provider_json_mode(p.id, ProviderKind::AnthropicCompatible, &moved.base_url, "prompt").unwrap());
+        assert!(!store.set_provider_json_mode(999, p.kind, &moved.base_url, "prompt").unwrap());
+        assert_eq!(mode(p.id), "json_schema");
+        // Name and model are never touched.
+        assert!(store.set_provider_json_mode(p.id, p.kind, &moved.base_url, "prompt").unwrap());
+        let row = store.get_provider(p.id).unwrap().unwrap();
+        assert_eq!((row.name.as_str(), row.model.as_str(), row.json_mode.as_str()), ("Local", "m", "prompt"));
+    }
 
     #[test]
     fn kinds_round_trip_and_map_to_protocols() {

@@ -1,12 +1,11 @@
 //! OpenAI-compatible client: `POST {base}/chat/completions`, `GET {base}/models`.
 //! Covers OpenAI, OpenRouter, Groq, DeepSeek, Ollama, LM Studio, ...
 
-use std::sync::Mutex;
-
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
 use super::http::{build_client, join_url, refused_feature, send_json, COMPLETION_TIMEOUT, MODELS_TIMEOUT};
+use super::learned::Learned;
 use super::{complete_validated, schema, Llm, LlmFuture};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
@@ -60,9 +59,10 @@ impl JsonMode {
     }
 }
 
-/// Words in a 400/422 error that mean "this endpoint does not take that `response_format`".
+/// Words in a 400/422 error that mean "this endpoint does not take that `response_format`" (no
+/// bare "schema" or "invalid": those also name errors a simpler request cannot fix).
 const REFUSAL_WORDS: &[&str] =
-    &["response_format", "json_schema", "json_object", "structured", "schema", "not supported", "unsupported"];
+    &["response_format", "json_schema", "json_object", "structured", "not supported", "unsupported"];
 
 pub struct OpenAiClient {
     pub name: String,
@@ -71,11 +71,11 @@ pub struct OpenAiClient {
     pub api_key: Option<String>,
     /// The mode the first call starts in (the provider's stored, learned mode).
     pub json_mode: JsonMode,
-    /// Step down to a simpler [`JsonMode`] when the endpoint refuses one (compatible endpoints;
-    /// the official API never needs it).
+    /// Step down to a simpler [`JsonMode`] when the endpoint refuses one (on by default: an
+    /// official model may refuse `json_schema` too).
     pub fallback: bool,
     /// The mode that last worked; later calls start from it.
-    learned: Mutex<Option<JsonMode>>,
+    learned: Learned<JsonMode>,
     http: reqwest::Client,
 }
 
@@ -88,8 +88,8 @@ impl OpenAiClient {
             model: model.trim().into(),
             api_key: api_key.filter(|k| !k.trim().is_empty()),
             json_mode: JsonMode::parse(json_mode),
-            fallback: false,
-            learned: Mutex::new(None),
+            fallback: true,
+            learned: Learned::default(),
             http: build_client(),
         }
     }
@@ -102,17 +102,7 @@ impl OpenAiClient {
 
     /// The mode that worked on the last successful call (`None` before one).
     pub fn learned_mode(&self) -> Option<JsonMode> {
-        match self.learned.lock() {
-            Ok(g) => *g,
-            Err(poisoned) => *poisoned.into_inner(),
-        }
-    }
-
-    fn learn(&self, mode: JsonMode) {
-        match self.learned.lock() {
-            Ok(mut g) => *g = Some(mode),
-            Err(poisoned) => *poisoned.into_inner() = Some(mode),
-        }
+        self.learned.get()
     }
 
     fn who(&self) -> &str {
@@ -127,7 +117,7 @@ impl OpenAiClient {
         loop {
             match self.raw_complete_in(mode, system, user, schema).await {
                 Ok(text) => {
-                    self.learn(mode);
+                    self.learned.set(mode);
                     return Ok(text);
                 }
                 Err(e) => match mode.simpler() {

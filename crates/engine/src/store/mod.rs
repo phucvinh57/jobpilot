@@ -268,14 +268,16 @@ const MIGRATIONS: &[&str] = &[
         AND id NOT IN (SELECT MAX(id) FROM reports WHERE period != '' GROUP BY kind, period);
     CREATE UNIQUE INDEX reports_period ON reports(kind, period) WHERE period != '';
     ",
-    // 11: provider kinds split into official and compatible: an `openai` / `anthropic` row that
-    // does not point at the official API is a compatible endpoint (an empty base URL meant the
-    // official default)
+    // 11: provider kinds split into official and compatible: an `openai` / `anthropic` row stays
+    // official only when it points at exactly the official API (an empty base URL meant the
+    // official default); any other address, look-alike hosts included, is a compatible endpoint
     "
     UPDATE providers SET kind = 'openai_compatible'
-        WHERE kind = 'openai' AND base_url != '' AND base_url NOT LIKE 'https://api.openai.com%';
+        WHERE kind = 'openai' AND base_url NOT IN
+            ('', 'https://api.openai.com', 'https://api.openai.com/', 'https://api.openai.com/v1', 'https://api.openai.com/v1/');
     UPDATE providers SET kind = 'anthropic_compatible'
-        WHERE kind = 'anthropic' AND base_url != '' AND base_url NOT LIKE 'https://api.anthropic.com%';
+        WHERE kind = 'anthropic' AND base_url NOT IN
+            ('', 'https://api.anthropic.com', 'https://api.anthropic.com/', 'https://api.anthropic.com/v1', 'https://api.anthropic.com/v1/');
     ",
 ];
 
@@ -494,8 +496,12 @@ mod tests {
             for (name, kind, base) in [
                 ("OpenAI", "openai", "https://api.openai.com/v1"),
                 ("Ollama", "openai", "http://localhost:11434/v1"),
+                ("Lookalike", "openai", "https://api.openai.com.proxy.example/v1"),
+                ("Bare", "openai", "https://api.openai.com/"),
                 ("Claude", "anthropic", "https://api.anthropic.com"),
+                ("ClaudeV1", "anthropic", "https://api.anthropic.com/v1/"),
                 ("Proxy", "anthropic", "https://proxy.example/anthropic"),
+                ("Sub", "anthropic", "https://api.anthropic.com.evil.example"),
                 ("Empty", "anthropic", ""),
             ] {
                 conn.execute(
@@ -513,8 +519,12 @@ mod tests {
             [
                 ("OpenAI".into(), ProviderKind::OpenAi, mode()),
                 ("Ollama".into(), ProviderKind::OpenAiCompatible, mode()),
+                ("Lookalike".into(), ProviderKind::OpenAiCompatible, mode()),
+                ("Bare".into(), ProviderKind::OpenAi, mode()),
                 ("Claude".into(), ProviderKind::Anthropic, mode()),
+                ("ClaudeV1".into(), ProviderKind::Anthropic, mode()),
                 ("Proxy".into(), ProviderKind::AnthropicCompatible, mode()),
+                ("Sub".into(), ProviderKind::AnthropicCompatible, mode()),
                 ("Empty".into(), ProviderKind::Anthropic, mode()),
             ]
         );

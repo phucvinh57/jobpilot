@@ -6,16 +6,14 @@
 //! (`temperature`, `budget_tokens`, assistant prefill). The request is non-streaming with a long
 //! timeout; adaptive thinking on a 16k budget finishes well inside it.
 //!
-//! An Anthropic-compatible endpoint that refuses `output_config` or adaptive thinking (HTTP
-//! 400/422) is retried once in [`JsonMode::Prompt`]: neither field, the schema in the system
-//! prompt. The official API never needs that.
-
-use std::sync::Mutex;
+//! An endpoint that refuses `output_config` or adaptive thinking (HTTP 400/422) is retried once in
+//! [`JsonMode::Prompt`]: neither field, the schema in the system prompt.
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
 use super::http::{build_client, join_url, refused_feature, send_json, COMPLETION_TIMEOUT, MODELS_TIMEOUT};
+use super::learned::Learned;
 use super::{complete_validated, schema, Llm, LlmFuture};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
@@ -50,17 +48,19 @@ impl JsonMode {
     }
 }
 
-/// Words in a 400/422 error that mean "this endpoint does not take `output_config` / thinking".
+/// Words in a 400/422 error that mean "this endpoint does not take `output_config` / thinking"
+/// (no bare "invalid", "unknown" or "format": an invalid model or a bad message says those too).
 const REFUSAL_WORDS: &[&str] = &[
     "output_config",
     "thinking",
-    "format",
-    "schema",
+    "json_schema",
+    "structured output",
     "not supported",
     "unsupported",
-    "unknown",
     "extra inputs",
-    "invalid",
+    "unknown field",
+    "unknown parameter",
+    "unrecognized",
 ];
 
 pub struct AnthropicClient {
@@ -70,11 +70,10 @@ pub struct AnthropicClient {
     pub api_key: Option<String>,
     /// The mode the first call starts in (the provider's stored, learned mode).
     pub json_mode: JsonMode,
-    /// Retry in [`JsonMode::Prompt`] when the endpoint refuses the native request (compatible
-    /// endpoints only).
+    /// Retry in [`JsonMode::Prompt`] when the endpoint refuses the native request (on by default).
     pub fallback: bool,
     /// The mode that last worked; later calls start from it.
-    learned: Mutex<Option<JsonMode>>,
+    learned: Learned<JsonMode>,
     http: reqwest::Client,
 }
 
@@ -88,8 +87,8 @@ impl AnthropicClient {
             model: if model.is_empty() { DEFAULT_MODEL.into() } else { model.into() },
             api_key: api_key.filter(|k| !k.trim().is_empty()),
             json_mode: JsonMode::Native,
-            fallback: false,
-            learned: Mutex::new(None),
+            fallback: true,
+            learned: Learned::default(),
             http: build_client(),
         }
     }
@@ -108,17 +107,7 @@ impl AnthropicClient {
 
     /// The mode that worked on the last successful call (`None` before one).
     pub fn learned_mode(&self) -> Option<JsonMode> {
-        match self.learned.lock() {
-            Ok(g) => *g,
-            Err(poisoned) => *poisoned.into_inner(),
-        }
-    }
-
-    fn learn(&self, mode: JsonMode) {
-        match self.learned.lock() {
-            Ok(mut g) => *g = Some(mode),
-            Err(poisoned) => *poisoned.into_inner() = Some(mode),
-        }
+        self.learned.get()
     }
 
     fn who(&self) -> &str {
@@ -149,7 +138,7 @@ impl AnthropicClient {
             other => other.map(|t| (t, mode)),
         };
         let (text, mode) = result?;
-        self.learn(mode);
+        self.learned.set(mode);
         Ok(text)
     }
 

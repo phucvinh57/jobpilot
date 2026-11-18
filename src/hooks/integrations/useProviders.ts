@@ -12,8 +12,8 @@ import {
   accountLine,
   draftOf,
   inputOf,
-  modelsInputOf,
   modelsSignature,
+  probeInputOf,
   switchKind,
   type Draft,
 } from "@/lib/integrations/providers";
@@ -39,11 +39,11 @@ export interface ProvidersCard {
   test: () => void;
   /** Two steps: the first click arms the button, the second deletes. */
   remove: () => void;
-  /** Codex: sign in with ChatGPT in the system browser (an unsaved provider is saved first). */
+  /** Codex: sign in with ChatGPT in the system browser (the form is saved first). */
   signIn: () => void;
   /** Codex: abort a sign-in that waits for the browser. */
   cancelSignIn: () => void;
-  /** Codex: reuse the Codex CLI's login (an unsaved provider is saved first). */
+  /** Codex: use the Codex CLI's login (the form is saved first). */
   importCli: () => void;
   /** Codex: a Codex CLI login is there to reuse (read when the Codex kind is in the dialog). */
   cliAvailable: boolean;
@@ -76,7 +76,7 @@ function useModels(
       setLoading(false);
       return;
     }
-    const input = modelsInputOf(form);
+    const input = probeInputOf(form);
     const signature = modelsSignature(input);
     if (input.baseUrl === "" || signature === listed.current) {
       return;
@@ -175,7 +175,7 @@ export function useProviders(): ProvidersCard {
   }, [withDraft, close, reload]);
 
   const test = useCallback(() => {
-    void withDraft("testing", "The test failed", (form) => api.testProvider(inputOf(form)).then(() => true)).then(
+    void withDraft("testing", "The test failed", (form) => api.testProvider(probeInputOf(form)).then(() => true)).then(
       (ok) => {
         if (ok) {
           setNotice("✓ Works");
@@ -205,18 +205,27 @@ export function useProviders(): ProvidersCard {
     });
   }, [draft, close, edit, run, reload]);
 
-  /** Run a Codex sign-in for the provider in the dialog; an unsaved one is saved first (the dialog
-   *  stays open on the saved provider). */
+  /** Run a Codex sign-in for the provider in the dialog. The form is saved first, always (an edited
+   *  kind or name takes effect, and a new provider gets its id); the dialog stays open on it. */
   const codex = useCallback(
     (what: string, title: string, call: (id: number) => Promise<string>) => {
       void withDraft(what, title, async (form) => {
-        let id = form.id;
-        if (id === 0) {
-          const saved = await api.saveProvider(inputOf(form));
-          id = saved.id;
-          setDraft((d) => d && { ...d, id, savedBaseUrl: saved.baseUrl, isDefault: saved.isDefault, apiKey: "" });
-          reload();
-        }
+        const saved = await api.saveProvider(inputOf(form));
+        const id = saved.id;
+        setDraft(
+          (d) =>
+            d && {
+              ...d,
+              id,
+              savedKind: saved.kind,
+              savedBaseUrl: saved.baseUrl,
+              isDefault: saved.isDefault,
+              account: saved.account,
+              hasKey: saved.account !== null,
+              apiKey: "",
+            },
+        );
+        reload();
         const account = await call(id);
         setDraft((d) => (d && d.id === id ? { ...d, account, hasKey: true } : d));
         return account;

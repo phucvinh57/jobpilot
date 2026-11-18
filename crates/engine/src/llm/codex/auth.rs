@@ -1,7 +1,8 @@
 //! Sign in with ChatGPT the way the Codex CLI does: the system browser opens the issuer's
 //! authorize page, the issuer redirects to `http://localhost:1455/auth/callback` (loopback + PKCE),
-//! and the code is swapped for tokens. Also: refreshing the access token, and reading the Codex
-//! CLI's own login (`auth.json`, read only, never written).
+//! and the code is swapped for tokens. Also: refreshing the access token, and the Codex CLI's own
+//! login (`auth.json`): read on every call of a linked provider, and its tokens written back after
+//! JobPilot refreshed them (see the module doc of [`super`]).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -13,6 +14,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 use super::tokens::Tokens;
+use super::SIGN_IN_INVALID;
 use crate::llm::http::{describe_net_error, http_error};
 use crate::mail::oauth::{self, RedirectSite};
 
@@ -155,7 +157,7 @@ async fn post_token(req: reqwest::RequestBuilder) -> Result<Value> {
     if !status.is_success() {
         let detail = crate::redact::redact(&http_error(status, &body)).into_owned();
         if matches!(status, StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED) {
-            return Err(SignInExpired(format!("the ChatGPT sign-in is no longer valid ({detail})")).into());
+            return Err(SignInExpired(format!("{SIGN_IN_INVALID} ({detail})")).into());
         }
         bail!("ChatGPT sign-in: {detail}");
     }
@@ -172,8 +174,7 @@ pub(crate) fn cli_auth_path() -> Option<PathBuf> {
     }
 }
 
-/// Read the Codex CLI's ChatGPT login from `path` (never written). An `OPENAI_API_KEY` in the file
-/// is ignored.
+/// Read the Codex CLI's ChatGPT login from `path`. An `OPENAI_API_KEY` in the file is ignored.
 pub(crate) fn read_cli_login(path: &Path) -> Result<Tokens> {
     let raw = std::fs::read_to_string(path)
         .map_err(|_| anyhow!("No Codex CLI login was found ({}): run `codex login` first", path.display()))?;
@@ -193,4 +194,58 @@ pub(crate) fn cli_login_at(path: &Path) -> bool {
         .ok()
         .and_then(|v| v.pointer("/tokens/access_token").and_then(Value::as_str).map(|t| !t.trim().is_empty()))
         .unwrap_or(false)
+}
+
+/// Write refreshed `tokens` back into the Codex CLI's login file at `path`, as the CLI itself does:
+/// read-modify-write of `tokens.*` and `last_refresh` only (every other field is kept), replaced
+/// atomically through a temp file in the same folder, keeping the file's permissions (0600 on unix).
+pub(crate) fn write_cli_login(path: &Path, tokens: &Tokens) -> Result<()> {
+    let gone = || anyhow!(super::CLI_LOGIN_GONE);
+    let raw = std::fs::read_to_string(path).map_err(|_| gone())?;
+    let mut v: Value = serde_json::from_str(&raw).map_err(|_| anyhow!("The Codex CLI's login file is not valid JSON"))?;
+    let root = v.as_object_mut().ok_or_else(gone)?;
+    let entry = root.entry("tokens").or_insert_with(|| json!({}));
+    if !entry.is_object() {
+        *entry = json!({});
+    }
+    if let Some(t) = entry.as_object_mut() {
+        t.insert("access_token".into(), json!(tokens.access_token));
+        t.insert("refresh_token".into(), json!(tokens.refresh_token));
+        if !tokens.id_token.is_empty() {
+            t.insert("id_token".into(), json!(tokens.id_token));
+        }
+        if !tokens.account_id.is_empty() {
+            t.insert("account_id".into(), json!(tokens.account_id));
+        }
+    }
+    root.insert("last_refresh".into(), json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)));
+    let text = serde_json::to_string_pretty(&v).context("encoding the Codex CLI's login")?;
+    write_atomically(path, text.as_bytes()).context("updating the Codex CLI's login file")
+}
+
+/// Replace `path` with `bytes`: a temp file in the same folder (owner-only from the start on unix),
+/// given the old file's permissions, then renamed over it.
+fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "auth.json".into());
+    let tmp = dir.join(format!(".{name}.jobpilot-{}.tmp", std::process::id()));
+    let permissions = std::fs::metadata(path).map(|m| m.permissions()).ok();
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let result = (|| {
+        let mut file = options.open(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        if let Some(permissions) = permissions {
+            std::fs::set_permissions(&tmp, permissions)?;
+        }
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }

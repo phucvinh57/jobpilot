@@ -1,19 +1,22 @@
 //! The Codex client: `POST {BASE_URL}/responses` (streamed, server-sent events) with the
-//! ChatGPT sign-in's access token, refreshed before it expires and once after a 401.
+//! ChatGPT sign-in's access token, refreshed before it expires and once after a 401. The tokens
+//! come from the keyring (own sign-in) or from the Codex CLI's `auth.json` (linked login), read
+//! again on every call.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
 use super::auth::{self, SignInExpired};
-use super::tokens::Tokens;
-use super::{BASE_URL, DEFAULT_MODEL, MODELS, NOT_SIGNED_IN};
+use super::tokens::{Login, Tokens};
+use super::{BASE_URL, CLI_LOGIN_GONE, DEFAULT_MODEL, MODELS, NOT_SIGNED_IN};
 use crate::llm::http::{build_client, describe_net_error, http_error, join_url, HttpError, COMPLETION_TIMEOUT};
 use crate::llm::{complete_validated, Llm, LlmFuture};
 use crate::store::Provider;
 use crate::Secrets;
 
 /// One refresh at a time across clients: the issuer rotates refresh tokens, so two refreshes
-/// with the same token would sign the user out.
+/// with the same token would sign the user out. (Against the Codex CLI itself, the file is read
+/// again before a refresh: see [`CodexClient::refresh`].)
 static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub struct CodexClient {
@@ -55,15 +58,31 @@ impl CodexClient {
         anyhow!("{}: {NOT_SIGNED_IN}", self.name)
     }
 
-    fn tokens(&self) -> Result<Tokens> {
-        Tokens::load(&self.secrets, self.provider_id)?.ok_or_else(|| self.not_signed_in())
+    fn login(&self) -> Result<Login> {
+        Login::load(&self.secrets, self.provider_id)?.ok_or_else(|| self.not_signed_in())
     }
 
-    /// Fresh tokens in place of `stale`: another call may have refreshed already (then those are
-    /// used), else the refresh token is spent and the new tokens are saved.
-    async fn refresh(&self, stale: &Tokens) -> Result<Tokens> {
+    /// The current tokens of `login`: a linked CLI login reads them from its file now.
+    fn tokens_of(&self, login: &Login) -> Result<Tokens> {
+        match login {
+            Login::Own(tokens) => Ok(tokens.clone()),
+            Login::Linked { path, .. } => {
+                auth::read_cli_login(path).map_err(|_| anyhow!("{}: {CLI_LOGIN_GONE}", self.name))
+            }
+        }
+    }
+
+    fn tokens(&self) -> Result<Tokens> {
+        self.tokens_of(&self.login()?)
+    }
+
+    /// Fresh tokens in place of `stale`: another call (or the Codex CLI, for a linked login) may
+    /// have refreshed already, then those are used; else the refresh token is spent and the new
+    /// tokens are saved where they came from (the keyring, or the CLI's file).
+    pub(super) async fn refresh(&self, stale: &Tokens) -> Result<Tokens> {
         let _one_at_a_time = REFRESH_LOCK.lock().await;
-        let current = self.tokens()?;
+        let login = self.login()?;
+        let current = self.tokens_of(&login)?;
         if current.access_token != stale.access_token {
             return Ok(current);
         }
@@ -74,7 +93,12 @@ impl CodexClient {
                 anyhow!("{}: {e:#}", self.name)
             }
         })?;
-        fresh.save(&self.secrets, self.provider_id)?;
+        match login {
+            Login::Own(_) => Login::Own(fresh.clone()).save(&self.secrets, self.provider_id)?,
+            Login::Linked { path, .. } => {
+                auth::write_cli_login(&path, &fresh).map_err(|e| anyhow!("{}: {e:#}", self.name))?
+            }
+        }
         tracing::info!(provider = self.provider_id, "codex: token refreshed");
         Ok(fresh)
     }
@@ -224,12 +248,10 @@ impl Sse {
         }
     }
 
-    /// The stream ended without `response.completed`.
+    /// The stream ended without `response.completed` / `response.incomplete`: whatever text
+    /// arrived is partial, so it is an error, never an answer.
     pub fn finish(self) -> Result<String> {
-        if self.text.trim().is_empty() {
-            bail!("the answer stream ended before the answer was complete")
-        }
-        Ok(self.text)
+        Err(anyhow!("the answer stream ended early (connection closed)"))
     }
 }
 

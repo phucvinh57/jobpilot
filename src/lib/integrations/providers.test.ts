@@ -6,10 +6,11 @@ import {
   fieldsOf,
   draftOf,
   inputOf,
+  keyIsSaved,
   keyLabel,
   modelsHint,
-  modelsInputOf,
   modelsSignature,
+  probeInputOf,
   providersStatus,
   switchKind,
 } from "./providers";
@@ -127,9 +128,16 @@ describe("the provider form", () => {
     expect(deleteLabel({ id: 4, confirmDelete: true })).toBe("Click again to delete");
   });
 
-  it("says when a saved key stays", () => {
-    expect(keyLabel({ hasKey: false })).toBe("API key");
-    expect(keyLabel({ hasKey: true })).toBe("API key (leave empty to keep the saved one)");
+  it("says when a saved key stays: only while the kind and address are the saved ones", () => {
+    const saved = draftOf(provider(), KINDS, true);
+    expect(keyIsSaved(saved)).toBe(true);
+    expect(keyLabel(saved)).toBe("API key (leave empty to keep the saved one)");
+    expect(keyLabel({ ...saved, hasKey: false })).toBe("API key");
+    const otherKind = switchKind(saved, "anthropic_compatible", KINDS);
+    expect(keyIsSaved(otherKind), "another kind").toBe(false);
+    expect(keyLabel(otherKind)).toBe("API key");
+    expect(keyIsSaved({ ...saved, baseUrl: "http://elsewhere/v1" }), "another address").toBe(false);
+    expect(keyIsSaved({ ...draftOf(undefined, KINDS), hasKey: true }), "never saved").toBe(false);
   });
 });
 
@@ -147,17 +155,19 @@ describe("the card", () => {
     expect(modelsHint(false, 12)).toBe("12 models available: pick one or type an id.");
   });
 
-  it("sends the saved key only to the address it was saved with when listing the models", () => {
+  it("sends the saved key only to the endpoint it was saved for when testing or listing the models", () => {
     const saved = draftOf(
       provider({ id: 4, name: "Proxy", baseUrl: "https://api.openai.com/v1", model: "gpt-4o", isDefault: true }),
       KINDS,
       true,
     );
-    expect(modelsInputOf(saved).id, "same address: the saved key").toBe(4);
+    expect(probeInputOf(saved).id, "same kind and address: the saved key").toBe(4);
     const moved = { ...saved, baseUrl: "https://api.openai.co/v1" };
-    expect(modelsInputOf(moved).id, "edited address: no saved key").toBe(0);
-    expect(modelsInputOf({ ...moved, apiKey: "sk-typed" })).toMatchObject({ id: 4, apiKey: "sk-typed" });
-    expect(modelsInputOf({ ...saved, baseUrl: " https://api.openai.com/v1 " }).id, "spaces do not count").toBe(4);
+    expect(probeInputOf(moved).id, "edited address: no saved key").toBe(0);
+    expect(probeInputOf({ ...moved, apiKey: "sk-typed" })).toMatchObject({ id: 4, apiKey: "sk-typed" });
+    expect(probeInputOf({ ...saved, baseUrl: " https://api.openai.com/v1 " }).id, "spaces do not count").toBe(4);
+    expect(probeInputOf({ ...saved, kind: "anthropic_compatible" }).id, "edited kind: no saved key").toBe(0);
+    expect(probeInputOf(draftOf(undefined, KINDS)).id, "a new provider has none").toBe(0);
   });
 
   it("lists the models again only when the id, kind, address or key change", () => {

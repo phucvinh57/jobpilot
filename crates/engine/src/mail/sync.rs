@@ -4,7 +4,7 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use super::account::{KV_HISTORY_ID, KV_LAST_REPORT, KV_LAST_SYNC};
 use super::classify::{self, MailKind};
 use super::gmail::{self, GmailClient, MailMessage};
-use crate::llm::{Llm, LlmFuture};
+use crate::llm::{Llm, Unavailable};
 use crate::notify::desktop_notify;
 use crate::store::{Application, Email, Status};
 use crate::{runtime, Core};
@@ -166,19 +166,6 @@ pub fn autostart(core: &Arc<Core>) -> bool {
     true
 }
 
-/// Stands in for the model when none is configured; fails only if a classification is needed.
-struct Unavailable(String);
-
-impl Llm for Unavailable {
-    fn complete_json<'a>(&'a self, _: &'a str, _: &'a str, _: &'a serde_json::Value) -> LlmFuture<'a, serde_json::Value> {
-        Box::pin(std::future::ready(Err(anyhow!("{}", self.0))))
-    }
-
-    fn list_models(&self) -> LlmFuture<'_, Vec<String>> {
-        Box::pin(std::future::ready(Err(anyhow!("{}", self.0))))
-    }
-}
-
 async fn run_sync(core: &Core) -> Result<SyncReport> {
     anyhow::ensure!(core.gmail_connected(), "Gmail is not connected");
     let client = GmailClient::new(&core.gmail_access_token().await?);
@@ -215,7 +202,10 @@ async fn run_sync(core: &Core) -> Result<SyncReport> {
     // Oldest first: a confirmation must be applied before the rejection that follows it.
     messages.sort_by_key(|m| m.date);
 
-    let llm: Box<dyn Llm> = core.default_llm().unwrap_or_else(|e| Box::new(Unavailable(format!("{e:#}"))));
+    let llm: Box<dyn Llm> = core.default_llm().unwrap_or_else(|e| {
+        // Stands in for the model when none is configured; fails only if a classification is needed.
+        Box::new(Unavailable::new("", &format!("{e:#}")))
+    });
     process_messages(core, llm.as_ref(), messages, &desktop_notify, &mut report).await;
 
     // Move the cursor only when everything was handled; otherwise the next run retries.

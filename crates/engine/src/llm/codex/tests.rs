@@ -13,7 +13,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 use super::auth;
 use super::client::{build_request, parse_sse, CodexClient};
-use super::tokens::{jwt_exp, IdClaims, Tokens};
+use super::tokens::{jwt_exp, IdClaims, Login, Tokens};
 use super::*;
 use crate::llm::{codex_tokens_secret, Llm};
 use crate::store::Provider;
@@ -189,9 +189,9 @@ fn token_blob_roundtrips_and_debug_hides_the_tokens() {
     // An explicit account id wins over the claim.
     assert_eq!(Tokens::from_raw(&access, "r", "", Some("acct-9")).account_id, "acct-9");
 
-    assert_eq!(Tokens::load(&secrets, 7).unwrap(), None);
-    t.save(&secrets, 7).unwrap();
-    assert_eq!(Tokens::load(&secrets, 7).unwrap(), Some(t.clone()));
+    assert_eq!(Login::load(&secrets, 7).unwrap(), None);
+    Login::Own(t.clone()).save(&secrets, 7).unwrap();
+    assert_eq!(Login::load(&secrets, 7).unwrap(), Some(Login::Own(t.clone())));
     let raw = secrets.get(&codex_tokens_secret(7)).unwrap().unwrap();
     assert!(raw.contains("refresh-token-abcdef"), "stored as one JSON blob");
 
@@ -204,7 +204,9 @@ fn token_blob_roundtrips_and_debug_hides_the_tokens() {
     assert!(soon.expires_soon(now()));
 
     secrets.set(&codex_tokens_secret(8), "not json").unwrap();
-    assert!(Tokens::load(&secrets, 8).is_err());
+    assert!(Login::load(&secrets, 8).is_err());
+    secrets.set(&codex_tokens_secret(8), "{\"source\": \"cli\"}").unwrap();
+    assert!(Login::load(&secrets, 8).is_err(), "a linked login names its file");
 }
 
 #[test]
@@ -242,10 +244,22 @@ fn imports_the_cli_login() {
     let (_d, core) = core();
     let p = codex_provider(&core);
     assert_eq!(core.codex_account(p.id).unwrap(), None);
-    assert_eq!(core.codex_import_from(p.id, &path).unwrap(), "ada@example.com");
+    assert_eq!(core.codex_link(p.id, path.clone()).unwrap(), "ada@example.com");
     assert_eq!(core.codex_account(p.id).unwrap().as_deref(), Some("ada@example.com"));
-    // The CLI's file is read only.
+    // Linking does not touch the CLI's file...
     assert_eq!(std::fs::read_to_string(&path).unwrap(), auth_json.to_string());
+    // ...and the keyring holds where the login is, not a copy of its tokens.
+    let blob: Value = serde_json::from_str(&core.secrets.get(&codex_tokens_secret(p.id)).unwrap().unwrap()).unwrap();
+    assert_eq!(blob, json!({"source": "cli", "path": path, "email": "ada@example.com"}));
+    assert_eq!(Login::load(&core.secrets, p.id).unwrap(), Some(Login::Linked { path: path.clone(), email: "ada@example.com".into() }));
+
+    // The account follows the file; once it is gone, the email saved with the link.
+    let mut other = auth_json.clone();
+    other["tokens"]["id_token"] = json!(id_token("grace@example.com", "acct-cli"));
+    std::fs::write(&path, other.to_string()).unwrap();
+    assert_eq!(core.codex_account(p.id).unwrap().as_deref(), Some("grace@example.com"));
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(core.codex_account(p.id).unwrap().as_deref(), Some("ada@example.com"));
 }
 
 #[test]
@@ -253,14 +267,18 @@ fn sign_in_needs_a_saved_codex_provider() {
     let (_d, core) = core();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("auth.json");
-    assert!(core.codex_import_from(0, &path).unwrap_err().to_string().contains("save the provider first"));
-    assert!(core.codex_import_from(99, &path).unwrap_err().to_string().contains("no longer exists"));
+    assert_eq!(core.codex_link(0, path.clone()).unwrap_err().to_string(), "Save the provider, then sign in.");
+    assert_eq!(core.codex_import_cli_login(0).unwrap_err().to_string(), "Save the provider, then sign in.");
+    assert!(core.codex_link(99, path.clone()).unwrap_err().to_string().contains("no longer exists"));
     let mut other = codex_provider(&core);
     other.id = 0;
     other.kind = ProviderKind::OpenAi;
     other.name = "OpenAI".into();
     let other = core.save_provider(&other, None).unwrap();
-    assert!(core.codex_import_from(other.id, &path).unwrap_err().to_string().contains("not a Codex provider"));
+    assert_eq!(
+        core.codex_link(other.id, path).unwrap_err().to_string(),
+        "Only a Codex provider signs in with ChatGPT."
+    );
 }
 
 // ---------------------------------------------------------------- request + SSE
@@ -297,9 +315,14 @@ fn parses_the_event_stream() {
     assert_eq!(parse_sse(&error).unwrap_err().to_string(), "the request failed: slow down");
     let cut = sse(&[json!({"type": "response.incomplete", "response": {"incomplete_details": {"reason": "max_output_tokens"}}})]);
     assert!(parse_sse(&cut).unwrap_err().to_string().contains("max_output_tokens"));
-    assert!(parse_sse("data: [DONE]\n").unwrap_err().to_string().contains("ended before"));
+    let early = "the answer stream ended early (connection closed)";
+    assert_eq!(parse_sse("data: [DONE]\n").unwrap_err().to_string(), early);
+    // Deltas without `response.completed` are a partial answer: an error, never the text.
+    let partial = sse(&[json!({"type": "response.output_text.delta", "delta": "{\"ok\": tr"})]);
+    assert_eq!(parse_sse(&partial).unwrap_err().to_string(), early);
     // CRLF lines, comments and unknown events are fine.
-    let crlf = ": keepalive\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\r\n\r\n";
+    let crlf = ": keepalive\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\r\n\r\n\
+                data: {\"type\":\"response.completed\",\"response\":{}}\r\n\r\n";
     assert_eq!(parse_sse(crlf).unwrap(), "x");
 }
 
@@ -307,8 +330,15 @@ fn parses_the_event_stream() {
 
 fn signed_in(core: &Core, provider_id: i64, access: &str) -> Tokens {
     let t = Tokens::from_raw(access, "refresh-token-old-1", &id_token("ada@example.com", "acct-42"), None);
-    t.save(&core.secrets, provider_id).unwrap();
+    Login::Own(t.clone()).save(&core.secrets, provider_id).unwrap();
     t
+}
+
+fn own_tokens(core: &Core, provider_id: i64) -> Tokens {
+    match Login::load(&core.secrets, provider_id).unwrap() {
+        Some(Login::Own(t)) => t,
+        other => panic!("not an own sign-in: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -362,7 +392,7 @@ async fn refreshes_after_a_401_and_saves_the_new_tokens() {
     );
     assert_eq!(reqs[2].headers["authorization"], format!("Bearer {new_access}"));
 
-    let saved = Tokens::load(&core.secrets, p.id).unwrap().unwrap();
+    let saved = own_tokens(&core, p.id);
     assert_eq!(saved.access_token, new_access);
     assert_eq!(saved.refresh_token, "refresh-token-new-2");
     assert_eq!(saved.account_id, "acct-42", "kept when the refresh sends no id token");
@@ -385,7 +415,7 @@ async fn refreshes_before_the_token_expires() {
     let reqs = seen.lock().unwrap();
     assert_eq!(reqs[0].path, "/oauth/token");
     assert_eq!(reqs[1].headers["authorization"], format!("Bearer {new_access}"));
-    let saved = Tokens::load(&core.secrets, p.id).unwrap().unwrap();
+    let saved = own_tokens(&core, p.id);
     assert_eq!(saved.refresh_token, "refresh-token-old-1", "kept when none is sent");
     assert_eq!(core.codex_account(p.id).unwrap().as_deref(), Some("new@example.com"));
 }
@@ -502,4 +532,124 @@ async fn browser_sign_in_end_to_end() {
     let form: HashMap<_, _> = url::form_urlencoded::parse(seen.lock().unwrap()[0].body.as_bytes()).into_owned().collect();
     assert_eq!(form["code"], "code-1");
     assert_eq!(form["redirect_uri"], redirect);
+}
+
+// ---------------------------------------------------------------- a linked Codex CLI login
+
+/// A Codex CLI `auth.json` in a temp CODEX_HOME, with fields JobPilot must keep.
+fn cli_home(access: &str) -> (tempfile::TempDir, std::path::PathBuf, Value) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("auth.json");
+    let auth_json = json!({
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "id_token": id_token("ada@example.com", "acct-cli"),
+            "access_token": access,
+            "refresh_token": "cli-refresh-token-1",
+            "account_id": "acct-cli",
+            "future_field": "kept",
+        },
+        "last_refresh": "2026-11-01T10:00:00Z",
+        "agent_identity": {"kept": true},
+    });
+    std::fs::write(&path, auth_json.to_string()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    (dir, path, auth_json)
+}
+
+#[tokio::test]
+async fn a_linked_login_reads_the_cli_file_on_every_call() {
+    let (_d, core) = core();
+    let p = codex_provider(&core);
+    let first = access_token(now() + 3600);
+    let (_home, path, mut auth_json) = cli_home(&first);
+    core.codex_link(p.id, path.clone()).unwrap();
+    let (base, seen) = serve(vec![sse_ok("{\"ok\": true}")]).await;
+    let client = CodexClient::new(&p, core.secrets.clone()).with_urls(&base, &base);
+    client.complete_json("S", "U", &schema()).await.unwrap();
+
+    // The CLI refreshed meanwhile: the next call uses its new token.
+    let second = access_token(now() + 7200);
+    auth_json["tokens"]["access_token"] = json!(second);
+    std::fs::write(&path, auth_json.to_string()).unwrap();
+    client.complete_json("S", "U", &schema()).await.unwrap();
+    {
+        let reqs = seen.lock().unwrap();
+        assert_eq!(reqs[0].headers["authorization"], format!("Bearer {first}"));
+        assert_eq!(reqs[1].headers["authorization"], format!("Bearer {second}"));
+        assert_eq!(reqs[1].headers["chatgpt-account-id"], "acct-cli");
+    }
+    assert!(core.secrets.get(&codex_tokens_secret(p.id)).unwrap().is_some_and(|b| !b.contains(&second)));
+
+    // The CLI logged out: sign in again.
+    std::fs::remove_file(&path).unwrap();
+    let err = client.complete_json("S", "U", &schema()).await.unwrap_err().to_string();
+    assert_eq!(err, format!("Codex: {CLI_LOGIN_GONE}"));
+    assert_eq!(crate::health::classify(&err), crate::health::Problem::ProviderSignIn);
+}
+
+#[tokio::test]
+async fn a_linked_login_writes_a_refresh_back_into_the_cli_file() {
+    let (_d, core) = core();
+    let p = codex_provider(&core);
+    let (_home, path, before) = cli_home("old-access-token-1");
+    core.codex_link(p.id, path.clone()).unwrap();
+    let new_access = access_token(now() + 3600);
+    let (base, seen) = serve(vec![
+        (401, json!({"error": {"message": "token expired"}}).to_string()),
+        (200, json!({"access_token": new_access, "refresh_token": "cli-refresh-token-2"}).to_string()),
+        sse_ok("{\"ok\": true}"),
+    ])
+    .await;
+    let client = CodexClient::new(&p, core.secrets.clone()).with_urls(&base, &base);
+    assert_eq!(client.complete_json("S", "U", &schema()).await.unwrap(), json!({"ok": true}));
+    {
+        let reqs = seen.lock().unwrap();
+        let refresh: Value = serde_json::from_str(&reqs[1].body).unwrap();
+        assert_eq!(refresh["refresh_token"], "cli-refresh-token-1", "the CLI's refresh token is spent");
+        assert_eq!(reqs[2].headers["authorization"], format!("Bearer {new_access}"));
+    }
+
+    // The new tokens are in the CLI's file, every other field is as it was.
+    let after: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(after["tokens"]["access_token"], new_access.as_str());
+    assert_eq!(after["tokens"]["refresh_token"], "cli-refresh-token-2");
+    assert_eq!(after["tokens"]["id_token"], before["tokens"]["id_token"]);
+    assert_eq!(after["tokens"]["account_id"], "acct-cli");
+    assert_eq!(after["tokens"]["future_field"], "kept");
+    assert_eq!(after["agent_identity"], json!({"kept": true}));
+    assert_eq!(after["OPENAI_API_KEY"], Value::Null);
+    assert_ne!(after["last_refresh"], before["last_refresh"]);
+    assert!(chrono::DateTime::parse_from_rfc3339(after["last_refresh"].as_str().unwrap()).is_ok());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    // No temp file is left behind, and the keyring still only links to the file.
+    let names: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(names, [std::ffi::OsString::from("auth.json")]);
+    assert!(matches!(Login::load(&core.secrets, p.id).unwrap(), Some(Login::Linked { .. })));
+}
+
+#[tokio::test]
+async fn a_linked_login_uses_a_refresh_the_cli_made_meanwhile() {
+    let (_d, core) = core();
+    let p = codex_provider(&core);
+    let (_home, path, mut auth_json) = cli_home("old-access-token-1");
+    core.codex_link(p.id, path.clone()).unwrap();
+    let client = CodexClient::new(&p, core.secrets.clone());
+    let stale = auth::read_cli_login(&path).unwrap();
+    // The CLI refreshed after this call read the file: no second refresh with a spent token.
+    let cli_access = access_token(now() + 3600);
+    auth_json["tokens"]["access_token"] = json!(cli_access);
+    auth_json["tokens"]["refresh_token"] = json!("cli-refresh-token-2");
+    std::fs::write(&path, auth_json.to_string()).unwrap();
+    let fresh = client.refresh(&stale).await.unwrap();
+    assert_eq!(fresh.access_token, cli_access);
+    assert_eq!(fresh.refresh_token, "cli-refresh-token-2");
 }
