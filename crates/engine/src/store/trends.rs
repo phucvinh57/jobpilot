@@ -29,7 +29,8 @@ pub struct NewTrendItem {
     pub text_path: Option<PathBuf>,
 }
 
-/// A generated digest (`kind`: `weekly`, `quarterly`, ...; `period`: `2026-W46`, `2026-Q4`, ...).
+/// A generated digest, one per `(kind, period)` (`kind`: `weekly`, `monthly`, `quarterly`,
+/// `yearly`; `period`: `2026-W46`, `2026-M11`, `2026-Q4`, `2026`).
 #[derive(Clone, Debug)]
 pub struct Report {
     pub id: i64,
@@ -132,18 +133,28 @@ impl Store {
         })
     }
 
-    /// Save a report (regenerating one adds a new row; the latest wins).
+    /// Save the report of `(kind, period)`: a new row, or the existing one replaced in place (its
+    /// id stays the same; `created_at` becomes now).
     pub fn add_report(&self, new: &NewReport) -> Result<Report> {
         let citations = if new.citations_json.is_empty() { "[]" } else { &new.citations_json };
-        let id = self.with_conn(|c| {
-            c.execute(
+        let id: i64 = self.with_conn(|c| {
+            Ok(c.query_row(
                 "INSERT INTO reports (kind, period, title, body_md, citations_json, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(kind, period) WHERE period != '' DO UPDATE SET title = excluded.title, body_md = excluded.body_md,
+                     citations_json = excluded.citations_json, created_at = excluded.created_at
+                 RETURNING id",
                 params![new.kind, new.period, new.title, new.body_md, citations, now()],
-            )?;
-            Ok(c.last_insert_rowid())
+                |row| row.get(0),
+            )?)
         })?;
-        self.get_report(id)?.context("report vanished after insert")
+        self.get_report(id)?
+        .context("report vanished after insert")
+    }
+
+    /// Delete a report; `false` when there was none with that id.
+    pub fn delete_report(&self, id: i64) -> Result<bool> {
+        self.with_conn(|c| Ok(c.execute("DELETE FROM reports WHERE id = ?1", [id])? == 1))
     }
 
     pub fn get_report(&self, id: i64) -> Result<Option<Report>> {
@@ -235,5 +246,30 @@ mod tests {
         assert_eq!(store.list_reports("weekly").unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), [w2.id, w1.id]);
         assert_eq!(store.get_report(w1.id).unwrap().unwrap().body_md, "first");
         assert!(store.get_report(999).unwrap().is_none());
+    }
+
+    #[test]
+    fn rerunning_a_period_replaces_its_report_in_place() {
+        let store = Store::open_in_memory().unwrap();
+        let report = |kind: &str, period: &str, body: &str| NewReport {
+            kind: kind.into(),
+            period: period.into(),
+            title: format!("{kind} {period}"),
+            body_md: body.into(),
+            citations_json: "{}".into(),
+        };
+        let first = store.add_report(&report("monthly", "2026-M11", "first")).unwrap();
+        let other = store.add_report(&report("yearly", "2026", "year")).unwrap();
+        let again = store.add_report(&report("monthly", "2026-M11", "second")).unwrap();
+        assert_eq!(again.id, first.id, "same period, same id");
+        assert_eq!(again.body_md, "second");
+        assert!(again.created_at >= first.created_at);
+        assert_eq!(store.list_reports("monthly").unwrap().len(), 1);
+        assert_eq!(store.get_report(first.id).unwrap().unwrap().body_md, "second");
+
+        assert!(store.delete_report(first.id).unwrap());
+        assert!(!store.delete_report(first.id).unwrap(), "already gone");
+        assert!(store.get_report(first.id).unwrap().is_none());
+        assert_eq!(store.get_report(other.id).unwrap().unwrap().body_md, "year");
     }
 }

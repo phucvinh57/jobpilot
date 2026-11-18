@@ -19,36 +19,64 @@ use crate::shared::topics::{self, presence_in, with_item};
 
 // ------------------------------------------------------------------ periods
 
-/// Weekly digest or quarterly summary.
+/// How long a report covers: a week, a month, a quarter or a year.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cadence {
     Weekly,
+    Monthly,
     Quarterly,
+    Yearly,
 }
 
 impl Cadence {
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "weekly" => Some(Cadence::Weekly),
+            "monthly" => Some(Cadence::Monthly),
             "quarterly" => Some(Cadence::Quarterly),
+            "yearly" => Some(Cadence::Yearly),
             _ => None,
         }
     }
 
-    /// The week or quarter that contains `today`.
+    /// The period of this cadence that contains `today`.
     pub fn period(self, today: NaiveDate) -> Period {
         match self {
             Cadence::Weekly => Period::week_of(today),
+            Cadence::Monthly => Period::month_of(today),
             Cadence::Quarterly => Period::quarter_of(today),
+            Cadence::Yearly => Period::year_of(today),
+        }
+    }
+
+    /// The cadence of `period`.
+    pub fn of(period: Period) -> Self {
+        match period {
+            Period::Week { .. } => Cadence::Weekly,
+            Period::Month { .. } => Cadence::Monthly,
+            Period::Quarter { .. } => Cadence::Quarterly,
+            Period::Year { .. } => Cadence::Yearly,
+        }
+    }
+
+    /// As the web app spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Cadence::Weekly => "weekly",
+            Cadence::Monthly => "monthly",
+            Cadence::Quarterly => "quarterly",
+            Cadence::Yearly => "yearly",
         }
     }
 }
 
-/// `Week of 9 November` or `Q4 2026`.
+/// `Week of 9 November`, `November 2026`, `Q4 2026` or `2026`.
 pub fn period_title(period: Period) -> String {
     match period {
         Period::Week { .. } => format!("Week of {}", period.start().format("%-d %B")),
+        Period::Month { .. } => period.start().format("%B %Y").to_string(),
         Period::Quarter { year, quarter } => format!("Q{quarter} {year}"),
+        Period::Year { year } => year.to_string(),
     }
 }
 
@@ -582,6 +610,8 @@ mod tests {
     fn a_period_is_named_for_the_header() {
         assert_eq!(period_title(period()), "Week of 9 November");
         assert_eq!(period_title(Period::parse("2026-Q4").unwrap()), "Q4 2026");
+        assert_eq!(period_title(Period::parse("2026-M11").unwrap()), "November 2026");
+        assert_eq!(period_title(Period::parse("2026").unwrap()), "2026");
         assert_eq!(
             header_summary(None, period()),
             "No digest yet \u{b7} Week of 9 November is the current period"
@@ -596,6 +626,12 @@ mod tests {
         assert_eq!(Cadence::parse("weekly"), Some(Cadence::Weekly));
         assert_eq!(Cadence::parse("quarterly"), Some(Cadence::Quarterly));
         assert_eq!(Cadence::parse("daily"), None);
+        assert_eq!(Cadence::Monthly.period(today).label(), "2026-M11");
+        assert_eq!(Cadence::Yearly.period(today).label(), "2026");
+        for cadence in [Cadence::Weekly, Cadence::Monthly, Cadence::Quarterly, Cadence::Yearly] {
+            assert_eq!(Cadence::parse(cadence.as_str()), Some(cadence));
+            assert_eq!(Cadence::of(cadence.period(today)), cadence);
+        }
     }
 
     // ---- runs

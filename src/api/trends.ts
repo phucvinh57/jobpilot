@@ -1,7 +1,7 @@
 // Typed functions over the `trends_*` commands. A function that changes stored data
 // tells the other screens.
 
-import { invoke, notifyChanged } from "./bridge";
+import { invoke, notifyChanged, pickSavePath } from "./bridge";
 
 import type { Job, JobKind } from "@/lib/trends/jobs";
 import type { Added, Cadence, Overview, PrefField, RunResult, SourceKind } from "@/types/trends";
@@ -52,4 +52,20 @@ export async function addToPreferences(field: PrefField, topic: string): Promise
   // The Profile screen and the setup banner follow the saved preferences.
   notifyChanged("profile");
   return added;
+}
+
+/** Save report `id` as a PDF where the user picks: the path written, or `null` when they cancelled
+ *  the file picker. */
+export async function exportPdf(id: number, fileName: string): Promise<string | null> {
+  const path = await pickSavePath("Save report as PDF", fileName, [{ name: "PDF", extensions: ["pdf"] }]);
+  if (path === null) {
+    return null;
+  }
+  return invoke<string>("trends_export_pdf", { id, path });
+}
+
+/** Delete a saved report (its period can be collected again). */
+export async function deleteReport(id: number): Promise<void> {
+  await invoke<void>("trends_delete_report", { id });
+  notifyChanged("trends");
 }

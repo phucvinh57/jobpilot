@@ -1,6 +1,6 @@
 // The sentences of the screen that are made of numbers from the shell.
 
-import type { Chart, ChartScope, ScopeKey, Term } from "@/types/trends";
+import type { Cadence, Chart, ChartScope, ScopeKey, Term } from "@/types/trends";
 
 /** Under the title of the digest: when it was made and how much it read. */
 export function digestHint(when: string, itemsRead: number | null): string {
@@ -67,9 +67,31 @@ export function collectCaption(periodLabel: string): string {
   return `${periodLabel}: collects from your sources, then your AI provider writes the digest. Every point links to the items it rests on.`;
 }
 
-/** The accessible name of a row of the history. */
-export function reportRowName(title: string, when: string): string {
-  return `${title}, ${when}`;
+/** The cadences, in the order of the switches. */
+export const CADENCES: readonly { value: Cadence; label: string }[] = [
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+  { value: "quarterly", label: "Quarterly" },
+  { value: "yearly", label: "Yearly" },
+];
+
+/** The name of a saved report: its period in words and its label (`November 2026 (2026-M11)`). A
+ *  year's title is its label: said once. */
+export function reportName(report: { periodTitle: string; period: string }): string {
+  return report.periodTitle === report.period ? report.period : `${report.periodTitle} (${report.period})`;
+}
+
+/** What the reports list says when it holds no report of `cadence`. */
+export function noReportsCaption(cadence: Cadence): string {
+  const label = CADENCES.find((c) => c.value === cadence)?.label ?? cadence;
+  return `No ${cadence} reports yet. Collect & build digest with ${label} selected.`;
+}
+
+/** The file name a report's PDF is offered under: `jobpilot-market-insight-2026-M11.pdf` (letters,
+ *  digits and dashes only). */
+export function reportFileName(period: string): string {
+  const safe = period.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `jobpilot-market-insight-${safe || "report"}.pdf`;
 }
 
 /** The notice when the saved data cannot be read. */

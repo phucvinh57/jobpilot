@@ -7,6 +7,7 @@ Rust desktop app (Tauri v2 shell + React web UI): JD link/file -> tailored CV (f
 ```
 Cargo.toml                 workspace
 assets/cv.typ              Typst renderer: typst compile --root <dir> --input data=<file>.yaml cv.typ out.pdf
+assets/trends.typ          market-insight report -> PDF (`engine::trends::pdf`): typst compile --root <dir> --input data=<file>.json trends.typ out.pdf
 assets/prompts/            tailor.md (CV system prompt), example-cv.yaml (few-shot), profile.md (documents -> profile), preferences.md, trends.md
 assets/jobpilot.desktop    desktop entry (StartupWMClass=jobpilot, same as the window app id)
 assets/icons/              app icon (svg + png), used by the deb / AppImage (and the extension)
@@ -50,9 +51,9 @@ crates/engine/  (package `jobpilot-engine`, lib `jobpilot_engine`)   no UI, no T
              `manual` (`Core::add_lead`: pasted link/file -> scored lead), `check` (`Core::check_job_source`: a new source is read
              once and refused unless it lists jobs), `suggest/` (graph `source_suggest`: searches in the user's Chrome, Private
              tab -> results parsed in code -> checked -> `source_suggestions`; a captcha/consent page pauses it, never solved)
-  trends     collection (hackernews, yc, rss, page; graph `trends` -> `trend_items`),
-             `frame` (MarketFrame: background + place, never wishes; decides what is counted),
-             `digest/` (extract, count, synthesize, cite: every point cites stored items)
+  trends     collection (hackernews, yc, rss, page; graph `trends` -> `trend_items`), `period` (week / month / quarter / year;
+             one report per period, a rerun replaces it), `frame` (MarketFrame: background + place, never wishes; decides what is counted),
+             `digest/` (extract, count, synthesize, cite: every point cites stored items), `pdf` (report -> PDF via `assets/trends.typ`)
 src-tauri/ (package `jobpilot`, lib `jobpilot_lib`)   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |
              profile (About you: the documents the profile is read from; preferences) | integrations (AI Providers, Gmail, Browser: extension pairing + signed-in sites) | trends (Digest, trend sources)

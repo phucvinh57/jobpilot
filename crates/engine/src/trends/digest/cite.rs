@@ -280,16 +280,19 @@ fn build_data(store: &Store, digest: &DigestState) -> Result<DigestData> {
     })
 }
 
-/// Heading of a report: `Weekly digest 2026-W46`, `Quarterly summary 2026-Q4`.
+/// Heading of a report: `Weekly digest 2026-W46`, `Monthly digest 2026-M11`, `Quarterly summary
+/// 2026-Q4`, `Yearly summary 2026`.
 pub fn report_title(period: &Period) -> String {
     match period {
         Period::Week { .. } => format!("Weekly digest {}", period.label()),
+        Period::Month { .. } => format!("Monthly digest {}", period.label()),
         Period::Quarter { .. } => format!("Quarterly summary {}", period.label()),
+        Period::Year { .. } => format!("Yearly summary {}", period.label()),
     }
 }
 
-/// Store `data` as the newest report of `period`'s kind: `body_md` is [`render_markdown`], and
-/// `citations_json` the data itself.
+/// Store `data` as the report of `period` (replacing the one an earlier run saved, same id):
+/// `body_md` is [`render_markdown`], and `citations_json` the data itself.
 pub fn save(store: &Store, period: &Period, data: &DigestData) -> Result<Report> {
     store.add_report(&NewReport {
         kind: period.kind().into(),
@@ -329,7 +332,7 @@ fn escape_md(text: &str) -> String {
 
 /// A stored address as a markdown link destination: only http(s), normalised, and with the
 /// characters that could end the link or start markup percent-encoded. `None` for anything else.
-fn link_destination(url: &str) -> Option<String> {
+pub(crate) fn link_destination(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok().filter(|u| matches!(u.scheme(), "http" | "https"))?;
     let mut out = String::with_capacity(url.len());
     for c in parsed.as_str().chars() {

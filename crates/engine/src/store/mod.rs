@@ -260,6 +260,14 @@ const MIGRATIONS: &[&str] = &[
         UNIQUE(kind, input)
     );
     ",
+    // 10: one report per period (`trends`): rerunning a period replaces its report, so keep the
+    // newest row of each (kind, period) and let the unique index hold it from now on (a row
+    // without a period names none, so those are left alone)
+    "
+    DELETE FROM reports WHERE period != ''
+        AND id NOT IN (SELECT MAX(id) FROM reports WHERE period != '' GROUP BY kind, period);
+    CREATE UNIQUE INDEX reports_period ON reports(kind, period) WHERE period != '';
+    ",
 ];
 
 #[derive(Clone)]
@@ -429,6 +437,39 @@ mod tests {
         // Reopening applies nothing twice.
         drop(store);
         assert!(Store::open(&path).unwrap().get_application_by_slug("old-app").unwrap().is_some());
+    }
+
+    #[test]
+    fn migration_10_keeps_the_newest_report_of_each_period() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        {
+            // Before migration 10, regenerating a digest added a row per run.
+            let conn = Connection::open(&path).unwrap();
+            for sql in &MIGRATIONS[..9] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 9).unwrap();
+            for (kind, period, body) in
+                [("weekly", "2026-W46", "old"), ("weekly", "2026-W46", "new"), ("weekly", "2026-W45", "other"), ("quarterly", "2026-Q4", "q")]
+            {
+                conn.execute(
+                    "INSERT INTO reports (kind, period, body_md, created_at) VALUES (?1, ?2, ?3, '2026-11-01T00:00:00+00:00')",
+                    [kind, period, body],
+                )
+                .unwrap();
+            }
+        }
+        let store = Store::open(&path).unwrap();
+        let weekly = store.list_reports("weekly").unwrap();
+        assert_eq!(weekly.iter().map(|r| r.body_md.as_str()).collect::<Vec<_>>(), ["other", "new"]);
+        assert_eq!(store.list_reports("quarterly").unwrap().len(), 1);
+        // From now on a rerun replaces the period's row.
+        let again = store
+            .add_report(&NewReport { kind: "weekly".into(), period: "2026-W46".into(), body_md: "newer".into(), ..Default::default() })
+            .unwrap();
+        assert_eq!(again.id, weekly[1].id);
+        assert_eq!(store.list_reports("weekly").unwrap().len(), 2);
     }
 
     #[test]

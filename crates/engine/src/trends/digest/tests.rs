@@ -267,9 +267,9 @@ async fn a_source_at_a_challenge_pauses_the_run_but_not_the_digest() {
     let state = done(core.resume_trends_collection_with(period(), config(&fx), digest_config(&llm)).await.unwrap());
     assert!(core.trend_challenges().unwrap().is_empty());
     let second = digest_of(&core, &state);
-    assert_ne!(first.report.id, second.report.id, "a new row; the newest wins");
+    assert_eq!(first.report.id, second.report.id, "one report per period: the rerun replaced it");
     assert_eq!(core.latest_trend_digest().unwrap().unwrap().report.id, second.report.id);
-    assert_eq!(core.trend_reports().unwrap().len(), 2);
+    assert_eq!(core.trend_reports().unwrap().len(), 1);
     assert_eq!(llm.extract_calls(), 1, "the extraction was cached");
     assert_eq!(llm.synth_calls(), 2);
 }
@@ -298,7 +298,7 @@ async fn regenerating_asks_the_model_only_about_new_items() {
     assert!(second_extract.1.contains("A new post"));
     assert_eq!(llm.synth_calls(), 2);
     assert_eq!(digest_of(&core, &state).data.unwrap().items_read, 3);
-    assert_eq!(core.trend_reports().unwrap().len(), 2);
+    assert_eq!(core.trend_reports().unwrap().len(), 1, "the period's report was replaced");
 }
 
 #[tokio::test]
@@ -934,4 +934,30 @@ fn a_report_reads_back_and_an_unreadable_one_still_shows_its_text() {
     assert!(back.data.is_none());
     assert_eq!(back.report.body_md, "plain");
     assert!(core.trend_digest(9999).unwrap().is_none());
+}
+
+#[test]
+fn reports_list_the_latest_period_first_and_delete() {
+    let (_dir, core) = core();
+    let save = |label: &str| core.save_trend_digest(&Period::parse(label).unwrap(), &DigestData::default()).unwrap();
+    let year = save("2026");
+    let quarter = save("2026-Q4");
+    let week = save("2026-W45");
+    let month = save("2026-M11");
+    let old_week = save("2026-W46");
+    let listed: Vec<String> = core.trend_reports().unwrap().into_iter().map(|r| r.period).collect();
+    // W46 starts 2026-11-09; W45 and M11 both start on 2026-11-02... no: W45 starts 2026-11-02, M11 on 2026-11-01.
+    assert_eq!(listed, ["2026-W46", "2026-W45", "2026-M11", "2026-Q4", "2026"]);
+    assert_eq!(core.latest_trend_digest().unwrap().unwrap().report.id, old_week.id, "the one saved last");
+    assert_eq!((month.kind.as_str(), month.title.as_str()), ("monthly", "Monthly digest 2026-M11"));
+    assert_eq!((year.kind.as_str(), year.title.as_str()), ("yearly", "Yearly summary 2026"));
+
+    // Saving a period again keeps its id.
+    assert_eq!(save("2026-Q4").id, quarter.id);
+    assert_eq!(core.trend_reports().unwrap().len(), 5);
+
+    core.delete_trend_report(week.id).unwrap();
+    core.delete_trend_report(week.id).unwrap();
+    assert!(core.trend_digest(week.id).unwrap().is_none());
+    assert_eq!(core.trend_reports().unwrap().len(), 4);
 }

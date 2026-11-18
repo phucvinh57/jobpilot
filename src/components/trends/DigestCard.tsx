@@ -1,4 +1,4 @@
-import { ChartPie, Check } from "lucide-react";
+import { ChartPie, Check, FileDown } from "lucide-react";
 
 import { Button, Caption, CiteChip, EmptyState, Heading, LinkButton, SectionLabel, Tag } from "@/components/ui/kit";
 
@@ -8,8 +8,19 @@ import type { Citation, Digest, Gap, Point, Wishes } from "@/types/trends";
 import type { PreferenceAdds } from "@/hooks/trends/usePreferenceAdds";
 import { openLink } from "@/api/shell";
 
-/** The latest digest: numbered points, each with the stored items it rests on. */
-export function DigestCard({ digest, adds }: { digest: Digest | null; adds: PreferenceAdds }) {
+/** The latest digest: numbered points, each with the stored items it rests on. `onExportPdf`: save
+ *  it as a PDF (no button without it). */
+export function DigestCard({
+  digest,
+  adds,
+  onExportPdf,
+  exporting = false,
+}: {
+  digest: Digest | null;
+  adds: PreferenceAdds;
+  onExportPdf?: () => void;
+  exporting?: boolean;
+}) {
   if (digest === null) {
     return (
       <div id="trends-digest" role="group" aria-label="Digest">
@@ -27,9 +38,16 @@ export function DigestCard({ digest, adds }: { digest: Digest | null; adds: Pref
       aria-label={digest.title}
       className="flex flex-col gap-4 border border-border bg-surface p-5"
     >
-      <div className="flex flex-col gap-0.5">
-        <Heading>{digest.title}</Heading>
-        <Caption>{digestHint(digest.when, digest.itemsRead)}</Caption>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <Heading>{digest.title}</Heading>
+          <Caption>{digestHint(digest.when, digest.itemsRead)}</Caption>
+        </div>
+        {onExportPdf && (
+          <Button id="trends-export-pdf" size="compact" icon={FileDown} busy={exporting} onClick={onExportPdf}>
+            Export PDF
+          </Button>
+        )}
       </div>
       <DigestBody digest={digest} adds={adds} />
     </section>

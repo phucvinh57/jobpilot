@@ -28,8 +28,8 @@ fn kind_of(kind: &str) -> CommandResult<SourceKind> {
 // ------------------------------------------------------------------ reads
 
 /// Everything the screen shows: the digest `selected` (the newest when `None`), its chart, the
-/// history, the waiting collections and the sources. `cadence`: `weekly` / `quarterly`, the period
-/// a new run would cover.
+/// list of reports, the waiting collections and the sources. `cadence`: `weekly` / `monthly` /
+/// `quarterly` / `yearly`, the period a new run would cover.
 #[tauri::command]
 pub async fn trends_overview(
     core: Cx<'_>,
@@ -44,8 +44,9 @@ pub async fn trends_overview(
 
 // ------------------------------------------------------------------ runs
 
-/// "Collect & build digest": collect the period's items, then write the digest. A source at a login
-/// or captcha pauses the run (`status: "waiting"`).
+/// "Collect & build digest", and "Rerun" of any listed report: collect the period's items, then
+/// write the digest, which replaces the period's report. A source at a login or captcha pauses the
+/// run (`status: "waiting"`).
 #[tauri::command]
 pub async fn trends_collect(core: Cx<'_>, period: String) -> CommandResult<RunDto> {
     let period = period_of(&period)?;
@@ -155,6 +156,28 @@ pub async fn trends_add_to_preferences(
     .await
 }
 
+// ------------------------------------------------------------------ reports
+
+/// "Export PDF": render report `id` as a PDF at the path the user chose in the save dialog
+/// (`.pdf` is added when missing). Returns the path written.
+#[tauri::command]
+pub async fn trends_export_pdf(core: Cx<'_>, id: i64, path: String) -> CommandResult<String> {
+    let core = core.inner().clone();
+    let written = run(async move {
+        core.export_trend_report_pdf(id, std::path::Path::new(&path))
+            .await
+    })
+    .await?;
+    Ok(written.to_string_lossy().into_owned())
+}
+
+/// "Delete" a report from the list.
+#[tauri::command]
+pub async fn trends_delete_report(core: Cx<'_>, id: i64) -> CommandResult<()> {
+    let core = core.inner().clone();
+    run_sync(move || core.delete_trend_report(id)).await
+}
+
 /// This context's commands; `lib.rs` routes every `trends_*` call here.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -167,6 +190,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         trends_remove_source,
         trends_set_source_enabled,
         trends_add_to_preferences,
+        trends_export_pdf,
+        trends_delete_report,
     ]
 }
 
@@ -183,6 +208,14 @@ mod tests {
         assert_eq!(
             period_of("2026-Q4").map(|p| p.label()).ok().as_deref(),
             Some("2026-Q4")
+        );
+        assert_eq!(
+            period_of("2026-M11").map(|p| p.label()).ok().as_deref(),
+            Some("2026-M11")
+        );
+        assert_eq!(
+            period_of("2026").map(|p| p.label()).ok().as_deref(),
+            Some("2026")
         );
         assert!(period_of("2026-W99").is_err());
         assert!(period_of("").is_err());
