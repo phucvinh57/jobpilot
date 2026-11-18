@@ -8,6 +8,7 @@ import { join } from "node:path";
 const root = import.meta.dir;
 const out = join(root, "dist");
 const icons = join(root, "..", "assets", "icons");
+const iconFiles = ["jobpilot-16.png", "jobpilot-32.png", "jobpilot-48.png", "jobpilot-128.png"];
 
 await rm(out, { recursive: true, force: true });
 await mkdir(join(out, "icons"), { recursive: true });
@@ -30,8 +31,7 @@ await Promise.all([
   copyFile(join(root, "manifest.json"), join(out, "manifest.json")),
   copyFile(join(root, "popup.html"), join(out, "popup.html")),
   copyFile(join(root, "popup.css"), join(out, "popup.css")),
-  copyFile(join(icons, "jobpilot-48.png"), join(out, "icons", "jobpilot-48.png")),
-  copyFile(join(icons, "jobpilot-256.png"), join(out, "icons", "jobpilot-256.png")),
+  ...iconFiles.map((file) => copyFile(join(icons, file), join(out, "icons", file))),
 ]);
 
 console.log(`extension built: ${result.outputs.map((o) => o.path.slice(out.length + 1)).join(", ")} -> ${out}`);
