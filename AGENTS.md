@@ -138,7 +138,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 
 ## Workflow
 
-- **One worktree per change** (`claude -w <name>`, in `.claude/worktrees/`).
+- **One worktree per change** (`claude -w <name>`, in `.claude/worktrees/`). If the user explicitly requests a hotfix, work directly in the current branch without creating a new worktree.
 - **Docs-only changes skip all of that.** A change that touches only `docs/` (except `docs/REVIEW.md`) is committed on `main` and pushed directly: no worktree, no PR, no `/pre-pr`.
 - **Execute an approved plan with subagents.** Split it into independent tasks, each a `general-purpose` subagent with a self-contained brief (goal, files, steps, checks). The main session checks their results, then runs `/pre-pr`.
 - **Show the result, don't claim it.** Report the output of `scripts/check.sh`. Never use `--no-verify`.
