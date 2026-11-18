@@ -637,12 +637,14 @@ mod tests {
                 kind: "hackernews".into(),
                 status: SourceStatus::Ok,
                 items: 4,
+                cut: 0,
             },
             SourceOutcome {
                 source_id: Some(2),
                 kind: "yc".into(),
                 status: SourceStatus::TimedOut,
                 items: 0,
+                cut: 0,
             },
         ];
         let (headline, lines) = summarize(&run);
