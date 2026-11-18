@@ -110,7 +110,7 @@ struct Cached {
 }
 
 pub(super) async fn extract(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendRun> {
-    let limits = env.config.limits.clone();
+    let limits = env.config.limits.for_period(&s.period);
     let items = period_items(&env.store, &s.period, limits.max_items).await?;
     ensure!(
         !items.is_empty(),

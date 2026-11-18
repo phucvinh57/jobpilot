@@ -79,7 +79,7 @@ pub(super) async fn synthesize(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<T
     let frame = MarketFrame::new(env.config.profile.as_ref(), &prefs);
     let counts = s.digest.counts.clone().unwrap_or_default();
     let (user, shown) =
-        build_prompt(&s.period, &frame, &counts, &items, &s.digest.extractions, env.config.limits.evidence_chars);
+        build_prompt(&s.period, &frame, &counts, &items, &s.digest.extractions, env.config.limits.for_period(&s.period).evidence_chars);
     let reply = env.llm()?.complete_json(SYSTEM, &user, &schema()).await.context("writing the digest")?;
     let points = only_shown(parse_points(&reply)?, &shown);
     tracing::info!(
