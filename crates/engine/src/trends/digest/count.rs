@@ -18,7 +18,9 @@
 //!   of the profile), sorted by direction against "in the profile". It is judged on the local
 //!   scope when each side of its window (before the period, the period) has enough postings, else
 //!   on the global one.
-//! - **terms not in the list**: frequent extracted topics the vocabulary does not know.
+//! - **terms not in the list**: the words of every item of the period that the vocabulary does not
+//!   know, per kind of item, ranked by a test where the volumes allow one ([`super::terms`]).
+//! - **coverage**: how much was read and what was not seen ([`Coverage`]).
 //! - **the pipeline**: the user's own leads, counted apart. Discovery found them through the
 //!   user's filters, so they never enter the market numbers.
 //! - **wishes**: each wished or avoided skill and domain, measured in the gap's scope. Wishes are
@@ -34,13 +36,14 @@ use futures::StreamExt;
 use regex::Regex;
 
 use super::stats::{self, Evidence};
+use super::terms::{Corpora, Side};
 use super::{
-    read_text, DigestEnv, Direction, Extraction, GapBucket, GapScope, GapSkill, ScopeCounts, SkillCount, SkillCounts,
-    TermCount, WishKind, WishSignal,
+    period_items_all, try_read_text, Coverage, DigestEnv, Direction, GapBucket, GapScope, GapSkill, ScopeCounts, SkillCount,
+    SkillCounts, Stratum, WishKind, WishSignal,
 };
 use crate::discover::source::mentions_lowered;
 use crate::prefs::Preferences;
-use crate::store::{Lead, LeadState, TrendItem};
+use crate::store::{Lead, LeadState, Store, TrendItem};
 use crate::trends::collect::TrendRun;
 use crate::trends::frame::MarketFrame;
 use crate::trends::period::Period;
@@ -54,15 +57,10 @@ const MAX_SKILLS: usize = 30;
 /// Characters of a lead's posting that are read.
 const MAX_LEAD_CHARS: usize = 20_000;
 /// Item texts read at once.
-const TEXT_READS: usize = 16;
+pub(super) const TEXT_READS: usize = 16;
 /// Permalink of a Hacker News item: where hiring postings live.
 pub(super) const HN_ITEM_PREFIX: &str = "https://news.ycombinator.com/item?id=";
 
-/// The share of false discoveries the movements called in one scope may hold, on average
-/// (Benjamini-Hochberg's `q`): at 0.10, of ten skills called rising or falling about one is noise.
-/// It is applied to all the tests of a scope together, so a longer vocabulary does not call more
-/// movements out of chance.
-const FALSE_DISCOVERY_RATE: f64 = 0.10;
 /// The prior of the step test, worth this many documents pulled towards the pooled share (see
 /// [`stats::log_odds_z`]): 1 lets the counts speak for themselves.
 const STEP_PRIOR: f64 = 1.0;
@@ -71,12 +69,6 @@ const STEP_PRIOR: f64 = 1.0;
 pub(super) const HIGH_SHARE_PERMILLE: u32 = 50;
 /// Skills per gap bucket.
 const MAX_PER_BUCKET: usize = 8;
-/// An extracted topic must name at least this many items to be listed as a term not in the list.
-const MIN_TERM_ITEMS: u32 = 3;
-/// Terms not in the list that are kept.
-const MAX_TERMS: usize = 10;
-/// Topics this short ("ai", "ml", "go") are too generic to be listed as terms.
-const MAX_GENERIC_CHARS: usize = 2;
 
 /// `(name, aliases)`. An alias is matched as whole words, ignoring case; one that starts with `=`
 /// must match exactly as written (`=Go`: the language, not the verb).
@@ -176,7 +168,7 @@ fn word_pattern() -> &'static Regex {
 }
 
 /// `(as written, lower case)` per word.
-fn tokens(text: &str) -> Vec<(&str, String)> {
+pub(super) fn tokens(text: &str) -> Vec<(&str, String)> {
     word_pattern()
         .find_iter(text)
         .map(|m| {
@@ -263,13 +255,13 @@ impl Vocabulary {
     }
 
     /// The skills a posting names.
-    fn skills_in(&self, text: &str) -> BTreeSet<usize> {
+    pub(super) fn skills_in(&self, text: &str) -> BTreeSet<usize> {
         self.matches(text, true)
     }
 
     /// The skills a short label stands for (a profile skill, a wish, a topic), the skill of that
     /// name first: "Golang" is Go, "Spring Boot" is Spring.
-    fn find(&self, label: &str) -> Vec<usize> {
+    pub(super) fn find(&self, label: &str) -> Vec<usize> {
         let label = label.trim();
         let mut found: Vec<usize> = self.names.iter().position(|n| n.eq_ignore_ascii_case(label)).into_iter().collect();
         for skill in self.matches(label, false) {
@@ -409,7 +401,7 @@ fn change_permille(target: (u32, u32), baseline: (u32, u32)) -> i32 {
 ///
 /// A row gets two tests, the target against the baseline ([`stats::log_odds_z`]) and the trend over
 /// every month ([`stats::trend_z`]). The tests of all the rows that are named at all are one family
-/// under [`FALSE_DISCOVERY_RATE`]; [`stats::call_direction`] turns what survives into a direction.
+/// under [`stats::FALSE_DISCOVERY_RATE`]; [`stats::call_direction`] turns what survives into a direction.
 /// A row named in no document is `Unclear` and takes no part in the family.
 fn judge(rows: &[&[u32]], documents: &[u32], target: usize) -> Vec<Reading> {
     struct Row {
@@ -433,7 +425,7 @@ fn judge(rows: &[&[u32]], documents: &[u32], target: usize) -> Vec<Reading> {
         .collect();
     let named = |row: &Row| row.baseline > 0 || row.now > 0;
     let family: Vec<f64> = tested.iter().filter(|row| named(row)).flat_map(|row| [row.step_z, row.trend_z]).collect();
-    let mut survives = stats::benjamini_hochberg(&family, FALSE_DISCOVERY_RATE).into_iter();
+    let mut survives = stats::benjamini_hochberg(&family, stats::FALSE_DISCOVERY_RATE).into_iter();
     tested
         .iter()
         .map(|row| {
@@ -693,39 +685,10 @@ fn wish_signals(wishes: &[(String, WishKind, bool)], docs: &[&Doc], profile_skil
         .collect()
 }
 
-/// Topics the extraction found in at least [`MIN_TERM_ITEMS`] items that the vocabulary does not
-/// know (nor are they generic short words): most items first, ties by term, at most [`MAX_TERMS`].
-fn uncatalogued(extractions: &[Extraction], vocab: &Vocabulary) -> Vec<TermCount> {
-    let mut items: HashMap<String, HashSet<i64>> = HashMap::new();
-    for extraction in extractions {
-        for topic in &extraction.topics {
-            let term = topic.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
-            if term.chars().count() <= MAX_GENERIC_CHARS || !vocab.find(&term).is_empty() {
-                continue;
-            }
-            items.entry(term).or_default().insert(extraction.item_id);
-        }
-    }
-    let mut terms: Vec<TermCount> = items
-        .into_iter()
-        .map(|(term, ids)| TermCount { term, items: u32::try_from(ids.len()).unwrap_or(u32::MAX) })
-        .filter(|t| t.items >= MIN_TERM_ITEMS)
-        .collect();
-    terms.sort_by(|a, b| b.items.cmp(&a.items).then_with(|| a.term.cmp(&b.term)));
-    terms.truncate(MAX_TERMS);
-    terms
-}
-
-/// Everything [`count`] computes, from what it read: the market's `postings`, the user's `leads`
-/// (both already limited to the window), the extraction of the period's items.
-pub(super) fn market_counts(
-    frame: &MarketFrame,
-    prefs: &Preferences,
-    postings: &[Doc],
-    leads: &[Doc],
-    extractions: &[Extraction],
-    window: &Window,
-) -> SkillCounts {
+/// Everything [`count`] computes about skills, from what it read: the market's `postings`, the
+/// user's `leads` (both already limited to the window). The terms and the coverage come from
+/// [`count`] itself, which has read the other items.
+pub(super) fn market_counts(frame: &MarketFrame, prefs: &Preferences, postings: &[Doc], leads: &[Doc], window: &Window) -> SkillCounts {
     // The market vocabulary knows the background, never the wishes.
     let vocab = Vocabulary::new(&frame.skills);
     let wishes = wish_list(prefs);
@@ -756,8 +719,8 @@ pub(super) fn market_counts(
         pipeline,
         gap_scope,
         gap: gap_list(&field, &vocab, &marks),
-        uncatalogued: uncatalogued(extractions, &vocab),
         wishes: wish_signals(&wishes, scope_docs, &frame.skills, window),
+        ..SkillCounts::default()
     }
 }
 
@@ -772,11 +735,22 @@ fn month_of(time: DateTime<Utc>) -> String {
     time.format("%Y-%m").to_string()
 }
 
+/// The market frame and the preferences it was made from (the saved ones, or none when they cannot
+/// be read: logged).
+pub(super) fn market_frame(env: &DigestEnv) -> (MarketFrame, Preferences) {
+    let prefs = env.store.preferences().unwrap_or_else(|_| {
+        tracing::warn!("the saved preferences could not be read; the digest has no place and no wishes");
+        Preferences::default()
+    });
+    (MarketFrame::new(env.config.profile.as_ref(), &prefs), prefs)
+}
+
 pub(super) async fn count(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendRun> {
     let window = window_for(&s.period, Utc::now().date_naive());
     let in_window = |month: &str| window.months.iter().any(|m| m == month);
 
-    // A backfilled Hacker News source holds thousands of postings: read a few at a time.
+    // A backfilled Hacker News source holds thousands of postings: read a few at a time. A text that
+    // cannot be read is not "not a posting": it is counted apart (`Coverage::postings_unreadable`).
     let candidates: Vec<(String, TrendItem)> = env
         .store
         .list_trend_items(None)?
@@ -784,12 +758,19 @@ pub(super) async fn count(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendR
         .map(|item| (month_of(item.published_at.unwrap_or(item.fetched_at)), item))
         .filter(|(month, item)| item.url.starts_with(HN_ITEM_PREFIX) && in_window(month))
         .collect();
-    let postings: Vec<Doc> = futures::stream::iter(candidates)
-        .map(|(month, item)| async move { (month, read_text(&item).await) })
-        .buffered(TEXT_READS)
-        .filter_map(|(month, text)| std::future::ready(is_hiring_posting(&text).then(|| Doc::new(month, text))))
-        .collect()
-        .await;
+    let mut texts = futures::stream::iter(candidates)
+        .map(|(month, item)| async move { (month, try_read_text(&item).await) })
+        .buffered(TEXT_READS);
+    let mut postings: Vec<Doc> = Vec::new();
+    let mut postings_unreadable = 0u32;
+    while let Some((month, text)) = texts.next().await {
+        match text {
+            None => postings_unreadable += 1,
+            Some(text) if is_hiring_posting(&text) => postings.push(Doc::new(month, text)),
+            Some(_) => {}
+        }
+    }
+    drop(texts);
     let mut leads = Vec::new();
     for state in [LeadState::New, LeadState::Promoted, LeadState::Dismissed] {
         for lead in env.store.list_leads(state)? {
@@ -800,12 +781,29 @@ pub(super) async fn count(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendR
         }
     }
 
-    let prefs = env.store.preferences().unwrap_or_else(|_| {
-        tracing::warn!("the saved preferences could not be read; the digest has no place and no wishes");
-        Preferences::default()
-    });
-    let frame = MarketFrame::new(env.config.profile.as_ref(), &prefs);
-    let counts = market_counts(&frame, &prefs, &postings, &leads, &s.digest.extractions, &window);
+    let (frame, prefs) = market_frame(&env);
+    let mut counts = market_counts(&frame, &prefs, &postings, &leads, &window);
+
+    // The words of every item, per kind of item: postings over the window's months, every other
+    // kind over this period against the one before.
+    let baseline_months = window.months.len().saturating_sub(window.target);
+    let mut corpora = Corpora::new(u32::try_from(baseline_months).unwrap_or(u32::MAX), u32::try_from(window.target).unwrap_or(u32::MAX));
+    for doc in &postings {
+        let side = if window.months.iter().position(|m| *m == doc.month).is_some_and(|at| at >= baseline_months) { Side::Target } else { Side::Baseline };
+        corpora.add(Stratum::HiringPosting, side, &doc.text);
+    }
+    let period_postings_and_others = add_period_items(&env.store, &s.period, &mut corpora).await?;
+    let terms = corpora.report(&Vocabulary::new(&frame.skills));
+    counts.uncatalogued = terms.terms;
+    counts.coverage = Coverage {
+        postings_counted: u32::try_from(postings.len()).unwrap_or(u32::MAX),
+        postings_unreadable,
+        items_counted: period_postings_and_others,
+        left_unread_at_source: left_unread_at_source(&s),
+        months_without_postings: counts.months.iter().zip(&counts.documents).filter(|(_, n)| **n == 0).map(|(month, _)| month.clone()).collect(),
+        not_comparable: terms.not_comparable,
+    };
+
     let sum = |docs: &[u32]| docs.iter().sum::<u32>();
     tracing::info!(
         documents = sum(&counts.documents),
@@ -814,12 +812,59 @@ pub(super) async fn count(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendR
         skills = counts.skills.len(),
         gap_local = counts.gap_scope == GapScope::Local,
         gap = counts.gap.len(),
-        uncatalogued = counts.uncatalogued.len(),
+        terms = counts.uncatalogued.len(),
+        rising_terms = counts.uncatalogued.iter().filter(|t| t.rising).count(),
         wishes = counts.wishes.len(),
+        postings = counts.coverage.postings_counted,
+        postings_unreadable = counts.coverage.postings_unreadable,
+        items = counts.coverage.items_counted,
+        left_unread = counts.coverage.left_unread_at_source.map_or(-1, i64::from),
+        months_without_postings = counts.coverage.months_without_postings.len(),
+        not_comparable = counts.coverage.not_comparable.len(),
         "skill frequency counted"
     );
     s.digest.counts = Some(counts);
     Ok(s)
+}
+
+/// What the sources of this run left unread (the sum of what their caps cut); `None` when no
+/// collection ran (the digest alone, on stored items).
+fn left_unread_at_source(s: &TrendRun) -> Option<u32> {
+    (!s.outcomes.is_empty()).then(|| u32::try_from(s.outcomes.iter().map(|o| o.cut).sum::<usize>()).unwrap_or(u32::MAX))
+}
+
+/// Add every item of `period` that is not a posting to its stratum's target side, and those of the
+/// period before (that are not the period's) to the baseline side; the postings are counted from
+/// the window, not from here. Returns how many items of the period were counted: its postings, and
+/// the other items whose text could be read.
+async fn add_period_items(store: &Store, period: &Period, corpora: &mut Corpora) -> Result<u32> {
+    let target = period_items_all(store, period).await?;
+    let in_target: HashSet<i64> = target.iter().map(|(item, _)| item.id).collect();
+    let before = period_items_all(store, &period.previous()).await?;
+
+    let mut counted = target.iter().filter(|(_, stratum)| *stratum == Stratum::HiringPosting).count();
+    let work: Vec<(Side, Stratum, TrendItem)> = target
+        .into_iter()
+        .filter(|(_, stratum)| *stratum != Stratum::HiringPosting)
+        .map(|(item, stratum)| (Side::Target, stratum, item))
+        .chain(
+            before
+                .into_iter()
+                .filter(|(item, stratum)| *stratum != Stratum::HiringPosting && !in_target.contains(&item.id))
+                .map(|(item, stratum)| (Side::Baseline, stratum, item)),
+        )
+        .collect();
+    let mut texts = futures::stream::iter(work)
+        .map(|(side, stratum, item)| async move { (side, stratum, try_read_text(&item).await) })
+        .buffered(TEXT_READS);
+    while let Some((side, stratum, text)) = texts.next().await {
+        let Some(text) = text else { continue };
+        corpora.add(stratum, side, &text);
+        if side == Side::Target {
+            counted += 1;
+        }
+    }
+    Ok(u32::try_from(counted).unwrap_or(u32::MAX))
 }
 
 /// A lead's role and posting text.
@@ -1193,8 +1238,8 @@ mod tests {
         (Window { months, target: 3 }, docs)
     }
 
-    fn counts_of(prefs: &Preferences, postings: &[Doc], leads: &[Doc], extractions: &[Extraction], window: &Window) -> SkillCounts {
-        market_counts(&MarketFrame::new(Some(&cv()), prefs), prefs, postings, leads, extractions, window)
+    fn counts_of(prefs: &Preferences, postings: &[Doc], leads: &[Doc], window: &Window) -> SkillCounts {
+        market_counts(&MarketFrame::new(Some(&cv()), prefs), prefs, postings, leads, window)
     }
 
     fn skill<'a>(skills: &'a [SkillCount], name: &str) -> &'a SkillCount {
@@ -1204,7 +1249,7 @@ mod tests {
     #[test]
     fn the_market_is_counted_globally_and_locally_with_directions() {
         let (window, postings) = market(12);
-        let counts = counts_of(&wishes(), &postings, &[], &[], &window);
+        let counts = counts_of(&wishes(), &postings, &[], &window);
 
         assert_eq!(counts.documents, [16; 6]);
         let local = counts.local.as_ref().expect("a place is set");
@@ -1263,7 +1308,7 @@ mod tests {
     #[test]
     fn a_thin_local_market_leaves_the_gap_global() {
         let (window, postings) = market(9);
-        let counts = counts_of(&place(), &postings, &[], &[], &window);
+        let counts = counts_of(&place(), &postings, &[], &window);
         assert_eq!(counts.local.as_ref().map(|l| l.documents.clone()), Some(vec![9; 6]));
         assert_eq!(counts.gap_scope, GapScope::Global, "27 local postings on each side");
         // On 27 postings a side a steady share could hide a movement, so it is unclear, not steady;
@@ -1276,7 +1321,7 @@ mod tests {
 
         // No place at all: no local scope.
         let nowhere = Preferences { remote: Remote::Onsite, ..Preferences::default() };
-        let counts = counts_of(&nowhere, &postings, &[], &[], &window);
+        let counts = counts_of(&nowhere, &postings, &[], &window);
         assert!(counts.local.is_none());
         assert_eq!((counts.gap_scope, counts.place.as_str()), (GapScope::Global, ""));
     }
@@ -1285,8 +1330,8 @@ mod tests {
     fn leads_never_change_the_market_counts() {
         let (window, postings) = market(12);
         let leads: Vec<Doc> = (0..40).map(|n| doc(&window.months[n % 6], "Initech | Backend Engineer | Singapore | Elixir, Elixir, Kafka")).collect();
-        let without = counts_of(&wishes(), &postings, &[], &[], &window);
-        let with = counts_of(&wishes(), &postings, &leads, &[], &window);
+        let without = counts_of(&wishes(), &postings, &[], &window);
+        let with = counts_of(&wishes(), &postings, &leads, &window);
 
         assert_eq!((&with.documents, &with.skills, &with.local), (&without.documents, &without.skills, &without.local));
         assert_eq!((&with.gap_scope, &with.gap, &with.wishes), (&without.gap_scope, &without.gap, &without.wishes));
@@ -1298,7 +1343,7 @@ mod tests {
     #[test]
     fn wishes_are_measured_in_order_and_never_shape_the_market() {
         let (window, postings) = market(12);
-        let counts = counts_of(&wishes(), &postings, &[], &[], &window);
+        let counts = counts_of(&wishes(), &postings, &[], &window);
         let wishes: Vec<(&str, WishKind, bool, Direction, u32)> =
             counts.wishes.iter().map(|w| (w.wish.as_str(), w.kind, w.avoided, w.direction, w.mentions)).collect();
         assert_eq!(
@@ -1316,34 +1361,11 @@ mod tests {
 
         // The same market with other wishes: every market number and the gap stay.
         let other = Preferences { must_skills: vec!["Elixir".into()], domains: vec!["robotics".into()], roles: vec!["Data Scientist".into()], ..place() };
-        let plain = counts_of(&other, &postings, &[], &[], &window);
+        let plain = counts_of(&other, &postings, &[], &window);
         let unmark = |skills: &[SkillCount]| skills.iter().map(|s| SkillCount { wished: false, ..s.clone() }).collect::<Vec<_>>();
         assert_eq!(unmark(&plain.skills), unmark(&counts.skills));
         assert_eq!(plain.local.as_ref().map(|l| unmark(&l.skills)), counts.local.as_ref().map(|l| unmark(&l.skills)));
         assert_eq!((&plain.documents, plain.gap_scope, &plain.gap), (&counts.documents, counts.gap_scope, &counts.gap));
         assert_ne!(plain.wishes, counts.wishes);
-    }
-
-    #[test]
-    fn frequent_topics_outside_the_vocabulary_are_listed() {
-        let extraction = |id: i64, topics: &[&str]| Extraction { item_id: id, topics: topics.iter().map(|t| t.to_string()).collect(), claims: Vec::new() };
-        let extractions = [
-            extraction(1, &["Mojo", "rust", "ai", "Platform Engineering", "mojo"]),
-            extraction(2, &["mojo", "golang", "platform engineering", "htmx"]),
-            extraction(3, &[" MOJO ", "platform  engineering", "htmx", "apache spark"]),
-            extraction(4, &["htmx", "go"]),
-            extraction(5, &["only twice", "Gleam"]),
-            extraction(6, &["only twice", "Gleam"]),
-            extraction(7, &["Gleam"]),
-        ];
-        let vocab = Vocabulary::new(&[]);
-        let terms: Vec<(String, u32)> = uncatalogued(&extractions, &vocab).into_iter().map(|t| (t.term, t.items)).collect();
-        assert_eq!(
-            terms,
-            [("gleam".to_string(), 3), ("htmx".to_string(), 3), ("mojo".to_string(), 3), ("platform engineering".to_string(), 3)],
-            "known skills (rust, golang, go, apache spark), short words and rare terms are left out; an item counts once"
-        );
-        let with_profile = Vocabulary::new(&["Gleam".into()]);
-        assert!(uncatalogued(&extractions, &with_profile).iter().all(|t| t.term != "gleam"), "a profile skill is in the vocabulary");
     }
 }

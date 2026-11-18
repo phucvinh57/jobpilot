@@ -103,6 +103,13 @@ fn erfc(x: f64) -> f64 {
     t * (-x * x + poly).exp()
 }
 
+/// The share of false discoveries the things called in one family of tests may hold, on average
+/// (Benjamini-Hochberg's `q`): at 0.10, of ten skills called rising or falling about one is noise.
+/// One family is a scope's skills (`count`) or a stratum's terms (`terms`); the rate is applied to
+/// all the tests of a family together, so a longer vocabulary does not call more movements out of
+/// chance.
+pub(super) const FALSE_DISCOVERY_RATE: f64 = 0.10;
+
 /// Which of the tests (given as z-scores, in their order) survive when the expected share of
 /// false discoveries among the survivors is held at `q` (Benjamini and Hochberg 1995). Testing a
 /// hundred skills at 5% each would call five movements out of pure noise; this does not.

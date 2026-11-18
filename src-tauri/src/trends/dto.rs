@@ -1045,6 +1045,7 @@ mod tests {
                 uncatalogued: vec![TermCount {
                     term: "Temporal".into(),
                     items: 4,
+                    ..TermCount::default()
                 }],
                 wishes: vec![
                     WishSignal {

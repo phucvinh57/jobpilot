@@ -4,7 +4,7 @@
 //! ```text
 //! START -> plan -> { hackernews, yc, feeds } -> store_items -> wait_human
 //!       -> END                                                        (collection only)
-//!       -> extract -> count -> synthesize -> enforce_citations -> save_report -> END   (with the digest)
+//!       -> count -> extract -> synthesize -> enforce_citations -> save_report -> END   (with the digest)
 //! ```
 //!
 //! - `plan` reads the enabled trend sources. Only their ids go into the state.
@@ -29,7 +29,7 @@
 //!
 //! # The digest
 //!
-//! After `wait_human` a route (`TrendRun::digest.enabled`) leads to `extract` or to END. The
+//! After `wait_human` a route (`TrendRun::digest.enabled`) leads to `count` or to END. The
 //! digest nodes read their items from the store, so what the other collectors stored is enough
 //! when one source waits at a challenge (see [`super::digest`]).
 
@@ -234,7 +234,7 @@ pub fn graph(
         .edge(START, "plan")
         .parallel("plan", &["hackernews", "yc", "feeds"], "store_items")
         .edge("store_items", "wait_human")
-        .route("wait_human", |s| if s.digest.enabled { "extract" } else { END }, &["extract", END])
+        .route("wait_human", |s| if s.digest.enabled { "count" } else { END }, &["count", END])
         .node_timeout("hackernews", collector_timeout)
         .node_timeout("yc", collector_timeout)
         .node_timeout("feeds", collector_timeout);

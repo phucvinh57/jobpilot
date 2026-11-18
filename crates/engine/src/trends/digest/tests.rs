@@ -15,8 +15,8 @@ use crate::health::Problem;
 use crate::llm::fake::FakeLlm;
 use crate::llm::LlmFuture;
 use crate::prefs::Preferences;
-use crate::store::{NewLead, NewTrendItem};
-use crate::trends::collect::{SourceStatus, TrendRun};
+use crate::store::{NewLead, NewSource, NewTrendItem, SourcePurpose};
+use crate::trends::collect::{SourceOutcome, SourceStatus, TrendRun};
 use crate::trends::source::SourceKind;
 use crate::trends::tests::{add_all, config, core, fixtures, status_of};
 use crate::{Core, Secrets};
@@ -363,15 +363,25 @@ fn env_with(store: Store) -> Arc<DigestEnv> {
     Arc::new(DigestEnv { store, secrets: Secrets::memory(), config: DigestConfig::default() })
 }
 
-/// An item with a text file under `dir`.
+/// An item with a text file under `dir`, of no source.
 fn stored_item(store: &Store, dir: &std::path::Path, url: &str, title: &str, text: &str, published: Option<chrono::DateTime<Utc>>) -> i64 {
+    stored_from(store, dir, None, url, title, text, published)
+}
+
+/// An item with a text file under `dir`, collected by `source`.
+fn stored_from(store: &Store, dir: &std::path::Path, source: Option<i64>, url: &str, title: &str, text: &str, published: Option<chrono::DateTime<Utc>>) -> i64 {
     let path = dir.join(format!("{}.txt", url.replace(['/', ':', '?', '='], "_")));
     std::fs::write(&path, text).unwrap();
     store
-        .add_trend_item(&NewTrendItem { url: url.into(), title: title.into(), published_at: published, text_path: Some(path), ..Default::default() })
+        .add_trend_item(&NewTrendItem { source_id: source, url: url.into(), title: title.into(), published_at: published, text_path: Some(path) })
         .unwrap()
         .unwrap()
         .id
+}
+
+/// A trend source of this adapter kind.
+fn trend_source(store: &Store, kind: &str) -> i64 {
+    store.add_source(&NewSource { kind: kind.into(), purpose: SourcePurpose::Trends, ..Default::default() }).unwrap().id
 }
 
 #[tokio::test]
@@ -817,6 +827,8 @@ fn a_report_saved_before_the_market_scan_still_loads() {
     assert!(data.counts.local.is_none() && data.counts.pipeline.is_none());
     assert!(data.counts.gap.is_empty() && data.counts.wishes.is_empty() && data.counts.uncatalogued.is_empty());
     assert_eq!(data.counts.gap_scope, GapScope::Global);
+    assert_eq!(data.counts.coverage, Coverage::default(), "a report saved before the coverage says nothing about it");
+    assert_eq!(data.counts.coverage.left_unread_at_source, None);
 
     let (_dir, core) = core();
     let row = core
@@ -827,6 +839,34 @@ fn a_report_saved_before_the_market_scan_still_loads() {
     // Rendered again, it has no part it lacks the data for.
     let md = cite::render_markdown(&Period::parse("2026-W46").unwrap(), &data);
     assert!(!md.contains("## Gap") && !md.contains("## Wishes") && !md.contains("Terms not in the list"), "{md}");
+}
+
+#[test]
+fn a_report_saved_before_the_strata_still_loads_its_terms_as_other_items() {
+    let old = r#"{"items":[],"points":[],"items_read":3,"dropped":0,
+        "counts":{"version":1,"months":["2026-11"],"documents":[3],"skills":[],
+            "uncatalogued":[{"term":"mojo","items":4},{"term":"htmx","items":3}]}}"#;
+    let data: DigestData = serde_json::from_str(old).unwrap();
+    assert_eq!(
+        data.counts.uncatalogued,
+        [
+            TermCount { term: "mojo".into(), items: 4, stratum: Stratum::Other, z_centi: 0, rising: false },
+            TermCount { term: "htmx".into(), items: 3, ..TermCount::default() },
+        ],
+        "its topics came from a mix of kinds: no kind is claimed"
+    );
+    assert_eq!(TermCount::default().stratum, Stratum::Other);
+    let md = cite::render_markdown(&Period::parse("2026-W46").unwrap(), &data);
+    assert!(md.contains("other items: mojo (4), htmx (3)"), "{md}");
+    // The new numbers round-trip.
+    let counts = SkillCounts {
+        uncatalogued: vec![TermCount { term: "mojo".into(), items: 12, stratum: Stratum::HnStory, z_centi: -45, rising: true }],
+        coverage: Coverage { postings_counted: 9, postings_unreadable: 1, items_counted: 30, left_unread_at_source: Some(4), months_without_postings: vec!["2026-09".into()], not_comparable: vec![Stratum::Yc, Stratum::Feed] },
+        ..SkillCounts::default()
+    };
+    let json = serde_json::to_string(&counts).unwrap();
+    assert!(json.contains("\"hn_story\"") && json.contains("\"not_comparable\":[\"yc\",\"feed\"]"), "{json}");
+    assert_eq!(serde_json::from_str::<SkillCounts>(&json).unwrap(), counts);
 }
 
 #[test]
@@ -878,7 +918,11 @@ fn the_markdown_shows_the_gap_the_wishes_and_the_new_terms_from_the_counts() {
                 WishSignal { wish: "Kotlin".into(), kind: WishKind::Skill, avoided: false, direction: Direction::Steady, mentions: 6 },
                 WishSignal { wish: "[gambling](http://evil.test)".into(), kind: WishKind::Domain, avoided: true, direction: Direction::Falling, mentions: 0 },
             ],
-            uncatalogued: vec![TermCount { term: "mojo *now*".into(), items: 4 }],
+            uncatalogued: vec![
+                TermCount { term: "mojo *now*".into(), items: 4, stratum: Stratum::HiringPosting, z_centi: 301, rising: true },
+                TermCount { term: "htmx".into(), items: 9, stratum: Stratum::HiringPosting, ..TermCount::default() },
+                TermCount { term: "zero trust".into(), items: 12, stratum: Stratum::HnStory, ..TermCount::default() },
+            ],
             ..SkillCounts::default()
         },
         ..DigestData::default()
@@ -890,44 +934,220 @@ fn the_markdown_shows_the_gap_the_wishes_and_the_new_terms_from_the_counts() {
         "| Wish | Kind | Avoid? | Direction | Mentions |",
         "| Kotlin | skill | no | steady | 6 |",
         "| \\[gambling\\](http\\://evil.test) | domain | yes | no data | 0 |",
-        "Terms not in the list (items naming them): mojo \\*now\\* (4)",
+        "Terms not in the list (documents naming them, by kind of item; rising: tested against the period before and kept after the control of false discoveries): \
+         hiring postings: mojo \\*now\\* (4, rising), htmx (9); Hacker News stories: zero trust (12)\n",
     ] {
         assert!(md.contains(expected), "{expected:?} missing in {md}");
     }
     assert!(!md.contains("](http://"), "{md}");
 }
 
+/// What the pick tests share: five postings of this thread, the newest items of the period, then
+/// three other items (an HN text post, a feed post, a page), older, and a posting of a thread two
+/// months old, which belongs to its own month.
+struct Pickable {
+    postings: Vec<i64>,
+    story: i64,
+    feed: i64,
+    page: i64,
+    old: i64,
+}
+
+fn pickable(store: &Store, dir: &std::path::Path) -> Pickable {
+    let now = Utc::now();
+    let postings: Vec<i64> = (0..5)
+        .map(|n| {
+            let text = format!("# Hacker News, Ask HN: Who is hiring? (this month)\n\nAcme{n} | Rust");
+            stored_item(store, dir, &format!("https://news.ycombinator.com/item?id={}", 100 + n), &format!("Acme{n} | Rust"), &text, Some(now))
+        })
+        .collect();
+    let story = stored_item(store, dir, "https://news.ycombinator.com/item?id=7", "Ask HN: Is anyone hiring SREs?", "# Ask HN: Is anyone hiring SREs?\n\n12 points", Some(now - Span::hours(1)));
+    let feed = stored_item(store, dir, "https://blog.test/1", "A post", "# A post\n\nWho is hiring? We are.", Some(now - Span::hours(2)));
+    let page = stored_item(store, dir, "https://page.test/", "A page", "# A page", Some(now - Span::hours(3)));
+    let old_text = "# Hacker News, Ask HN: Who is hiring? (two months ago)\n\nOldCo | Go";
+    let old = stored_item(store, dir, "https://news.ycombinator.com/item?id=50", "OldCo | Go", old_text, Some(now - Span::days(60)));
+    Pickable { postings, story, feed, page, old }
+}
+
+/// The ids the model would read, in order.
+async fn picked(store: &Store, max: usize, counts: Option<&SkillCounts>) -> Vec<i64> {
+    pick::pick_items(store, &Vocabulary::new(&[]), &period(), max, counts).await.unwrap().into_iter().map(|i| i.id).collect()
+}
+
 #[tokio::test]
 async fn hiring_postings_only_fill_the_room_the_other_items_leave() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_in_memory().unwrap();
-    let now = Utc::now();
-    // Five postings of one backfilled thread, the newest items of the period.
-    let postings: Vec<i64> = (0..5)
-        .map(|n| {
-            let text = format!("# Hacker News, Ask HN: Who is hiring? (this month)\n\nAcme{n} | Rust");
-            stored_item(&store, dir.path(), &format!("https://news.ycombinator.com/item?id={}", 100 + n), &format!("Acme{n} | Rust"), &text, Some(now))
-        })
-        .collect();
-    // Three other items, older: an HN text post (an item URL too), a feed post, a page.
-    let story = stored_item(&store, dir.path(), "https://news.ycombinator.com/item?id=7", "Ask HN: Is anyone hiring SREs?", "# Ask HN: Is anyone hiring SREs?\n\n12 points", Some(now - Span::hours(1)));
-    let feed = stored_item(&store, dir.path(), "https://blog.test/1", "A post", "# A post\n\nWho is hiring? We are.", Some(now - Span::hours(2)));
-    let page = stored_item(&store, dir.path(), "https://page.test/", "A page", "# A page", Some(now - Span::hours(3)));
-    // A posting of an older thread, backfilled (fetched) now: it belongs to its own month.
-    let old_text = "# Hacker News, Ask HN: Who is hiring? (two months ago)\n\nOldCo | Go";
-    let old = stored_item(&store, dir.path(), "https://news.ycombinator.com/item?id=50", "OldCo | Go", old_text, Some(now - Span::days(60)));
+    let Pickable { postings, story, feed, page, old } = pickable(&store, dir.path());
 
-    let ids = |items: Vec<TrendItem>| items.into_iter().map(|i| i.id).collect::<Vec<_>>();
-    let picked = ids(period_items(&store, &period(), 4).await.unwrap());
-    assert_eq!(picked.len(), 4);
-    assert_eq!(picked[..3], [story, feed, page], "every other item first, newest first");
-    assert!(postings.contains(&picked[3]), "one posting fills the room left");
+    // With nothing to look for (no counts), the pick is the plain spread: this is the old rule.
+    let few = picked(&store, 4, None).await;
+    assert_eq!(few.len(), 4);
+    assert_eq!(few[..3], [story, feed, page], "every other item first, newest first");
+    assert!(postings.contains(&few[3]), "one posting fills the room left");
 
-    let all = ids(period_items(&store, &period(), 100).await.unwrap());
+    let all = picked(&store, 100, None).await;
     assert_eq!(all.len(), 8, "with room, the postings are read too");
     assert!(!all.contains(&old), "a backfilled posting is not evidence for this period");
     assert_eq!(all[..3], [story, feed, page]);
-    assert_eq!(ids(period_items(&store, &period(), 2).await.unwrap()), [story, feed], "no room: no posting");
+    assert_eq!(picked(&store, 2, None).await, [story, feed], "no room: no posting");
+
+    // The period's items are all listed, uncapped, each with its kind: the posting rule needs no source.
+    let listed = period_items_all(&store, &period()).await.unwrap();
+    assert_eq!(listed.len(), 8);
+    assert_eq!(listed.iter().filter(|(_, stratum)| *stratum == Stratum::HiringPosting).count(), 5);
+    assert!(listed.iter().filter(|(_, stratum)| *stratum != Stratum::HiringPosting).all(|(_, stratum)| *stratum == Stratum::Other), "no source: other");
+}
+
+#[tokio::test]
+async fn an_item_naming_an_indicator_is_picked_even_when_it_is_an_old_posting() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let Pickable { postings, story, feed, page, .. } = pickable(&store, dir.path());
+    // The oldest item of the period, a posting of last month's thread: the old rule left every
+    // posting out as soon as the other items filled the room.
+    let elixir_text = "# Hacker News, Ask HN: Who is hiring? (last month)\n\nOldCo | Elixir and Phoenix | Remote";
+    let elixir = stored_item(&store, dir.path(), "https://news.ycombinator.com/item?id=51", "OldCo | Elixir", elixir_text, Some(Utc::now() - Span::days(20)));
+    assert_eq!(picked(&store, 4, None).await[..3], [story, feed, page], "without an indicator it is left out ...");
+    assert!(!picked(&store, 4, None).await.contains(&elixir));
+
+    let gap = |skill: &str| GapSkill { skill: skill.into(), bucket: GapBucket::LearnNext, direction: Direction::Steady, share_permille: 90, target_permille: 90, low_permille: 50, high_permille: 140 };
+    let counts = SkillCounts { gap: vec![gap("Elixir")], ..SkillCounts::default() };
+    let with_skill = picked(&store, 4, Some(&counts)).await;
+    assert_eq!(with_skill, [elixir, story, feed, page], "... and picked first with one: the rest is the same rule");
+    assert_eq!(picked(&store, 2, Some(&counts)).await, [elixir, story], "also when there is room for two");
+
+    // Terms are indicators too, served in turn with the skills; whole words in the item's own words.
+    let term = |term: &str| TermCount { term: term.into(), items: 9, ..TermCount::default() };
+    let counts = SkillCounts { gap: vec![gap("Elixir")], uncatalogued: vec![term("sres"), term("rm")], ..counts };
+    assert_eq!(picked(&store, 4, Some(&counts)).await, [elixir, story, feed, page], "the story names `sres`; `rm` is in no item");
+    let counts = SkillCounts { uncatalogued: vec![term("who is hiring"), term("rust")], gap: vec![gap("Rust")], ..SkillCounts::default() };
+    let by_rust = picked(&store, 4, Some(&counts)).await;
+    // `who is hiring` is in a feed item's own words, not in the postings' (their header is not theirs).
+    assert_eq!(by_rust[0], postings[4], "the newest posting naming Rust first: {by_rust:?}");
+    assert_eq!(by_rust[1], feed, "then the item naming the first term");
+    assert_eq!(by_rust.len(), 4);
+    let again = picked(&store, 4, Some(&counts)).await;
+    assert_eq!(by_rust, again, "the same store and counts pick the same items");
+}
+
+#[tokio::test]
+async fn every_item_of_the_period_is_counted_while_the_model_reads_only_its_pick() {
+    let (dir, core) = core();
+    let now = Utc::now();
+    let (rss, yc, hn) = (trend_source(&core.store, "rss"), trend_source(&core.store, "yc"), trend_source(&core.store, "hackernews"));
+    for n in 0..40 {
+        stored_from(&core.store, dir.path(), Some(rss), &format!("https://blog.test/{n}"), &format!("Post {n}"), &format!("# Post {n}\n\nWe adopted Zig for storage number {n}."), Some(now - Span::minutes(n)));
+    }
+    for n in 0..10 {
+        stored_from(&core.store, dir.path(), Some(yc), &format!("https://www.ycombinator.com/companies/co{n}"), &format!("Co{n}"), &format!("# Co{n}\n\nY Combinator company, Fall 2026. Tools for team {n}.\n\nHiring: yes"), Some(now - Span::minutes(100 + n)));
+    }
+    for n in 0..5 {
+        stored_from(&core.store, dir.path(), Some(hn), &format!("https://example.test/story{n}"), &format!("Story {n}"), &format!("# Story {n}\n\n10 points and 2 comments on Hacker News. Discussion: https://news.ycombinator.com/item?id={n}"), Some(now - Span::minutes(200 + n)));
+        let text = format!("# Hacker News, Ask HN: Who is hiring? (this month)\n\nAcme{n} | Rust engineer");
+        stored_from(&core.store, dir.path(), None, &format!("https://news.ycombinator.com/item?id={}", 900 + n), &format!("Acme{n} | Rust"), &text, Some(now - Span::minutes(300 + n)));
+    }
+    let llm = Scripted::new(one_point);
+    let config = DigestConfig { llm: Some(llm.clone()), limits: DigestLimits { max_items: 10, batch_items: 100, ..DigestLimits::default() }, profile: None };
+
+    let state = done(core.build_trends_digest_with(period(), config).await.unwrap());
+
+    let data = digest_of(&core, &state).data.unwrap();
+    let coverage = &data.counts.coverage;
+    assert_eq!(coverage.items_counted, 60, "every item of the period, whatever the cap");
+    assert_eq!(coverage.postings_counted, 5);
+    assert_eq!((coverage.postings_unreadable, coverage.left_unread_at_source), (0, None), "stored items only: no collection ran");
+    assert_eq!(data.items_read, 10, "the model reads the cap and no more");
+    assert_eq!(state.digest.items.len(), 10);
+    let prompts = llm.calls();
+    let extract = prompts.iter().find(|(_, user)| user.contains("<item id=")).expect("one extraction call");
+    assert_eq!(extract.1.matches("<item id=").count(), 10);
+    // This month's postings are the whole window's, the five months before hold none; nothing before
+    // this period either, so no stratum of the period has a side to be compared with.
+    assert_eq!(coverage.months_without_postings.len(), 5, "{:?}", coverage.months_without_postings);
+    assert_eq!(coverage.not_comparable, [Stratum::HiringPosting, Stratum::HnStory, Stratum::Yc, Stratum::Feed]);
+    // The terms come from all 60 items, not from the 10 the model read: 40 posts name "storage" ...
+    let storage = data.counts.uncatalogued.iter().find(|t| t.stratum == Stratum::Feed && t.term.contains("storage")).expect("a term of the feed");
+    assert_eq!(storage.items, 40, "{:?}", data.counts.uncatalogued);
+    // ... and the collector's own words are nobody's trend.
+    assert!(data.counts.uncatalogued.iter().all(|t| !t.term.contains("hacker") && !t.term.contains("discussion") && !t.term.contains("combinator")), "{:?}", data.counts.uncatalogued);
+}
+
+#[tokio::test]
+async fn an_unreadable_hacker_news_text_is_reported_not_taken_for_a_non_posting() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let now = Utc::now();
+    let hn = |id: u32| format!("https://news.ycombinator.com/item?id={id}");
+    stored_item(&store, dir.path(), &hn(1), "Acme | Rust", "# Hacker News, Ask HN: Who is hiring? (this month)\n\nAcme | Rust engineer", Some(now));
+    stored_item(&store, dir.path(), &hn(2), "Ask HN: a question", "# Ask HN: a question\n\nNot a posting at all.", Some(now));
+    // Two postings whose text cannot be read: the file is gone, and no file was ever saved.
+    store.add_trend_item(&NewTrendItem { url: hn(3), title: "Gone".into(), published_at: Some(now), text_path: Some(dir.path().join("gone.txt")), ..Default::default() }).unwrap();
+    store.add_trend_item(&NewTrendItem { url: hn(4), title: "No file".into(), published_at: Some(now), text_path: None, ..Default::default() }).unwrap();
+    // Not a Hacker News item: its missing text is not about postings.
+    store.add_trend_item(&NewTrendItem { url: "https://blog.test/x".into(), title: "Blog".into(), published_at: Some(now), text_path: Some(dir.path().join("none.txt")), ..Default::default() }).unwrap();
+
+    let counts = count::count(env_with(store), TrendRun::new(Period::week_of(now.date_naive()))).await.unwrap().digest.counts.unwrap();
+
+    assert_eq!(counts.coverage.postings_counted, 1);
+    assert_eq!(counts.coverage.postings_unreadable, 2, "the missing file and the missing path, not the story");
+    assert_eq!(counts.documents.iter().sum::<u32>(), 1);
+}
+
+#[tokio::test]
+async fn what_the_sources_left_unread_is_summed_for_a_collection_and_absent_for_a_digest_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    stored_item(&store, dir.path(), "https://blog.test/1", "A post", "# A post\n\nSomething happened.", Some(Utc::now()));
+    let env = env_with(store);
+    let outcome = |cut: usize, status: SourceStatus| SourceOutcome { source_id: Some(1), kind: "hackernews".into(), status, items: 5, cut };
+
+    let alone = count::count(env.clone(), TrendRun::new(period())).await.unwrap();
+    assert_eq!(alone.digest.counts.unwrap().coverage.left_unread_at_source, None, "no collection ran");
+
+    let mut collected = TrendRun::new(period());
+    collected.outcomes = vec![outcome(3, SourceStatus::Ok), outcome(4, SourceStatus::Ok), outcome(0, SourceStatus::TimedOut)];
+    let counts = count::count(env.clone(), collected).await.unwrap().digest.counts.unwrap();
+    assert_eq!(counts.coverage.left_unread_at_source, Some(7), "what each cap cut, added up");
+
+    let mut nothing_cut = TrendRun::new(period());
+    nothing_cut.outcomes = vec![outcome(0, SourceStatus::Ok)];
+    let counts = count::count(env, nothing_cut).await.unwrap().digest.counts.unwrap();
+    assert_eq!(counts.coverage.left_unread_at_source, Some(0), "a collection that cut nothing says 0, not nothing");
+}
+
+#[tokio::test]
+async fn collector_boilerplate_never_reaches_the_terms() {
+    // The real adapters write the texts, the fixture server stands in for the web: if an adapter
+    // changes its wording, the lines it adds must still be recognised (`terms::body`).
+    let (_dir, core) = core();
+    let fx = fixtures().await;
+    add_all(&core, &fx);
+    done(core.collect_trends_with(period(), config(&fx)).await.unwrap());
+    let kinds = source_kinds(&core.store).unwrap();
+
+    let mut seen: std::collections::BTreeMap<Stratum, Vec<String>> = std::collections::BTreeMap::new();
+    for item in core.store.list_trend_items(None).unwrap() {
+        let posting = is_posting_item(&item).await;
+        let stratum = stratum_of(&item, posting, &kinds);
+        let own = terms::body(&read_text(&item).await, stratum);
+        assert!(!own.trim().is_empty(), "{stratum:?}: {}", item.title);
+        for boilerplate in ["Discussion:", "points and", "Y Combinator company", "Team size:", "Hiring:", "Website:", "Status:", "Sector:", "Tags:", "Stage:", "Location:", "http://", "https://"] {
+            assert!(!own.contains(boilerplate), "{stratum:?} item {:?} still has {boilerplate:?}: {own}", item.title);
+        }
+        if matches!(stratum, Stratum::HiringPosting | Stratum::HnStory) {
+            assert!(!own.contains("Hacker News,") && !own.contains("on Hacker News"), "{stratum:?}: {own}");
+        }
+        assert!(!own.lines().any(|l| l.starts_with("# ")), "{stratum:?}: {own}");
+        seen.entry(stratum).or_default().push(own);
+    }
+    assert_eq!(seen.keys().copied().collect::<Vec<_>>(), [Stratum::HiringPosting, Stratum::HnStory, Stratum::Yc, Stratum::Feed], "{:?}", seen.keys());
+    // What the items themselves said is still there.
+    let said = |stratum: Stratum, words: &str| seen[&stratum].iter().any(|own| own.contains(words));
+    assert!(said(Stratum::HiringPosting, "Senior Rust Engineer"));
+    assert!(said(Stratum::HnStory, "Rust 2.0 released"));
+    assert!(said(Stratum::Yc, "Hiring tools"));
+    assert!(said(Stratum::Feed, "Postgres 19"));
 }
 
 #[test]

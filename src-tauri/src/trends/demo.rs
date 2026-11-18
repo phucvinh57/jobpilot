@@ -4,8 +4,9 @@
 
 use jobpilot_engine::store::NewTrendItem;
 use jobpilot_engine::trends::digest::{
-    centi, log_odds_z, month_window, permille, trend_z, wilson, Direction, GapBucket, GapScope,
-    GapSkill, ScopeCounts, TermCount, WishKind, WishSignal, MARKET_SCAN_VERSION,
+    centi, log_odds_z, month_window, permille, trend_z, wilson, Coverage, Direction, GapBucket,
+    GapScope, GapSkill, ScopeCounts, Stratum, TermCount, WishKind, WishSignal,
+    MARKET_SCAN_VERSION,
 };
 use jobpilot_engine::trends::{
     CitedItem, DigestData, Period, Point, Section, SkillCount, SkillCounts, SourceKind,
@@ -172,10 +173,19 @@ pub fn seed_demo(core: &Core) -> Result<()> {
             gap(GapBucket::AtRisk, "PHP", Direction::Falling, 49, 25),
         ],
         uncatalogued: vec![
-            term("Temporal", 5),
-            term("dbt", 4),
-            term("vector databases", 3),
+            term("Temporal", 11, Stratum::HiringPosting, 312),
+            term("dbt", 9, Stratum::HiringPosting, 0),
+            term("vector databases", 14, Stratum::HnStory, 0),
+            term("agent harness", 6, Stratum::Feed, 0),
         ],
+        coverage: Coverage {
+            postings_counted: GLOBAL_DOCUMENTS.iter().sum(),
+            postings_unreadable: 0,
+            items_counted: u32::try_from(cited.len()).unwrap_or(0),
+            left_unread_at_source: Some(0),
+            months_without_postings: Vec::new(),
+            not_comparable: vec![Stratum::Yc],
+        },
         wishes: vec![
             wish("Rust", WishKind::Skill, false, Direction::Rising, 53),
             wish("Kubernetes", WishKind::Skill, false, Direction::Rising, 75),
@@ -325,10 +335,14 @@ fn gap(
     }
 }
 
-fn term(term: &str, items: u32) -> TermCount {
+/// A term outside the skill list; a `z_centi` above zero marks one that rose against its baseline.
+fn term(term: &str, items: u32, stratum: Stratum, z_centi: i32) -> TermCount {
     TermCount {
         term: term.into(),
         items,
+        stratum,
+        z_centi,
+        rising: z_centi > 0,
     }
 }
 
