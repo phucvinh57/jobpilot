@@ -50,9 +50,9 @@ pub use trends::{NewReport, NewTrendItem, Report, TrendItem};
 
 /// The schema version the squashed [`SCHEMA`] stands for: a database at an older version was made
 /// by a release whose migrations are gone, and is refused.
-const BASELINE: usize = 11;
+const BASELINE: usize = 10;
 
-/// The whole schema as of [`BASELINE`] (migrations 1 to 11 of earlier releases, squashed).
+/// The whole schema as of [`BASELINE`] (migrations 1 to 10 of earlier releases, squashed).
 const SCHEMA: &str = "
     CREATE TABLE applications (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,7 +239,19 @@ const SCHEMA: &str = "
 
 /// Migrations after [`BASELINE`], in order: entry `i` takes the database to version
 /// `BASELINE + i + 1`. `PRAGMA user_version` holds the version.
-const MIGRATIONS: &[&str] = &[];
+const MIGRATIONS: &[&str] = &[
+    // 11: provider kinds split into official and compatible: an `openai` / `anthropic` row stays
+    // official only when it points at exactly the official API (an empty base URL meant the
+    // official default); any other address, look-alike hosts included, is a compatible endpoint
+    "
+    UPDATE providers SET kind = 'openai_compatible'
+        WHERE kind = 'openai' AND base_url NOT IN
+            ('', 'https://api.openai.com', 'https://api.openai.com/', 'https://api.openai.com/v1', 'https://api.openai.com/v1/');
+    UPDATE providers SET kind = 'anthropic_compatible'
+        WHERE kind = 'anthropic' AND base_url NOT IN
+            ('', 'https://api.anthropic.com', 'https://api.anthropic.com/', 'https://api.anthropic.com/v1', 'https://api.anthropic.com/v1/');
+    ",
+];
 
 #[derive(Clone)]
 pub struct Store {
@@ -386,6 +398,33 @@ mod tests {
         let error = Store::open(&path).err().unwrap();
         assert!(format!("{error:#}").contains("too old"), "{error:#}");
         assert!(format!("{error:#}").contains("old.db"), "names the file: {error:#}");
+    }
+
+    #[test]
+    fn a_database_at_the_baseline_is_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v10.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(
+            "INSERT INTO providers (name, kind, base_url) VALUES
+                ('official', 'openai', 'https://api.openai.com/v1'),
+                ('local', 'openai', 'http://localhost:11434/v1'),
+                ('proxy', 'anthropic', 'https://api.anthropic.com.evil.test');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", BASELINE as i64).unwrap();
+        drop(conn);
+
+        let store = Store::open(&path).unwrap();
+        let kinds = store
+            .with_conn(|c| {
+                let mut stmt = c.prepare("SELECT kind FROM providers ORDER BY id")?;
+                let rows = stmt.query_map([], |r| r.get(0))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<String>>>()?)
+            })
+            .unwrap();
+        assert_eq!(kinds, ["openai", "openai_compatible", "anthropic_compatible"]);
     }
 
     #[test]
