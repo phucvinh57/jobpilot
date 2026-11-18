@@ -1,19 +1,29 @@
 import { useState } from "react";
-import { Eye, FileDown, RefreshCw, Trash2 } from "lucide-react";
+import { ChartPie, FileDown, RefreshCw, Trash2 } from "lucide-react";
 
-import { Button, Caption, type DataColumn, DataTable, Dialog, Section, Segmented } from "@/components/ui/kit";
+import {
+  Button,
+  Caption,
+  type DataColumn,
+  DataTable,
+  Dialog,
+  EmptyState,
+  Section,
+  Segmented,
+} from "@/components/ui/kit";
 
 import { CADENCES, noReportsCaption, reportName } from "@/lib/trends/format";
 import type { Cadence, ReportRow } from "@/types/trends";
+import { RunStatus } from "./RunStatus";
 
-/** The saved reports of one cadence, newest period first: open one in the digest card, collect its
- *  period again (it replaces the report), save it as a PDF or delete it. The filter follows the
- *  cadence chosen above, and can be switched on its own. */
+/** The saved reports of one cadence, newest period first: a click on a row opens the report;
+ *  each can be collected again (it replaces the report), saved as a PDF or deleted. The row of the
+ *  period a run is building says the step it is at. */
 export function Reports({
   reports,
   cadence,
-  shown,
-  busy,
+  onCadence,
+  running,
   exporting,
   deleting,
   onOpen,
@@ -23,12 +33,11 @@ export function Reports({
 }: {
   /** Every saved report of every cadence. */
   reports: readonly ReportRow[];
-  /** The cadence chosen in the controls: the filter starts there. */
+  /** The cadence whose reports are listed (also the period of a new research). */
   cadence: Cadence;
-  /** The report in the digest card. */
-  shown: number | undefined;
-  /** A trends run is in flight: no rerun. */
-  busy: boolean;
+  onCadence: (cadence: Cadence) => void;
+  /** The trends run in flight (no rerun meanwhile): the period it builds and its step. */
+  running: { period: string; step: string } | undefined;
   exporting: boolean;
   deleting: boolean;
   onOpen: (id: number) => void;
@@ -37,15 +46,12 @@ export function Reports({
   /** Resolves `true` once the report is gone. */
   onDelete: (id: number) => Promise<boolean>;
 }) {
-  const [filter, setFilter] = useState(cadence);
-  // A new cadence above moves the filter with it.
-  const [followed, setFollowed] = useState(cadence);
-  if (followed !== cadence) {
-    setFollowed(cadence);
-    setFilter(cadence);
-  }
   const [confirming, setConfirming] = useState<ReportRow>();
-  const rows = reports.filter((r) => r.cadence === filter);
+  const rows = reports.filter((r) => r.cadence === cadence);
+  const busy = running !== undefined;
+  // The run's step is said in the row of its period; above the list while no listed row is its.
+  const building = (r: ReportRow) => running !== undefined && r.period === running.period;
+  const orphan = running !== undefined && !rows.some(building) ? running : undefined;
 
   const columns: DataColumn<ReportRow>[] = [
     {
@@ -59,7 +65,12 @@ export function Reports({
       ),
     },
     { key: "points", header: "Points", className: "w-20 tabular-nums", cell: (r) => r.points },
-    { key: "when", header: "Updated", className: "text-muted", cell: (r) => r.when },
+    {
+      key: "when",
+      header: "Updated",
+      className: "text-muted",
+      cell: (r) => (running && building(r) ? <RunStatus step={running.step} /> : r.when),
+    },
     {
       key: "actions",
       header: <span className="sr-only">Actions</span>,
@@ -68,15 +79,6 @@ export function Reports({
         const name = reportName(r);
         return (
           <span className="flex justify-end gap-2 whitespace-nowrap">
-            <Button
-              id={`trends-report-${r.id}-open`}
-              size="compact"
-              icon={Eye}
-              aria-label={`Open ${name}`}
-              onClick={() => onOpen(r.id)}
-            >
-              Open
-            </Button>
             <Button
               id={`trends-report-${r.id}-rerun`}
               size="compact"
@@ -120,22 +122,23 @@ export function Reports({
     <Section
       id="trends-reports"
       title="Reports"
-      hint="One report per period. Rerun collects the period again and replaces its report."
+      hint="One report per period: click one to read it. Rerun collects the period again and replaces its report."
     >
       <div id="trends-reports-cadence">
-        <Segmented label="Reports period" choices={CADENCES} value={filter} onChange={setFilter} />
+        <Segmented label="Reports period" choices={CADENCES} value={cadence} onChange={onCadence} />
       </div>
+      {orphan && <RunStatus step={orphan.step} period={orphan.period} />}
       {rows.length === 0 ? (
-        <Caption>{noReportsCaption(filter)}</Caption>
+        <EmptyState icon={ChartPie} title="No reports yet" body={noReportsCaption(cadence)} />
       ) : (
         <DataTable
+          id="trends-reports-table"
           label="Reports"
           columns={columns}
           rows={rows}
           rowKey={(r) => String(r.id)}
           rowLabel={reportName}
           onOpen={(r) => onOpen(r.id)}
-          openKey={shown === undefined ? null : String(shown)}
         />
       )}
       <Dialog

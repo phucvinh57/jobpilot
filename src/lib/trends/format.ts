@@ -62,7 +62,7 @@ export function termsLine(terms: Term[]): string {
   return terms.map((t) => `${t.term} (${t.items} item${t.items === 1 ? "" : "s"})`).join(", ");
 }
 
-/** Under the primary button: what a run for `periodLabel` does. */
+/** In the "New research" dialog: what a run for `periodLabel` does. */
 export function collectCaption(periodLabel: string): string {
   return `${periodLabel}: collects from your sources, then your AI provider writes the digest. Every point links to the items it rests on.`;
 }
@@ -84,7 +84,7 @@ export function reportName(report: { periodTitle: string; period: string }): str
 /** What the reports list says when it holds no report of `cadence`. */
 export function noReportsCaption(cadence: Cadence): string {
   const label = CADENCES.find((c) => c.value === cadence)?.label ?? cadence;
-  return `No ${cadence} reports yet. Collect & build digest with ${label} selected.`;
+  return `No ${cadence} reports yet. Press New research and choose ${label}.`;
 }
 
 /** The file name a report's PDF is offered under: `jobpilot-market-insight-2026-M11.pdf` (letters,
@@ -94,9 +94,9 @@ export function reportFileName(period: string): string {
   return `jobpilot-market-insight-${safe || "report"}.pdf`;
 }
 
-/** The notice when the saved data cannot be read. */
-export function readFailure(message: string): string {
-  return `Could not read the saved data: ${message}`;
+/** The body of the toast that says how a run ended: one line per source, on one line. */
+export function resultBody(details: readonly string[]): string | undefined {
+  return details.length === 0 ? undefined : details.join(" · ");
 }
 
 /** The notice when a topic could not be saved. */

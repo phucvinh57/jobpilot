@@ -143,7 +143,7 @@ pub(super) fn extension_folder(app: &AppHandle) -> Option<String> {
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../extension/dist");
     let checkout = checkout.canonicalize().unwrap_or(checkout);
     let bundled = app.path().resource_dir().ok().map(|dir| dir.join("extension"));
-    rules::extension_path(&checkout, bundled).map(|p| p.display().to_string())
+    rules::extension_path(&checkout, bundled).map(tauri::utils::display_path)
 }
 
 fn gmail(core: &Core) -> GmailDto {

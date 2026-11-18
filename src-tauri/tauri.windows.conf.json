@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["nsis"],
+    "icon": ["../assets/icons/jobpilot.ico"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "../assets/icons/jobpilot.ico"
+      }
+    }
+  }
+}

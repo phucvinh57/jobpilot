@@ -1,8 +1,9 @@
 //! What the app shell shows on every screen: the setup state (sidebar health line, setup banner),
-//! the navigation badges, the appearance, and the one way a link leaves the app.
+//! the navigation badges, the background jobs, the appearance, and the one way a link leaves the app.
 
 use std::sync::Arc;
 
+use jobpilot_engine::discover::{parse_source_thread, SOURCE_GRAPH};
 use jobpilot_engine::health::{Health, Problem};
 use jobpilot_engine::prefs::Appearance;
 use jobpilot_engine::Core;
@@ -11,6 +12,7 @@ use tauri::ipc::Invoke;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
+use super::activity::{activity, ActivityDto, Job};
 use super::error::{run, run_sync, CommandError, CommandResult, ProblemDto};
 use super::insight::is_web_link;
 
@@ -130,6 +132,46 @@ pub async fn shared_status(core: State<'_, Arc<Core>>) -> CommandResult<ShellSta
     .await
 }
 
+/// The name of the job source a `source_run` thread searches. A source that cannot be read (it was
+/// removed) has none: the line then says "a source".
+fn source_name(core: &Core, graph: &str, thread: &str) -> Option<String> {
+    if graph != SOURCE_GRAPH {
+        return None;
+    }
+    let (_, id) = parse_source_thread(thread)?;
+    core.store.get_source(id).ok().flatten().map(|s| s.name)
+}
+
+/// The graph runs that are running or waiting for the user, as the sidebar lists them. Called at
+/// startup and after `shared:graph-progress`.
+#[tauri::command]
+pub async fn shared_activity(core: State<'_, Arc<Core>>) -> CommandResult<Vec<ActivityDto>> {
+    let core = core.inner().clone();
+    run_sync(move || {
+        let mut jobs = Vec::new();
+        for t in core.graphs.running()? {
+            jobs.push(Job {
+                nodes: core.graphs.current_nodes(&t.thread)?,
+                source: source_name(&core, &t.graph, &t.thread),
+                thread: t.thread,
+                graph: t.graph,
+                waiting: None,
+            });
+        }
+        for w in core.graphs.waiting()? {
+            jobs.push(Job {
+                nodes: Vec::new(),
+                source: source_name(&core, &w.graph, &w.thread),
+                thread: w.thread,
+                graph: w.graph,
+                waiting: Some(w.reason),
+            });
+        }
+        Ok(activity(&jobs))
+    })
+    .await
+}
+
 /// The saved appearance: `system` / `light` / `dark`.
 #[tauri::command]
 pub async fn shared_appearance(core: State<'_, Arc<Core>>) -> CommandResult<&'static str> {
@@ -167,6 +209,7 @@ pub async fn shared_open_url(app: AppHandle, url: String) -> CommandResult<()> {
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         shared_status,
+        shared_activity,
         shared_appearance,
         shared_set_appearance,
         shared_open_url

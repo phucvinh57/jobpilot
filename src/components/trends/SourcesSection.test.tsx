@@ -34,15 +34,16 @@ beforeEach(() => {
     }
   }
   mocks.api.overview.mockResolvedValue(overviewFixture());
-  useRuns.setState({ running: undefined, step: undefined, notice: undefined });
+  useRuns.setState({ running: undefined, step: undefined, saved: undefined });
 });
 
 afterEach(cleanup);
 
 async function shown() {
   renderWithToasts(<TrendsPage />);
-  await screen.findByRole("heading", { name: "Weekly digest 2026-W46" });
-  return userEvent.setup();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("tab", { name: "Sources" }));
+  return user;
 }
 
 const sources = () => within(screen.getByRole("region", { name: "Sources" }));

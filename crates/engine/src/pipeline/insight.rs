@@ -46,6 +46,9 @@ use crate::{runtime, Core, Store};
 mod fetch;
 
 /// Longest JD (in characters) sent to the model.
+/// Name of the graph that reads about the company of one job.
+pub const GRAPH: &str = "insight";
+
 const MAX_JD_CHARS: usize = 12_000;
 /// Longest text taken from one company page.
 const MAX_PAGE_CHARS: usize = 5_000;
@@ -273,7 +276,7 @@ struct Page {
 }
 
 fn insight_graph(llm: Arc<dyn Llm>, policy: Policy) -> GraphDef<State> {
-    GraphDef::new("insight")
+    GraphDef::new(GRAPH)
         .node("company_urls", move |mut s: State| async move {
             s.urls = company_urls(s.url.as_deref(), policy);
             tracing::info!(urls = s.urls.len(), "insight: company pages chosen");

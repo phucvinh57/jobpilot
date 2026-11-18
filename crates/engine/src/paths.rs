@@ -1,6 +1,6 @@
 //! Filesystem layout of the private app state.
 //!
-//! Everything lives under `$XDG_DATA_HOME/jobpilot` (override with `JOBPILOT_DATA_DIR`).
+//! Everything lives under the OS user data directory (override with `JOBPILOT_DATA_DIR`).
 
 use std::path::PathBuf;
 
@@ -35,7 +35,7 @@ impl Paths {
         }
     }
 
-    /// `JOBPILOT_DATA_DIR` if set, else `<XDG data dir>/jobpilot`.
+    /// `JOBPILOT_DATA_DIR` if set, else `<user data dir>/jobpilot` (`%APPDATA%\jobpilot` on Windows).
     pub fn from_env() -> Result<Self> {
         if let Some(dir) = std::env::var_os(DATA_DIR_ENV).filter(|v| !v.is_empty()) {
             return Ok(Self::new(dir));

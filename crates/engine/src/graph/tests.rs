@@ -451,6 +451,96 @@ fn cancel_stops_a_running_thread() {
 }
 
 #[test]
+fn running_lists_the_threads_of_this_process_with_the_node_they_are_at() {
+    let dir = tempfile::tempdir().unwrap();
+    let graphs = graphs_at(&db(dir.path()));
+    assert!(graphs.running().unwrap().is_empty());
+    let graph = GraphDef::<Flow>::new("long")
+        .node("first", |s: Flow| ready(Ok(s)))
+        .node("sleep", |s: Flow| async move {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok(s)
+        })
+        .edge(START, "first")
+        .edge("first", "sleep")
+        .edge("sleep", END);
+    // A paused thread is not running.
+    let paused = GraphDef::<Flow>::new("paused")
+        .wait("approve", |s| (!s.approved).then_some(WaitReason::ConfirmPreferences))
+        .edge(START, "approve")
+        .edge("approve", END);
+    let mut events = graphs.subscribe();
+    let rx = {
+        let graphs = graphs.clone();
+        runtime::spawn(async move { graphs.run(&graph, "r", Flow::default()).await })
+    };
+    runtime::block_on(async {
+        assert!(matches!(graphs.run(&paused, "w", Flow::default()).await.unwrap(), Outcome::Waiting(_)));
+        loop {
+            let p = events.recv().await.unwrap();
+            if p.event == (ProgressEvent::NodeStarted { node: "sleep".into() }) {
+                break;
+            }
+        }
+        let running = graphs.running().unwrap();
+        assert_eq!(running.len(), 1, "{running:?}");
+        assert_eq!((running[0].thread.as_str(), running[0].graph.as_str()), ("r", "long"));
+        assert_eq!(running[0].status, ThreadStatus::Running);
+        assert_eq!(graphs.current_nodes("r").unwrap(), ["sleep"]);
+        assert_eq!(graphs.current_nodes("w").unwrap(), ["approve"]);
+        assert!(graphs.current_nodes("nope").unwrap().is_empty());
+        graphs.cancel("r").unwrap();
+    });
+    assert_eq!(runtime::block_on(rx).unwrap().unwrap(), Outcome::Cancelled);
+    assert!(graphs.running().unwrap().is_empty());
+}
+
+#[test]
+fn running_is_ordered_by_thread_not_by_the_last_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let graphs = graphs_at(&db(dir.path()));
+    let long = || {
+        GraphDef::<Flow>::new("long")
+            .node("first", |s: Flow| ready(Ok(s)))
+            .node("sleep", |s: Flow| async move {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok(s)
+            })
+            .edge(START, "first")
+            .edge("first", "sleep")
+            .edge("sleep", END)
+    };
+    let mut events = graphs.subscribe();
+    let mut start = |thread: &'static str| {
+        let rx = {
+            let graphs = graphs.clone();
+            let graph = long();
+            runtime::spawn(async move { graphs.run(&graph, thread, Flow::default()).await })
+        };
+        runtime::block_on(async {
+            loop {
+                let p = events.recv().await.unwrap();
+                if p.thread == thread && p.event == (ProgressEvent::NodeStarted { node: "sleep".into() }) {
+                    break;
+                }
+            }
+        });
+        rx
+    };
+    // "b" starts first, so "a" has the newer checkpoint: the list is by thread all the same.
+    let b = start("b");
+    let a = start("a");
+    let threads = |graphs: &Graphs| {
+        graphs.running().unwrap().into_iter().map(|i| i.thread).collect::<Vec<_>>()
+    };
+    assert_eq!(threads(&graphs), ["a", "b"]);
+    graphs.cancel("a").unwrap();
+    graphs.cancel("b").unwrap();
+    assert_eq!(runtime::block_on(a).unwrap().unwrap(), Outcome::Cancelled);
+    assert_eq!(runtime::block_on(b).unwrap().unwrap(), Outcome::Cancelled);
+}
+
+#[test]
 fn a_thread_left_running_by_a_crash_reads_as_failed_and_can_resume() {
     let dir = tempfile::tempdir().unwrap();
     let path = db(dir.path());
