@@ -942,6 +942,100 @@ fn the_markdown_shows_the_gap_the_wishes_and_the_new_terms_from_the_counts() {
     assert!(!md.contains("](http://"), "{md}");
 }
 
+#[test]
+fn the_coverage_says_the_counted_line_and_only_the_facts_that_apply() {
+    let months: Vec<String> = ["2026-06", "2026-07", "2026-08"].map(String::from).to_vec();
+    let complete = Coverage { postings_counted: 480, postings_unreadable: 0, items_counted: 500, left_unread_at_source: Some(0), months_without_postings: vec![], not_comparable: vec![] };
+    // Nothing but the counted line when all is complete (an unknown left-unread is not a fact either).
+    assert_eq!(complete.lines(&months), ["Counted 480 hiring postings over 2026-06 to 2026-08."]);
+    assert_eq!(Coverage { left_unread_at_source: None, ..complete.clone() }.lines(&months), complete.lines(&months));
+    assert_eq!(complete.lines(&months[..1]), ["Counted 480 hiring postings in 2026-06."]);
+    assert_eq!(complete.lines(&[]), ["Counted 480 hiring postings."]);
+    assert_eq!(Coverage { postings_counted: 1, ..complete.clone() }.lines(&months), ["Counted 1 hiring posting over 2026-06 to 2026-08."]);
+
+    // Each fact appears alone, in its own sentence.
+    let only = |patch: Coverage| patch.lines(&months)[1..].to_vec();
+    assert_eq!(only(Coverage { postings_unreadable: 1, ..complete.clone() }), ["1 Hacker News item could not be read; it may have been a posting."]);
+    assert_eq!(only(Coverage { postings_unreadable: 14, ..complete.clone() }), ["14 Hacker News items could not be read; some may have been postings."]);
+    assert_eq!(only(Coverage { left_unread_at_source: Some(1), ..complete.clone() }), ["In this run the sources left 1 item or thread unread."]);
+    assert_eq!(only(Coverage { left_unread_at_source: Some(120), ..complete.clone() }), ["In this run the sources left 120 items or threads unread."]);
+    assert_eq!(only(Coverage { months_without_postings: vec!["2026-07".into()], ..complete.clone() }), ["No hiring postings were counted in 2026-07."]);
+    assert_eq!(
+        only(Coverage { months_without_postings: vec!["2026-06".into(), "2026-07".into()], ..complete.clone() }),
+        ["No hiring postings were counted in 2026-06, 2026-07."]
+    );
+    assert_eq!(
+        only(Coverage { not_comparable: vec![Stratum::Yc, Stratum::Feed], ..complete.clone() }),
+        ["Not compared with the period before (too few items or too uneven): YC companies, feed and page items."]
+    );
+
+    // All of them, in this order.
+    let partial = Coverage {
+        postings_counted: 310,
+        postings_unreadable: 4,
+        items_counted: 400,
+        left_unread_at_source: Some(25),
+        months_without_postings: vec!["2026-07".into()],
+        not_comparable: vec![Stratum::HnStory],
+    };
+    assert_eq!(
+        partial.lines(&months),
+        [
+            "Counted 310 hiring postings over 2026-06 to 2026-08.",
+            "4 Hacker News items could not be read; some may have been postings.",
+            "In this run the sources left 25 items or threads unread.",
+            "No hiring postings were counted in 2026-07.",
+            "Not compared with the period before (too few items or too uneven): Hacker News stories.",
+        ]
+    );
+
+    // Without any posting the first sentence says so, and the months are not listed again.
+    let none = Coverage { months_without_postings: months.clone(), postings_unreadable: 2, ..Coverage::default() };
+    assert_eq!(none.lines(&months), ["No hiring postings were counted over 2026-06 to 2026-08.", "2 Hacker News items could not be read; some may have been postings."]);
+}
+
+#[test]
+fn a_level_is_a_share_with_its_range_and_only_when_the_counts_have_one() {
+    assert_eq!(level_text(3, 94, 71, 123), Some(("9.4%".to_string(), "7.1% to 12.3%".to_string())));
+    assert_eq!(level_text(3, 0, 0, 12), Some(("0.0%".to_string(), "0.0% to 1.2%".to_string())), "a skill named in none of the postings still has a range");
+    assert_eq!(level_text(0, 94, 71, 123), None, "a report saved before the tests");
+    assert_eq!(level_text(3, 0, 0, 0), None, "no document in the period's months: no share to take");
+}
+
+#[test]
+fn the_markdown_shows_the_period_level_with_its_range_and_the_coverage() {
+    let skill = |name: &str, level: (u32, u32, u32)| SkillCount { skill: name.into(), by_month: vec![3, 9], total: 12, target: 9, target_permille: level.0, low_permille: level.1, high_permille: level.2, ..SkillCount::default() };
+    let mut data = DigestData {
+        counts: SkillCounts {
+            months: vec!["2026-10".into(), "2026-11".into()],
+            target_months: 1,
+            documents: vec![40, 52],
+            skills: vec![skill("Rust", (94, 71, 123)), skill("a|b", (0, 0, 0))],
+            coverage: Coverage { postings_counted: 92, left_unread_at_source: Some(12), ..Coverage::default() },
+            ..SkillCounts::default()
+        },
+        ..DigestData::default()
+    };
+    let md = cite::render_markdown(&Period::parse("2026-W46").unwrap(), &data);
+    for expected in [
+        "(counted by the app). The last column is the share of the postings of the period's own months, with its 95% range.\n\n",
+        "| Skill | 2026-10 | 2026-11 | Total | This period (95% range) |\n|---|---|---|---|---|\n",
+        "| Rust | 3 | 9 | 12 | 9.4% (7.1% to 12.3%) |\n",
+        "| a\\|b | 3 | 9 | 12 | - |\n",
+        "\n\nCoverage: Counted 92 hiring postings over 2026-10 to 2026-11. In this run the sources left 12 items or threads unread.\n\n",
+    ] {
+        assert!(md.contains(expected), "{expected:?} missing in {md}");
+    }
+    assert!(md.find("| Rust |").unwrap() < md.find("Coverage:").unwrap(), "the coverage is under the table: {md}");
+
+    // Counts saved before the tests: the table as it was, and no coverage to say.
+    data.counts.target_months = 0;
+    data.counts.coverage = Coverage::default();
+    let md = cite::render_markdown(&Period::parse("2026-W46").unwrap(), &data);
+    assert!(md.contains("| Skill | 2026-10 | 2026-11 | Total |\n|---|---|---|---|\n| Rust | 3 | 9 | 12 |\n"), "{md}");
+    assert!(!md.contains("This period") && !md.contains("Coverage"), "{md}");
+}
+
 /// What the pick tests share: five postings of this thread, the newest items of the period, then
 /// three other items (an HN text post, a feed post, a page), older, and a posting of a thread two
 /// months old, which belongs to its own month.

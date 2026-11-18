@@ -200,8 +200,9 @@ fn percent(part: u32, whole: u32) -> String {
     super::permille_text(super::permille(u64::from(part), u64::from(whole)))
 }
 
-/// One scope's table: postings per month, then per skill its share per month, total and direction.
-fn scope_table(out: &mut String, months: &[String], scope: &ScopeCounts) {
+/// One scope's table: postings per month, then per skill its share per month, total and direction,
+/// and (when the counts have them) its level in the period's own months with the 95% range.
+fn scope_table(out: &mut String, months: &[String], scope: &ScopeCounts, target_months: u32) {
     let _ = writeln!(out, "months: {}", months.join(" "));
     let _ = writeln!(out, "postings read: {}", join_numbers(&scope.documents));
     if scope.skills.is_empty() {
@@ -209,9 +210,12 @@ fn scope_table(out: &mut String, months: &[String], scope: &ScopeCounts) {
     }
     for skill in scope.skills.iter().take(TABLE_SKILLS) {
         let shares: Vec<String> = skill.by_month.iter().zip(&scope.documents).map(|(&n, &d)| percent(n, d)).collect();
+        let level = super::level_text(target_months, skill.target_permille, skill.low_permille, skill.high_permille)
+            .map(|(share, range)| format!(", this period {share} ({range})"))
+            .unwrap_or_default();
         let _ = writeln!(
             out,
-            "- {}: {} (total {}, {})",
+            "- {}: {} (total {}, {}){level}",
             own(&skill.skill),
             shares.join(" "),
             skill.total,
@@ -235,16 +239,31 @@ fn market_block(out: &mut String, counts: &SkillCounts) {
          the app: {target} against the months before them, and the trend over all the months. \"unclear\" means the data \
          cannot tell (the usual case with few postings).",
     );
+    if counts.target_months > 0 {
+        let _ = writeln!(
+            out,
+            "\"this period\" is a skill's share of the postings of {target}, with the 95% range of that share at this \
+             many postings. A wide range means the level is uncertain."
+        );
+    }
+    let coverage = format!("\nCoverage of these numbers, from the app: {}\n", counts.coverage.lines(&counts.months).join(" "));
     if counts.documents.iter().all(|&n| n == 0) {
         out.push_str("- no hiring postings were counted: say that the skill numbers are missing\n");
+        out.push_str(&coverage);
         return;
     }
     out.push_str("\nGlobal (every posting):\n");
-    scope_table(out, &counts.months, &ScopeCounts { documents: counts.documents.clone(), skills: counts.skills.clone() });
+    scope_table(
+        out,
+        &counts.months,
+        &ScopeCounts { documents: counts.documents.clone(), skills: counts.skills.clone() },
+        counts.target_months,
+    );
     if let Some(local) = &counts.local {
         let _ = writeln!(out, "\nLocal (postings that name {}):", own(&counts.place));
-        scope_table(out, &counts.months, local);
+        scope_table(out, &counts.months, local, counts.target_months);
     }
+    out.push_str(&coverage);
 
     let why = match (counts.gap_scope, &counts.local) {
         (GapScope::Local, _) => "the local scope: it has enough postings in the months before the period and in the period's own months",
@@ -429,12 +448,17 @@ mod tests {
         SkillCount { skill: name.into(), by_month: by_month.to_vec(), total: by_month.iter().sum(), direction, ..SkillCount::default() }
     }
 
+    /// A skill with its level in the period's own month: the share and its 95% range, in per mille.
+    fn skill_at(name: &str, by_month: [u32; 2], direction: Direction, level: (u32, u32, u32)) -> SkillCount {
+        SkillCount { target: by_month[1], target_permille: level.0, low_permille: level.1, high_permille: level.2, ..skill(name, by_month, direction) }
+    }
+
     fn counts() -> SkillCounts {
         SkillCounts {
             months: vec!["2026-10".into(), "2026-11".into()],
             target_months: 1,
             documents: vec![40, 52],
-            skills: vec![skill("Rust", [3, 9], Direction::Rising), skill("Python", [10, 5], Direction::Falling)],
+            skills: vec![skill_at("Rust", [3, 9], Direction::Rising, (94, 71, 123)), skill("Python", [10, 5], Direction::Falling)],
             local: Some(ScopeCounts { documents: vec![8, 0], skills: vec![skill("Rust", [2, 0], Direction::Unclear)] }),
             place: "Singapore".into(),
             field: vec!["platform".into(), "engineer".into()],
@@ -450,7 +474,14 @@ mod tests {
                 TermCount { term: "htmx".into(), items: 9, stratum: Stratum::HiringPosting, ..TermCount::default() },
                 TermCount { term: "zero trust".into(), items: 12, stratum: Stratum::HnStory, ..TermCount::default() },
             ],
-            coverage: Coverage { not_comparable: vec![Stratum::HnStory, Stratum::Yc], ..Coverage::default() },
+            coverage: Coverage {
+                postings_counted: 92,
+                postings_unreadable: 3,
+                items_counted: 120,
+                left_unread_at_source: Some(12),
+                months_without_postings: Vec::new(),
+                not_comparable: vec![Stratum::HnStory, Stratum::Yc],
+            },
             wishes: vec![
                 WishSignal { wish: "Kotlin".into(), kind: WishKind::Skill, avoided: false, direction: Direction::Steady, mentions: 6 },
                 WishSignal { wish: "fintech".into(), kind: WishKind::Domain, avoided: true, direction: Direction::Unclear, mentions: 0 },
@@ -525,9 +556,29 @@ mod tests {
         );
         assert!(market.contains("\"unclear\" means the data cannot tell") && !market.contains("half"), "{market}");
         assert!(market.contains("Global (every posting):\nmonths: 2026-10 2026-11\npostings read: 40 52\n"), "{market}");
-        assert!(market.contains("- Rust: 7.5% 17.3% (total 12, rising)"), "{market}");
-        assert!(market.contains("- Python: 25.0% 9.6% (total 15, falling)"), "{market}");
-        assert!(market.contains("Local (postings that name Singapore):\nmonths: 2026-10 2026-11\npostings read: 8 0\n- Rust: 25.0% - (total 2, unclear)"), "{market}");
+        // The level of the period with its range, where the counts have one; a skill without one reads as before.
+        assert!(market.contains("- Rust: 7.5% 17.3% (total 12, rising), this period 9.4% (7.1% to 12.3%)\n"), "{market}");
+        assert!(market.contains("- Python: 25.0% 9.6% (total 15, falling)\n"), "{market}");
+        assert!(
+            market.contains("\"this period\" is a skill's share of the postings of the period's own month (the last of the months), with the 95% range"),
+            "the level is explained when there is one: {market}"
+        );
+        // One coverage line after the tables, from the same facts as the markdown's.
+        assert!(
+            market.contains(
+                "\nCoverage of these numbers, from the app: Counted 92 hiring postings over 2026-10 to 2026-11. \
+                 3 Hacker News items could not be read; some may have been postings. \
+                 In this run the sources left 12 items or threads unread. \
+                 Not compared with the period before (too few items or too uneven): Hacker News stories, YC companies.\n"
+            ),
+            "{market}"
+        );
+        assert!(
+            market.find("Coverage of these numbers").unwrap() > market.find("Local (postings that name").unwrap()
+                && market.find("Coverage of these numbers").unwrap() < market.find("The gap and the wishes").unwrap(),
+            "after the tables, before the gap: {market}"
+        );
+        assert!(market.contains("Local (postings that name Singapore):\nmonths: 2026-10 2026-11\npostings read: 8 0\n- Rust: 25.0% - (total 2, unclear)\n"), "{market}");
         assert!(market.contains("judged on the global scope: too little local data"), "{market}");
         assert!(market.contains("naming platform, engineer"), "{market}");
         assert!(market.contains("- build on: Rust (rising, 13.0%)\n- learn next: Kafka (steady, 7.5%)\n- at risk: Python (falling, 16.3%)"), "{market}");
@@ -552,6 +603,9 @@ mod tests {
         assert!(prompt.contains("no profile was readable: describe the market in general terms"), "{prompt}");
         assert!(prompt.contains("- place: none set"), "{prompt}");
         assert!(prompt.contains("no hiring postings were counted"), "{prompt}");
+        // Counts that carry no split of the months have no level to show, and say what they saw.
+        assert!(!prompt.contains("this period") && !prompt.contains("95% range"), "{prompt}");
+        assert!(prompt.contains("\nCoverage of these numbers, from the app: No hiring postings were counted.\n"), "{prompt}");
         assert!(prompt.contains("- none saved: leave the wishes_check section out"), "{prompt}");
         assert!(!prompt.contains("Global (every posting)"));
     }

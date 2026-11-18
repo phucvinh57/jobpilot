@@ -13,7 +13,9 @@
 //!   months, under one control of false discoveries per scope. New terms the vocabulary does not
 //!   know come from the words of every item ([`terms`]), per kind of item ([`Stratum`]), ranked
 //!   by a test where the volumes allow one. The model never counts. The counts also say what was
-//!   not seen ([`Coverage`]).
+//!   not seen ([`Coverage`]); [`Coverage::lines`] puts it in words, the same for the prompt, the
+//!   markdown, the PDF and the screen, next to each skill's level in the period's own months with
+//!   its 95% range ([`level_text`]).
 //! - `extract` ([`extract`]): the model reads a capped pick of the period's items, chosen so that
 //!   it can cite the indicators `count` found ([`pick`]): per item `{ topics[], claims[{text,
 //!   quote}] }`, in batched model calls with bounded concurrency. Item text is wrapped as
@@ -239,6 +241,18 @@ pub fn permille_text(permille: u32) -> String {
     format!("{}.{}%", permille / 10, permille % 10)
 }
 
+/// The level of a skill in the period's own months, in words: its share (`9.4%`) and the 95%
+/// range of that share (`7.1% to 12.3%`), from the per mille numbers of a [`SkillCount`] or a
+/// [`GapSkill`]. `None` in a report saved before the tests (`target_months` is 0), and when the
+/// period's months held no document to take a share of (no range, not even an empty one). The one
+/// place every surface (prompt, markdown, view) gets these words from.
+pub fn level_text(target_months: u32, target_permille: u32, low_permille: u32, high_permille: u32) -> Option<(String, String)> {
+    if target_months == 0 || high_permille == 0 {
+        return None;
+    }
+    Some((permille_text(target_permille), format!("{} to {}", permille_text(low_permille), permille_text(high_permille))))
+}
+
 /// Where a skill stands for this user: the market's direction against their background (the
 /// profile's skills), decided in code (`count::gap_bucket`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -409,6 +423,46 @@ pub struct Coverage {
     /// Kinds of item with items in the period that were not tested against the side before: too few
     /// documents on a side, or a volume that changed too much. Their terms are listed by level only.
     pub not_comparable: Vec<Stratum>,
+}
+
+impl Coverage {
+    /// What the counts saw and did not see, as plain sentences: the one every surface (the prompt,
+    /// the markdown, the PDF and the view) says, so they never disagree. `months` are the months of
+    /// the window, oldest first. The first sentence always comes: how many hiring postings were
+    /// counted, over which months. Each other fact comes only when it applies: postings that could
+    /// not be read, what the sources left unread in this run (items or threads, not postings), months
+    /// without postings, and the kinds of item that were not compared with the period before.
+    pub fn lines(&self, months: &[String]) -> Vec<String> {
+        let over = match (months.first(), months.last()) {
+            (Some(first), Some(last)) if first != last => format!(" over {first} to {last}"),
+            (Some(only), _) => format!(" in {only}"),
+            _ => String::new(),
+        };
+        let mut lines = vec![match self.postings_counted {
+            0 => format!("No hiring postings were counted{over}."),
+            1 => format!("Counted 1 hiring posting{over}."),
+            n => format!("Counted {n} hiring postings{over}."),
+        }];
+        match self.postings_unreadable {
+            0 => {}
+            1 => lines.push("1 Hacker News item could not be read; it may have been a posting.".to_string()),
+            n => lines.push(format!("{n} Hacker News items could not be read; some may have been postings.")),
+        }
+        match self.left_unread_at_source {
+            Some(1) => lines.push("In this run the sources left 1 item or thread unread.".to_string()),
+            Some(n) if n > 1 => lines.push(format!("In this run the sources left {n} items or threads unread.")),
+            _ => {}
+        }
+        // When no posting was counted at all, the first sentence has said it.
+        if self.postings_counted > 0 && !self.months_without_postings.is_empty() {
+            lines.push(format!("No hiring postings were counted in {}.", self.months_without_postings.join(", ")));
+        }
+        if !self.not_comparable.is_empty() {
+            let kinds: Vec<&str> = self.not_comparable.iter().map(|kind| kind.plural()).collect();
+            lines.push(format!("Not compared with the period before (too few items or too uneven): {}.", kinds.join(", ")));
+        }
+        lines
+    }
 }
 
 /// What a wish is.

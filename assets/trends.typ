@@ -122,6 +122,11 @@
   )
 }
 
+// What the counts saw and did not see.
+#if data.coverage.len() > 0 {
+  block(above: 8pt, text(size: 8.5pt, fill: muted, data.coverage.join(" ")))
+}
+
 #if data.dropped > 0 {
   v(6pt)
   text(

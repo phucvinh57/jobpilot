@@ -6,7 +6,7 @@ import { CommandError } from "@/lib/problem";
 import { renderWithToasts as render } from "@/test/render";
 import type { GraphProgress } from "@/api/events";
 
-import type { Digest, RunResult } from "@/types/trends";
+import type { Digest, RunResult, Term } from "@/types/trends";
 import { useRuns } from "@/hooks/trends/runs";
 import { useToasts } from "@/stores/toast";
 import {
@@ -19,6 +19,7 @@ import {
   localScope,
   oldChartFixture,
   overviewFixture,
+  PARTIAL_COVERAGE,
   reportRowFixture,
 } from "@/test/fixtures/trends";
 import { TrendsPage } from "./TrendsPage";
@@ -217,9 +218,14 @@ describe("the Trends screen", () => {
     const rows = within(chart.getByRole("list", { name: "Skill share, Local" }));
     expect(rows.getAllByRole("listitem")).toHaveLength(3);
     expect(
-      rows.getByRole("listitem", { name: /^Rust: 9\.4% · rising · in your profile · in your wishes · 56 in total/ }),
+      rows.getByRole("listitem", {
+        name: /^Rust: 9\.4% · this period 11\.2% \(8\.6% to 14\.4%\) · rising · in your profile · in your wishes · 56 in total/,
+      }),
     ).toBeTruthy();
     expect(rows.getAllByText("rising")).toHaveLength(2);
+    // Each bar's share over the window is the bar; the level of the period and its range sit under it.
+    expect(rows.getByText("this period 11.2% (8.6% to 14.4%)")).toBeTruthy();
+    expect(rows.getAllByText(/^this period /)).toHaveLength(3);
     expect(chart.getByText("In your profile")).toBeTruthy();
     expect(chart.getByText("In your wishes")).toBeTruthy();
     expect(
@@ -227,14 +233,27 @@ describe("the Trends screen", () => {
     ).toBeTruthy();
     expect(chart.getByRole("listitem", { name: "2026-06: 92 postings" })).toBeTruthy();
     expect(chart.getByText(/^Your own leads, for comparison: 26 over the window/)).toBeTruthy();
+    // A report that saw everything it could says what it counted in one plain line, not a notice.
+    expect(
+      chart.getByText(
+        (_, el) =>
+          el?.id === "trends-coverage" &&
+          el.textContent ===
+            "Counted 2106 hiring postings over 2026-06 to 2026-11. Not compared with the period before (too few items or too uneven): YC companies.",
+      ),
+    ).toBeTruthy();
+    expect(chart.queryByRole("group", { name: "The counts did not see everything" })).toBeNull();
 
     // The gap as the app sorted it, next to the model's point; the wishes; the unknown terms.
     const gap = within(screen.getByRole("region", { name: "Your gap: build on, learn next, at risk" }));
     expect(gap.getByText(/^Judged by the app on postings in Ho Chi Minh City/)).toBeTruthy();
     expect(
       within(gap.getByRole("group", { name: "Build on" })).getByRole("listitem", {
-        name: "Rust: 9.4% of postings, rising",
+        name: "Rust: 9.4% of postings, this period 13.0% (9.0% to 22.0%), rising",
       }),
+    ).toBeTruthy();
+    expect(
+      within(gap.getByRole("group", { name: "Build on" })).getByText("this period 13.0% (9.0% to 22.0%)"),
     ).toBeTruthy();
     expect(within(gap.getByRole("group", { name: "Learn next" })).getByText("Kubernetes")).toBeTruthy();
     expect(
@@ -245,8 +264,43 @@ describe("the Trends screen", () => {
     expect(wishes.getByRole("listitem", { name: "PHP (skill, avoided): falling, 29 postings" })).toBeTruthy();
     expect(wishes.getByText("skill you avoid")).toBeTruthy();
     expect(wishes.getByRole("listitem", { name: "climate tech (domain): no data, no posting names it" })).toBeTruthy();
-    expect(screen.getByText("Temporal (5 items), dbt (4 items)")).toBeTruthy();
+    // The terms the skill list does not know, by the kind of item, the tested risers marked.
+    expect(
+      screen.getByText(
+        "hiring postings: Temporal (5 items, rising), dbt (4 items); Hacker News stories: vector databases (14 items)",
+      ),
+    ).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Report search" })).toBeNull();
+  });
+
+  it("shows the coverage as a notice when the counts did not see everything", async () => {
+    mocks.api.overview.mockResolvedValue(
+      overviewFixture({ chart: chartFixture({ coverage: PARTIAL_COVERAGE, partial: true }) }),
+    );
+    await opened();
+    const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
+    const notice = within(chart.getByRole("group", { name: "The counts did not see everything" }));
+    // Each sentence is a line of its own (its months kept whole when it wraps).
+    expect(notice.getAllByRole("listitem").map((li) => li.textContent)).toEqual(PARTIAL_COVERAGE);
+    expect(document.querySelector("p#trends-coverage")).toBeNull();
+  });
+
+  it("lists the terms of a report saved before the kinds were told apart as it always did", async () => {
+    const base = overviewFixture();
+    const digest = base.digest;
+    if (digest === null || digest.body.kind !== "data") {
+      throw new Error("the fixture has a digest with data");
+    }
+    const terms: Term[] = [
+      { term: "Temporal", items: 5, kind: "", rising: false },
+      { term: "dbt", items: 4, kind: "", rising: false },
+    ];
+    mocks.api.overview.mockResolvedValue({
+      ...base,
+      digest: { ...digest, body: { ...digest.body, uncatalogued: terms } },
+    });
+    await opened();
+    expect(screen.getByText("Temporal (5 items), dbt (4 items)")).toBeTruthy();
   });
 
   it("switches the chart between the local and the global market", async () => {
@@ -262,7 +316,9 @@ describe("the Trends screen", () => {
     const rows = within(chart.getByRole("list", { name: "Skill share, Global" }));
     expect(rows.getAllByRole("listitem")).toHaveLength(2);
     expect(
-      rows.getByRole("listitem", { name: /^PHP: 4\.6% · falling · in your profile · in your wishes/ }),
+      rows.getByRole("listitem", {
+        name: /^PHP: 4\.6% · this period 3\.2% \(2\.4% to 4\.2%\) · falling · in your profile · in your wishes/,
+      }),
     ).toBeTruthy();
     expect(chart.getByText(/^Global market: every posting, 2106 hiring postings/)).toBeTruthy();
     expect(chart.getByRole("listitem", { name: "2026-06: 340 postings" })).toBeTruthy();
@@ -302,6 +358,9 @@ describe("the Trends screen", () => {
     expect(chart.queryByText("In your wishes")).toBeNull();
     expect(chart.queryByText("rising")).toBeNull();
     expect(chart.getByText(/2026-06 to 2026-11 \(398 read\)/)).toBeTruthy();
+    // No level, no range and no coverage in a report saved before the tests.
+    expect(chart.queryByText(/this period/)).toBeNull();
+    expect(document.querySelector("#trends-coverage")).toBeNull();
   });
 
   it("asks for the period of a new research in a dialog, with what the run does", async () => {

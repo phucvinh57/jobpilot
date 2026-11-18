@@ -35,16 +35,29 @@ export function pickScope(
   return find(picked) ?? find(chart.scope) ?? chart.scopes[0];
 }
 
-/** The accessible name and tooltip of a chart row: the share, the direction, the marks and the counts. */
+/** A level in the period's own months with the range it has at this many postings:
+ *  `this period 9.4% (7.1% to 12.3%)`. Nothing when the report has none (saved before the tests). */
+export function levelLine(level: { now: string | null; range: string | null }): string | undefined {
+  return level.now !== null && level.range !== null ? `this period ${level.now} (${level.range})` : undefined;
+}
+
+/** The accessible name and tooltip of a chart row: the share, the level of the period with its
+ *  range, the direction, the marks and the counts. */
 export function skillRowName(skill: {
   name: string;
   share: string;
+  now: string | null;
+  range: string | null;
   description: string;
   direction: { label: string } | null;
   inProfile: boolean;
   wished: boolean;
 }): string {
   const parts = [skill.share];
+  const level = levelLine(skill);
+  if (level) {
+    parts.push(level);
+  }
   if (skill.direction) {
     parts.push(skill.direction.label);
   }
@@ -57,9 +70,40 @@ export function skillRowName(skill: {
   return `${skill.name}: ${parts.join(" · ")} · ${skill.description}`;
 }
 
-/** The terms the skill list does not know, with how many items name each. */
+/** The accessible name of a skill of the gap: its share of the field's postings, the level of the
+ *  period with its range when the report has them, and the direction. */
+export function gapSkillName(skill: {
+  skill: string;
+  share: string;
+  now: string | null;
+  range: string | null;
+  direction: { label: string };
+}): string {
+  const level = levelLine(skill);
+  return `${skill.skill}: ${skill.share} of postings, ${level ? `${level}, ` : ""}${skill.direction.label}`;
+}
+
+/** The terms the skill list does not know, with how many items name each, grouped by the kind of
+ *  item they were found in (`hiring postings: Temporal (11 items, rising), dbt (9 items); ...`). The
+ *  shell sends the groups in display order; a term without a kind (a report saved before the kinds
+ *  were told apart) is listed plainly. */
 export function termsLine(terms: Term[]): string {
-  return terms.map((t) => `${t.term} (${t.items} item${t.items === 1 ? "" : "s"})`).join(", ");
+  const named = (t: Term) => `${t.term} (${t.items} item${t.items === 1 ? "" : "s"}${t.rising ? ", rising" : ""})`;
+  const groups: { kind: string; terms: Term[] }[] = [];
+  for (const term of terms) {
+    const group = groups.find((g) => g.kind === term.kind);
+    if (group) {
+      group.terms.push(term);
+    } else {
+      groups.push({ kind: term.kind, terms: [term] });
+    }
+  }
+  return groups
+    .map((g) => {
+      const list = g.terms.map(named).join(", ");
+      return g.kind === "" ? list : `${g.kind}: ${list}`;
+    })
+    .join("; ");
 }
 
 /** In the "New research" dialog: what a run for `periodLabel` does. */

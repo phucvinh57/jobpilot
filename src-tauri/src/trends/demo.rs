@@ -208,19 +208,30 @@ pub fn seed_demo(core: &Core) -> Result<()> {
         dropped: 1,
     };
     // One report per cadence, so the Reports list has a row in each; the week is saved last and
-    // is the one shown first.
+    // is the one shown first. The month's report is the one whose counts did not see everything:
+    // it shows the coverage as a notice.
     let today = now.date_naive();
     let last_year = today.with_year(today.year() - 1).unwrap_or(today);
+    let partial = partial(&data);
     for other in [
         Period::year_of(last_year),
         Period::quarter_of(today),
-        Period::month_of(today),
         Period::week_of(today - Duration::days(7)),
     ] {
         core.save_trend_digest(&other, &data)?;
     }
+    core.save_trend_digest(&Period::month_of(today), &partial)?;
     core.save_trend_digest(&period, &data)?;
     Ok(())
+}
+
+/// The same report from counts that did not see everything: postings whose text could not be
+/// read, and items a source left unread in the run.
+fn partial(data: &DigestData) -> DigestData {
+    let mut data = data.clone();
+    data.counts.coverage.postings_unreadable = 14;
+    data.counts.coverage.left_unread_at_source = Some(120);
+    data
 }
 
 /// A skill of the demo: postings naming it per month, and its direction (set by hand; the test

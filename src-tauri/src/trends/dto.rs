@@ -18,11 +18,12 @@ use chrono::Utc;
 use serde::Serialize;
 
 use super::rules::{
-    bucket_key, bucket_words, challenge_name, challenge_phrase, describe, describe_source,
-    direction_tag, header_summary, is_web_url, judged_on, knows_background,
-    latest_month_is_partial, month_label, percent, percent_text, period_title, permille,
-    pipeline_note, scope_key, scope_note, section_title, status_tag, status_text, summarize,
-    target, when, wish_kind, wish_signal, Cadence, Field, Tone, BUCKETS,
+    bucket_key, bucket_words, challenge_name, challenge_phrase, coverage_is_partial,
+    coverage_lines, describe, describe_source, direction_tag, gap_level, header_summary,
+    is_web_url, judged_on, knows_background, latest_month_is_partial, month_label, percent,
+    percent_text, period_title, permille, pipeline_note, scope_key, scope_note, section_title,
+    skill_level, status_tag, status_text, summarize, target, term_kind, when, wish_kind,
+    wish_signal, Cadence, Field, Tone, BUCKETS,
 };
 use crate::shared::{CommandError, CommandResult};
 
@@ -185,6 +186,12 @@ pub struct GapSkillDto {
     pub skill: String,
     /// `18%`: its share of the field's postings over the window.
     pub share: String,
+    /// `13.0%`: its share of the field's postings in the period's own months (`None` for a report
+    /// saved before the tests).
+    pub now: Option<String>,
+    /// `9.0% to 22.0%`: the 95% range of `now`, how far it can be trusted at this many postings
+    /// (`None` as `now`).
+    pub range: Option<String>,
     pub direction: TagDto,
 }
 
@@ -218,6 +225,11 @@ pub struct TermDto {
     pub term: String,
     /// Items whose topics name it.
     pub items: u32,
+    /// The kind of item it was found in: `hiring postings`, `Hacker News stories`, `YC companies`,
+    /// `feeds`, `other items` (empty for a report saved before the kinds were told apart).
+    pub kind: String,
+    /// Tested against the period before and kept after the control of false discoveries.
+    pub rising: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -268,6 +280,8 @@ impl DigestDto {
                     .map(|t| TermDto {
                         term: t.term.clone(),
                         items: t.items,
+                        kind: term_kind(data.counts.target_months, t.stratum),
+                        rising: t.rising,
                     })
                     .collect(),
             },
@@ -341,10 +355,15 @@ fn gap_dto(counts: &SkillCounts) -> GapDto {
                         .gap
                         .iter()
                         .filter(|g| g.bucket == bucket)
-                        .map(|g| GapSkillDto {
-                            skill: g.skill.clone(),
-                            share: percent_text(g.share_permille),
-                            direction: tag(direction_tag(g.direction)),
+                        .map(|g| {
+                            let level = gap_level(g, counts.target_months);
+                            GapSkillDto {
+                                skill: g.skill.clone(),
+                                share: percent_text(g.share_permille),
+                                now: level.as_ref().map(|(now, _)| now.clone()),
+                                range: level.map(|(_, range)| range),
+                                direction: tag(direction_tag(g.direction)),
+                            }
                         })
                         .collect(),
                 }
@@ -429,6 +448,12 @@ pub struct ChartDto {
     pub marks: bool,
     /// The user's own leads, for comparison (never counted in the market).
     pub pipeline: Option<String>,
+    /// What the counts saw and did not see, one sentence per fact: how many postings were counted
+    /// over which months first, then only what applies (empty for a report saved before the tests).
+    pub coverage: Vec<String>,
+    /// Something was not seen (postings that could not be read, items or threads a source left
+    /// unread, a month without postings): the screen shows the coverage as a notice.
+    pub partial: bool,
 }
 
 /// One slice of the market's postings.
@@ -475,6 +500,11 @@ pub struct ChartSkillDto {
     pub description: String,
     /// `absent` / `added` / `avoided`: where the skill stands in the saved preferences.
     pub presence: &'static str,
+    /// Its share of the scope's postings in the period's own months: `9.4%` (`None` for a report
+    /// saved before the tests).
+    pub now: Option<String>,
+    /// The 95% range of `now`: `7.1% to 12.3%` (`None` as `now`).
+    pub range: Option<String>,
     /// Where its share is going, decided in code (`None` for a report saved before).
     pub direction: Option<TagDto>,
     /// In the user's profile.
@@ -527,6 +557,8 @@ impl ChartDto {
             to_month: counts.months.last().cloned().unwrap_or_default(),
             marks: knows,
             pipeline: counts.pipeline.as_ref().map(pipeline_note),
+            coverage: coverage_lines(counts),
+            partial: coverage_is_partial(counts),
         })
     }
 }
@@ -546,6 +578,7 @@ fn scope_dto(
         .take(CHART_ROWS)
         .map(|skill| {
             let share = permille(skill.total, documents);
+            let level = skill_level(skill, counts.target_months);
             ChartSkillDto {
                 name: skill.skill.clone(),
                 total: skill.total,
@@ -554,6 +587,8 @@ fn scope_dto(
                 description: describe(skill, &data.documents, partial),
                 // Any skill of the chart, rising or not: adding it makes no claim about the trend.
                 presence: Field::Skills.presence(prefs, &skill.skill).as_str(),
+                now: level.as_ref().map(|(now, _)| now.clone()),
+                range: level.map(|(_, range)| range),
                 direction: knows.then(|| tag(direction_tag(skill.direction))),
                 in_profile: skill.in_profile,
                 wished: skill.wished,
@@ -581,7 +616,13 @@ fn scope_dto(
             })
             .collect(),
         max_percent: skills.iter().map(|s| s.percent).max().unwrap_or(0).max(1),
-        note: scope_note(scope, data, counts.gap_scope, knows),
+        note: scope_note(
+            scope,
+            data,
+            counts.gap_scope,
+            knows,
+            counts.target_months > 0,
+        ),
         skills,
     }
 }
@@ -766,8 +807,8 @@ mod tests {
     use jobpilot_engine::graph::{Failure, Outcome, WaitReason};
     use jobpilot_engine::health::Problem;
     use jobpilot_engine::trends::digest::{
-        Direction, GapBucket, GapScope, GapSkill, ScopeCounts, TermCount, WishKind, WishSignal,
-        MARKET_SCAN_VERSION,
+        Coverage, Direction, GapBucket, GapScope, GapSkill, ScopeCounts, Stratum, TermCount,
+        WishKind, WishSignal, MARKET_SCAN_VERSION,
     };
     use jobpilot_engine::trends::{
         CitedItem, Digest, DigestData, Period, Point, Section, SkillCount, SkillCounts, TrendRun,
@@ -775,7 +816,7 @@ mod tests {
     use jobpilot_engine::{Core, Paths, Secrets};
 
     use super::{
-        overview, run_result, sections, ChartDto, DigestBodyDto,
+        overview, run_result, sections, ChartDto, DigestBodyDto, DigestDto,
     };
     use jobpilot_engine::prefs::Preferences;
     use crate::trends::demo;
@@ -922,6 +963,11 @@ mod tests {
             [("Rust", 15, "15%", "absent"), ("Go", 3, "2.5%", "added")]
         );
         assert!(global.skills.iter().all(|s| s.direction.is_none()));
+        assert!(
+            global.skills.iter().all(|s| s.now.is_none() && s.range.is_none()),
+            "no level in a report saved before the tests"
+        );
+        assert!(chart.coverage.is_empty() && !chart.partial);
         assert_eq!(
             (chart.from_month.as_str(), chart.to_month.as_str()),
             ("2026-10", "2026-11")
@@ -1014,7 +1060,7 @@ mod tests {
             chart.scopes[0]
                 .note
                 .as_deref()
-                .is_some_and(|n| n.starts_with("Too few postings")),
+                .is_some_and(|n| n.starts_with("No clear movement in the postings yet")),
             "no local skill has a direction yet"
         );
     }
@@ -1035,6 +1081,7 @@ mod tests {
             points: vec![point(Section::WishesCheck, "PHP", &[7])],
             counts: SkillCounts {
                 version: MARKET_SCAN_VERSION,
+                target_months: 3,
                 place: "Singapore".into(),
                 field: vec!["backend".into(), "engineer".into()],
                 gap_scope: GapScope::Local,
@@ -1042,11 +1089,21 @@ mod tests {
                     gap("Rust", GapBucket::BuildOn, Direction::Rising, 182),
                     gap("Kubernetes", GapBucket::LearnNext, Direction::Steady, 95),
                 ],
-                uncatalogued: vec![TermCount {
-                    term: "Temporal".into(),
-                    items: 4,
-                    ..TermCount::default()
-                }],
+                uncatalogued: vec![
+                    TermCount {
+                        term: "Temporal".into(),
+                        items: 4,
+                        stratum: Stratum::HiringPosting,
+                        z_centi: 312,
+                        rising: true,
+                    },
+                    TermCount {
+                        term: "zero trust".into(),
+                        items: 9,
+                        stratum: Stratum::HnStory,
+                        ..TermCount::default()
+                    },
+                ],
                 wishes: vec![
                     WishSignal {
                         wish: "PHP".into(),
@@ -1099,6 +1156,12 @@ mod tests {
             ("18%", "rising")
         );
         assert_eq!(gap.groups[1].skills[0].share, "9.5%");
+        // The level of the period's months, with its range, beside the share over the window.
+        assert_eq!(
+            (rust.now.as_deref(), rust.range.as_deref()),
+            (Some("18.2%"), Some("16.2% to 20.2%"))
+        );
+        assert_eq!(gap.groups[1].skills[0].range.as_deref(), Some("7.5% to 11.5%"));
 
         let wishes = out[1].wishes.as_ref().expect("the wishes");
         assert_eq!(out[1].points.len(), 1);
@@ -1139,6 +1202,124 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].title, "What it means for you");
         assert!(out[0].gap.is_none() && out[0].wishes.is_none());
+    }
+
+    /// A skill with its level in the period's own months (per mille: the share, its 95% range).
+    fn skill_at(name: &str, by_month: &[u32], level: (u32, u32, u32)) -> SkillCount {
+        SkillCount {
+            target_permille: level.0,
+            low_permille: level.1,
+            high_permille: level.2,
+            ..skill(name, by_month)
+        }
+    }
+
+    fn new_counts(coverage: Coverage) -> SkillCounts {
+        SkillCounts {
+            version: MARKET_SCAN_VERSION,
+            months: vec!["2026-10".into(), "2026-11".into()],
+            target_months: 1,
+            documents: vec![200, 200],
+            skills: vec![
+                skill_at("Rust", &[30, 40], (94, 71, 123)),
+                skill("Zig", &[1, 0]),
+            ],
+            coverage,
+            ..SkillCounts::default()
+        }
+    }
+
+    #[test]
+    fn a_new_chart_shows_each_skills_level_and_range_and_what_the_counts_did_not_see() {
+        let complete = Coverage {
+            postings_counted: 400,
+            left_unread_at_source: Some(0),
+            not_comparable: vec![Stratum::Yc],
+            ..Coverage::default()
+        };
+        let chart = ChartDto::new(&digest_of(new_counts(complete.clone())), &Preferences::default())
+            .expect("a chart");
+        let rust = &chart.scopes[0].skills[0];
+        assert_eq!(
+            (rust.now.as_deref(), rust.range.as_deref()),
+            (Some("9.4%"), Some("7.1% to 12.3%"))
+        );
+        let zig = &chart.scopes[0].skills[1];
+        assert!(
+            zig.now.is_none() && zig.range.is_none(),
+            "no share where the period's months held no document to take it of"
+        );
+        assert_eq!(
+            chart.coverage,
+            [
+                "Counted 400 hiring postings over 2026-10 to 2026-11.",
+                "Not compared with the period before (too few items or too uneven): YC companies."
+            ]
+        );
+        assert!(!chart.partial, "a complete report is a plain line, not a notice");
+        assert_eq!(
+            chart.scopes[0].note.as_deref(),
+            Some("No clear movement in the postings yet: the shares, with their ranges, are what to read.")
+        );
+
+        let partial = Coverage {
+            postings_unreadable: 3,
+            left_unread_at_source: Some(25),
+            ..complete
+        };
+        let chart = ChartDto::new(&digest_of(new_counts(partial)), &Preferences::default())
+            .expect("a chart");
+        assert!(chart.partial);
+        assert!(chart.coverage.iter().any(|l| l.starts_with("3 Hacker News items could not be read")));
+        assert!(chart.coverage.iter().any(|l| l == "In this run the sources left 25 items or threads unread."));
+    }
+
+    #[test]
+    fn a_report_saved_before_the_tests_has_no_range_no_coverage_and_no_kind() {
+        // The counts of the market scan (version 1), made before the tests: levels, coverage and
+        // kinds of item did not exist, and what the report said stays as it was.
+        let old = r#"{"items":[],"points":[],"items_read":0,"dropped":0,
+            "counts":{"version":1,"months":["2026-10","2026-11"],"documents":[100,100],
+                "skills":[{"skill":"Rust","by_month":[10,20],"total":30,"direction":"rising","in_profile":true}],
+                "gap_scope":"global",
+                "gap":[{"skill":"Rust","bucket":"build_on","direction":"rising","share_permille":150}],
+                "uncatalogued":[{"term":"mojo","items":4}]}}"#;
+        let data: DigestData = serde_json::from_str(old).expect("an old report reads back");
+        let digest = digest_of(data.counts.clone());
+
+        let chart = ChartDto::new(&digest, &Preferences::default()).expect("a chart");
+        let rust = &chart.scopes[0].skills[0];
+        assert!(rust.now.is_none() && rust.range.is_none());
+        assert!(chart.coverage.is_empty() && !chart.partial);
+        assert_eq!(
+            chart.scopes[0].note, None,
+            "a skill with a direction needs no note"
+        );
+
+        let sections = sections(&data, &Preferences::default());
+        let gap = sections[0].gap.as_ref().expect("the gap");
+        let skill = &gap.groups[0].skills[0];
+        assert_eq!(skill.share, "15%");
+        assert!(skill.now.is_none() && skill.range.is_none());
+
+        let DigestDto { body, .. } = DigestDto::new(
+            &Digest {
+                data: Some(data),
+                ..digest
+            },
+            &Preferences::default(),
+        );
+        let DigestBodyDto::Data { uncatalogued, .. } = body else {
+            panic!("an old report has data")
+        };
+        assert_eq!(
+            uncatalogued
+                .iter()
+                .map(|t| (t.term.as_str(), t.items, t.kind.as_str(), t.rising))
+                .collect::<Vec<_>>(),
+            [("mojo", 4, "", false)],
+            "its terms came from a mix of kinds: no kind is claimed"
+        );
     }
 
     #[test]
@@ -1260,6 +1441,24 @@ mod tests {
             [("local", 10), ("global", 10)]
         );
         assert!(chart.scopes[0].documents < chart.scopes[1].documents);
+        // The demo's skills have a level with a range, and the shown (complete) report has a plain coverage line.
+        assert!(chart
+            .scopes
+            .iter()
+            .flat_map(|s| &s.skills)
+            .all(|s| s.now.is_some() && s.range.is_some()));
+        assert!(!chart.coverage.is_empty() && !chart.partial);
+        assert!(uncatalogued.iter().any(|t| t.rising && t.kind == "hiring postings"));
+        assert!(uncatalogued.iter().any(|t| !t.rising && t.kind == "Hacker News stories"));
+        // One of the other demo reports is partial, so its notice can be seen.
+        let partial = seen
+            .history
+            .iter()
+            .filter(|r| r.id != digest.report_id)
+            .filter_map(|r| overview(&core, Some(r.id), Cadence::Weekly).ok()?.chart)
+            .filter(|c| c.partial)
+            .count();
+        assert_eq!(partial, 1, "exactly one demo report is partial");
 
         // A report that is gone falls back to the newest.
         let missing = overview(&core, Some(9999), Cadence::Quarterly).expect("an overview");
