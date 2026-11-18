@@ -1,4 +1,5 @@
-//! AI providers: OpenAI-compatible and Anthropic clients with JSON-schema output.
+//! AI providers: OpenAI(-compatible) and Anthropic(-compatible) clients with JSON-schema output
+//! (Codex through a ChatGPT sign-in is in [`codex`]).
 //!
 //! ```text
 //! let llm = core.default_llm()?;                       // or core.llm_for(provider_id)
@@ -9,8 +10,14 @@
 //! fences) and retries once, quoting the validation errors back to the model. Errors are
 //! human-readable (`Anthropic: HTTP 401 Unauthorized: invalid x-api-key`) and never contain the
 //! API key. API keys live only in the keyring under [`api_key_secret`]`(provider_id)`.
+//!
+//! JSON mode is learned, never set by the user: a compatible endpoint that refuses the JSON
+//! schema request is retried in a simpler mode (see [`openai::JsonMode`],
+//! [`anthropic::JsonMode`]); [`Core::llm_for`] saves the mode that worked in
+//! `Provider::json_mode`, so the next client starts from it.
 
 pub mod anthropic;
+pub mod codex;
 pub mod fake;
 mod http;
 pub mod message;
@@ -22,11 +29,12 @@ mod http_tests;
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Mutex;
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
-use crate::store::{NewProvider, Provider, ProviderKind};
+use crate::store::{NewProvider, Protocol, Provider, ProviderKind, Store};
 use crate::Core;
 
 pub use anthropic::AnthropicClient;
@@ -53,37 +61,145 @@ pub trait Llm: Send + Sync {
 
     /// Model ids offered by the provider (for the model picker).
     fn list_models(&self) -> LlmFuture<'_, Vec<String>>;
+
+    /// The JSON mode that worked on the last successful call, as stored in `Provider::json_mode`
+    /// (`json_schema`, `json_object`, `prompt`); `None` before one, or for a client without modes.
+    fn learned_json_mode(&self) -> Option<&'static str> {
+        None
+    }
 }
 
-/// Default base URL for a provider kind.
+/// Default base URL for a provider kind (`""` = the user must enter one: the compatible kinds).
 pub fn default_base_url(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::OpenAi => openai::DEFAULT_BASE_URL,
         ProviderKind::Anthropic => anthropic::DEFAULT_BASE_URL,
+        ProviderKind::Codex => codex::BASE_URL,
+        ProviderKind::OpenAiCompatible | ProviderKind::AnthropicCompatible => "",
     }
 }
 
 /// Default model for a provider kind (`""` = the user must pick one).
 pub fn default_model(kind: ProviderKind) -> &'static str {
     match kind {
-        ProviderKind::OpenAi => "",
+        ProviderKind::OpenAi => openai::DEFAULT_MODEL,
         ProviderKind::Anthropic => anthropic::DEFAULT_MODEL,
+        ProviderKind::Codex => codex::DEFAULT_MODEL,
+        ProviderKind::OpenAiCompatible | ProviderKind::AnthropicCompatible => "",
     }
 }
 
-/// Build the client for `provider`. `api_key` is optional (Ollama and friends need none).
+/// Build the client for `provider`. `api_key` is optional (Ollama and friends need none). An
+/// official kind with an empty base URL uses its default; a compatible kind needs one.
 pub fn from_provider(provider: &Provider, api_key: Option<String>) -> Box<dyn Llm> {
-    match provider.kind {
-        ProviderKind::OpenAi => Box::new(OpenAiClient::new(
-            &provider.name,
-            &provider.base_url,
-            &provider.model,
-            api_key,
-            &provider.json_mode,
-        )),
-        ProviderKind::Anthropic => {
-            Box::new(AnthropicClient::new(&provider.name, &provider.base_url, &provider.model, api_key))
+    let kind = provider.kind;
+    let base_url = match provider.base_url.trim() {
+        "" if kind.is_official() => default_base_url(kind),
+        "" => return Box::new(Unavailable::new(&provider.name, "no base URL is set (enter it in Settings > AI providers)")),
+        url => url,
+    };
+    let fallback = !kind.is_official();
+    match kind.protocol() {
+        Protocol::ChatCompletions => Box::new(
+            OpenAiClient::new(&provider.name, base_url, &provider.model, api_key, &provider.json_mode)
+                .with_fallback(fallback),
+        ),
+        Protocol::Messages => Box::new(
+            AnthropicClient::new(&provider.name, base_url, &provider.model, api_key)
+                .with_json_mode(&provider.json_mode)
+                .with_fallback(fallback),
+        ),
+        // Hook for the Codex client (`codex`): it replaces this placeholder.
+        Protocol::CodexResponses => Box::new(Unavailable::new(&provider.name, "Codex sign-in is not available yet")),
+    }
+}
+
+/// A client that cannot work; every call fails with `"{name}: {reason}"`.
+struct Unavailable {
+    message: String,
+}
+
+impl Unavailable {
+    fn new(name: &str, reason: &str) -> Self {
+        let name = name.trim();
+        Self { message: if name.is_empty() { reason.to_string() } else { format!("{name}: {reason}") } }
+    }
+}
+
+impl Llm for Unavailable {
+    fn complete_json<'a>(&'a self, _: &'a str, _: &'a str, _: &'a Value) -> LlmFuture<'a, Value> {
+        Box::pin(async move { Err(anyhow::anyhow!("{}", self.message)) })
+    }
+
+    fn list_models(&self) -> LlmFuture<'_, Vec<String>> {
+        Box::pin(async move { Err(anyhow::anyhow!("{}", self.message)) })
+    }
+}
+
+/// Wrap `llm` (built from `provider`) so the JSON mode it learns is saved in the provider's row:
+/// after each successful call, a mode that differs from the saved one is written with
+/// `Store::update_provider` (best effort: a failure is logged, the answer is still returned).
+pub fn persisting_json_mode(store: Store, provider: &Provider, llm: Box<dyn Llm>) -> Box<dyn Llm> {
+    // Both clients' modes use these stored strings.
+    let saved = openai::JsonMode::parse(&provider.json_mode).as_str();
+    Box::new(Persisting { inner: llm, store, provider_id: provider.id, saved: Mutex::new(saved) })
+}
+
+struct Persisting {
+    inner: Box<dyn Llm>,
+    store: Store,
+    provider_id: i64,
+    /// The mode in the provider's row, as last read or written.
+    saved: Mutex<&'static str>,
+}
+
+impl Persisting {
+    fn remember(&self) {
+        let Some(mode) = self.inner.learned_json_mode() else { return };
+        let mut saved = match self.saved.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if *saved == mode {
+            return;
         }
+        let result = self.store.get_provider(self.provider_id).and_then(|p| match p {
+            Some(p) => self.store.update_provider(&Provider { json_mode: mode.to_string(), ..p }),
+            None => Ok(()),
+        });
+        match result {
+            Ok(()) => {
+                tracing::info!(provider = self.provider_id, mode, "llm: learned JSON mode");
+                *saved = mode;
+            }
+            Err(e) => tracing::warn!(provider = self.provider_id, "llm: saving the learned JSON mode failed: {e:#}"),
+        }
+    }
+}
+
+impl Llm for Persisting {
+    fn complete_json<'a>(&'a self, system: &'a str, user: &'a str, schema: &'a Value) -> LlmFuture<'a, Value> {
+        Box::pin(async move {
+            let out = self.inner.complete_json(system, user, schema).await?;
+            self.remember();
+            Ok(out)
+        })
+    }
+
+    fn chat_json<'a>(&'a self, system: &'a str, messages: &'a [Message], schema: &'a Value) -> LlmFuture<'a, Value> {
+        Box::pin(async move {
+            let out = self.inner.chat_json(system, messages, schema).await?;
+            self.remember();
+            Ok(out)
+        })
+    }
+
+    fn list_models(&self) -> LlmFuture<'_, Vec<String>> {
+        self.inner.list_models()
+    }
+
+    fn learned_json_mode(&self) -> Option<&'static str> {
+        self.inner.learned_json_mode()
     }
 }
 
@@ -140,20 +256,25 @@ pub fn api_key_secret(provider_id: i64) -> String {
     format!("provider:{provider_id}:api_key")
 }
 
+/// Keyring key holding a Codex provider's sign-in tokens (one JSON blob).
+pub fn codex_tokens_secret(provider_id: i64) -> String {
+    format!("provider:{provider_id}:codex_tokens")
+}
+
 impl Core {
     /// The stored API key of a provider (`None` when none is set).
     pub fn provider_api_key(&self, provider_id: i64) -> Result<Option<String>> {
         Ok(self.secrets.get(&api_key_secret(provider_id))?.filter(|k| !k.is_empty()))
     }
 
-    /// Client for one provider, with its stored key.
+    /// Client for one provider, with its stored key; the JSON mode it learns is saved.
     pub fn llm_for(&self, provider_id: i64) -> Result<Box<dyn Llm>> {
         let provider = self
             .store
             .get_provider(provider_id)?
             .with_context(|| format!("AI provider {provider_id} no longer exists"))?;
         let key = self.provider_api_key(provider_id)?;
-        Ok(from_provider(&provider, key))
+        Ok(persisting_json_mode(self.store.clone(), &provider, from_provider(&provider, key)))
     }
 
     /// Client for the default provider.
@@ -192,9 +313,11 @@ impl Core {
         Ok(saved)
     }
 
-    /// Delete a provider and its stored key; another provider becomes the default if needed.
+    /// Delete a provider and its stored key / Codex tokens; another provider becomes the default
+    /// if needed.
     pub fn remove_provider(&self, provider_id: i64) -> Result<()> {
         self.secrets.delete(&api_key_secret(provider_id))?;
+        self.secrets.delete(&codex_tokens_secret(provider_id))?;
         self.store.delete_provider(provider_id)?;
         if self.store.default_provider()?.is_none() {
             if let Some(first) = self.store.list_providers()?.first() {
@@ -364,5 +487,40 @@ mod tests {
         assert_eq!(core.store.default_provider().unwrap().unwrap().id, a.id, "default falls back");
         core.remove_provider(a.id).unwrap();
         assert!(core.default_llm().is_err());
+    }
+
+    #[test]
+    fn removal_deletes_codex_tokens() {
+        let (_dir, core) = core();
+        let c = core.save_provider(&draft("Codex", ProviderKind::Codex), None).unwrap();
+        core.secrets.set(&codex_tokens_secret(c.id), "{\"access_token\": \"t\"}").unwrap();
+        assert_eq!(codex_tokens_secret(c.id), format!("provider:{}:codex_tokens", c.id));
+        core.remove_provider(c.id).unwrap();
+        assert_eq!(core.secrets.get(&codex_tokens_secret(c.id)).unwrap(), None);
+    }
+
+    #[test]
+    fn defaults_per_kind() {
+        assert_eq!(default_base_url(ProviderKind::OpenAi), "https://api.openai.com/v1");
+        assert_eq!(default_base_url(ProviderKind::Anthropic), "https://api.anthropic.com");
+        assert_eq!(default_base_url(ProviderKind::Codex), "https://chatgpt.com/backend-api/codex");
+        assert_eq!(default_base_url(ProviderKind::OpenAiCompatible), "");
+        assert_eq!(default_base_url(ProviderKind::AnthropicCompatible), "");
+        assert_eq!(default_model(ProviderKind::OpenAi), "gpt-5");
+        assert_eq!(default_model(ProviderKind::Anthropic), "claude-opus-5-5");
+        assert_eq!(default_model(ProviderKind::Codex), "gpt-5-codex");
+        assert_eq!(default_model(ProviderKind::OpenAiCompatible), "");
+        assert_eq!(default_model(ProviderKind::AnthropicCompatible), "");
+    }
+
+    #[tokio::test]
+    async fn codex_and_compatible_without_url_fail_plainly() {
+        let codex = from_provider(&draft("Codex", ProviderKind::Codex), None);
+        let err = codex.complete_json("S", "U", &schema()).await.unwrap_err().to_string();
+        assert_eq!(err, "Codex: Codex sign-in is not available yet");
+        let mut compatible = draft("Local", ProviderKind::OpenAiCompatible);
+        compatible.base_url = " ".into();
+        let err = from_provider(&compatible, None).list_models().await.unwrap_err().to_string();
+        assert!(err.starts_with("Local: no base URL is set"), "{err}");
     }
 }

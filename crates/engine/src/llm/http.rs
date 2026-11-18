@@ -4,7 +4,7 @@
 use std::error::Error as _;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use reqwest::{RequestBuilder, StatusCode};
 use serde_json::Value;
 
@@ -21,6 +21,34 @@ pub(crate) fn build_client() -> reqwest::Client {
         .user_agent(concat!("jobpilot/", env!("CARGO_PKG_VERSION")))
         .build()
         .unwrap_or_default()
+}
+
+/// A non-2xx answer from a provider. `message` is the whole human-readable text
+/// (`"{who}: HTTP 400 Bad Request: ..."`, key redacted); callers that need the status (the JSON
+/// mode fallback) get it with `err.downcast_ref::<HttpError>()`.
+#[derive(Debug)]
+pub(crate) struct HttpError {
+    pub status: u16,
+    pub message: String,
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for HttpError {}
+
+/// `err` is an HTTP 400/422 from `who` whose provider message mentions one of `words`
+/// (lowercase): the endpoint refused a request feature, so a simpler request may work.
+pub(crate) fn refused_feature(err: &anyhow::Error, who: &str, words: &[&str]) -> bool {
+    let Some(http) = err.downcast_ref::<HttpError>() else { return false };
+    if !matches!(http.status, 400 | 422) {
+        return false;
+    }
+    let text = http.message.strip_prefix(who).unwrap_or(&http.message).to_lowercase();
+    words.iter().any(|w| text.contains(w))
 }
 
 /// `base` + `/` + `path`, tolerating a trailing slash on `base`.
@@ -40,7 +68,11 @@ pub(crate) async fn send_json(req: RequestBuilder, who: &str, secret: Option<&st
         .await
         .map_err(|e| anyhow!("{who}: reading the response failed: {}", redact(&describe_net_error(&e), secret)))?;
     if !status.is_success() {
-        bail!("{who}: {}", redact(&http_error(status, &body), secret));
+        return Err(HttpError {
+            status: status.as_u16(),
+            message: format!("{who}: {}", redact(&http_error(status, &body), secret)),
+        }
+        .into());
     }
     serde_json::from_str(&body).map_err(|_| {
         anyhow!("{who}: the server did not return JSON (HTTP {}): {}", status.as_u16(), redact(&snippet(&body), secret))
@@ -144,6 +176,26 @@ mod tests {
             "HTTP 502 Bad Gateway: <html>upstream down</html>"
         );
         assert_eq!(http_error(StatusCode::NOT_FOUND, ""), "HTTP 404 Not Found");
+    }
+
+    #[test]
+    fn http_error_keeps_the_text_and_the_status() {
+        let err: anyhow::Error = HttpError { status: 400, message: "P: HTTP 400 Bad Request: no".into() }.into();
+        assert_eq!(err.to_string(), "P: HTTP 400 Bad Request: no");
+        assert_eq!(err.downcast_ref::<HttpError>().map(|e| e.status), Some(400));
+    }
+
+    #[test]
+    fn refused_feature_needs_400_or_422_and_a_keyword() {
+        let err = |status, message: &str| -> anyhow::Error { HttpError { status, message: message.into() }.into() };
+        let words = ["response_format"];
+        assert!(refused_feature(&err(400, "P: HTTP 400 Bad Request: response_format is invalid"), "P", &words));
+        assert!(refused_feature(&err(422, "P: HTTP 422 Unprocessable Entity: Response_Format"), "P", &words));
+        assert!(!refused_feature(&err(401, "P: HTTP 401 Unauthorized: response_format"), "P", &words));
+        assert!(!refused_feature(&err(400, "P: HTTP 400 Bad Request: model not found"), "P", &words));
+        // The provider's own name is not part of the message that is searched.
+        assert!(!refused_feature(&err(400, "response_format proxy: HTTP 400 Bad Request: x"), "response_format proxy", &words));
+        assert!(!refused_feature(&anyhow::anyhow!("response_format"), "P", &words));
     }
 
     #[test]

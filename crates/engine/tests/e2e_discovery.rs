@@ -359,7 +359,7 @@ async fn open_core(tmp: &Path, model: SocketAddr) -> Core {
         &Provider {
             id: 0,
             name: "Fake".into(),
-            kind: ProviderKind::OpenAi,
+            kind: ProviderKind::OpenAiCompatible,
             base_url: format!("http://{model}/v1"),
             model: "fake-model".into(),
             json_mode: String::new(),

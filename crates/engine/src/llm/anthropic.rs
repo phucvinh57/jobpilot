@@ -5,11 +5,17 @@
 //! `output_config.format`, a large `max_tokens`, and none of the removed parameters
 //! (`temperature`, `budget_tokens`, assistant prefill). The request is non-streaming with a long
 //! timeout; adaptive thinking on a 16k budget finishes well inside it.
+//!
+//! An Anthropic-compatible endpoint that refuses `output_config` or adaptive thinking (HTTP
+//! 400/422) is retried once in [`JsonMode::Prompt`]: neither field, the schema in the system
+//! prompt. The official API never needs that.
+
+use std::sync::Mutex;
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
-use super::http::{build_client, join_url, send_json, COMPLETION_TIMEOUT, MODELS_TIMEOUT};
+use super::http::{build_client, join_url, refused_feature, send_json, COMPLETION_TIMEOUT, MODELS_TIMEOUT};
 use super::{complete_validated, schema, Llm, LlmFuture};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
@@ -17,11 +23,58 @@ pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
 pub const API_VERSION: &str = "2023-06-01";
 pub const MAX_TOKENS: u32 = 16_000;
 
+/// How a `/v1/messages` request asks for JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonMode {
+    /// `output_config.format` json_schema plus adaptive thinking (stored as `json_schema`).
+    Native,
+    /// Neither field; schema in the system prompt (stored as `prompt`).
+    Prompt,
+}
+
+impl JsonMode {
+    /// From the stored string: `prompt` = `Prompt`, anything else = `Native`.
+    pub fn parse(s: &str) -> Self {
+        if s.trim() == super::openai::JSON_MODE_PROMPT {
+            JsonMode::Prompt
+        } else {
+            JsonMode::Native
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JsonMode::Native => super::openai::JSON_MODE_SCHEMA,
+            JsonMode::Prompt => super::openai::JSON_MODE_PROMPT,
+        }
+    }
+}
+
+/// Words in a 400/422 error that mean "this endpoint does not take `output_config` / thinking".
+const REFUSAL_WORDS: &[&str] = &[
+    "output_config",
+    "thinking",
+    "format",
+    "schema",
+    "not supported",
+    "unsupported",
+    "unknown",
+    "extra inputs",
+    "invalid",
+];
+
 pub struct AnthropicClient {
     pub name: String,
     pub base_url: String,
     pub model: String,
     pub api_key: Option<String>,
+    /// The mode the first call starts in (the provider's stored, learned mode).
+    pub json_mode: JsonMode,
+    /// Retry in [`JsonMode::Prompt`] when the endpoint refuses the native request (compatible
+    /// endpoints only).
+    pub fallback: bool,
+    /// The mode that last worked; later calls start from it.
+    learned: Mutex<Option<JsonMode>>,
     http: reqwest::Client,
 }
 
@@ -34,7 +87,37 @@ impl AnthropicClient {
             base_url: if base.is_empty() { DEFAULT_BASE_URL.into() } else { base.into() },
             model: if model.is_empty() { DEFAULT_MODEL.into() } else { model.into() },
             api_key: api_key.filter(|k| !k.trim().is_empty()),
+            json_mode: JsonMode::Native,
+            fallback: false,
+            learned: Mutex::new(None),
             http: build_client(),
+        }
+    }
+
+    /// Start in the stored mode (`json_schema` / `prompt`).
+    pub fn with_json_mode(mut self, json_mode: &str) -> Self {
+        self.json_mode = JsonMode::parse(json_mode);
+        self
+    }
+
+    /// Turn the fallback to [`JsonMode::Prompt`] on or off.
+    pub fn with_fallback(mut self, fallback: bool) -> Self {
+        self.fallback = fallback;
+        self
+    }
+
+    /// The mode that worked on the last successful call (`None` before one).
+    pub fn learned_mode(&self) -> Option<JsonMode> {
+        match self.learned.lock() {
+            Ok(g) => *g,
+            Err(poisoned) => *poisoned.into_inner(),
+        }
+    }
+
+    fn learn(&self, mode: JsonMode) {
+        match self.learned.lock() {
+            Ok(mut g) => *g = Some(mode),
+            Err(poisoned) => *poisoned.into_inner() = Some(mode),
         }
     }
 
@@ -55,7 +138,23 @@ impl AnthropicClient {
     }
 
     async fn raw_complete(&self, system: &str, user: &str, schema: &Value) -> Result<String> {
-        let body = build_request(&self.model, system, user, schema);
+        let mode = self.learned_mode().unwrap_or(self.json_mode);
+        let result = match self.raw_complete_in(mode, system, user, schema).await {
+            Err(e)
+                if mode == JsonMode::Native && self.fallback && refused_feature(&e, self.who(), REFUSAL_WORDS) =>
+            {
+                tracing::info!(from = mode.as_str(), to = "prompt", "llm: endpoint refused the JSON mode, retrying");
+                self.raw_complete_in(JsonMode::Prompt, system, user, schema).await.map(|t| (t, JsonMode::Prompt))
+            }
+            other => other.map(|t| (t, mode)),
+        };
+        let (text, mode) = result?;
+        self.learn(mode);
+        Ok(text)
+    }
+
+    async fn raw_complete_in(&self, mode: JsonMode, system: &str, user: &str, schema: &Value) -> Result<String> {
+        let body = build_request(&self.model, system, user, schema, mode);
         let req = self.headers(self.http.post(self.url("messages")).timeout(COMPLETION_TIMEOUT)).json(&body);
         let resp = send_json(req, self.who(), self.api_key.as_deref()).await?;
         parse_completion(&resp).map_err(|e| anyhow!("{}: {e}", self.who()))
@@ -79,6 +178,10 @@ impl Llm for AnthropicClient {
     fn list_models(&self) -> LlmFuture<'_, Vec<String>> {
         Box::pin(self.raw_models())
     }
+
+    fn learned_json_mode(&self) -> Option<&'static str> {
+        self.learned_mode().map(JsonMode::as_str)
+    }
 }
 
 /// `{base}/v1/{path}`; a base that already ends in `/v1` is not doubled.
@@ -88,16 +191,24 @@ pub(crate) fn messages_url(base: &str, path: &str) -> String {
     join_url(&format!("{base}/v1"), path)
 }
 
-/// Request body of `POST /v1/messages`.
-pub(crate) fn build_request(model: &str, system: &str, user: &str, schema: &Value) -> Value {
-    json!({
-        "model": model,
-        "max_tokens": MAX_TOKENS,
-        "system": system,
-        "messages": [{"role": "user", "content": user}],
-        "thinking": {"type": "adaptive"},
-        "output_config": {"format": {"type": "json_schema", "schema": schema::for_anthropic(schema)}},
-    })
+/// Request body of `POST /v1/messages` in `mode`.
+pub(crate) fn build_request(model: &str, system: &str, user: &str, schema: &Value, mode: JsonMode) -> Value {
+    match mode {
+        JsonMode::Native => json!({
+            "model": model,
+            "max_tokens": MAX_TOKENS,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+            "thinking": {"type": "adaptive"},
+            "output_config": {"format": {"type": "json_schema", "schema": schema::for_anthropic(schema)}},
+        }),
+        JsonMode::Prompt => json!({
+            "model": model,
+            "max_tokens": MAX_TOKENS,
+            "system": format!("{system}\n\n{}", schema::schema_instructions(schema)),
+            "messages": [{"role": "user", "content": user}],
+        }),
+    }
 }
 
 /// Extract the answer text from a `/v1/messages` response (first `text` block; thinking blocks
@@ -159,7 +270,7 @@ mod tests {
 
     #[test]
     fn request_body() {
-        let body = build_request("claude-opus-5-5", "SYS", "USER", &schema());
+        let body = build_request("claude-opus-5-5", "SYS", "USER", &schema(), JsonMode::Native);
         assert_eq!(body["model"], "claude-opus-5-5");
         assert_eq!(body["max_tokens"], 16000);
         assert_eq!(body["system"], "SYS");
@@ -177,6 +288,20 @@ mod tests {
         assert!(body["thinking"].get("budget_tokens").is_none());
         // No assistant prefill: the only message is the user's.
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn prompt_request_body_has_no_output_config_or_thinking() {
+        let body = build_request("m", "SYS", "USER", &schema(), JsonMode::Prompt);
+        assert!(body.get("output_config").is_none());
+        assert!(body.get("thinking").is_none());
+        let system = body["system"].as_str().unwrap();
+        assert!(system.starts_with("SYS\n\n") && system.contains("JSON Schema"));
+        assert_eq!(body["messages"], json!([{"role": "user", "content": "USER"}]));
+        assert_eq!(JsonMode::parse("prompt"), JsonMode::Prompt);
+        assert_eq!(JsonMode::parse("json_schema"), JsonMode::Native);
+        assert_eq!(JsonMode::parse("json_object"), JsonMode::Native);
+        assert_eq!(JsonMode::Prompt.as_str(), "prompt");
     }
 
     #[test]

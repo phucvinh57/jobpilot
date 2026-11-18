@@ -41,7 +41,7 @@ pub use profile::{sources_hash, NewProfileSource, ProfileSource, StoredProfile};
 pub use graph::{
     GraphCheckpointRow, GraphThread, GRAPH_DONE, GRAPH_FAILED, GRAPH_RUNNING, GRAPH_WAITING,
 };
-pub use providers::{NewProvider, Provider, ProviderKind};
+pub use providers::{NewProvider, Protocol, Provider, ProviderKind};
 pub use sessions::{NewSession, Session};
 pub use source_suggestions::{NewSuggestion, SourceSuggestion, SuggestionState};
 pub use sources::{NewSource, Source, SourcePurpose};
@@ -268,6 +268,15 @@ const MIGRATIONS: &[&str] = &[
         AND id NOT IN (SELECT MAX(id) FROM reports WHERE period != '' GROUP BY kind, period);
     CREATE UNIQUE INDEX reports_period ON reports(kind, period) WHERE period != '';
     ",
+    // 11: provider kinds split into official and compatible: an `openai` / `anthropic` row that
+    // does not point at the official API is a compatible endpoint (an empty base URL meant the
+    // official default)
+    "
+    UPDATE providers SET kind = 'openai_compatible'
+        WHERE kind = 'openai' AND base_url != '' AND base_url NOT LIKE 'https://api.openai.com%';
+    UPDATE providers SET kind = 'anthropic_compatible'
+        WHERE kind = 'anthropic' AND base_url != '' AND base_url NOT LIKE 'https://api.anthropic.com%';
+    ",
 ];
 
 #[derive(Clone)]
@@ -473,6 +482,45 @@ mod tests {
     }
 
     #[test]
+    fn migration_11_splits_provider_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            for sql in &MIGRATIONS[..10] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 10).unwrap();
+            for (name, kind, base) in [
+                ("OpenAI", "openai", "https://api.openai.com/v1"),
+                ("Ollama", "openai", "http://localhost:11434/v1"),
+                ("Claude", "anthropic", "https://api.anthropic.com"),
+                ("Proxy", "anthropic", "https://proxy.example/anthropic"),
+                ("Empty", "anthropic", ""),
+            ] {
+                conn.execute(
+                    "INSERT INTO providers (name, kind, base_url, json_mode) VALUES (?1, ?2, ?3, 'json_object')",
+                    [name, kind, base],
+                )
+                .unwrap();
+            }
+        }
+        let store = Store::open(&path).unwrap();
+        let kinds: Vec<_> = store.list_providers().unwrap().into_iter().map(|p| (p.name, p.kind, p.json_mode)).collect();
+        let mode = || "json_object".to_string();
+        assert_eq!(
+            kinds,
+            [
+                ("OpenAI".into(), ProviderKind::OpenAi, mode()),
+                ("Ollama".into(), ProviderKind::OpenAiCompatible, mode()),
+                ("Claude".into(), ProviderKind::Anthropic, mode()),
+                ("Proxy".into(), ProviderKind::AnthropicCompatible, mode()),
+                ("Empty".into(), ProviderKind::Anthropic, mode()),
+            ]
+        );
+    }
+
+    #[test]
     fn status_moves_forward_only() {
         let (_dir, store) = store();
         let app = store.create_application(&new_app("a")).unwrap();
@@ -509,8 +557,8 @@ mod tests {
         let (_dir, store) = store();
         let a = store
             .add_provider(&NewProvider {
-                name: "OpenAI".into(),
-                kind: ProviderKind::OpenAi,
+                name: "Local".into(),
+                kind: ProviderKind::OpenAiCompatible,
                 base_url: "https://api.openai.com/v1".into(),
                 ..Default::default()
             })

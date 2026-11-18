@@ -277,7 +277,7 @@ async fn from_provider_builds_the_right_client() {
     let provider = Provider {
         id: 1,
         name: "Local".into(),
-        kind: ProviderKind::OpenAi,
+        kind: ProviderKind::OpenAiCompatible,
         base_url: format!("{base}/v1"),
         model: "m".into(),
         json_mode: "json_schema".into(),
@@ -285,4 +285,130 @@ async fn from_provider_builds_the_right_client() {
     };
     test_llm(from_provider(&provider, None).as_ref()).await.unwrap();
     assert_eq!(seen.lock().unwrap()[0].path, "/v1/chat/completions");
+}
+
+fn refused(message: &str) -> (u16, String) {
+    (400, json!({"error": {"message": message}}).to_string())
+}
+
+#[tokio::test]
+async fn compatible_endpoint_that_refuses_a_schema_is_retried_in_json_object_mode() {
+    let (base, seen) =
+        serve(vec![refused("response_format json_schema is not supported"), openai_reply(r#"{"ok": true}"#)]).await;
+    let client = OpenAiClient::new("Local", &format!("{base}/v1"), "m", None, "json_schema").with_fallback(true);
+    assert_eq!(client.complete_json("SYS", "USER", &ok_schema()).await.unwrap(), json!({"ok": true}));
+    assert_eq!(client.learned_json_mode(), Some("json_object"));
+    {
+        let reqs = seen.lock().unwrap();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[0].json()["response_format"]["type"], "json_schema");
+        assert_eq!(reqs[1].json()["response_format"], json!({"type": "json_object"}));
+        assert!(reqs[1].json()["messages"][0]["content"].as_str().unwrap().contains("JSON Schema"));
+    }
+    // The next call starts from the learned mode.
+    client.complete_json("SYS", "USER", &ok_schema()).await.unwrap();
+    let reqs = seen.lock().unwrap();
+    assert_eq!(reqs.len(), 3);
+    assert_eq!(reqs[2].json()["response_format"], json!({"type": "json_object"}));
+}
+
+#[tokio::test]
+async fn compatible_endpoint_steps_down_to_no_response_format() {
+    let (base, seen) = serve(vec![
+        refused("json_schema is unsupported"),
+        (422, json!({"detail": "response_format json_object not supported"}).to_string()),
+        openai_reply(r#"{"ok": true}"#),
+    ])
+    .await;
+    let client = OpenAiClient::new("Local", &format!("{base}/v1"), "m", None, "").with_fallback(true);
+    client.complete_json("SYS", "USER", &ok_schema()).await.unwrap();
+    assert_eq!(client.learned_json_mode(), Some("prompt"));
+    let reqs = seen.lock().unwrap();
+    assert_eq!(reqs.len(), 3);
+    assert!(reqs[2].json().get("response_format").is_none());
+}
+
+#[tokio::test]
+async fn official_openai_never_falls_back() {
+    let (base, seen) = serve(vec![refused("response_format json_schema is not supported")]).await;
+    let client = OpenAiClient::new("OpenAI", &format!("{base}/v1"), "m", None, "json_schema");
+    let err = client.complete_json("S", "U", &ok_schema()).await.unwrap_err().to_string();
+    assert_eq!(err, "OpenAI: HTTP 400 Bad Request: response_format json_schema is not supported");
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(client.learned_json_mode(), None);
+}
+
+#[tokio::test]
+async fn an_auth_error_never_triggers_the_fallback() {
+    let body = json!({"error": {"message": "invalid key; response_format unsupported"}}).to_string();
+    let (base, seen) = serve(vec![(401, body.clone())]).await;
+    let client = OpenAiClient::new("Local", &format!("{base}/v1"), "m", None, "json_schema").with_fallback(true);
+    assert!(client.complete_json("S", "U", &ok_schema()).await.unwrap_err().to_string().contains("HTTP 401"));
+    assert_eq!(seen.lock().unwrap().len(), 1);
+
+    let (base, seen) = serve(vec![(401, body)]).await;
+    let client = AnthropicClient::new("Proxy", &base, "m", Some("k-123456".into())).with_fallback(true);
+    assert!(client.complete_json("S", "U", &ok_schema()).await.unwrap_err().to_string().contains("HTTP 401"));
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn anthropic_compatible_endpoint_that_refuses_output_config_is_retried_in_prompt_mode() {
+    let (base, seen) = serve(vec![
+        (400, json!({"type": "error", "error": {"type": "invalid_request_error", "message": "output_config: Extra inputs are not permitted"}}).to_string()),
+        anthropic_reply(json!([{"type": "text", "text": "{\"ok\": true}"}])),
+    ])
+    .await;
+    let client = AnthropicClient::new("Proxy", &base, "m", Some("k-123456".into())).with_fallback(true);
+    assert_eq!(client.complete_json("SYS", "USER", &ok_schema()).await.unwrap(), json!({"ok": true}));
+    assert_eq!(client.learned_json_mode(), Some("prompt"));
+    let reqs = seen.lock().unwrap();
+    assert_eq!(reqs.len(), 2);
+    assert!(reqs[0].json().get("output_config").is_some());
+    let retry = reqs[1].json();
+    assert!(retry.get("output_config").is_none() && retry.get("thinking").is_none());
+    assert!(retry["system"].as_str().unwrap().contains("JSON Schema"));
+}
+
+#[tokio::test]
+async fn official_anthropic_never_falls_back() {
+    let (base, seen) = serve(vec![refused("output_config: unknown field")]).await;
+    let client = AnthropicClient::new("Claude", &base, "m", Some("k-123456".into()));
+    assert!(client.complete_json("S", "U", &ok_schema()).await.is_err());
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn llm_for_saves_the_learned_json_mode() {
+    let (base, _seen) =
+        serve(vec![refused("response_format json_schema is not supported"), openai_reply(r#"{"ok": true}"#)]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let core = Core::open_at(crate::Paths::new(dir.path().join("jp")), crate::Secrets::memory()).unwrap();
+    let saved = core
+        .save_provider(
+            &Provider {
+                id: 0,
+                name: "Local".into(),
+                kind: ProviderKind::OpenAiCompatible,
+                base_url: format!("{base}/v1"),
+                model: "m".into(),
+                json_mode: "json_schema".into(),
+                is_default: false,
+            },
+            None,
+        )
+        .unwrap();
+    let llm = core.llm_for(saved.id).unwrap();
+    llm.complete_json("S", "U", &ok_schema()).await.unwrap();
+    let row = core.store.get_provider(saved.id).unwrap().unwrap();
+    assert_eq!(row.json_mode, "json_object");
+    assert_eq!((row.name.as_str(), row.model.as_str()), ("Local", "m"), "only the mode changes");
+
+    // A new client starts in the saved mode: one request, already json_object.
+    let (base2, seen2) = serve(vec![openai_reply(r#"{"ok": true}"#)]).await;
+    core.store.update_provider(&Provider { base_url: format!("{base2}/v1"), ..row }).unwrap();
+    core.llm_for(saved.id).unwrap().complete_json("S", "U", &ok_schema()).await.unwrap();
+    let reqs = seen2.lock().unwrap();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].json()["response_format"], json!({"type": "json_object"}));
 }

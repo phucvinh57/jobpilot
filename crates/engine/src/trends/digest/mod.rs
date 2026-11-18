@@ -461,7 +461,8 @@ impl DigestEnv {
             .default_provider()?
             .context("no AI provider is set up: add one in Settings > AI providers and make it the default")?;
         let key = self.secrets.get(&llm::api_key_secret(provider.id))?.filter(|k| !k.is_empty());
-        Ok(Arc::from(llm::from_provider(&provider, key)))
+        let client = llm::from_provider(&provider, key);
+        Ok(Arc::from(llm::persisting_json_mode(self.store.clone(), &provider, client)))
     }
 }
 
