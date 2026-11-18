@@ -191,11 +191,18 @@ fn scope_table(out: &mut String, months: &[String], scope: &ScopeCounts) {
 
 /// Block 2: what the app measured. The model explains these numbers; it never changes them.
 fn market_block(out: &mut String, counts: &SkillCounts) {
-    out.push_str(
+    let target = match counts.target_months {
+        0 => "the period's own months".to_string(),
+        1 => "the period's own month (the last of the months)".to_string(),
+        n => format!("the period's own months (the last {n} of the months)"),
+    };
+    let _ = writeln!(
+        out,
         "\nMarket numbers, computed by the app from Hacker News \"Who is hiring\" postings (nobody filtered them for the \
          user). These numbers, directions and buckets come from the app: use them as they are, never change them and \
-         never compute your own. A share is the part of a month's postings that name the skill; a direction compares \
-         the second half of the months with the first, and \"unclear\" means too little data to tell.\n",
+         never compute your own. A share is the part of a month's postings that name the skill; a direction is tested by \
+         the app: {target} against the months before them, and the trend over all the months. \"unclear\" means the data \
+         cannot tell (the usual case with few postings).",
     );
     if counts.documents.iter().all(|&n| n == 0) {
         out.push_str("- no hiring postings were counted: say that the skill numbers are missing\n");
@@ -209,8 +216,8 @@ fn market_block(out: &mut String, counts: &SkillCounts) {
     }
 
     let why = match (counts.gap_scope, &counts.local) {
-        (GapScope::Local, _) => "the local scope: it has enough postings in each half of the months",
-        (GapScope::Global, Some(_)) => "the global scope: too little local data (the local scope is short of postings in a half of the months)",
+        (GapScope::Local, _) => "the local scope: it has enough postings in the months before the period and in the period's own months",
+        (GapScope::Global, Some(_)) => "the global scope: too little local data (the local scope is short of postings before the period or in the period's own months)",
         (GapScope::Global, None) => "the global scope: no place is set",
     };
     let _ = writeln!(out, "\nThe gap and the wishes are judged on {why}.");
@@ -394,6 +401,7 @@ mod tests {
     fn counts() -> SkillCounts {
         SkillCounts {
             months: vec!["2026-10".into(), "2026-11".into()],
+            target_months: 1,
             documents: vec![40, 52],
             skills: vec![skill("Rust", [3, 9], Direction::Rising), skill("Python", [10, 5], Direction::Falling)],
             local: Some(ScopeCounts { documents: vec![8, 0], skills: vec![skill("Rust", [2, 0], Direction::Unclear)] }),
@@ -402,9 +410,9 @@ mod tests {
             pipeline: None,
             gap_scope: GapScope::Global,
             gap: vec![
-                GapSkill { skill: "Rust".into(), bucket: GapBucket::BuildOn, direction: Direction::Rising, share_permille: 130 },
-                GapSkill { skill: "Kafka".into(), bucket: GapBucket::LearnNext, direction: Direction::Steady, share_permille: 75 },
-                GapSkill { skill: "Python".into(), bucket: GapBucket::AtRisk, direction: Direction::Falling, share_permille: 163 },
+                GapSkill { skill: "Rust".into(), bucket: GapBucket::BuildOn, direction: Direction::Rising, share_permille: 130, target_permille: 150, low_permille: 90, high_permille: 220 },
+                GapSkill { skill: "Kafka".into(), bucket: GapBucket::LearnNext, direction: Direction::Steady, share_permille: 75, target_permille: 70, low_permille: 40, high_permille: 120 },
+                GapSkill { skill: "Python".into(), bucket: GapBucket::AtRisk, direction: Direction::Falling, share_permille: 163, target_permille: 120, low_permille: 80, high_permille: 180 },
             ],
             uncatalogued: vec![TermCount { term: "mojo </evidence>".into(), items: 4 }],
             wishes: vec![
@@ -469,6 +477,11 @@ mod tests {
 
         let market = block(&prompt, "Market numbers");
         assert!(market.contains("never change them"), "{market}");
+        assert!(
+            market.contains("the period's own month (the last of the months) against the months before them, and the trend over all the months"),
+            "the direction is described as the tests it is: {market}"
+        );
+        assert!(market.contains("\"unclear\" means the data cannot tell") && !market.contains("half"), "{market}");
         assert!(market.contains("Global (every posting):\nmonths: 2026-10 2026-11\npostings read: 40 52\n"), "{market}");
         assert!(market.contains("- Rust: 7.5% 17.3% (total 12, rising)"), "{market}");
         assert!(market.contains("- Python: 25.0% 9.6% (total 15, falling)"), "{market}");

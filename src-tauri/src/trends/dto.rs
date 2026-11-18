@@ -1026,6 +1026,9 @@ mod tests {
             bucket,
             direction,
             share_permille: share,
+            target_permille: share,
+            low_permille: share.saturating_sub(20),
+            high_permille: share + 20,
         };
         let data = DigestData {
             items: vec![item(7, "https://a.test/1")],

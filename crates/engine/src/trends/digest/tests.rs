@@ -592,37 +592,40 @@ skills:
     items: [Rust, Python]
 ";
 
-/// Six months of hiring postings in the window of [`period`]: per month 12 backend postings in
-/// Singapore and 4 in Berlin. Python is in 8 of the 12 local ones in the first three months and in
-/// 2 later, Rust the other way round; Kafka is in half throughout, Gleam in 3, Kotlin in 1, and
-/// fintech in 2. Plus one news item of this week that the model cites.
+/// Six months of hiring postings in the window of [`period`] (the last month is the period's
+/// own): per month 36 backend postings in Singapore and 12 in Berlin, enough for a month to be
+/// judged against the five before it. The local ones come in three blocks of 12: in each, Python is
+/// in 8 of the 12 in the first three months and in 2 later, Rust the other way round; Kafka is in
+/// half throughout, Gleam in 3, Kotlin in 1, and fintech in 2. Plus one news item of this week that
+/// the model cites.
 fn store_market(store: &Store, dir: &std::path::Path) {
-    let months = count::month_window(&period(), 6);
+    let months = count::window_for(&period(), Utc::now().date_naive()).months;
     for (m, month) in months.iter().enumerate() {
         let published = chrono::DateTime::parse_from_rfc3339(&format!("{month}-01T00:00:00Z")).unwrap().with_timezone(&Utc);
         let late = m >= 3;
-        for n in 0..16 {
+        for n in 0..48 {
             let mut skills = Vec::new();
-            let place = if n < 12 { "Singapore" } else { "Berlin" };
-            if n >= 12 {
+            let place = if n < 36 { "Singapore" } else { "Berlin" };
+            let k = n % 12;
+            if n >= 36 {
                 skills.push("Go, Kubernetes");
             } else {
-                if (!late && n < 8) || (late && n < 2) {
+                if (!late && k < 8) || (late && k < 2) {
                     skills.push("Python");
                 }
-                if (late && n < 8) || (!late && n < 2) {
+                if (late && k < 8) || (!late && k < 2) {
                     skills.push("Rust");
                 }
-                if n % 2 == 0 {
+                if k % 2 == 0 {
                     skills.push("Kafka");
                 }
-                if n < 3 {
+                if k < 3 {
                     skills.push("Gleam");
                 }
-                if n == 5 {
+                if k == 5 {
                     skills.push("Kotlin");
                 }
-                if n < 2 {
+                if k < 2 {
                     skills.push("fintech payments");
                 }
             }
@@ -695,13 +698,14 @@ async fn wishes_never_change_the_market_numbers_or_the_gap() {
     assert_ne!(a.counts.skills, b.counts.skills, "the wished marks differ");
 
     // ... and they are not trivial: a local gap from the profile, directions from shares.
-    assert_eq!(a.counts.documents, [16; 6]);
+    assert_eq!(a.counts.documents, [48; 6]);
+    assert_eq!(a.counts.target_months, 1, "a week is its month against the five before");
     assert_eq!(a.counts.gap_scope, GapScope::Local);
     let gap: Vec<(&str, GapBucket)> = a.counts.gap.iter().map(|g| (g.skill.as_str(), g.bucket)).collect();
     assert_eq!(gap, [("Rust", GapBucket::BuildOn), ("Kafka", GapBucket::LearnNext), ("Kotlin", GapBucket::LearnNext), ("Python", GapBucket::AtRisk)]);
     assert!(a.counts.skills.iter().all(|s| s.skill != "Gleam"), "a wish is not part of the market vocabulary");
     let gleam = a.counts.wishes.iter().find(|w| w.wish == "Gleam").unwrap();
-    assert_eq!((gleam.mentions, gleam.direction), (18, Direction::Steady), "but it is measured");
+    assert_eq!((gleam.mentions, gleam.direction), (54, Direction::Steady), "but it is measured");
     assert_eq!(a.counts.field, ["backend", "engineer"]);
 
     // The prompt: the background from the profile, wishes only in their block, no target roles.
@@ -737,7 +741,7 @@ async fn enforce_citations_drops_points_against_the_counts() {
     let store = Store::open_in_memory().unwrap();
     let a = stored_item(&store, dir.path(), "https://a.test/1", "News", "# News\n\nSomething happened in the market.", None);
     let skill = |name: &str, direction: Direction| SkillCount { skill: name.into(), by_month: vec![9], total: 9, direction, ..SkillCount::default() };
-    let gap = |name: &str, bucket: GapBucket| GapSkill { skill: name.into(), bucket, direction: Direction::Steady, share_permille: 100 };
+    let gap = |name: &str, bucket: GapBucket| GapSkill { skill: name.into(), bucket, direction: Direction::Steady, share_permille: 100, target_permille: 100, low_permille: 60, high_permille: 150 };
     let wish = |name: &str, kind: WishKind| WishSignal { wish: name.into(), kind, avoided: false, direction: Direction::Unclear, mentions: 0 };
     let mut state = TrendRun::new(period());
     state.digest.items = vec![a];
@@ -809,6 +813,7 @@ fn a_report_saved_before_the_market_scan_still_loads() {
     let data: DigestData = serde_json::from_str(old).unwrap();
     assert_eq!(data.counts.skills[0], SkillCount { skill: "Rust".into(), by_month: vec![1, 2], total: 3, ..SkillCount::default() });
     assert_eq!(data.counts.skills[0].direction, Direction::Unclear);
+    assert_eq!(data.counts.target_months, 0, "no split of the months in a report saved before the tests");
     assert!(data.counts.local.is_none() && data.counts.pipeline.is_none());
     assert!(data.counts.gap.is_empty() && data.counts.wishes.is_empty() && data.counts.uncatalogued.is_empty());
     assert_eq!(data.counts.gap_scope, GapScope::Global);
@@ -825,6 +830,39 @@ fn a_report_saved_before_the_market_scan_still_loads() {
 }
 
 #[test]
+fn a_report_saved_before_the_tests_still_loads_without_their_numbers() {
+    // Counts of the market scan (version 1), made by the halves rule: a direction and a gap, but
+    // no split of the months, no interval and no score.
+    let old = r#"{"items":[],"points":[],"items_read":0,"dropped":0,
+        "counts":{"version":1,"months":["2026-06","2026-07","2026-08","2026-09","2026-10","2026-11"],
+            "documents":[40,40,40,40,40,40],
+            "skills":[{"skill":"Rust","by_month":[4,4,4,8,8,8],"total":36,"direction":"rising","in_profile":true,"wished":false}],
+            "local":{"documents":[10,10,10,10,10,10],"skills":[{"skill":"Rust","by_month":[1,1,1,2,2,2],"total":9,"direction":"unclear"}]},
+            "gap_scope":"local",
+            "gap":[{"skill":"Rust","bucket":"build_on","direction":"rising","share_permille":150}],
+            "wishes":[{"wish":"Rust","kind":"skill","direction":"rising","mentions":36}]}}"#;
+    let data: DigestData = serde_json::from_str(old).unwrap();
+    let rust = &data.counts.skills[0];
+    assert_eq!((rust.direction, rust.total), (Direction::Rising, 36), "what the old report said stays");
+    assert_eq!((rust.target, rust.target_permille, rust.low_permille, rust.high_permille, rust.z_centi, rust.trend_z_centi), (0, 0, 0, 0, 0, 0));
+    let local = data.counts.local.as_ref().unwrap();
+    assert_eq!(local.skills[0].target_permille, 0);
+    let gap = &data.counts.gap[0];
+    assert_eq!((gap.direction, gap.share_permille), (Direction::Rising, 150));
+    assert_eq!((gap.target_permille, gap.low_permille, gap.high_permille), (0, 0, 0));
+    assert_eq!((data.counts.version, data.counts.target_months), (1, 0));
+    assert!(data.counts.version >= MARKET_SCAN_VERSION, "it still knows the background");
+
+    // It renders again, and a new report with the numbers round-trips through its JSON.
+    let md = cite::render_markdown(&Period::parse("2026-W46").unwrap(), &data);
+    assert!(md.contains("Rust (rising, 15.0%)"), "{md}");
+    let fresh = SkillCount { skill: "Rust".into(), target: 24, target_permille: 667, low_permille: 510, high_permille: 790, z_centi: 320, trend_z_centi: -45, ..SkillCount::default() };
+    let counts = SkillCounts { target_months: 3, skills: vec![fresh.clone()], ..SkillCounts::default() };
+    let again: SkillCounts = serde_json::from_str(&serde_json::to_string(&counts).unwrap()).unwrap();
+    assert_eq!(again, counts);
+}
+
+#[test]
 fn the_markdown_shows_the_gap_the_wishes_and_the_new_terms_from_the_counts() {
     let data = DigestData {
         counts: SkillCounts {
@@ -832,9 +870,9 @@ fn the_markdown_shows_the_gap_the_wishes_and_the_new_terms_from_the_counts() {
             documents: vec![40],
             gap_scope: GapScope::Local,
             gap: vec![
-                GapSkill { skill: "Rust".into(), bucket: GapBucket::BuildOn, direction: Direction::Rising, share_permille: 125 },
-                GapSkill { skill: "Kafka".into(), bucket: GapBucket::LearnNext, direction: Direction::Steady, share_permille: 500 },
-                GapSkill { skill: "Py|thon".into(), bucket: GapBucket::AtRisk, direction: Direction::Falling, share_permille: 7 },
+                GapSkill { skill: "Rust".into(), bucket: GapBucket::BuildOn, direction: Direction::Rising, share_permille: 125, target_permille: 140, low_permille: 90, high_permille: 210 },
+                GapSkill { skill: "Kafka".into(), bucket: GapBucket::LearnNext, direction: Direction::Steady, share_permille: 500, target_permille: 480, low_permille: 400, high_permille: 560 },
+                GapSkill { skill: "Py|thon".into(), bucket: GapBucket::AtRisk, direction: Direction::Falling, share_permille: 7, target_permille: 4, low_permille: 1, high_permille: 20 },
             ],
             wishes: vec![
                 WishSignal { wish: "Kotlin".into(), kind: WishKind::Skill, avoided: false, direction: Direction::Steady, mentions: 6 },

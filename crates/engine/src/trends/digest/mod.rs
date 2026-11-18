@@ -11,7 +11,9 @@
 //!   whose quote is not in the item's text is dropped on the spot. Answers are cached next to the
 //!   item's text, so regenerating a digest asks the model only about new items.
 //! - `count` ([`count`]): skill frequency per month over hiring-thread postings and leads, counted
-//!   in code against a fixed vocabulary (plus the user's own skills); the model never counts.
+//!   in code against a fixed vocabulary (plus the user's own skills); the model never counts. The
+//!   direction of a skill is tested in code too: the period's months against the months before them
+//!   and the trend over all months, under one control of false discoveries per scope.
 //! - `synthesize` ([`synthesize`]): one model call: rising and falling skills, active domains,
 //!   funding and hiring signals, and what it means for the user's preferences. Each point carries
 //!   `citations[]` of item ids and may carry one verbatim `quote`. The evidence in the prompt stays
@@ -51,6 +53,7 @@ mod api;
 pub(crate) mod cite;
 mod count;
 mod extract;
+mod stats;
 mod synthesize;
 #[cfg(test)]
 mod tests;
@@ -75,6 +78,8 @@ use crate::{Secrets, Store};
 
 pub use api::{Digest, TrendChallenge};
 pub use count::{is_hiring_posting, month_window, Vocabulary};
+/// The statistics behind the counts, for the sample data of the shell to make real numbers with.
+pub use stats::{centi, log_odds_z, trend_z, wilson};
 
 /// Name of the digest-only graph in the checkpoint store.
 pub const DIGEST_GRAPH: &str = "trends_digest";
@@ -184,12 +189,14 @@ pub struct Point {
     pub citations: Vec<i64>,
 }
 
-/// Where a skill's share of the postings is going over the window, decided in code
-/// (`count::direction`): the share in the second half of the months against the first half.
+/// Where a skill's share of the postings is going, decided in code by tests (`stats::call_direction`):
+/// the period's months against the months before them, and the trend over every month. A movement
+/// is called only when it survives the control of false discoveries; the rest is `Steady` when
+/// there are enough postings to have seen a movement, `Unclear` when there are not.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
-    /// Too few documents or mentions to tell.
+    /// The data cannot tell: too few postings to have shown a movement, or the skill is in none.
     #[default]
     Unclear,
     Rising,
@@ -246,6 +253,27 @@ pub struct SkillCount {
     /// Where its share is going (older reports: `Unclear`).
     #[serde(default)]
     pub direction: Direction,
+    /// Documents of the period's own months (the last [`SkillCounts::target_months`]) naming the
+    /// skill; 0 in a report saved before the tests.
+    #[serde(default)]
+    pub target: u32,
+    /// `target` as a share of the documents of those months, in per mille.
+    #[serde(default)]
+    pub target_permille: u32,
+    /// The 95% interval of that share, in per mille (the Wilson interval): how far it can be
+    /// trusted at this many postings.
+    #[serde(default)]
+    pub low_permille: u32,
+    #[serde(default)]
+    pub high_permille: u32,
+    /// The period's months against the months before, as a z-score in hundredths (positive: the
+    /// share is higher in the period). A direction needs the test to survive the control of false
+    /// discoveries, not only a large score.
+    #[serde(default)]
+    pub z_centi: i32,
+    /// The trend over every month of the window, as a z-score in hundredths (positive: growing).
+    #[serde(default)]
+    pub trend_z_centi: i32,
     /// The skill is in the user's profile.
     #[serde(default)]
     pub in_profile: bool,
@@ -282,6 +310,15 @@ pub struct GapSkill {
     pub direction: Direction,
     /// Share of the field's postings naming the skill over the whole window, in per mille.
     pub share_permille: u32,
+    /// Its share of the field's postings in the period's own months, in per mille (0 in a report
+    /// saved before the tests).
+    #[serde(default)]
+    pub target_permille: u32,
+    /// The 95% interval of that share, in per mille.
+    #[serde(default)]
+    pub low_permille: u32,
+    #[serde(default)]
+    pub high_permille: u32,
 }
 
 /// A term the extraction found in several items that the skill vocabulary does not know: a
@@ -321,8 +358,11 @@ pub struct WishSignal {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkillCounts {
-    /// `2026-06` ... `2026-11`, oldest first; the last one is the period's month.
+    /// `2026-06` ... `2026-11`, oldest first: the baseline months, then the period's own.
     pub months: Vec<String>,
+    /// How many of the last `months` are the period's own (the others are what they are compared
+    /// with); 0 in a report saved before the tests.
+    pub target_months: u32,
     /// Hiring postings read per month, aligned with `months` (older reports also counted leads
     /// here).
     pub documents: Vec<u32>,

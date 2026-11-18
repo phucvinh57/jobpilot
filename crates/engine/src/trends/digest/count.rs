@@ -10,11 +10,14 @@
 //!
 //! - **global**: every posting of the window; **local**: the postings of the user's place (a
 //!   preferred location, or remote when the work mode allows it), when there is a place.
-//! - a [`Direction`] per skill and scope ([`direction`]): the second half of the window against
-//!   the first, `Unclear` when the data is thin.
+//! - a [`Direction`] per skill and scope ([`judge`]): the period's own months against the months
+//!   before them (a step) and the trend over every month, each a test of the counts, all of a
+//!   scope's tests under one control of false discoveries; `Unclear` when the data cannot tell.
+//!   The window knows which months are the period's ([`Window`]).
 //! - **the gap** ([`gap_bucket`]): the skills of the postings in the user's field (the role words
 //!   of the profile), sorted by direction against "in the profile". It is judged on the local
-//!   scope when that has enough postings, else on the global one.
+//!   scope when each side of its window (before the period, the period) has enough postings, else
+//!   on the global one.
 //! - **terms not in the list**: frequent extracted topics the vocabulary does not know.
 //! - **the pipeline**: the user's own leads, counted apart. Discovery found them through the
 //!   user's filters, so they never enter the market numbers.
@@ -30,6 +33,7 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use futures::StreamExt;
 use regex::Regex;
 
+use super::stats::{self, Evidence};
 use super::{
     read_text, DigestEnv, Direction, Extraction, GapBucket, GapScope, GapSkill, ScopeCounts, SkillCount, SkillCounts,
     TermCount, WishKind, WishSignal,
@@ -41,8 +45,10 @@ use crate::trends::collect::TrendRun;
 use crate::trends::frame::MarketFrame;
 use crate::trends::period::Period;
 
-/// Months in the window, the period's month last.
-const MONTHS: usize = 6;
+/// Months before a week's or a month's own month that the window compares it with.
+const BASELINE_MONTHS: usize = 5;
+/// Months before a quarter's own months that the window compares them with.
+const QUARTER_BASELINE_MONTHS: usize = 3;
 /// Skills kept in a scope's list.
 const MAX_SKILLS: usize = 30;
 /// Characters of a lead's posting that are read.
@@ -52,18 +58,14 @@ const TEXT_READS: usize = 16;
 /// Permalink of a Hacker News item: where hiring postings live.
 pub(super) const HN_ITEM_PREFIX: &str = "https://news.ycombinator.com/item?id=";
 
-/// A half of the window (the first `n/2` months, or the rest) needs at least this many documents
-/// before a direction is called: below it, one posting more or less swings the share by several
-/// points. The same bar decides whether the local scope is big enough to judge the gap on.
-pub(super) const MIN_HALF_DOCS: u32 = 30;
-/// A skill needs at least this many mentions over the window before a direction is called.
-pub(super) const MIN_MENTIONS: u32 = 5;
-/// A share must move by at least this much (in per mille of the documents: 10 = one percentage
-/// point) to be rising or falling ...
-const MIN_SHARE_CHANGE_PERMILLE: i128 = 10;
-/// ... and by at least this part of the first half's share (in percent): a skill at 40% that
-/// moves to 41% is steady, one at 2% that moves to 3% is rising.
-const MIN_RELATIVE_CHANGE_PERCENT: i128 = 25;
+/// The share of false discoveries the movements called in one scope may hold, on average
+/// (Benjamini-Hochberg's `q`): at 0.10, of ten skills called rising or falling about one is noise.
+/// It is applied to all the tests of a scope together, so a longer vocabulary does not call more
+/// movements out of chance.
+const FALSE_DISCOVERY_RATE: f64 = 0.10;
+/// The prior of the step test, worth this many documents pulled towards the pooled share (see
+/// [`stats::log_odds_z`]): 1 lets the counts speak for themselves.
+const STEP_PRIOR: f64 = 1.0;
 /// Share of the field's postings (in per mille) from which a skill is "often asked for": it can
 /// be built on or learnt next without a rising direction.
 pub(super) const HIGH_SHARE_PERMILLE: u32 = 50;
@@ -304,49 +306,181 @@ impl Doc {
     }
 }
 
-/// The months of skill counts for a digest of `period` built on `today`: [`MONTHS`] ending with the
-/// period's last month. The current year ends with its month that has begun: the months to come
-/// hold no postings, and a window with an empty half has no direction.
-pub(crate) fn window_for(period: &Period, today: NaiveDate) -> Vec<String> {
-    match period {
-        Period::Year { year } if today.year() == *year => {
-            let month = Period::Month { year: *year, month: today.month() };
-            month_window(&month, MONTHS)
-        }
-        _ => month_window(period, MONTHS),
-    }
+/// The months a digest counts, in two parts: the baseline, which the period's own months (the
+/// target) are compared with, then the target itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Window {
+    /// `2026-06` ... `2026-11`, oldest first: the baseline, then the target.
+    pub months: Vec<String>,
+    /// How many of the last `months` are the period's own; the months before them are the baseline.
+    pub target: usize,
+}
+
+/// Months since year 0 (`year * 12 + month - 1`): months can be counted with plain arithmetic.
+fn month_index(date: NaiveDate) -> i32 {
+    date.year() * 12 + date.month0() as i32
+}
+
+/// The month of an index of [`month_index`], as `2026-11`.
+fn month_label(index: i32) -> String {
+    format!("{:04}-{:02}", index.div_euclid(12), index.rem_euclid(12) + 1)
+}
+
+/// `n` consecutive months ending with the month of index `last`, oldest first.
+fn months_ending(last: i32, n: usize) -> Vec<String> {
+    (0..n).rev().map(|back| month_label(last - back as i32)).collect()
+}
+
+/// The month index of the period's last day.
+fn last_month(period: &Period) -> i32 {
+    month_index((period.end() - Duration::days(1)).date_naive())
+}
+
+/// The window of a digest of `period` built on `today`. It ends with the period's last month, but
+/// never after today's: the months that have not begun hold no postings, so a year or a quarter
+/// in progress ends with its latest month, and the target holds the period's months that have
+/// begun. (A period that has not begun at all keeps its first month: there is nothing to cut.)
+///
+/// - **week, month**: the target is the one month the period ends in, the baseline the 5 before;
+/// - **quarter**: the target is the quarter's months that have begun (1 to 3), the baseline the 3
+///   months before the quarter;
+/// - **year**: the target is the year's months that have begun (1 to 12), the baseline as many
+///   months before the year.
+pub(crate) fn window_for(period: &Period, today: NaiveDate) -> Window {
+    let first = month_index(period.start().date_naive());
+    let end = last_month(period).min(month_index(today)).max(first);
+    let begun = usize::try_from(end - first + 1).unwrap_or(1);
+    let (target, baseline) = match period {
+        Period::Week { .. } | Period::Month { .. } => (1, BASELINE_MONTHS),
+        Period::Quarter { .. } => (begun, QUARTER_BASELINE_MONTHS),
+        Period::Year { .. } => (begun, begun),
+    };
+    Window { months: months_ending(end, baseline + target), target }
 }
 
 /// `n` months ending with the month of the period's last day, oldest first (`2026-06` ...).
 pub fn month_window(period: &Period, n: usize) -> Vec<String> {
-    let last = (period.end() - Duration::days(1)).date_naive();
-    let (mut year, mut month) = (last.year(), last.month());
-    let mut months = Vec::with_capacity(n);
-    for _ in 0..n {
-        months.push(format!("{year:04}-{month:02}"));
-        if month == 1 {
-            (year, month) = (year - 1, 12);
-        } else {
-            month -= 1;
-        }
-    }
-    months.reverse();
-    months
+    months_ending(last_month(period), n)
 }
 
-/// Every skill of a vocabulary over some documents: documents per month, and per skill and month
-/// the documents naming it.
+/// What the counts say about one row (a skill, a domain) over the window: its direction and the
+/// numbers it rests on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Reading {
+    direction: Direction,
+    /// Documents of the target months naming it.
+    target: u32,
+    /// `target` as a share of the target months' documents, in per mille.
+    target_permille: u32,
+    /// The 95% interval of that share, in per mille.
+    low_permille: u32,
+    high_permille: u32,
+    /// [`stats::log_odds_z`]: the target months against the baseline.
+    step_z: f64,
+    /// [`stats::trend_z`]: the trend over every month of the window.
+    trend_z: f64,
+}
+
+/// The sum of a row.
+fn sum(values: &[u32]) -> u32 {
+    values.iter().fold(0, |sum, &n| sum.saturating_add(n))
+}
+
+/// The sums of the two sides of a row: the baseline (every month before the last `target`), then
+/// the target.
+fn sides(values: &[u32], target: usize) -> (u32, u32) {
+    let (baseline, target) = values.split_at(values.len().saturating_sub(target));
+    (sum(baseline), sum(target))
+}
+
+/// The target's share of the documents minus the baseline's, in per mille; 0 when a side has no
+/// documents.
+fn change_permille(target: (u32, u32), baseline: (u32, u32)) -> i32 {
+    let share = |(k, n): (u32, u32)| (n > 0).then(|| f64::from(k.min(n)) / f64::from(n));
+    match (share(target), share(baseline)) {
+        (Some(now), Some(before)) => ((now - before) * 1000.0).round() as i32,
+        _ => 0,
+    }
+}
+
+/// Where each row's share is going, and how sure the counts are. `rows` hold the documents naming
+/// each thing per month, `documents` the documents read per month (both oldest first), `target` the
+/// last months that are the period's own.
+///
+/// A row gets two tests, the target against the baseline ([`stats::log_odds_z`]) and the trend over
+/// every month ([`stats::trend_z`]). The tests of all the rows that are named at all are one family
+/// under [`FALSE_DISCOVERY_RATE`]; [`stats::call_direction`] turns what survives into a direction.
+/// A row named in no document is `Unclear` and takes no part in the family.
+fn judge(rows: &[&[u32]], documents: &[u32], target: usize) -> Vec<Reading> {
+    struct Row {
+        baseline: u32,
+        now: u32,
+        step_z: f64,
+        trend_z: f64,
+    }
+    let (documents_baseline, documents_now) = sides(documents, target);
+    let tested: Vec<Row> = rows
+        .iter()
+        .map(|row| {
+            let (baseline, now) = sides(row, target);
+            Row {
+                baseline,
+                now,
+                step_z: stats::log_odds_z(now, documents_now, baseline, documents_baseline, STEP_PRIOR),
+                trend_z: stats::trend_z(row, documents),
+            }
+        })
+        .collect();
+    let named = |row: &Row| row.baseline > 0 || row.now > 0;
+    let family: Vec<f64> = tested.iter().filter(|row| named(row)).flat_map(|row| [row.step_z, row.trend_z]).collect();
+    let mut survives = stats::benjamini_hochberg(&family, FALSE_DISCOVERY_RATE).into_iter();
+    tested
+        .iter()
+        .map(|row| {
+            let direction = if named(row) {
+                let evidence = Evidence {
+                    step_z: row.step_z,
+                    trend_z: row.trend_z,
+                    step_survives: survives.next().unwrap_or(false),
+                    trend_survives: survives.next().unwrap_or(false),
+                    change_permille: change_permille((row.now, documents_now), (row.baseline, documents_baseline)),
+                    min_side_documents: documents_baseline.min(documents_now),
+                };
+                stats::call_direction(&evidence)
+            } else {
+                Direction::Unclear
+            };
+            let (low_permille, high_permille) = stats::wilson(row.now, documents_now);
+            Reading {
+                direction,
+                target: row.now,
+                target_permille: super::permille(u64::from(row.now), u64::from(documents_now)),
+                low_permille,
+                high_permille,
+                step_z: row.step_z,
+                trend_z: row.trend_z,
+            }
+        })
+        .collect()
+}
+
+/// Every skill of a vocabulary over some documents: documents per month, per skill and month the
+/// documents naming it, and what the counts say about each skill (all of them one family of tests).
 struct Tally {
     documents: Vec<u32>,
     table: Vec<Vec<u32>>,
+    /// The last months of the window that are the period's own.
+    target: usize,
+    /// Per skill, aligned with `table`.
+    readings: Vec<Reading>,
 }
 
 impl Tally {
-    /// Documents outside `months` are ignored.
-    fn new<'a>(docs: impl IntoIterator<Item = &'a Doc>, vocab: &Vocabulary, months: &[String]) -> Self {
-        let column: HashMap<&str, usize> = months.iter().enumerate().map(|(i, m)| (m.as_str(), i)).collect();
-        let mut documents = vec![0u32; months.len()];
-        let mut table: Vec<Vec<u32>> = vec![vec![0; months.len()]; vocab.names.len()];
+    /// Documents outside the window's months are ignored.
+    fn new<'a>(docs: impl IntoIterator<Item = &'a Doc>, vocab: &Vocabulary, window: &Window) -> Self {
+        let column: HashMap<&str, usize> = window.months.iter().enumerate().map(|(i, m)| (m.as_str(), i)).collect();
+        let mut documents = vec![0u32; window.months.len()];
+        let mut table: Vec<Vec<u32>> = vec![vec![0; window.months.len()]; vocab.names.len()];
         for doc in docs {
             let Some(&at) = column.get(doc.month.as_str()) else { continue };
             documents[at] += 1;
@@ -354,29 +488,47 @@ impl Tally {
                 table[skill][at] += 1;
             }
         }
-        Self { documents, table }
+        let rows: Vec<&[u32]> = table.iter().map(Vec::as_slice).collect();
+        let readings = judge(&rows, &documents, window.target);
+        Self { documents, table, target: window.target, readings }
     }
 
     fn total(&self, skill: usize) -> u32 {
-        self.table.get(skill).map_or(0, |row| row.iter().sum())
+        self.table.get(skill).map_or(0, |row| sum(row))
     }
 
     fn direction(&self, skill: usize) -> Direction {
-        self.table.get(skill).map_or(Direction::Unclear, |row| direction(row, &self.documents))
+        self.readings.get(skill).map_or(Direction::Unclear, |reading| reading.direction)
+    }
+
+    /// Does each side of the window (before the period, the period) hold at least
+    /// [`stats::MIN_SIDE_DOCS`] documents: is the scope big enough to judge a movement on?
+    fn has_both_sides(&self) -> bool {
+        let (baseline, target) = sides(&self.documents, self.target);
+        baseline >= stats::MIN_SIDE_DOCS && target >= stats::MIN_SIDE_DOCS
     }
 
     /// The scope's list: skills that appear at all, most mentioned first, ties by name, at most
-    /// [`MAX_SKILLS`], each with its direction and marks.
+    /// [`MAX_SKILLS`], each with its direction, numbers and marks.
     fn scope(&self, vocab: &Vocabulary, marks: &Marks) -> ScopeCounts {
         let mut skills: Vec<SkillCount> = (0..vocab.names.len())
             .filter(|&i| self.total(i) > 0)
-            .map(|i| SkillCount {
-                skill: vocab.names[i].clone(),
-                by_month: self.table[i].clone(),
-                total: self.total(i),
-                direction: self.direction(i),
-                in_profile: marks.profile.contains(&i),
-                wished: marks.wished.contains(&i),
+            .filter_map(|i| {
+                let reading = self.readings.get(i)?;
+                Some(SkillCount {
+                    skill: vocab.names[i].clone(),
+                    by_month: self.table[i].clone(),
+                    total: self.total(i),
+                    direction: reading.direction,
+                    target: reading.target,
+                    target_permille: reading.target_permille,
+                    low_permille: reading.low_permille,
+                    high_permille: reading.high_permille,
+                    z_centi: stats::centi(reading.step_z),
+                    trend_z_centi: stats::centi(reading.trend_z),
+                    in_profile: marks.profile.contains(&i),
+                    wished: marks.wished.contains(&i),
+                })
             })
             .collect();
         skills.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.skill.cmp(&b.skill)));
@@ -392,51 +544,17 @@ struct Marks {
     wished: HashSet<usize>,
 }
 
-/// Skill frequency over `docs` (those outside `months` are ignored): per skill and month the
+/// Skill frequency over `docs` (those outside the window are ignored): per skill and month the
 /// number of documents that name it. Most mentioned first, ties by name, at most [`MAX_SKILLS`].
 #[cfg(test)]
-pub(super) fn count_skills(docs: &[Doc], vocab: &Vocabulary, months: &[String]) -> SkillCounts {
-    let ScopeCounts { documents, skills } = Tally::new(docs, vocab, months).scope(vocab, &Marks::default());
-    SkillCounts { months: months.to_vec(), documents, skills, ..SkillCounts::default() }
-}
-
-/// The sums of the two halves of the window: the first `n/2` months, then the rest.
-fn halves(values: &[u32]) -> (u64, u64) {
-    let (first, second) = values.split_at(values.len() / 2);
-    let sum = |v: &[u32]| v.iter().map(|&n| u64::from(n)).sum::<u64>();
-    (sum(first), sum(second))
-}
-
-/// Does each half of the window hold at least `min` documents?
-fn halves_have(documents: &[u32], min: u32) -> bool {
-    let (first, second) = halves(documents);
-    first >= u64::from(min) && second >= u64::from(min)
-}
-
-/// Where a skill's share of the documents is going: the share in the second half of the months
-/// (`mentions / documents`) against the first half. `Unclear` when a half has fewer than
-/// [`MIN_HALF_DOCS`] documents or the skill fewer than [`MIN_MENTIONS`] mentions in all. Rising
-/// when the share grows by at least [`MIN_SHARE_CHANGE_PERMILLE`] per mille *and* by at least
-/// [`MIN_RELATIVE_CHANGE_PERCENT`] percent of the first half's share (any growth from zero
-/// counts as relative growth); falling when it drops by both; steady otherwise. Computed in
-/// integers, so a change exactly at a threshold counts.
-pub fn direction(by_month: &[u32], documents: &[u32]) -> Direction {
-    let (d1, d2) = halves(documents);
-    let (m1, m2) = halves(by_month);
-    if d1 < u64::from(MIN_HALF_DOCS) || d2 < u64::from(MIN_HALF_DOCS) || m1 + m2 < u64::from(MIN_MENTIONS) {
-        return Direction::Unclear;
-    }
-    let (d1, d2, m1, m2) = (i128::from(d1), i128::from(d2), i128::from(m1), i128::from(m2));
-    // share2 - share1 = (m2*d1 - m1*d2) / (d1*d2); share1 = m1/d1.
-    let change = m2 * d1 - m1 * d2;
-    let big_enough = |change: i128| 1000 * change >= MIN_SHARE_CHANGE_PERMILLE * d1 * d2;
-    let relative_enough = |change: i128| 100 * change >= MIN_RELATIVE_CHANGE_PERCENT * m1 * d2;
-    if change > 0 && big_enough(change) && relative_enough(change) {
-        Direction::Rising
-    } else if change < 0 && big_enough(-change) && relative_enough(-change) {
-        Direction::Falling
-    } else {
-        Direction::Steady
+pub(super) fn count_skills(docs: &[Doc], vocab: &Vocabulary, window: &Window) -> SkillCounts {
+    let ScopeCounts { documents, skills } = Tally::new(docs, vocab, window).scope(vocab, &Marks::default());
+    SkillCounts {
+        months: window.months.clone(),
+        target_months: u32::try_from(window.target).unwrap_or(u32::MAX),
+        documents,
+        skills,
+        ..SkillCounts::default()
     }
 }
 
@@ -449,7 +567,7 @@ pub fn direction(by_month: &[u32], documents: &[u32]) -> Direction {
 /// - not in the profile, not falling, and rising or at a high share: **learn next**;
 /// - otherwise not in the gap.
 ///
-/// An `Unclear` direction (too little data to tell) is treated like steady: only the share rule
+/// An `Unclear` direction (the data cannot tell) is treated like steady: only the share rule
 /// applies, so a skill that is often asked for still shows, but nothing is called rising or at
 /// risk on thin data.
 pub fn gap_bucket(direction: Direction, in_profile: bool, share_permille: u32) -> Option<GapBucket> {
@@ -479,9 +597,18 @@ fn gap_list(field: &Tally, vocab: &Vocabulary, marks: &Marks) -> Vec<GapSkill> {
     let documents: u64 = field.documents.iter().map(|&n| u64::from(n)).sum();
     let mut gap: Vec<GapSkill> = (0..vocab.names.len())
         .filter_map(|i| {
-            let (direction, share_permille) = (field.direction(i), super::permille(u64::from(field.total(i)), documents));
-            let bucket = gap_bucket(direction, marks.profile.contains(&i), share_permille)?;
-            Some(GapSkill { skill: vocab.names[i].clone(), bucket, direction, share_permille })
+            let reading = field.readings.get(i)?;
+            let share_permille = super::permille(u64::from(field.total(i)), documents);
+            let bucket = gap_bucket(reading.direction, marks.profile.contains(&i), share_permille)?;
+            Some(GapSkill {
+                skill: vocab.names[i].clone(),
+                bucket,
+                direction: reading.direction,
+                share_permille,
+                target_permille: reading.target_permille,
+                low_permille: reading.low_permille,
+                high_permille: reading.high_permille,
+            })
         })
         .collect();
     gap.sort_by(|a, b| {
@@ -524,11 +651,32 @@ fn wish_list(prefs: &Preferences) -> Vec<(String, WishKind, bool)> {
 
 /// Each wish measured on the gap's scope (`docs`): a skill through a vocabulary that knows the
 /// wished skills too (only here: the market lists never use it), a domain as a word in the
-/// posting. No mention at all is "no data" (0, `Unclear`).
-fn wish_signals(wishes: &[(String, WishKind, bool)], docs: &[&Doc], profile_skills: &[String], months: &[String]) -> Vec<WishSignal> {
+/// posting. No mention at all is "no data" (0, `Unclear`). The skills are one family of tests, as
+/// in the market lists; the domains of the call are another.
+fn wish_signals(wishes: &[(String, WishKind, bool)], docs: &[&Doc], profile_skills: &[String], window: &Window) -> Vec<WishSignal> {
     let wished: Vec<String> = wishes.iter().filter(|(_, kind, _)| *kind == WishKind::Skill).map(|(w, _, _)| w.clone()).collect();
     let vocab = Vocabulary::new(&[profile_skills, &wished[..]].concat());
-    let tally = Tally::new(docs.iter().copied(), &vocab, months);
+    let tally = Tally::new(docs.iter().copied(), &vocab, window);
+
+    let column: HashMap<&str, usize> = window.months.iter().enumerate().map(|(i, m)| (m.as_str(), i)).collect();
+    let domain_rows: Vec<Vec<u32>> = wishes
+        .iter()
+        .filter(|(_, kind, _)| *kind == WishKind::Domain)
+        .map(|(wish, _, _)| {
+            let mut by_month = vec![0u32; window.months.len()];
+            for doc in docs {
+                if let Some(&at) = column.get(doc.month.as_str()) {
+                    if mentions_lowered(&doc.lower, wish) {
+                        by_month[at] += 1;
+                    }
+                }
+            }
+            by_month
+        })
+        .collect();
+    let rows: Vec<&[u32]> = domain_rows.iter().map(Vec::as_slice).collect();
+    let mut domains = judge(&rows, &tally.documents, window.target).into_iter().zip(&domain_rows);
+
     wishes
         .iter()
         .map(|(wish, kind, avoided)| {
@@ -537,18 +685,7 @@ fn wish_signals(wishes: &[(String, WishKind, bool)], docs: &[&Doc], profile_skil
                     Some(&i) => (tally.direction(i), tally.total(i)),
                     None => (Direction::Unclear, 0),
                 },
-                WishKind::Domain => {
-                    let column: HashMap<&str, usize> = months.iter().enumerate().map(|(i, m)| (m.as_str(), i)).collect();
-                    let mut by_month = vec![0u32; months.len()];
-                    for doc in docs {
-                        if let Some(&at) = column.get(doc.month.as_str()) {
-                            if mentions_lowered(&doc.lower, wish) {
-                                by_month[at] += 1;
-                            }
-                        }
-                    }
-                    (direction(&by_month, &tally.documents), by_month.iter().sum())
-                }
+                WishKind::Domain => domains.next().map_or((Direction::Unclear, 0), |(reading, row)| (reading.direction, sum(row))),
             };
             let direction = if mentions == 0 { Direction::Unclear } else { direction };
             WishSignal { wish: wish.clone(), kind: *kind, avoided: *avoided, direction, mentions }
@@ -587,7 +724,7 @@ pub(super) fn market_counts(
     postings: &[Doc],
     leads: &[Doc],
     extractions: &[Extraction],
-    months: &[String],
+    window: &Window,
 ) -> SkillCounts {
     // The market vocabulary knows the background, never the wishes.
     let vocab = Vocabulary::new(&frame.skills);
@@ -596,19 +733,21 @@ pub(super) fn market_counts(
     let marks = Marks { profile: vocab.find_all(&frame.skills), wished: vocab.find_all(&wished) };
 
     let all: Vec<&Doc> = postings.iter().collect();
-    let global = Tally::new(all.iter().copied(), &vocab, months).scope(&vocab, &marks);
+    let global = Tally::new(all.iter().copied(), &vocab, window).scope(&vocab, &marks);
     let local_docs: Option<Vec<&Doc>> = frame.has_place().then(|| postings.iter().filter(|d| frame.is_local(&d.lower)).collect());
-    let local = local_docs.as_ref().map(|docs| Tally::new(docs.iter().copied(), &vocab, months).scope(&vocab, &marks));
-    let (gap_scope, scope_docs) = match (&local_docs, &local) {
-        (Some(docs), Some(counts)) if halves_have(&counts.documents, MIN_HALF_DOCS) => (GapScope::Local, docs.as_slice()),
+    let local_tally = local_docs.as_ref().map(|docs| Tally::new(docs.iter().copied(), &vocab, window));
+    let local = local_tally.as_ref().map(|tally| tally.scope(&vocab, &marks));
+    let (gap_scope, scope_docs) = match (&local_docs, &local_tally) {
+        (Some(docs), Some(tally)) if tally.has_both_sides() => (GapScope::Local, docs.as_slice()),
         _ => (GapScope::Global, all.as_slice()),
     };
-    let field = Tally::new(scope_docs.iter().copied().filter(|d| frame.in_field(&d.lower)), &vocab, months);
-    let pipeline = (!leads.is_empty()).then(|| Tally::new(leads, &vocab, months).scope(&vocab, &marks));
+    let field = Tally::new(scope_docs.iter().copied().filter(|d| frame.in_field(&d.lower)), &vocab, window);
+    let pipeline = (!leads.is_empty()).then(|| Tally::new(leads, &vocab, window).scope(&vocab, &marks));
 
     SkillCounts {
         version: super::MARKET_SCAN_VERSION,
-        months: months.to_vec(),
+        months: window.months.clone(),
+        target_months: u32::try_from(window.target).unwrap_or(u32::MAX),
         documents: global.documents,
         skills: global.skills,
         local,
@@ -618,7 +757,7 @@ pub(super) fn market_counts(
         gap_scope,
         gap: gap_list(&field, &vocab, &marks),
         uncatalogued: uncatalogued(extractions, &vocab),
-        wishes: wish_signals(&wishes, scope_docs, &frame.skills, months),
+        wishes: wish_signals(&wishes, scope_docs, &frame.skills, window),
     }
 }
 
@@ -634,8 +773,8 @@ fn month_of(time: DateTime<Utc>) -> String {
 }
 
 pub(super) async fn count(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendRun> {
-    let months = window_for(&s.period, Utc::now().date_naive());
-    let in_window = |month: &str| months.iter().any(|m| m == month);
+    let window = window_for(&s.period, Utc::now().date_naive());
+    let in_window = |month: &str| window.months.iter().any(|m| m == month);
 
     // A backfilled Hacker News source holds thousands of postings: read a few at a time.
     let candidates: Vec<(String, TrendItem)> = env
@@ -666,7 +805,7 @@ pub(super) async fn count(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendR
         Preferences::default()
     });
     let frame = MarketFrame::new(env.config.profile.as_ref(), &prefs);
-    let counts = market_counts(&frame, &prefs, &postings, &leads, &s.digest.extractions, &months);
+    let counts = market_counts(&frame, &prefs, &postings, &leads, &s.digest.extractions, &window);
     let sum = |docs: &[u32]| docs.iter().sum::<u32>();
     tracing::info!(
         documents = sum(&counts.documents),
@@ -702,8 +841,9 @@ mod tests {
         Doc::new(month, text)
     }
 
-    fn months() -> Vec<String> {
-        ["2026-09", "2026-10", "2026-11"].map(String::from).to_vec()
+    /// Three months, the last one the period's own.
+    fn window() -> Window {
+        Window { months: ["2026-09", "2026-10", "2026-11"].map(String::from).to_vec(), target: 1 }
     }
 
     fn total(counts: &SkillCounts, skill: &str) -> Option<Vec<u32>> {
@@ -719,9 +859,9 @@ mod tests {
             doc("2026-11", "Hooli | We go to market fast. Rust! Machine Learning, node.js and C++/C#."),
             doc("2026-12", "Outside the window: Rust Rust"),
         ];
-        let counts = count_skills(&docs, &Vocabulary::new(&[]), &months());
+        let counts = count_skills(&docs, &Vocabulary::new(&[]), &window());
 
-        assert_eq!(counts.months, months());
+        assert_eq!((counts.months.as_slice(), counts.target_months), (window().months.as_slice(), 1));
         assert_eq!(counts.documents, [1, 2, 1], "the December document is ignored");
         assert_eq!(total(&counts, "Rust"), Some(vec![1, 1, 1]), "once per document");
         assert_eq!(total(&counts, "Kafka"), Some(vec![1, 0, 0]));
@@ -746,8 +886,8 @@ mod tests {
     #[test]
     fn counting_is_deterministic_and_does_not_confuse_similar_words() {
         let docs = [doc("2026-11", "JavaScript and TypeScript, not Java. Trust us. Mongo, MongoDB. Spark of joy; Apache Spark.")];
-        let a = count_skills(&docs, &Vocabulary::new(&[]), &months());
-        let b = count_skills(&docs, &Vocabulary::new(&[]), &months());
+        let a = count_skills(&docs, &Vocabulary::new(&[]), &window());
+        let b = count_skills(&docs, &Vocabulary::new(&[]), &window());
         assert_eq!(a, b);
         assert_eq!(total(&a, "Rust"), None, "'Trust' is not Rust");
         assert_eq!(total(&a, "Java"), Some(vec![0, 0, 1]), "JavaScript is not Java");
@@ -760,7 +900,7 @@ mod tests {
     fn the_users_own_skills_are_counted_too() {
         let docs = [doc("2026-11", "We need Gleam and Crystal developers, and rust and golang too")];
         let vocab = Vocabulary::new(&["Gleam".into(), "crystal".into(), "rust".into(), "Golang".into(), "  ".into()]);
-        let counts = count_skills(&docs, &vocab, &months());
+        let counts = count_skills(&docs, &vocab, &window());
         assert_eq!(total(&counts, "Gleam"), Some(vec![0, 0, 1]));
         assert_eq!(total(&counts, "crystal"), Some(vec![0, 0, 1]), "named as the user wrote it");
         assert_eq!(counts.skills.iter().filter(|s| s.skill.eq_ignore_ascii_case("rust")).count(), 1, "no duplicate of a built-in");
@@ -772,7 +912,7 @@ mod tests {
     fn a_skill_of_one_or_two_letters_is_not_counted() {
         let docs = [doc("2026-11", "Series C startup, strong R&D team, we use C# and C++")];
         let vocab = Vocabulary::new(&["C".into(), "R".into(), "C#".into(), "C++".into()]);
-        let counts = count_skills(&docs, &vocab, &months());
+        let counts = count_skills(&docs, &vocab, &window());
         assert_eq!(total(&counts, "C"), None, "Series C is not the language");
         assert_eq!(total(&counts, "R"), None, "R&D is not the language");
         assert_eq!(total(&counts, "C#"), Some(vec![0, 0, 1]));
@@ -790,24 +930,68 @@ mod tests {
     }
 
     #[test]
-    fn the_window_ends_with_the_month_of_the_period() {
+    fn month_window_ends_with_the_month_of_the_periods_last_day() {
         let w46 = Period::parse("2026-W46").unwrap();
         assert_eq!(month_window(&w46, 3), ["2026-09", "2026-10", "2026-11"]);
         let w1 = Period::parse("2026-W01").unwrap();
         assert_eq!(month_window(&w1, 3), ["2025-11", "2025-12", "2026-01"], "W01 ends on 2026-01-04");
         let q4 = Period::parse("2026-Q4").unwrap();
         assert_eq!(month_window(&q4, 6), ["2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12"]);
-        let today = NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
-        let nov = Period::parse("2026-M11").unwrap();
-        assert_eq!(window_for(&nov, today), ["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"]);
-        let year = Period::parse("2026").unwrap();
-        assert_eq!(
-            window_for(&year, today),
-            ["2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03"],
-            "the current year ends with the month that has begun"
-        );
-        let past = Period::parse("2025").unwrap();
-        assert_eq!(window_for(&past, today).last().map(String::as_str), Some("2025-12"), "a past year ends with December");
+    }
+
+    /// The window of the period `label` on the day `(year, month, day)`: its months and its target.
+    fn window_on(label: &str, today: (i32, u32, u32)) -> (Vec<String>, usize) {
+        let today = NaiveDate::from_ymd_opt(today.0, today.1, today.2).unwrap();
+        let window = window_for(&Period::parse(label).unwrap(), today);
+        (window.months, window.target)
+    }
+
+    /// Every month from `first` to `last`, both `YYYY-MM`.
+    fn months_of(first: &str, last: &str) -> Vec<String> {
+        let index = |m: &str| m[..4].parse::<i32>().unwrap() * 12 + m[5..].parse::<i32>().unwrap() - 1;
+        (index(first)..=index(last)).map(month_label).collect()
+    }
+
+    #[test]
+    fn a_week_or_a_month_is_one_month_against_the_five_before() {
+        assert_eq!(window_on("2026-W46", (2026, 11, 19)), (months_of("2026-06", "2026-11"), 1));
+        assert_eq!(window_on("2026-M11", (2026, 11, 19)), (months_of("2026-06", "2026-11"), 1));
+        // A past month, and one that has not begun, keep their own month.
+        assert_eq!(window_on("2026-M03", (2026, 11, 19)), (months_of("2025-10", "2026-03"), 1));
+        assert_eq!(window_on("2026-M11", (2026, 3, 18)), (months_of("2026-06", "2026-11"), 1));
+        // 2026-W49 is Nov 30 - Dec 6: it ends in the month that has begun.
+        assert_eq!(window_on("2026-W49", (2026, 11, 30)), (months_of("2026-06", "2026-11"), 1), "December has not begun");
+        assert_eq!(window_on("2026-W49", (2026, 12, 3)), (months_of("2026-07", "2026-12"), 1));
+        assert_eq!(window_on("2026-W01", (2026, 1, 2)), (months_of("2025-08", "2026-01"), 1), "W01 ends on 2026-01-04");
+    }
+
+    #[test]
+    fn a_quarter_is_its_months_that_have_begun_against_the_three_before() {
+        // In progress: October and November have begun, December has not.
+        assert_eq!(window_on("2026-Q4", (2026, 11, 19)), (months_of("2026-07", "2026-11"), 2));
+        assert_eq!(window_on("2026-Q4", (2026, 10, 2)), (months_of("2026-07", "2026-10"), 1), "the quarter's first month");
+        // Over: all three months.
+        assert_eq!(window_on("2026-Q4", (2027, 1, 5)), (months_of("2026-07", "2026-12"), 3));
+        assert_eq!(window_on("2026-Q2", (2026, 11, 19)), (months_of("2026-01", "2026-06"), 3), "a past quarter");
+        assert_eq!(window_on("2026-Q1", (2026, 3, 31)), (months_of("2025-10", "2026-03"), 3), "the last day of the quarter");
+    }
+
+    #[test]
+    fn a_year_is_its_months_that_have_begun_against_as_many_before() {
+        // The current year ends with the month that has begun.
+        assert_eq!(window_on("2026", (2026, 3, 18)), (months_of("2025-10", "2026-03"), 3));
+        assert_eq!(window_on("2026", (2026, 11, 19)), (months_of("2025-02", "2026-11"), 11));
+        // A past year: twelve months against the twelve before.
+        assert_eq!(window_on("2025", (2026, 11, 19)), (months_of("2024-01", "2025-12"), 12));
+        // January, the year's first month: one against one.
+        assert_eq!(window_on("2026", (2026, 1, 9)), (months_of("2025-12", "2026-01"), 1));
+    }
+
+    #[test]
+    fn a_period_that_has_not_begun_keeps_its_first_month() {
+        // Nothing can be cut: the window is the period's own, and it will hold no postings.
+        assert_eq!(window_on("2027-Q2", (2026, 11, 19)), (months_of("2027-01", "2027-04"), 1));
+        assert_eq!(window_on("2027", (2026, 11, 19)), (months_of("2026-12", "2027-01"), 1));
     }
 
     #[test]
@@ -820,44 +1004,107 @@ mod tests {
 
     // ------------------------------------------------------------ direction and gap
 
+    /// The direction of one skill alone: `by_month` of `documents`, the last `target` months the
+    /// period's own. It is its own family of two tests.
+    fn direction_of(by_month: &[u32], documents: &[u32], target: usize) -> Direction {
+        judge(&[by_month], documents, target)[0].direction
+    }
+
     #[test]
-    fn thin_data_has_no_direction() {
+    fn thin_data_is_unclear_not_steady() {
         use Direction::*;
-        // Below MIN_HALF_DOCS documents in a half.
-        assert_eq!(direction(&[0, 0, 0, 5, 5, 5], &[9, 9, 9, 10, 10, 10]), Unclear, "27 documents in the first half");
-        assert_eq!(direction(&[0, 20], &[29, 100]), Unclear);
-        assert_eq!(direction(&[0, 20], &[30, 100]), Rising, "exactly MIN_HALF_DOCS is enough");
-        // Below MIN_MENTIONS mentions.
-        assert_eq!(direction(&[0, 4], &[100, 100]), Unclear, "4 mentions");
-        assert_eq!(direction(&[0, 5], &[100, 100]), Rising, "exactly MIN_MENTIONS is enough");
-        // An odd number of months: the first half is the shorter one.
-        assert_eq!(direction(&[0, 10, 10], &[40, 20, 20]), Rising, "40 against 40 documents");
-        assert_eq!(direction(&[0, 10, 10], &[29, 40, 40]), Unclear);
-        // Nothing at all.
-        assert_eq!(direction(&[], &[]), Unclear);
-        assert_eq!(direction(&[0, 0], &[0, 0]), Unclear);
+        // Nothing at all, and a skill that is in no posting.
+        assert_eq!(direction_of(&[], &[], 0), Unclear);
+        assert_eq!(direction_of(&[0; 6], &[100; 6], 3), Unclear, "named nowhere");
+        // The same share all along: with 27 documents on each side a movement could have hidden.
+        assert_eq!(direction_of(&[3; 6], &[9; 6], 3), Unclear, "27 documents a side");
+        assert_eq!(direction_of(&[3; 6], &[10, 10, 10, 10, 10, 9], 3), Unclear, "29 in the target");
+        assert_eq!(direction_of(&[3; 6], &[10; 6], 3), Steady, "exactly MIN_SIDE_DOCS a side is enough");
+        // A small movement on few documents is not a finding either way.
+        assert_eq!(direction_of(&[2, 2, 2, 3, 3, 3], &[9; 6], 3), Unclear);
+        // A large one is: the tests already count how few the documents are.
+        assert_eq!(direction_of(&[0, 0, 0, 6, 6, 6], &[9; 6], 3), Rising);
+        // A few mentions in a big sample are a share, not a trend: the skill is steady.
+        assert_eq!(direction_of(&[1, 0, 1, 0, 1, 0], &[100; 6], 3), Steady);
     }
 
     #[test]
     fn direction_compares_shares_not_counts() {
         use Direction::*;
-        // Growth from zero is rising.
-        assert_eq!(direction(&[0, 0, 0, 2, 2, 2], &[10, 10, 10, 10, 10, 10]), Rising);
-        // Twice the postings, the same share: steady, not rising.
-        assert_eq!(direction(&[10, 20], &[100, 200]), Steady);
-        // More mentions but a smaller share: falling.
-        assert_eq!(direction(&[20, 25], &[100, 400]), Falling);
-        // Exactly one point and exactly 25%: rising (4% -> 5%); falling the other way (4% -> 3%).
-        assert_eq!(direction(&[4, 5], &[100, 100]), Rising);
-        assert_eq!(direction(&[4, 3], &[100, 100]), Falling);
-        // One point but only 2.5% of a big share: steady (40% -> 41%, and back).
-        assert_eq!(direction(&[40, 41], &[100, 100]), Steady);
-        assert_eq!(direction(&[41, 40], &[100, 100]), Steady);
-        // A big relative change below one point: steady (1.0% -> 1.9%); exactly one point rises.
-        assert_eq!(direction(&[10, 19], &[1000, 1000]), Steady);
-        assert_eq!(direction(&[10, 20], &[1000, 1000]), Rising);
-        // A drop of 20% of the share: steady (5% -> 4%).
-        assert_eq!(direction(&[5, 4], &[100, 100]), Steady);
+        // The same share on plenty of documents, or noise around it: steady.
+        assert_eq!(direction_of(&[50; 6], &[250; 6], 3), Steady);
+        assert_eq!(direction_of(&[48, 53, 50, 47, 52, 50], &[250; 6], 3), Steady);
+        // Twice the documents and twice the mentions at the same share: no change, however many more.
+        assert_eq!(direction_of(&[20, 20, 20, 40, 40, 40], &[100, 100, 100, 200, 200, 200], 3), Steady);
+        // The reading says so: no movement of the share at all.
+        let reading = judge(&[&[20, 20, 20, 40, 40, 40]], &[100, 100, 100, 200, 200, 200], 3)[0];
+        assert!(reading.step_z.abs() < 1e-9 && reading.trend_z.abs() < 1e-9, "{reading:?}");
+        // More mentions but a smaller share is falling.
+        assert_eq!(direction_of(&[60, 60, 60, 70, 70, 70], &[300, 300, 300, 600, 600, 600], 3), Falling);
+        // A large change on a few hundred documents: 10% to 20% of 300 a side.
+        assert_eq!(direction_of(&[10, 10, 10, 20, 20, 20], &[100; 6], 3), Rising);
+        assert_eq!(direction_of(&[20, 20, 20, 10, 10, 10], &[100; 6], 3), Falling);
+    }
+
+    #[test]
+    fn a_slow_drift_is_called_through_the_trend_even_when_the_last_step_is_small() {
+        // 40% down to 32% over six months, 250 documents each month: the last month against the five
+        // before is no evidence by itself, the trend over all six is.
+        let (k, n) = ([100, 96, 92, 88, 84, 80], [250; 6]);
+        let reading = judge(&[&k], &n, 1)[0];
+        assert!(reading.step_z.abs() < 1.645, "the step alone would not be called: {reading:?}");
+        assert!(reading.trend_z < -1.96, "{reading:?}");
+        assert_eq!(reading.direction, Direction::Falling);
+        // The same months in another order are no drift.
+        assert_eq!(direction_of(&[92, 80, 100, 84, 96, 88], &n, 1), Direction::Steady);
+        // The other way.
+        let rising: Vec<u32> = k.iter().rev().copied().collect();
+        assert_eq!(direction_of(&rising, &n, 1), Direction::Rising);
+    }
+
+    #[test]
+    fn one_skill_moving_among_many_unchanged_ones_survives_the_family_control() {
+        // Forty skills at a steady 20% of 100 documents a month, and one at 10% then 27%.
+        let flat = [20u32; 6];
+        let mover = [10, 10, 10, 27, 27, 27];
+        let mut rows: Vec<&[u32]> = vec![&flat; 40];
+        rows.push(&mover);
+        let read = judge(&rows, &[100; 6], 3);
+        assert_eq!(read[40].direction, Direction::Rising, "{:?}", read[40]);
+        assert!(read[..40].iter().all(|r| r.direction == Direction::Steady));
+
+        // A movement that alone passes at the usual 5% is not called among that many tests.
+        let borderline = [20, 20, 20, 27, 27, 27];
+        let alone = judge(&[&borderline], &[100; 6], 3)[0];
+        assert!(alone.step_z > 1.96, "{alone:?}");
+        assert_eq!(alone.direction, Direction::Rising);
+        rows[40] = &borderline;
+        assert_eq!(judge(&rows, &[100; 6], 3)[40].direction, Direction::Steady, "chance among 82 tests");
+    }
+
+    #[test]
+    fn a_skill_in_no_document_is_unclear_and_takes_no_part_in_the_family() {
+        // The same borderline movement, with a thousand unnamed skills around it: they add no tests.
+        let (silent, borderline) = ([0u32; 6], [20, 20, 20, 27, 27, 27]);
+        let mut rows: Vec<&[u32]> = vec![&silent; 1000];
+        rows.push(&borderline);
+        let read = judge(&rows, &[100; 6], 3);
+        assert!(read[..1000].iter().all(|r| r.direction == Direction::Unclear && r.target == 0));
+        assert_eq!(read[1000], judge(&[&borderline], &[100; 6], 3)[0]);
+    }
+
+    #[test]
+    fn the_interval_holds_the_share_and_narrows_with_more_documents() {
+        // 6 in 10 of the documents of each of the last three months, then ten times as many.
+        let small = judge(&[&[1, 1, 1, 6, 6, 6]], &[10; 6], 3)[0];
+        let big = judge(&[&[10, 10, 10, 60, 60, 60]], &[100; 6], 3)[0];
+        assert_eq!((small.target, small.target_permille), (18, 600));
+        assert_eq!((big.target, big.target_permille), (180, 600));
+        for reading in [small, big] {
+            assert!(reading.low_permille <= reading.target_permille && reading.target_permille <= reading.high_permille, "{reading:?}");
+        }
+        assert!(big.high_permille - big.low_permille < small.high_permille - small.low_permille);
+        assert_eq!((small.low_permille, small.high_permille), stats::wilson(18, 30), "the target months only");
     }
 
     #[test]
@@ -908,10 +1155,11 @@ mod tests {
         }
     }
 
-    /// Per month of six: `local` backend postings in Singapore, and 4 elsewhere. In the first three
-    /// months Python is in 8 of 12 local ones and Rust in 2; in the last three the other way round.
-    /// Kafka is in half of them throughout, Gleam (a wish only) in 3, Kotlin in 1, fintech in 2.
-    fn market(local: usize) -> (Vec<String>, Vec<Doc>) {
+    /// Per month of six (the last three are the period's own): `local` backend postings in
+    /// Singapore, and 4 elsewhere. In the first three months Python is in 8 of 12 local ones and Rust
+    /// in 2; in the last three the other way round. Kafka is in half of them throughout, Gleam (a
+    /// wish only) in 3, Kotlin in 1, fintech in 2.
+    fn market(local: usize) -> (Window, Vec<Doc>) {
         let months: Vec<String> = ["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"].map(String::from).to_vec();
         let mut docs = Vec::new();
         for (m, month) in months.iter().enumerate() {
@@ -942,11 +1190,11 @@ mod tests {
                 docs.push(doc(month, &format!("Globex{n} | Backend Engineer | Berlin | Go, Kubernetes")));
             }
         }
-        (months, docs)
+        (Window { months, target: 3 }, docs)
     }
 
-    fn counts_of(prefs: &Preferences, postings: &[Doc], leads: &[Doc], extractions: &[Extraction], months: &[String]) -> SkillCounts {
-        market_counts(&MarketFrame::new(Some(&cv()), prefs), prefs, postings, leads, extractions, months)
+    fn counts_of(prefs: &Preferences, postings: &[Doc], leads: &[Doc], extractions: &[Extraction], window: &Window) -> SkillCounts {
+        market_counts(&MarketFrame::new(Some(&cv()), prefs), prefs, postings, leads, extractions, window)
     }
 
     fn skill<'a>(skills: &'a [SkillCount], name: &str) -> &'a SkillCount {
@@ -955,19 +1203,33 @@ mod tests {
 
     #[test]
     fn the_market_is_counted_globally_and_locally_with_directions() {
-        let (months, postings) = market(12);
-        let counts = counts_of(&wishes(), &postings, &[], &[], &months);
+        let (window, postings) = market(12);
+        let counts = counts_of(&wishes(), &postings, &[], &[], &window);
 
         assert_eq!(counts.documents, [16; 6]);
         let local = counts.local.as_ref().expect("a place is set");
         assert_eq!(local.documents, [12; 6]);
         assert_eq!(counts.place, "Singapore");
         assert_eq!(counts.field, ["backend", "engineer"]);
-        assert_eq!(counts.gap_scope, GapScope::Local, "36 local postings in each half");
+        assert_eq!(counts.target_months, 3);
+        assert_eq!(counts.gap_scope, GapScope::Local, "36 local postings in the baseline and in the target");
 
         assert_eq!(skill(&local.skills, "Rust").direction, Direction::Rising);
         assert_eq!(skill(&local.skills, "Python").direction, Direction::Falling);
         assert_eq!(skill(&local.skills, "Kafka").direction, Direction::Steady);
+        // The numbers behind the calls: the target is the last three months, the scores carry the sign.
+        let rust = skill(&local.skills, "Rust");
+        assert_eq!((rust.target, rust.target_permille), (24, 667), "8 of 12 in each of the last three months");
+        assert!(rust.z_centi > 196 && rust.trend_z_centi > 196, "{rust:?}");
+        let python = skill(&local.skills, "Python");
+        assert_eq!((python.target, python.target_permille), (6, 167));
+        assert!(python.z_centi < -196 && python.trend_z_centi < -196, "{python:?}");
+        let kafka = skill(&local.skills, "Kafka");
+        assert_eq!((kafka.target, kafka.target_permille, kafka.z_centi, kafka.trend_z_centi), (18, 500, 0, 0));
+        // Every share lies inside its own interval, in every scope.
+        for s in counts.skills.iter().chain(&local.skills) {
+            assert!(s.low_permille <= s.target_permille && s.target_permille <= s.high_permille, "{s:?}");
+        }
         assert_eq!(skill(&counts.skills, "Go").direction, Direction::Steady, "global only");
         assert!(local.skills.iter().all(|s| s.skill != "Go"), "Berlin is not local");
         // Marks: Golang in the profile marks Go; Kotlin is wished (and counted, it is built in).
@@ -991,31 +1253,40 @@ mod tests {
         );
         assert_eq!(skill(&local.skills, "Kafka").total, 36);
         assert_eq!(counts.gap[1].share_permille, 500);
+        for g in &counts.gap {
+            assert!(g.low_permille <= g.target_permille && g.target_permille <= g.high_permille, "{g:?}");
+        }
+        assert_eq!(counts.gap[0].target_permille, 667, "Rust in 24 of the 36 local postings of the target");
         assert!(counts.pipeline.is_none());
     }
 
     #[test]
     fn a_thin_local_market_leaves_the_gap_global() {
-        let (months, postings) = market(9);
-        let counts = counts_of(&place(), &postings, &[], &[], &months);
+        let (window, postings) = market(9);
+        let counts = counts_of(&place(), &postings, &[], &[], &window);
         assert_eq!(counts.local.as_ref().map(|l| l.documents.clone()), Some(vec![9; 6]));
-        assert_eq!(counts.gap_scope, GapScope::Global, "27 local postings in a half");
-        assert!(counts.local.as_ref().unwrap().skills.iter().all(|s| s.direction == Direction::Unclear));
+        assert_eq!(counts.gap_scope, GapScope::Global, "27 local postings on each side");
+        // On 27 postings a side a steady share could hide a movement, so it is unclear, not steady;
+        // a movement as large as Python's and Rust's is called all the same.
+        let local = counts.local.as_ref().unwrap();
+        assert_eq!(skill(&local.skills, "Kafka").direction, Direction::Unclear);
+        assert_eq!(skill(&local.skills, "Python").direction, Direction::Falling);
+        assert_eq!(skill(&local.skills, "Rust").direction, Direction::Rising);
         assert!(counts.gap.iter().any(|g| g.skill == "Go"), "Berlin's postings count in the global gap");
 
         // No place at all: no local scope.
         let nowhere = Preferences { remote: Remote::Onsite, ..Preferences::default() };
-        let counts = counts_of(&nowhere, &postings, &[], &[], &months);
+        let counts = counts_of(&nowhere, &postings, &[], &[], &window);
         assert!(counts.local.is_none());
         assert_eq!((counts.gap_scope, counts.place.as_str()), (GapScope::Global, ""));
     }
 
     #[test]
     fn leads_never_change_the_market_counts() {
-        let (months, postings) = market(12);
-        let leads: Vec<Doc> = (0..40).map(|n| doc(&months[n % 6], "Initech | Backend Engineer | Singapore | Elixir, Elixir, Kafka")).collect();
-        let without = counts_of(&wishes(), &postings, &[], &[], &months);
-        let with = counts_of(&wishes(), &postings, &leads, &[], &months);
+        let (window, postings) = market(12);
+        let leads: Vec<Doc> = (0..40).map(|n| doc(&window.months[n % 6], "Initech | Backend Engineer | Singapore | Elixir, Elixir, Kafka")).collect();
+        let without = counts_of(&wishes(), &postings, &[], &[], &window);
+        let with = counts_of(&wishes(), &postings, &leads, &[], &window);
 
         assert_eq!((&with.documents, &with.skills, &with.local), (&without.documents, &without.skills, &without.local));
         assert_eq!((&with.gap_scope, &with.gap, &with.wishes), (&without.gap_scope, &without.gap, &without.wishes));
@@ -1026,8 +1297,8 @@ mod tests {
 
     #[test]
     fn wishes_are_measured_in_order_and_never_shape_the_market() {
-        let (months, postings) = market(12);
-        let counts = counts_of(&wishes(), &postings, &[], &[], &months);
+        let (window, postings) = market(12);
+        let counts = counts_of(&wishes(), &postings, &[], &[], &window);
         let wishes: Vec<(&str, WishKind, bool, Direction, u32)> =
             counts.wishes.iter().map(|w| (w.wish.as_str(), w.kind, w.avoided, w.direction, w.mentions)).collect();
         assert_eq!(
@@ -1045,7 +1316,7 @@ mod tests {
 
         // The same market with other wishes: every market number and the gap stay.
         let other = Preferences { must_skills: vec!["Elixir".into()], domains: vec!["robotics".into()], roles: vec!["Data Scientist".into()], ..place() };
-        let plain = counts_of(&other, &postings, &[], &[], &months);
+        let plain = counts_of(&other, &postings, &[], &[], &window);
         let unmark = |skills: &[SkillCount]| skills.iter().map(|s| SkillCount { wished: false, ..s.clone() }).collect::<Vec<_>>();
         assert_eq!(unmark(&plain.skills), unmark(&counts.skills));
         assert_eq!(plain.local.as_ref().map(|l| unmark(&l.skills)), counts.local.as_ref().map(|l| unmark(&l.skills)));
