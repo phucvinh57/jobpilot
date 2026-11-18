@@ -1,8 +1,9 @@
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandError } from "@/lib/problem";
+import { renderWithToasts } from "@/test/render";
 
 import type { Added } from "@/types/trends";
 import { useRuns } from "@/hooks/trends/runs";
@@ -34,9 +35,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 async function shown() {
-  render(<TrendsPage />);
+  renderWithToasts(<TrendsPage />);
+  // The topics are in a report: open the newest one.
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("row", { name: "Week of 9 November (2026-W46)" }));
   await screen.findByRole("heading", { name: "Weekly digest 2026-W46" });
-  return userEvent.setup();
+  return user;
 }
 
 describe("Add to preferences", () => {
@@ -115,8 +119,9 @@ describe("Add to preferences", () => {
     });
     const user = await shown();
     await user.click(screen.getAllByRole("button", { name: "Add Rust to preferences" })[0] as HTMLElement);
-    const notice = within(await screen.findByRole("group", { name: "Result" }));
-    expect(notice.getByText('"Rust" is in your avoid list, so it was not added.')).toBeTruthy();
+    expect(
+      await screen.findByRole("status", { name: '"Rust" is in your avoid list, so it was not added.' }),
+    ).toBeTruthy();
     // It now reads as in the avoid list, not as added.
     expect(screen.getAllByRole("button", { name: "Rust is in your avoid list" }).length).toBeGreaterThan(0);
   });

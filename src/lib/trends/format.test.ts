@@ -7,7 +7,7 @@ import {
   digestHint,
   pickScope,
   noReportsCaption,
-  readFailure,
+  resultBody,
   reportFileName,
   reportName,
   skillRowName,
@@ -88,7 +88,7 @@ describe("sentences", () => {
   it("names a saved report by its period", () => {
     expect(reportName({ periodTitle: "November 2026", period: "2026-M11" })).toBe("November 2026 (2026-M11)");
     expect(reportName({ periodTitle: "2026", period: "2026" })).toBe("2026");
-    expect(noReportsCaption("monthly")).toBe("No monthly reports yet. Collect & build digest with Monthly selected.");
+    expect(noReportsCaption("monthly")).toBe("No monthly reports yet. Press New research and choose Monthly.");
   });
 
   it("offers a report's PDF under a safe file name", () => {
@@ -100,7 +100,13 @@ describe("sentences", () => {
   });
 
   it("names the failures", () => {
-    expect(readFailure("disk full")).toBe("Could not read the saved data: disk full");
     expect(addFailure("Rust", "locked")).toBe('Could not add "Rust" to your preferences: locked');
+  });
+
+  it("puts the lines of a run's result on one line, and nothing when there are none", () => {
+    expect(resultBody(["Hacker News: 4 new item(s)", "YC companies: timed out"])).toBe(
+      "Hacker News: 4 new item(s) · YC companies: timed out",
+    );
+    expect(resultBody([])).toBeUndefined();
   });
 });

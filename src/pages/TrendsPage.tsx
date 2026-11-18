@@ -1,23 +1,59 @@
-import { RefreshCw } from "lucide-react";
+import { Plus } from "lucide-react";
+import { useState } from "react";
 
-import { Button, Caption, Page } from "@/components/ui/kit";
+import { Button, Caption, Page, Tabs } from "@/components/ui/kit";
+import { LoadError } from "@/components/ProblemHelp";
 
 import { useTrends } from "@/hooks/trends/useTrends";
 import { Challenges } from "@/components/trends/Challenges";
-import { Controls } from "@/components/trends/Controls";
-import { DigestCard } from "@/components/trends/DigestCard";
-import { NoticeView } from "@/components/trends/NoticeView";
+import { NewResearchDialog } from "@/components/trends/NewResearchDialog";
+import { ReportView } from "@/components/trends/ReportView";
 import { Reports } from "@/components/trends/Reports";
-import { SkillChart } from "@/components/trends/SkillChart";
 import { SourcesSection } from "@/components/trends/SourcesSection";
 
+type Tab = "reports" | "sources";
+
+const TABS: readonly { value: Tab; label: string }[] = [
+  { value: "reports", label: "Reports" },
+  { value: "sources", label: "Sources" },
+];
+
 /** Market trends: where the market of your place is going (local, then global), your gap against
- *  your background, then your wishes against the market, from the sources you add. "Collect & build digest"
- *  (the one primary button) collects the period's items, then asks the AI provider for a digest;
- *  every point links to the stored items it rests on. */
+ *  your background, then your wishes against the market, from the sources you add. The list has
+ *  two tabs, the saved reports and the sources; "New research" (the one primary button) asks for
+ *  the period in a dialog, collects its items, then asks the AI provider for a digest. A click on a
+ *  report opens it: every point links to the stored items it rests on. */
 export function TrendsPage() {
   const t = useTrends();
-  const { data } = t;
+  const { data, report } = t;
+  const [tab, setTab] = useState<Tab>("reports");
+  const [creating, setCreating] = useState(false);
+
+  const loadError = <LoadError error={t.loadError} title="The saved data could not be read" onRetry={t.reload} />;
+
+  if (report) {
+    return (
+      <div id="trends" className="h-full">
+        <ReportView
+          loading={report.loading}
+          digest={report.digest}
+          chart={report.chart}
+          row={report.row}
+          adds={t.adds}
+          step={t.running?.step}
+          busy={t.busy}
+          exporting={t.exporting}
+          onBack={t.back}
+          onExport={t.exportPdf}
+          onRegenerate={(period) => void t.regenerateFor(period)}
+          onRerun={(period) => void t.rerun(period)}
+        >
+          {loadError}
+        </ReportView>
+      </div>
+    );
+  }
+
   return (
     <div id="trends" className="h-full">
       <Page
@@ -26,67 +62,62 @@ export function TrendsPage() {
         subtitle={data && <span id="trends-summary">{data.summary}</span>}
         actions={
           <Button
-            id="trends-regenerate"
-            size="compact"
-            icon={RefreshCw}
-            aria-label="Regenerate from stored items"
-            title="Write the digest again from the stored items, without collecting"
-            disabled={t.busy || !t.ready}
-            onClick={() => void t.regenerate()}
+            id="trends-new"
+            variant="primary"
+            icon={Plus}
+            aria-haspopup="dialog"
+            busy={t.busy}
+            onClick={() => setCreating(true)}
           >
-            Refresh
+            New research
           </Button>
         }
       >
-        <Controls
-          cadence={t.cadence}
-          onCadence={t.chooseCadence}
-          periodLabel={data?.period.label}
-          busy={t.busy}
-          ready={t.ready}
-          step={t.step}
-          onCollect={() => void t.collect()}
-        />
-        {t.notice && <NoticeView notice={t.notice} />}
-        {data && (
-          <Challenges
-            challenges={data.challenges}
-            busy={t.busy}
-            onContinue={(period) => void t.resume(period)}
-            onWithout={(period) => void t.regenerateFor(period)}
-          />
-        )}
+        {loadError}
+        <div id="trends-tabs">
+          <Tabs<Tab> label="Trends" tabs={TABS} value={tab} onChange={setTab} />
+        </div>
         {data ? (
-          <>
-            {/* The digest on the left, the skill chart beside it (below it when narrow). */}
-            <div className="flex flex-wrap items-start gap-5">
-              <div className="flex min-w-[360px] flex-[1.2_1_420px] flex-col">
-                <DigestCard digest={data.digest} adds={t.adds} exporting={t.exporting} onExportPdf={t.exportShown} />
-              </div>
-              {data.chart && (
-                <div className="flex min-w-[340px] flex-[1_1_380px] flex-col gap-5">
-                  <SkillChart key={data.digest?.reportId ?? 0} chart={data.chart} adds={t.adds} />
-                </div>
-              )}
-            </div>
-            <Reports
-              reports={data.history}
-              cadence={t.cadence}
-              shown={t.shownReport}
-              busy={t.busy}
-              exporting={t.exporting}
-              deleting={t.deleting}
-              onOpen={t.pickReport}
-              onRerun={(period) => void t.rerun(period)}
-              onExport={t.exportPdf}
-              onDelete={t.remove}
-            />
+          tab === "reports" ? (
+            <>
+              <Challenges
+                challenges={data.challenges}
+                busy={t.busy}
+                onContinue={(period) => void t.resume(period)}
+                onWithout={(period) => void t.regenerateFor(period)}
+              />
+              <Reports
+                reports={data.history}
+                cadence={t.cadence}
+                onCadence={t.chooseCadence}
+                running={t.running}
+                exporting={t.exporting}
+                deleting={t.deleting}
+                onOpen={t.pickReport}
+                onRerun={(period) => void t.rerun(period)}
+                onExport={t.exportPdf}
+                onDelete={t.remove}
+              />
+            </>
+          ) : (
             <SourcesSection sources={data.sources} kinds={data.sourceKinds} />
-          </>
+          )
         ) : (
           t.loading && <Caption>Loading…</Caption>
         )}
       </Page>
+      <NewResearchDialog
+        open={creating}
+        cadence={t.cadence}
+        onCadence={t.chooseCadence}
+        periodLabel={t.periodLabel}
+        onStart={() => {
+          if (t.collect()) {
+            setCreating(false);
+          }
+        }}
+        onClose={() => setCreating(false)}
+      />
     </div>
   );
 }

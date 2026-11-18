@@ -6,7 +6,7 @@ import { CommandError } from "@/lib/problem";
 import { renderWithToasts as render } from "@/test/render";
 import type { GraphProgress } from "@/api/events";
 
-import type { RunResult } from "@/types/trends";
+import type { Digest, RunResult } from "@/types/trends";
 import { useRuns } from "@/hooks/trends/runs";
 import { useToasts } from "@/stores/toast";
 import {
@@ -19,6 +19,7 @@ import {
   localScope,
   oldChartFixture,
   overviewFixture,
+  reportRowFixture,
 } from "@/test/fixtures/trends";
 import { TrendsPage } from "./TrendsPage";
 
@@ -87,19 +88,113 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+/** The list (the Reports tab). */
 async function shown() {
   render(<TrendsPage />);
-  await screen.findByRole("heading", { name: "Weekly digest 2026-W46" });
+  await screen.findByRole("region", { name: "Reports" });
   return userEvent.setup();
 }
 
-const collect = () => screen.getByRole("button", { name: "Collect & build digest" });
+const row = (name: string) => screen.getByRole("row", { name });
+
+/** The newest weekly report, opened from its row. */
+async function opened() {
+  const user = await shown();
+  await user.click(row("Week of 9 November (2026-W46)"));
+  await screen.findByRole("heading", { level: 1, name: "Weekly digest 2026-W46" });
+  return user;
+}
+
+const newResearch = () => screen.getByRole("button", { name: "New research" });
+const step = () => document.querySelector("#trends-step")?.textContent;
+const primaries = (root: ParentNode = document) =>
+  // The kit's primary fill is the only one with `text-on-fill`.
+  Array.from(root.querySelectorAll("button")).filter((b) => b.className.includes("text-on-fill"));
+
+/** New research > Collect & build digest, for the period that is chosen. */
+async function startResearch(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(newResearch());
+  const dialog = await screen.findByRole("dialog", { name: "New research" });
+  await user.click(within(dialog).getByRole("button", { name: "Collect & build digest" }));
+}
 
 describe("the Trends screen", () => {
-  it("shows the digest with its citations, the skill chart and the sources", async () => {
+  it("lists the reports and keeps the digest for the report that is opened", async () => {
     await shown();
     expect(screen.getByRole("heading", { level: 1, name: "Trends" })).toBeTruthy();
     expect(screen.getByText(/Week of 9 November · from 6 postings and articles/)).toBeTruthy();
+    expect(mocks.api.overview).toHaveBeenLastCalledWith(undefined, "weekly");
+    expect(row("Week of 9 November (2026-W46)")).toBeTruthy();
+    // No report content, and one tab at a time.
+    expect(document.querySelector("#trends-digest")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Skills in demand" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Sources" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export PDF" })).toBeNull();
+    expect(primaries()).toEqual([newResearch()]);
+  });
+
+  it("switches between the reports and the sources", async () => {
+    const user = await shown();
+    const tabs = within(screen.getByRole("tablist", { name: "Trends" }));
+    expect(document.querySelector("#trends-tabs [role=tablist]")).toBeTruthy();
+    expect(tabs.getByRole("tab", { name: "Reports" }).getAttribute("aria-selected")).toBe("true");
+
+    await user.click(tabs.getByRole("tab", { name: "Sources" }));
+    expect(tabs.getByRole("tab", { name: "Sources" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByRole("region", { name: "Reports" })).toBeNull();
+    expect(screen.getByRole("switch", { name: "Collect from Hacker News" }).getAttribute("aria-checked")).toBe("true");
+    expect(
+      screen.getByRole("switch", { name: "Collect from Example engineering blog" }).getAttribute("aria-checked"),
+    ).toBe("false");
+    // Still one primary: the dialog of a source has its own while it is open.
+    expect(primaries()).toEqual([newResearch()]);
+    await user.click(screen.getByRole("button", { name: "Web page" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add Web page" });
+    expect(primaries(dialog)).toEqual([within(dialog).getByRole("button", { name: "Add" })]);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click(tabs.getByRole("tab", { name: "Reports" }));
+    expect(screen.getByRole("region", { name: "Reports" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Sources" })).toBeNull();
+  });
+
+  it("opens a report from its row, shows it with its actions, and goes back to the list", async () => {
+    const user = await shown();
+    const read = deferred<ReturnType<typeof overviewFixture>>();
+    mocks.api.overview.mockReturnValueOnce(read.promise);
+    await user.click(row("Week of 2 November (2026-W45)"));
+    expect(mocks.api.overview).toHaveBeenLastCalledWith(2, "weekly");
+    // Until it is read: its name, no digest of another report, nothing to act on.
+    expect(screen.getByRole("heading", { level: 1, name: "Weekly digest 2026-W45" })).toBeTruthy();
+    expect(screen.getByText("Loading…")).toBeTruthy();
+    expect(document.querySelector("#trends-digest")).toBeNull();
+    expect(screen.getByRole("button", { name: "Export PDF" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByRole("tablist")).toBeNull();
+
+    await act(async () =>
+      read.resolve(
+        overviewFixture({
+          digest: { ...(overviewFixture().digest as Digest), reportId: 2, title: "Weekly digest 2026-W45" },
+        }),
+      ),
+    );
+    expect(document.querySelector("#trends-digest")).toBeTruthy();
+    expect(screen.getByText("Week of 2 November (2026-W45)")).toBeTruthy();
+    for (const name of ["Export PDF", "Rewrite digest", "Rerun"]) {
+      expect(screen.getByRole("button", { name }).hasAttribute("disabled")).toBe(false);
+    }
+    expect(primaries(), "the actions of a report are all secondary").toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: "Back to Trends" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Trends" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Reports" })).toBeTruthy();
+    expect(document.querySelector("#trends-digest")).toBeNull();
+    expect(mocks.api.overview).toHaveBeenLastCalledWith(undefined, "weekly");
+  });
+
+  it("shows the digest with its citations and the skill chart", async () => {
+    await opened();
     expect(screen.getByText("2026-11-14 09:12 · 6 item(s) read")).toBeTruthy();
 
     // The digest: sections, numbered points, quote, citations.
@@ -151,17 +246,11 @@ describe("the Trends screen", () => {
     expect(wishes.getByText("skill you avoid")).toBeTruthy();
     expect(wishes.getByRole("listitem", { name: "climate tech (domain): no data, no posting names it" })).toBeTruthy();
     expect(screen.getByText("Temporal (5 items), dbt (4 items)")).toBeTruthy();
-
-    // Sources.
-    expect(screen.getByRole("switch", { name: "Collect from Hacker News" }).getAttribute("aria-checked")).toBe("true");
-    expect(
-      screen.getByRole("switch", { name: "Collect from Example engineering blog" }).getAttribute("aria-checked"),
-    ).toBe("false");
     expect(screen.queryByRole("region", { name: "Report search" })).toBeNull();
   });
 
   it("switches the chart between the local and the global market", async () => {
-    const user = await shown();
+    const user = await opened();
     const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
     const local = chart.getByRole("button", { name: "Market scope: Local" });
     const global = chart.getByRole("button", { name: "Market scope: Global" });
@@ -194,7 +283,7 @@ describe("the Trends screen", () => {
         }),
       }),
     );
-    const user = await shown();
+    const user = await opened();
     const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
     expect(chart.getByRole("button", { name: "Market scope: Global" }).getAttribute("aria-pressed")).toBe("true");
     expect(chart.queryByText(/^Too little local data/)).toBeNull();
@@ -204,7 +293,7 @@ describe("the Trends screen", () => {
 
   it("shows a chart saved before the app knew the user's place as it always did", async () => {
     mocks.api.overview.mockResolvedValue(overviewFixture({ chart: oldChartFixture() }));
-    await shown();
+    await opened();
     const chart = within(screen.getByRole("region", { name: "Skills in demand" }));
     expect(chart.queryByRole("group", { name: "Market scope" })).toBeNull();
     expect(chart.getAllByRole("listitem")).toHaveLength(2);
@@ -215,37 +304,41 @@ describe("the Trends screen", () => {
     expect(chart.getByText(/2026-06 to 2026-11 \(398 read\)/)).toBeTruthy();
   });
 
-  it("has one primary action, the period choice and the caption of what a run does", async () => {
+  it("asks for the period of a new research in a dialog, with what the run does", async () => {
     const user = await shown();
-    expect(collect().hasAttribute("disabled")).toBe(false);
-    // Exactly one primary button on the screen (the kit's primary fill is the only one with `text-on-fill`);
-    // with the dialog of a source open, its Add is the one primary of the dialog.
-    const primaries = (root: ParentNode = document) =>
-      Array.from(root.querySelectorAll("button")).filter((b) => b.className.includes("text-on-fill"));
-    expect(primaries()).toEqual([collect()]);
-    await user.click(screen.getByRole("button", { name: "Web page" }));
-    const dialog = await screen.findByRole("dialog", { name: "Add Web page" });
-    expect(primaries(dialog)).toEqual([within(dialog).getByRole("button", { name: "Add" })]);
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(primaries()).toEqual([collect()]);
+    expect(screen.queryByRole("button", { name: "Collect & build digest" })).toBeNull();
+    await user.click(newResearch());
+    const dialog = await screen.findByRole("dialog", { name: "New research" });
+    expect(dialog.id).toBe("trends-new-dialog");
+    const collect = within(dialog).getByRole("button", { name: "Collect & build digest" });
+    expect(primaries(dialog), "the one primary of the dialog").toEqual([collect]);
+    expect(collect.hasAttribute("disabled")).toBe(false);
     expect(
-      screen.getByText(/^2026-W46: collects from your sources, then your AI provider writes the digest/),
+      within(dialog).getByText(/^2026-W46: collects from your sources, then your AI provider writes the digest/),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Digest period: Weekly" }).getAttribute("aria-pressed")).toBe("true");
+    expect(dialog.querySelector("#trends-cadence")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Digest period: Weekly" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
 
     mocks.api.overview.mockImplementation((_selected: number | undefined, cadence: string) =>
       Promise.resolve(
         overviewFixture(cadence === "quarterly" ? { period: { label: "2026-Q4", title: "Q4 2026" } } : {}),
       ),
     );
-    await user.click(screen.getByRole("button", { name: "Digest period: Quarterly" }));
-    expect(await screen.findByText(/^2026-Q4: collects from your sources/)).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "Digest period: Quarterly" }));
+    expect(await within(dialog).findByText(/^2026-Q4: collects from your sources/)).toBeTruthy();
     expect(mocks.api.overview).toHaveBeenLastCalledWith(undefined, "quarterly");
+
+    // Cancel starts nothing.
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(mocks.api.runJob).not.toHaveBeenCalled();
+    expect(primaries()).toEqual([newResearch()]);
   });
 
   it("opens a cited item with the shell, and only when it has a web address", async () => {
-    const user = await shown();
+    const user = await opened();
     await user.click(screen.getAllByRole("button", { name: `Open source: ${ACME}` })[0] as HTMLElement);
     expect(mocks.invoke).toHaveBeenCalledWith("shared_open_url", { url: "https://news.example.com/item/1001" });
 
@@ -262,77 +355,128 @@ describe("the Trends screen", () => {
     expect(mocks.invoke).not.toHaveBeenCalled();
   });
 
-  it("collects and builds the digest: busy with its step, then the summary of the run", async () => {
+  it("starts a research from the dialog: it closes at once, the row says the step, a toast the result", async () => {
     const user = await shown();
     const run = deferred<RunResult>();
     mocks.api.runJob.mockReturnValue(run.promise);
-    await user.click(collect());
+    await startResearch(user);
 
     expect(mocks.api.runJob).toHaveBeenCalledWith({ kind: "collect", period: "2026-W46" });
-    expect(collect().hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "Regenerate from stored items" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("status").textContent).toBe("Starting");
+    // The dialog does not wait for the run.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const started = await screen.findByRole("status", { name: "Research started" });
+    expect(within(started).getByText("Week of 9 November (2026-W46)")).toBeTruthy();
+    expect(newResearch().hasAttribute("disabled")).toBe(true);
+    // The row of the period being built says the step in place of when it was updated.
+    const building = row("Week of 9 November (2026-W46)");
+    expect(within(building).getByRole("status").textContent).toBe("Starting");
+    expect(within(building).queryByText("2026-11-14 09:12")).toBeNull();
+    expect(within(row("Week of 2 November (2026-W45)")).getByText("2026-11-07 09:00")).toBeTruthy();
 
     progress({ node: "extract" });
-    expect(screen.getByRole("status").textContent).toBe("Reading the items with your AI provider");
+    expect(step()).toBe("Reading the items with your AI provider");
     // Steps of other flows are not this run's.
     progress({ graph: "discovery", node: "plan" });
     progress({ kind: "detail", node: "plan" });
-    expect(screen.getByRole("status").textContent).toBe("Reading the items with your AI provider");
+    expect(step()).toBe("Reading the items with your AI provider");
 
     await act(async () => run.resolve(DONE));
-    const result = within(screen.getByRole("group", { name: "Result" }));
-    expect(result.getByText("Digest ready: 8 point(s) from 6 item(s).")).toBeTruthy();
-    expect(result.getByText("YC companies: timed out, left out of this run")).toBeTruthy();
-    expect(screen.queryByRole("status")).toBeNull();
-    expect(collect().hasAttribute("disabled")).toBe(false);
-    // The new digest is the one shown.
+    const result = within(await screen.findByRole("status", { name: "Digest ready: 8 point(s) from 6 item(s)." }));
+    expect(
+      result.getByText(/Hacker News: 4 new item\(s\) · YC companies: timed out, left out of this run/),
+    ).toBeTruthy();
+    expect(step()).toBeUndefined();
+    // The new report opens for the user who waited on the list.
     await waitFor(() => expect(mocks.api.overview).toHaveBeenLastCalledWith(4, "weekly"));
+    expect(await screen.findByRole("button", { name: "Back to Trends" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Rewrite digest" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("says the step above the list while the period being built has no row yet", async () => {
+    const user = await shown();
+    const run = deferred<RunResult>();
+    mocks.api.runJob.mockReturnValue(run.promise);
+    mocks.api.overview.mockImplementation((_selected: number | undefined, cadence: string) =>
+      Promise.resolve(
+        overviewFixture(cadence === "quarterly" ? { period: { label: "2026-Q4", title: "Q4 2026" } } : {}),
+      ),
+    );
+    await user.click(newResearch());
+    const dialog = await screen.findByRole("dialog", { name: "New research" });
+    await user.click(within(dialog).getByRole("button", { name: "Digest period: Quarterly" }));
+    await within(dialog).findByText(/^2026-Q4: collects/);
+    await user.click(within(dialog).getByRole("button", { name: "Collect & build digest" }));
+    expect(mocks.api.runJob).toHaveBeenCalledWith({ kind: "collect", period: "2026-Q4" });
+
+    // The list follows the period chosen: no quarterly report yet.
+    const reports = within(screen.getByRole("region", { name: "Reports" }));
+    expect(reports.getByRole("button", { name: "Reports period: Quarterly" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(step()).toBe("2026-Q4: Starting");
+    expect(reports.getByText("No quarterly reports yet. Press New research and choose Quarterly.")).toBeTruthy();
+    await act(async () => run.resolve({ ...DONE, reportId: null }));
   });
 
   it("starts one run at a time", async () => {
     const user = await shown();
     const run = deferred<RunResult>();
     mocks.api.runJob.mockReturnValue(run.promise);
-    await user.click(collect());
-    await user.click(collect());
+    await startResearch(user);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(newResearch());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Rerun .*2026-W45/ }).hasAttribute("disabled")).toBe(true);
     expect(mocks.api.runJob).toHaveBeenCalledTimes(1);
-    // The period waits for the run to finish.
-    await user.click(screen.getByRole("button", { name: "Digest period: Quarterly" }));
-    expect(mocks.api.overview).not.toHaveBeenCalledWith(undefined, "quarterly");
-    await act(async () => run.resolve(DONE));
+    // The reports can still be filtered while it runs.
+    await user.click(screen.getByRole("button", { name: "Reports period: Monthly" }));
+    expect(await screen.findByRole("row", { name: "November 2026 (2026-M11)" })).toBeTruthy();
+    expect(step()).toBe("2026-W46: Starting");
+    await act(async () => run.resolve({ ...DONE, reportId: null }));
+    expect(newResearch().hasAttribute("disabled")).toBe(false);
   });
 
-  it("writes the digest again from the stored items", async () => {
-    const user = await shown();
-    mocks.api.runJob.mockResolvedValue(DONE);
-    await user.click(screen.getByRole("button", { name: "Regenerate from stored items" }));
+  it("writes the digest of the open report again from the stored items, or collects its period again", async () => {
+    const user = await opened();
+    const run = deferred<RunResult>();
+    mocks.api.runJob.mockReturnValueOnce(run.promise);
+    await user.click(screen.getByRole("button", { name: "Rewrite digest" }));
     expect(mocks.api.runJob).toHaveBeenCalledWith({ kind: "regenerate", period: "2026-W46" });
-    expect(await screen.findByText("Digest ready: 8 point(s) from 6 item(s).")).toBeTruthy();
+    for (const name of ["Export PDF", "Rewrite digest", "Rerun"]) {
+      expect(screen.getByRole("button", { name }).hasAttribute("disabled"), name).toBe(true);
+    }
+    expect(step()).toBe("Starting");
+    await act(async () => run.resolve(DONE));
+    expect(await screen.findByRole("status", { name: "Digest ready: 8 point(s) from 6 item(s)." })).toBeTruthy();
+    // The report that replaced the one on screen is shown.
+    await waitFor(() => expect(mocks.api.overview).toHaveBeenLastCalledWith(4, "weekly"));
+
+    mocks.api.runJob.mockResolvedValueOnce({ ...DONE, reportId: null });
+    await user.click(screen.getByRole("button", { name: "Rerun" }));
+    expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "collect", period: "2026-W46" });
   });
 
   it("explains a failed run in a toast, offers the fix and Retry carries on where it stopped", async () => {
     const user = await shown();
     mocks.api.runJob.mockRejectedValueOnce(network());
-    await user.click(collect());
+    await startResearch(user);
 
     const toast = await screen.findByRole("alert", { name: "The run did not finish" });
     expect(within(toast).getByText("connection refused")).toBeTruthy();
     expect(within(toast).getByText("The connection failed. Check your network and try again.")).toBeTruthy();
-    expect(screen.queryByRole("group", { name: "Result" }), "no banner on the page").toBeNull();
     expect(useRuns.getState().notice, "told once, then forgotten").toBeUndefined();
 
     mocks.api.runJob.mockResolvedValueOnce(DONE);
     await user.click(within(toast).getByRole("button", { name: "Retry" }));
     expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "resume", period: "2026-W46" });
-    expect(await screen.findByText("Digest ready: 8 point(s) from 6 item(s).")).toBeTruthy();
+    expect(await screen.findByRole("status", { name: "Digest ready: 8 point(s) from 6 item(s)." })).toBeTruthy();
     expect(screen.queryByRole("alert", { name: "The run did not finish" }), "Retry closes the toast").toBeNull();
   });
 
-  it("retries a failed refresh as a digest-only run and offers no Retry for a plain error", async () => {
-    const user = await shown();
+  it("retries a failed rewrite as a digest-only run and offers no Retry for a plain error", async () => {
+    const user = await opened();
     mocks.api.runJob.mockRejectedValueOnce(network());
-    await user.click(screen.getByRole("button", { name: "Regenerate from stored items" }));
+    await user.click(screen.getByRole("button", { name: "Rewrite digest" }));
     const toast = await screen.findByRole("alert", { name: "The run did not finish" });
     mocks.api.runJob.mockRejectedValueOnce(new CommandError("the model answered nonsense"));
     await user.click(within(toast).getByRole("button", { name: "Retry" }));
@@ -345,7 +489,7 @@ describe("the Trends screen", () => {
     const user = await shown();
     const run = deferred<RunResult>();
     mocks.api.runJob.mockReturnValue(run.promise);
-    await user.click(collect());
+    await startResearch(user);
     cleanup();
     await act(async () => run.reject(network()));
     expect(useRuns.getState().notice?.kind).toBe("error");
@@ -369,7 +513,7 @@ describe("the Trends screen", () => {
         retryable: false,
       }),
     );
-    await user.click(collect());
+    await startResearch(user);
     const toast = await screen.findByRole("alert", { name: "The run did not finish" });
     expect(within(toast).getByRole("button", { name: "Open Settings > AI providers" })).toBeTruthy();
     expect(within(toast).queryByRole("button", { name: "Retry" })).toBeNull();
@@ -387,15 +531,13 @@ describe("the Trends screen", () => {
       url: "https://reports.example.com/annual-2026.html",
     });
 
-    mocks.api.runJob.mockResolvedValue({
-      status: "waiting",
-      reportId: null,
-      headline: "A source needs you before the digest can be built: see the banner below.",
-      details: [],
-    });
+    const waiting = "A source needs you before the digest can be built: see the banner below.";
+    mocks.api.runJob.mockResolvedValue({ status: "waiting", reportId: null, headline: waiting, details: [] });
     await user.click(within(banner).getByRole("button", { name: "Continue" }));
     expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "resume", period: "2026-W46" });
-    expect(await screen.findByText(/A source needs you before the digest can be built/)).toBeTruthy();
+    expect(await screen.findByRole("status", { name: waiting })).toBeTruthy();
+    // Nothing was saved: the list stays, with its banner.
+    expect(screen.getByRole("region", { name: "Reports" })).toBeTruthy();
 
     await user.click(within(banner).getByRole("button", { name: "Build digest without it" }));
     expect(mocks.api.runJob).toHaveBeenLastCalledWith({ kind: "regenerate", period: "2026-W46" });
@@ -412,37 +554,57 @@ describe("the Trends screen", () => {
     expect(within(banner).getByRole("button", { name: "Open page" }).hasAttribute("disabled")).toBe(true);
   });
 
-  it("keeps the run going while the user is on another screen", async () => {
+  it("keeps the run going while the user is on another screen, and says how it ended there", async () => {
     const user = await shown();
     const run = deferred<RunResult>();
     mocks.api.runJob.mockReturnValue(run.promise);
-    await user.click(collect());
+    await startResearch(user);
+    cleanup();
+    act(() => useToasts.getState().clear());
+
+    // On another screen: the result is a toast all the same.
+    const elsewhere = render(<p>Jobs</p>);
+    expect(useRuns.getState().running).toEqual({ kind: "collect", period: "2026-W46" });
+    elsewhere.unmount();
+
+    await shown();
+    expect(newResearch().hasAttribute("disabled")).toBe(true);
+    expect(step()).toBe("Starting");
     cleanup();
 
-    render(<TrendsPage />);
-    await screen.findByRole("heading", { name: "Weekly digest 2026-W46" });
-    expect(collect().hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("status").textContent).toBe("Starting");
+    render(<p>Jobs</p>);
     await act(async () => run.resolve(DONE));
-    expect(await screen.findByText("Digest ready: 8 point(s) from 6 item(s).")).toBeTruthy();
+    const result = await screen.findByRole("status", { name: "Digest ready: 8 point(s) from 6 item(s)." });
+    expect(within(result).getByText(/YC companies: timed out/)).toBeTruthy();
+    expect(useRuns.getState().running).toBeUndefined();
   });
 
-  it("lists the reports of the chosen cadence and reads the one opened", async () => {
+  it("leaves the user on the list when the run they came back to ends", async () => {
     const user = await shown();
+    const run = deferred<RunResult>();
+    mocks.api.runJob.mockReturnValue(run.promise);
+    await startResearch(user);
+    cleanup();
+
+    await shown();
+    await act(async () => run.resolve(DONE));
+    expect(await screen.findByRole("status", { name: "Digest ready: 8 point(s) from 6 item(s)." })).toBeTruthy();
+    expect(newResearch().hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("heading", { level: 1, name: "Trends" })).toBeTruthy();
+    expect(mocks.api.overview).not.toHaveBeenCalledWith(4, "weekly");
+  });
+
+  it("lists the reports of the chosen cadence", async () => {
+    await shown();
     const reports = within(screen.getByRole("region", { name: "Reports" }));
     expect(reports.getByRole("button", { name: "Reports period: Weekly" }).getAttribute("aria-pressed")).toBe("true");
-    expect(reports.getByRole("row", { name: "Week of 9 November (2026-W46)" }).getAttribute("aria-current")).toBe(
-      "true",
-    );
+    expect(reports.getByRole("row", { name: "Week of 9 November (2026-W46)" })).toBeTruthy();
     expect(reports.queryByRole("row", { name: "November 2026 (2026-M11)" })).toBeNull();
-
-    await user.click(reports.getByRole("button", { name: "Open Week of 2 November (2026-W45)" }));
-    expect(mocks.api.overview).toHaveBeenLastCalledWith(2, "weekly");
   });
 
-  it("saves the shown report as a PDF from the digest", async () => {
+  it("saves the open report as a PDF", async () => {
     mocks.api.exportPdf.mockResolvedValue("/tmp/jobpilot-market-insight-2026-W46.pdf");
-    const user = await shown();
+    const user = await opened();
     await user.click(screen.getByRole("button", { name: "Export PDF" }));
     expect(mocks.api.exportPdf).toHaveBeenCalledWith(3, "jobpilot-market-insight-2026-W46.pdf");
     expect(await screen.findByRole("status", { name: "Saved PDF" })).toBeTruthy();
@@ -458,25 +620,26 @@ describe("the Trends screen", () => {
         sources: [],
       }),
     );
-    const user = userEvent.setup();
-    render(<TrendsPage />);
-    expect(await screen.findByText("No digest yet")).toBeTruthy();
-    expect(screen.getByText(/Add sources, then press "Collect & build digest"/)).toBeTruthy();
+    const user = await shown();
     expect(screen.getByText("No digest yet · Week of 9 November is the current period")).toBeTruthy();
-    expect(screen.getByText("No sources yet: add Hacker News, the YC companies, a feed or a page.")).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Skills in demand" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Export PDF" })).toBeNull();
-
     const reports = within(screen.getByRole("region", { name: "Reports" }));
-    expect(reports.getByText("No weekly reports yet. Collect & build digest with Weekly selected.")).toBeTruthy();
+    expect(reports.getByText("No reports yet")).toBeTruthy();
+    expect(reports.getByText("No weekly reports yet. Press New research and choose Weekly.")).toBeTruthy();
+    expect(reports.queryByRole("table")).toBeNull();
+    // The empty list points at the one primary; it has none of its own.
+    expect(primaries()).toEqual([newResearch()]);
     await user.click(reports.getByRole("button", { name: "Reports period: Yearly" }));
-    expect(reports.getByText("No yearly reports yet. Collect & build digest with Yearly selected.")).toBeTruthy();
+    expect(await reports.findByText("No yearly reports yet. Press New research and choose Yearly.")).toBeTruthy();
+
+    await user.click(screen.getByRole("tab", { name: "Sources" }));
+    expect(screen.getByText("No sources yet: add Hacker News, the YC companies, a feed or a page.")).toBeTruthy();
   });
 
   it("shows a report this version cannot read back as its saved text", async () => {
     mocks.api.overview.mockResolvedValue(
       overviewFixture({
         chart: null,
+        history: [reportRowFixture({ id: 1, title: "Old digest", period: "2026-X1", periodTitle: "2026-X1" })],
         digest: {
           reportId: 1,
           title: "Old digest",
@@ -486,17 +649,32 @@ describe("the Trends screen", () => {
         },
       }),
     );
-    render(<TrendsPage />);
+    const user = await shown();
+    await user.click(row("2026-X1"));
     expect(await screen.findByText("# Old digest")).toBeTruthy();
     expect(screen.getByText("- a point")).toBeTruthy();
     expect(screen.getByText("2026-01-02 10:00")).toBeTruthy();
   });
 
-  it("says when the saved data cannot be read", async () => {
+  it("says when the saved data cannot be read, and offers to read again", async () => {
     mocks.api.overview.mockRejectedValue(new CommandError("disk full"));
     render(<TrendsPage />);
-    expect(await screen.findByText("Could not read the saved data: disk full")).toBeTruthy();
-    expect(collect().hasAttribute("disabled")).toBe(true);
+    const toast = await screen.findByRole("alert", { name: "The saved data could not be read" });
+    expect(within(toast).getByText("disk full")).toBeTruthy();
+    expect(screen.getByText("The saved data could not be read.")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Reports" })).toBeNull();
+
+    // No period is known: a research cannot start.
+    const user = userEvent.setup();
+    await user.click(newResearch());
+    const dialog = await screen.findByRole("dialog", { name: "New research" });
+    expect(within(dialog).getByRole("button", { name: "Collect & build digest" }).hasAttribute("disabled")).toBe(true);
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    mocks.api.overview.mockResolvedValue(overviewFixture());
+    await user.click(screen.getAllByRole("button", { name: "Retry" })[0] as HTMLElement);
+    expect(await screen.findByRole("region", { name: "Reports" })).toBeTruthy();
   });
 
   it("shows text from feeds as text, never as markup", async () => {
@@ -508,7 +686,9 @@ describe("the Trends screen", () => {
       first.citations = [{ number: 1, title: evil, url: "https://news.example.com/x" }];
     }
     mocks.api.overview.mockResolvedValue(fixture);
+    const user = userEvent.setup();
     const { container } = render(<TrendsPage />);
+    await user.click(await screen.findByRole("row", { name: "Week of 9 November (2026-W46)" }));
     expect((await screen.findAllByText(evil)).length).toBeGreaterThan(0);
     expect(container.querySelector("img")).toBeNull();
   });
