@@ -1,4 +1,4 @@
-import { History as HistoryIcon, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import { Button, Caption, Page } from "@/components/ui/kit";
 
@@ -6,8 +6,8 @@ import { useTrends } from "@/hooks/trends/useTrends";
 import { Challenges } from "@/components/trends/Challenges";
 import { Controls } from "@/components/trends/Controls";
 import { DigestCard } from "@/components/trends/DigestCard";
-import { History } from "@/components/trends/History";
 import { NoticeView } from "@/components/trends/NoticeView";
+import { Reports } from "@/components/trends/Reports";
 import { SkillChart } from "@/components/trends/SkillChart";
 import { SourcesSection } from "@/components/trends/SourcesSection";
 
@@ -25,29 +25,17 @@ export function TrendsPage() {
         title="Trends"
         subtitle={data && <span id="trends-summary">{data.summary}</span>}
         actions={
-          <>
-            <Button
-              id="trends-history-toggle"
-              size="compact"
-              icon={HistoryIcon}
-              aria-haspopup="dialog"
-              disabled={!data}
-              onClick={t.openHistory}
-            >
-              Earlier digests
-            </Button>
-            <Button
-              id="trends-regenerate"
-              size="compact"
-              icon={RefreshCw}
-              aria-label="Regenerate from stored items"
-              title="Write the digest again from the stored items, without collecting"
-              disabled={t.busy || !t.ready}
-              onClick={() => void t.regenerate()}
-            >
-              Refresh
-            </Button>
-          </>
+          <Button
+            id="trends-regenerate"
+            size="compact"
+            icon={RefreshCw}
+            aria-label="Regenerate from stored items"
+            title="Write the digest again from the stored items, without collecting"
+            disabled={t.busy || !t.ready}
+            onClick={() => void t.regenerate()}
+          >
+            Refresh
+          </Button>
         }
       >
         <Controls
@@ -73,7 +61,7 @@ export function TrendsPage() {
             {/* The digest on the left, the skill chart beside it (below it when narrow). */}
             <div className="flex flex-wrap items-start gap-5">
               <div className="flex min-w-[360px] flex-[1.2_1_420px] flex-col">
-                <DigestCard digest={data.digest} adds={t.adds} />
+                <DigestCard digest={data.digest} adds={t.adds} exporting={t.exporting} onExportPdf={t.exportShown} />
               </div>
               {data.chart && (
                 <div className="flex min-w-[340px] flex-[1_1_380px] flex-col gap-5">
@@ -81,14 +69,19 @@ export function TrendsPage() {
                 </div>
               )}
             </div>
-            <SourcesSection sources={data.sources} kinds={data.sourceKinds} />
-            <History
-              open={t.historyOpen}
+            <Reports
               reports={data.history}
+              cadence={t.cadence}
               shown={t.shownReport}
-              onSelect={t.pickReport}
-              onClose={t.closeHistory}
+              busy={t.busy}
+              exporting={t.exporting}
+              deleting={t.deleting}
+              onOpen={t.pickReport}
+              onRerun={(period) => void t.rerun(period)}
+              onExport={t.exportPdf}
+              onDelete={t.remove}
             />
+            <SourcesSection sources={data.sources} kinds={data.sourceKinds} />
           </>
         ) : (
           t.loading && <Caption>Loading…</Caption>

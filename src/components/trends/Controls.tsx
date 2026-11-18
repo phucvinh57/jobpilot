@@ -1,14 +1,9 @@
 import { Button, Caption, Segmented, Spinner } from "@/components/ui/kit";
 
-import { collectCaption } from "@/lib/trends/format";
+import { CADENCES, collectCaption } from "@/lib/trends/format";
 import type { Cadence } from "@/types/trends";
 
-const CADENCES: readonly { value: Cadence; label: string }[] = [
-  { value: "weekly", label: "Weekly" },
-  { value: "quarterly", label: "Quarterly" },
-];
-
-/** Weekly or quarterly, and the one primary button of the screen. */
+/** The period of a run (week, month, quarter, year), and the one primary button of the screen. */
 export function Controls({
   cadence,
   onCadence,

@@ -6,8 +6,10 @@ import {
   collectCaption,
   digestHint,
   pickScope,
+  noReportsCaption,
   readFailure,
-  reportRowName,
+  reportFileName,
+  reportName,
   skillRowName,
   termsLine,
 } from "./format";
@@ -83,8 +85,21 @@ describe("sentences", () => {
     expect(collectCaption("2026-W46")).toMatch(/^2026-W46: collects from your sources/);
   });
 
-  it("names a row of the history and the failures", () => {
-    expect(reportRowName("Week 46", "2026-11-14 09:12")).toBe("Week 46, 2026-11-14 09:12");
+  it("names a saved report by its period", () => {
+    expect(reportName({ periodTitle: "November 2026", period: "2026-M11" })).toBe("November 2026 (2026-M11)");
+    expect(reportName({ periodTitle: "2026", period: "2026" })).toBe("2026");
+    expect(noReportsCaption("monthly")).toBe("No monthly reports yet. Collect & build digest with Monthly selected.");
+  });
+
+  it("offers a report's PDF under a safe file name", () => {
+    expect(reportFileName("2026-M11")).toBe("jobpilot-market-insight-2026-M11.pdf");
+    expect(reportFileName("2026-W46")).toBe("jobpilot-market-insight-2026-W46.pdf");
+    expect(reportFileName("2026")).toBe("jobpilot-market-insight-2026.pdf");
+    expect(reportFileName("../a b/c")).toBe("jobpilot-market-insight-a-b-c.pdf");
+    expect(reportFileName("")).toBe("jobpilot-market-insight-report.pdf");
+  });
+
+  it("names the failures", () => {
     expect(readFailure("disk full")).toBe("Could not read the saved data: disk full");
     expect(addFailure("Rust", "locked")).toBe('Could not add "Rust" to your preferences: locked');
   });

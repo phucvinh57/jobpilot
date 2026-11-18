@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
     removeSource: vi.fn(),
     setSourceEnabled: vi.fn(),
     addToPreferences: vi.fn(),
+    exportPdf: vi.fn(),
+    deleteReport: vi.fn(),
   },
   invoke: vi.fn(),
   progress: new Set<(p: GraphProgress) => void>(),
@@ -425,27 +427,25 @@ describe("the Trends screen", () => {
     expect(await screen.findByText("Digest ready: 8 point(s) from 6 item(s).")).toBeTruthy();
   });
 
-  it("shows earlier digests in a dialog and reads the one picked", async () => {
+  it("lists the reports of the chosen cadence and reads the one opened", async () => {
     const user = await shown();
-    expect(screen.queryByRole("dialog", { name: "Earlier digests" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Earlier digests" }));
+    const reports = within(screen.getByRole("region", { name: "Reports" }));
+    expect(reports.getByRole("button", { name: "Reports period: Weekly" }).getAttribute("aria-pressed")).toBe("true");
+    expect(reports.getByRole("row", { name: "Week of 9 November (2026-W46)" }).getAttribute("aria-current")).toBe(
+      "true",
+    );
+    expect(reports.queryByRole("row", { name: "November 2026 (2026-M11)" })).toBeNull();
 
-    const history = within(await screen.findByRole("dialog", { name: "Earlier digests" }));
-    expect(
-      history.getByRole("button", { name: "Weekly digest 2026-W46, 2026-11-14 09:12" }).getAttribute("aria-current"),
-    ).toBe("true");
-    await user.click(history.getByRole("button", { name: "Weekly digest 2026-W45, 2026-11-07 09:00" }));
+    await user.click(reports.getByRole("button", { name: "Open Week of 2 November (2026-W45)" }));
     expect(mocks.api.overview).toHaveBeenLastCalledWith(2, "weekly");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Earlier digests" })).toBeNull());
   });
 
-  it("closes the earlier digests without picking one", async () => {
+  it("saves the shown report as a PDF from the digest", async () => {
+    mocks.api.exportPdf.mockResolvedValue(true);
     const user = await shown();
-    await user.click(screen.getByRole("button", { name: "Earlier digests" }));
-    const history = within(await screen.findByRole("dialog", { name: "Earlier digests" }));
-    await user.click(history.getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(mocks.api.overview).not.toHaveBeenCalledWith(2, "weekly");
+    await user.click(screen.getByRole("button", { name: "Export PDF" }));
+    expect(mocks.api.exportPdf).toHaveBeenCalledWith(3, "jobpilot-market-insight-2026-W46.pdf");
+    expect(await screen.findByRole("status", { name: "Saved PDF" })).toBeTruthy();
   });
 
   it("tells a new user what to do first", async () => {
@@ -465,10 +465,12 @@ describe("the Trends screen", () => {
     expect(screen.getByText("No digest yet · Week of 9 November is the current period")).toBeTruthy();
     expect(screen.getByText("No sources yet: add Hacker News, the YC companies, a feed or a page.")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Skills in demand" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export PDF" })).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Earlier digests" }));
-    const history = await screen.findByRole("dialog", { name: "Earlier digests" });
-    expect(within(history).getByText("No digests yet.")).toBeTruthy();
+    const reports = within(screen.getByRole("region", { name: "Reports" }));
+    expect(reports.getByText("No weekly reports yet. Collect & build digest with Weekly selected.")).toBeTruthy();
+    await user.click(reports.getByRole("button", { name: "Reports period: Yearly" }));
+    expect(reports.getByText("No yearly reports yet. Collect & build digest with Yearly selected.")).toBeTruthy();
   });
 
   it("shows a report this version cannot read back as its saved text", async () => {

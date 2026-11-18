@@ -1,14 +1,16 @@
 // The Trends screen's use-cases: read what it shows, start a run (collect, refresh, continue,
-// retry), pick the period, pick an earlier digest, add a topic to the preferences.
+// retry, rerun a saved report), pick the period, show, export or delete a saved report, add a topic
+// to the preferences.
 
 import { useCallback, useState } from "react";
 
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { useGraphProgress } from "@/hooks/useGraphProgress";
-import { useQuery } from "@/hooks/useAsync";
+import { useAction, useQuery } from "@/hooks/useAsync";
+import { toast } from "@/stores/toast";
 
 import * as api from "@/api/trends";
-import { readFailure } from "@/lib/trends/format";
+import { readFailure, reportFileName } from "@/lib/trends/format";
 import type { Job, JobKind } from "@/lib/trends/jobs";
 import type { Cadence, Overview } from "@/types/trends";
 import { useRuns, type InfoNotice } from "./runs";
@@ -23,7 +25,6 @@ export function useTrends() {
   const [cadence, setCadence] = useState<Cadence>("weekly");
   // `undefined`: the newest digest.
   const [selected, setSelected] = useState<number>();
-  const [historyOpen, setHistoryOpen] = useState(false);
 
   const overview = useQuery<Loaded>(
     () => api.overview(selected, cadence).then((o) => ({ ...o, cadence })),
@@ -66,6 +67,28 @@ export function useTrends() {
 
   const adds = usePreferenceAdds(data, say);
 
+  const exportAction = useAction(async (id: number, period: string) => {
+    const fileName = reportFileName(period);
+    if (await api.exportPdf(id, fileName)) {
+      toast.ok("Saved PDF", fileName);
+    }
+  });
+  useErrorToast(exportAction.error, { title: "The report could not be saved as PDF", clear: exportAction.clearError });
+
+  const shownReport = data?.digest?.reportId;
+  // The period of the report on screen (what its PDF is named after).
+  const shownPeriod = data?.history.find((r) => r.id === shownReport)?.period;
+  const deleteAction = useAction(async (id: number) => {
+    await api.deleteReport(id);
+    // The report on screen is gone: show the newest.
+    if (id === shownReport || id === selected) {
+      setSelected(undefined);
+    }
+    toast.ok("Report deleted");
+    return true;
+  });
+  useErrorToast(deleteAction.error, { title: "The report could not be deleted", clear: deleteAction.clearError });
+
   // The period of the shown cadence, once it has been read (the run commands take it).
   const period = data?.cadence === cadence ? data.period.label : undefined;
   const begin = (kind: JobKind) => (period === undefined ? Promise.resolve() : start({ kind, period }));
@@ -91,15 +114,22 @@ export function useTrends() {
     resume: (periodLabel: string) => start({ kind: "resume", period: periodLabel }),
     /** "Build digest without it": the digest alone, from what is stored. */
     regenerateFor: (periodLabel: string) => start({ kind: "regenerate", period: periodLabel }),
-    shownReport: data?.digest?.reportId,
-    /** The "Earlier digests" dialog; picking one shows it and closes the dialog. */
-    historyOpen,
-    openHistory: () => setHistoryOpen(true),
-    closeHistory: () => setHistoryOpen(false),
-    pickReport: (id: number) => {
-      setSelected(id);
-      setHistoryOpen(false);
-    },
+    shownReport,
+    /** Show a saved report in the digest card. */
+    pickReport: (id: number) => setSelected(id),
+    /** Collect a saved report's period again and rebuild it (it replaces that report). */
+    rerun: (periodLabel: string) => start({ kind: "collect", period: periodLabel }),
+    /** Save a report as a PDF where the user picks ("Saved PDF"; nothing when they cancel). */
+    exportPdf: (id: number, periodLabel: string) => void exportAction.run(id, periodLabel),
+    /** Save the report on screen as a PDF; `undefined` while none is shown. */
+    exportShown:
+      shownReport !== undefined && shownPeriod !== undefined
+        ? () => void exportAction.run(shownReport, shownPeriod)
+        : undefined,
+    exporting: exportAction.busy,
+    /** Delete a saved report; resolves `true` once it is gone. */
+    remove: async (id: number) => (await deleteAction.run(id)) === true,
+    deleting: deleteAction.busy,
     adds,
   };
 }

@@ -4,7 +4,7 @@
 import type { Tone } from "@/lib/tokens";
 
 /** The period a new run covers. */
-export type Cadence = "weekly" | "quarterly";
+export type Cadence = "weekly" | "monthly" | "quarterly" | "yearly";
 
 /** The lists of the saved preferences a topic of the digest can be added to. */
 export type PrefField = "skills" | "domains";
@@ -13,9 +13,9 @@ export type PrefField = "skills" | "domains";
 export type Presence = "absent" | "added" | "avoided";
 
 export interface Period {
-  /** `2026-W46` / `2026-Q4`: what the run commands take. */
+  /** `2026-W46` / `2026-M11` / `2026-Q4` / `2026`: what the run commands take. */
   label: string;
-  /** `Week of 9 November` / `Q4 2026`. */
+  /** `Week of 9 November` / `November 2026` / `Q4 2026` / `2026`. */
   title: string;
 }
 
@@ -196,10 +196,19 @@ export interface Chart {
   pipeline: string | null;
 }
 
+/** A saved report (one per period: a rerun replaces it). */
 export interface ReportRow {
   id: number;
   title: string;
+  /** When it was last updated, in the user's time zone. */
   when: string;
+  /** `2026-W46` / `2026-M11` / `2026-Q4` / `2026`: what Rerun collects for. */
+  period: string;
+  /** `Week of 9 November` / `November 2026` / `Q4 2026` / `2026`. */
+  periodTitle: string;
+  cadence: Cadence;
+  /** Points in the report. */
+  points: number;
 }
 
 /** A collection paused at a login, captcha or block page. */
@@ -244,7 +253,7 @@ export interface Overview {
   summary: string;
   digest: Digest | null;
   chart: Chart | null;
-  /** Earlier digests, newest first. */
+  /** Every saved report of every cadence, newest period first. */
   history: ReportRow[];
   challenges: Challenge[];
   sources: Source[];

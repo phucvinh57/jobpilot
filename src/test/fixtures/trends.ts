@@ -1,6 +1,6 @@
 // Realistic data for the trends tests (the shape of the demo seed: `JOBPILOT_DEMO=1`).
 
-import type { Chart, ChartScope, Challenge, DigestSection, Overview } from "@/types/trends";
+import type { Cadence, Chart, ChartScope, Challenge, DigestSection, Overview, ReportRow } from "@/types/trends";
 
 export const ACME = "Acme | Senior Rust Engineer | REMOTE | robotics platform";
 export const GLOBEX = "Globex | Platform Engineer | Berlin | Rust, Go, Kubernetes";
@@ -12,6 +12,30 @@ export function challengeFixture(patch: Partial<Challenge> = {}): Challenge {
     kind: "login",
     what: "needs you to sign in",
     url: "https://reports.example.com/annual-2026.html",
+    ...patch,
+  };
+}
+
+const PERIOD_TITLES: Record<string, { title: string; cadence: Cadence }> = {
+  "2026-W46": { title: "Week of 9 November", cadence: "weekly" },
+  "2026-W45": { title: "Week of 2 November", cadence: "weekly" },
+  "2026-M11": { title: "November 2026", cadence: "monthly" },
+  "2026-Q4": { title: "Q4 2026", cadence: "quarterly" },
+  "2026": { title: "2026", cadence: "yearly" },
+};
+
+/** A saved report; its title and cadence follow `period` (one of the labels above). */
+export function reportRowFixture(patch: Partial<ReportRow> = {}): ReportRow {
+  const period = patch.period ?? "2026-W46";
+  const known = PERIOD_TITLES[period] ?? { title: period, cadence: "weekly" };
+  return {
+    id: 3,
+    title: "Weekly digest 2026-W46",
+    when: "2026-11-14 09:12",
+    period,
+    periodTitle: known.title,
+    cadence: known.cadence,
+    points: 6,
     ...patch,
   };
 }
@@ -103,8 +127,9 @@ export function overviewFixture(patch: Partial<Overview> = {}): Overview {
     },
     chart: chartFixture(),
     history: [
-      { id: 3, title: "Weekly digest 2026-W46", when: "2026-11-14 09:12" },
-      { id: 2, title: "Weekly digest 2026-W45", when: "2026-11-07 09:00" },
+      reportRowFixture({ id: 5, title: "Monthly digest 2026-M11", period: "2026-M11" }),
+      reportRowFixture(),
+      reportRowFixture({ id: 2, title: "Weekly digest 2026-W45", when: "2026-11-07 09:00", period: "2026-W45" }),
     ],
     challenges: [],
     sources: [
