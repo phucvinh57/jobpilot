@@ -10,11 +10,11 @@ assets/cv.typ              Typst renderer: typst compile --root <dir> --input da
 assets/trends.typ          market-insight report -> PDF (`engine::trends::pdf`): typst compile --root <dir> --input data=<file>.json trends.typ out.pdf
 assets/prompts/            tailor.md (CV system prompt), example-cv.yaml (few-shot), profile.md (documents -> profile), preferences.md, trends.md
 assets/jobpilot.desktop    desktop entry (StartupWMClass=jobpilot, same as the window app id)
-assets/icons/              app icon (svg + png), used by the deb / AppImage (and the extension)
+assets/icons/              app icon (svg + png), used by the deb / AppImage / macOS app (and the extension)
 extension/                 the JobPilot Chrome extension (MV3, TypeScript, `bun run ext:build` -> extension/dist): an allowlisted relay
                            between the app and the user's Chrome; `PROTOCOL.md` is the contract with `engine::browser::bridge` (change both together)
 assets/fonts/              Inter, Space Grotesk, Source Serif 4: static TTFs (SIL OFL, see OFL.txt) bundled by the web app (`src/styles.css`)
-scripts/package.sh         release .deb + AppImage (Tauri bundler) -> release/
+scripts/package.sh         release .deb + AppImage on Linux, .app (zip) + .dmg on macOS (Tauri bundler) -> release/
 crates/engine/  (package `jobpilot-engine`, lib `jobpilot_engine`)   no UI, no Tauri dependency; the shell's contexts call it, never the reverse.
              `src/` the modules below (`lib.rs` = the module index); `tests/` integration tests (`e2e_discovery`) and `fixtures/profile.yaml`;
              features `test-util` (test profile helpers for the shell's unit tests) and `test-browser` (the bridge's test kit for `tests/`)
@@ -102,7 +102,7 @@ src/                   React + Vite + TypeScript + Tailwind; feature folders (ap
 - Browser tests (`#[ignore]`, start Chromium with the built extension and an auto-approving bridge, local fixture pages only): `bun run ext:build`, then `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-engine -- --ignored` (`browser::bridge::testkit`; it takes `JOBPILOT_CHROME` or Playwright's Chromium under `/opt/pw-browsers`: branded Google Chrome ignores `--load-extension`). Guarded tabs block `127.0.0.1` literals, so their fixtures are reached as `http://<name>.test:<port>`.
 - End-to-end without real services: `cargo test -p jobpilot-engine --test e2e_discovery` (fake provider + fake Greenhouse board on loopback, real typst: a text document -> profile, source -> leads with score and insight -> Prepare CV -> Approve CV); with `bun run ext:build` then `JOBPILOT_NO_SANDBOX=1 cargo test -p jobpilot-engine --features test-browser --test e2e_discovery -- --ignored` it also dry-runs the apply on a local form in a Chromium driven through the JobPilot extension (the cargo feature `test-browser` exposes the bridge's test kit to `tests/`).
 - Package: `scripts/package.sh` -> `release/`
-- Needs: Rust, Node + bun, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium 125+ with the JobPilot extension (Settings > Browser shows how to install and pair it), Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring).
+- Needs: Rust, Node + bun, `typst` CLI (`cargo install --locked typst-cli`), Chrome/Chromium 125+ with the JobPilot extension (Settings > Browser shows how to install and pair it), Linux libs (`libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libgtk-3-dev librsvg2-dev`, libdbus for the keyring); on macOS Xcode's command line tools instead of those libs (secrets go to the Keychain; the `dev-tools` feature is Linux-only).
 - Pre-PR checks (there is no CI; this is the gate, run by the pre-push hook and `/pre-pr`): `scripts/check.sh [--all] [--only web|rust|render]` runs the groups touched since main: `web` (typecheck, Biome, vitest, vite build, the extension's typecheck + build), `rust` (clippy + test), `render` (typst on `assets/prompts/example-cv.yaml`). `CARGO_PROFILE_ARG="--profile ci"` makes a cold run faster. `scripts/risk.sh [--label <tier>]` prints the risk tier the changed paths require (`docs/REVIEW.md`).
 - Hooks: `bun install` installs lefthook (pre-commit: Biome on staged files; pre-push: `check.sh`). If `core.hooksPath` was set before: `git config --unset core.hooksPath && bunx lefthook install`.
 - Logs: stderr and `<data_dir>/logs/`; `RUST_LOG=jobpilot_engine=debug` for more.

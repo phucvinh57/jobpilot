@@ -62,7 +62,8 @@ pub fn typst_binary() -> PathBuf {
         .map(|c| c.join("bin/typst"))
         .into_iter()
         .chain(dirs::home_dir().map(|h| h.join(".local/bin/typst")))
-        .chain(["/usr/local/bin/typst", "/usr/bin/typst", "/snap/bin/typst"].map(PathBuf::from));
+        // `/opt/homebrew/bin`: Homebrew on Apple Silicon, not on the PATH of an app opened from Finder.
+        .chain(["/usr/local/bin/typst", "/usr/bin/typst", "/snap/bin/typst", "/opt/homebrew/bin/typst"].map(PathBuf::from));
     on_path.chain(usual).find(|p| p.is_file()).unwrap_or_else(|| "typst".into())
 }
 
