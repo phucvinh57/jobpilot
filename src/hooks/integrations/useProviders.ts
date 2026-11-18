@@ -8,7 +8,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAction, useQuery, type Action, type Query } from "@/hooks/useAsync";
 
 import * as api from "@/api/providers";
-import { draftOf, inputOf, modelsInputOf, modelsSignature, switchKind, type Draft } from "@/lib/integrations/providers";
+import {
+  accountLine,
+  draftOf,
+  inputOf,
+  modelsInputOf,
+  modelsSignature,
+  switchKind,
+  type Draft,
+} from "@/lib/integrations/providers";
 import { toast } from "@/stores/toast";
 import type { KindDefaults, Provider, ProviderKind, Providers } from "@/types/integrations";
 import { useRunner, type Runner } from "./useRunner";
@@ -31,6 +39,14 @@ export interface ProvidersCard {
   test: () => void;
   /** Two steps: the first click arms the button, the second deletes. */
   remove: () => void;
+  /** Codex: sign in with ChatGPT in the system browser (an unsaved provider is saved first). */
+  signIn: () => void;
+  /** Codex: abort a sign-in that waits for the browser. */
+  cancelSignIn: () => void;
+  /** Codex: reuse the Codex CLI's login (an unsaved provider is saved first). */
+  importCli: () => void;
+  /** Codex: a Codex CLI login is there to reuse (read when the Codex kind is in the dialog). */
+  cliAvailable: boolean;
   /** Make a listed provider the one generation uses. */
   makeDefault: Action<[Provider], boolean>;
 }
@@ -115,10 +131,15 @@ export function useProviders(): ProvidersCard {
     [kinds, reset],
   );
 
+  const signingIn = runner.busy === "signing-in";
   const close = useCallback(() => {
+    if (signingIn) {
+      // A sign-in that waits for the browser ends with the dialog.
+      api.codexCancelSignIn().catch(() => undefined);
+    }
     reset();
     setDraft(undefined);
-  }, [reset]);
+  }, [reset, signingIn]);
 
   const setKind = useCallback(
     (kind: ProviderKind) => {
@@ -184,6 +205,57 @@ export function useProviders(): ProvidersCard {
     });
   }, [draft, close, edit, run, reload]);
 
+  /** Run a Codex sign-in for the provider in the dialog; an unsaved one is saved first (the dialog
+   *  stays open on the saved provider). */
+  const codex = useCallback(
+    (what: string, title: string, call: (id: number) => Promise<string>) => {
+      void withDraft(what, title, async (form) => {
+        let id = form.id;
+        if (id === 0) {
+          const saved = await api.saveProvider(inputOf(form));
+          id = saved.id;
+          setDraft((d) => d && { ...d, id, savedBaseUrl: saved.baseUrl, isDefault: saved.isDefault, apiKey: "" });
+          reload();
+        }
+        const account = await call(id);
+        setDraft((d) => (d && d.id === id ? { ...d, account, hasKey: true } : d));
+        return account;
+      }).then((account) => {
+        if (account) {
+          toast.ok("Signed in with ChatGPT", accountLine(account));
+          reload();
+        }
+      });
+    },
+    [withDraft, reload],
+  );
+
+  const signIn = useCallback(() => codex("signing-in", "Could not sign in", api.codexSignIn), [codex]);
+  const importCli = useCallback(
+    () => codex("importing", "Could not use the Codex CLI login", api.codexImportCli),
+    [codex],
+  );
+  const cancelSignIn = useCallback(() => {
+    api.codexCancelSignIn().catch(() => undefined);
+  }, []);
+
+  // Whether a Codex CLI login can be reused: read when the Codex kind is in the dialog.
+  const [cliAvailable, setCliAvailable] = useState(false);
+  const codexOpen = draft?.kind === "codex";
+  useEffect(() => {
+    if (!codexOpen) {
+      return;
+    }
+    let live = true;
+    api.codexCliAvailable().then(
+      (available) => live && setCliAvailable(available),
+      () => live && setCliAvailable(false),
+    );
+    return () => {
+      live = false;
+    };
+  }, [codexOpen]);
+
   const makeDefault = useAction(async (provider: Provider) => {
     await api.makeDefault(provider.id);
     toast.ok("Default provider", `${provider.name} is used for generation now.`);
@@ -205,6 +277,10 @@ export function useProviders(): ProvidersCard {
     save,
     test,
     remove,
+    signIn,
+    cancelSignIn,
+    importCli,
+    cliAvailable,
     makeDefault,
   };
 }

@@ -22,7 +22,7 @@ export interface Gmail {
   pollMinutes: number;
 }
 
-export type ProviderKind = "openai" | "anthropic";
+export type ProviderKind = "openai_compatible" | "anthropic_compatible" | "openai" | "anthropic" | "codex";
 
 export interface Provider {
   id: number;
@@ -31,18 +31,25 @@ export interface Provider {
   kindLabel: string;
   baseUrl: string;
   model: string;
-  /** The endpoint lacks `json_schema` support: ask for a JSON object instead. */
-  jsonObject: boolean;
   isDefault: boolean;
+  /** Codex: the ChatGPT account it is signed in with (`null`: not signed in, or another kind). */
+  account: string | null;
 }
 
-/** What a kind of provider starts with in the form. */
+/** What a kind of provider starts with in the form, and which fields it has. */
 export interface KindDefaults {
   kind: ProviderKind;
   label: string;
   name: string;
+  /** The fixed address of an official kind; `""` for a compatible kind (the user enters it). */
   baseUrl: string;
   model: string;
+  /** The form asks for a base URL (the compatible kinds). */
+  needsBaseUrl: boolean;
+  /** The form asks for an API key (every kind but Codex). */
+  hasKeyField: boolean;
+  /** The provider signs in with ChatGPT instead (Codex). */
+  signIn: boolean;
 }
 
 export interface Providers {
@@ -57,7 +64,6 @@ export interface ProviderInput {
   name: string;
   baseUrl: string;
   model: string;
-  jsonObject: boolean;
   apiKey: string | null;
 }
 

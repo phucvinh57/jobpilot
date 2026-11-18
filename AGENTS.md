@@ -28,7 +28,7 @@ crates/engine/  (package `jobpilot-engine`, lib `jobpilot_engine`)   no UI, no T
   logging    tracing: stderr + rolling <data_dir>/logs/jobpilot.log.<date> (14 kept), both through redact
   health     startup checks (typst, provider, browser extension connected) -> Health/Problem; classify(error text) -> Problem kind (network, no provider, ...)
   facade     Core { paths, store, secrets }, Core::open()
-  llm        AI providers: `complete_json`, `chat_json` (multi-turn)
+  llm        AI providers (OpenAI / Anthropic and compatible endpoints, Codex via a ChatGPT sign-in or the Codex CLI login: `llm::codex`): `complete_json`, `chat_json` (multi-turn); the JSON mode is learned per provider (schema -> json_object -> prompt), never a setting
   pipeline   analyze -> tailor -> guard -> render; `insight`: per-job brief (domain, company facts, skills, interview process)
   browser    the user's own Chrome, driven through the JobPilot extension: `bridge` (WebSocket server on 127.0.0.1:47615, Origin-checked,
              pairing token in the keyring; `Core::browser()`), `tab` (`Tab`: navigate, eval, content, click, type, keys, files, screenshots;

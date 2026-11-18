@@ -47,3 +47,27 @@ export async function removeProvider(id: number): Promise<void> {
   await invoke<void>("integrations_remove_provider", { id });
   providersChanged();
 }
+
+/** Sign the saved Codex provider in with ChatGPT in the system browser; resolves with the account's email. */
+export async function codexSignIn(id: number): Promise<string> {
+  const account = await invoke<string>("integrations_codex_sign_in", { id });
+  providersChanged();
+  return account;
+}
+
+/** Abort a Codex sign-in that waits for the browser. */
+export function codexCancelSignIn(): Promise<void> {
+  return invoke<void>("integrations_codex_cancel_sign_in");
+}
+
+/** Reuse the Codex CLI's login for the saved Codex provider; resolves with the account's email. */
+export async function codexImportCli(id: number): Promise<string> {
+  const account = await invoke<string>("integrations_codex_import_cli", { id });
+  providersChanged();
+  return account;
+}
+
+/** Whether a Codex CLI login is there to reuse. */
+export function codexCliAvailable(): Promise<boolean> {
+  return invoke<boolean>("integrations_codex_cli_available");
+}

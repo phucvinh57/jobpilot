@@ -13,10 +13,11 @@ export interface Draft {
   model: string;
   /** Typed key; never shown again after it is saved. */
   apiKey: string;
-  jsonObject: boolean;
   isDefault: boolean;
-  /** A key is saved in the keyring for this provider. */
+  /** A key is saved in the keyring for this provider (Codex: it is signed in). */
   hasKey: boolean;
+  /** Codex: the ChatGPT account it is signed in with. */
+  account: string | null;
   /** The address saved with the provider: its saved key goes to this one only. */
   savedBaseUrl: string;
   /** Models loaded from the provider, for the picker. */
@@ -29,6 +30,18 @@ function defaultsOf(kinds: readonly KindDefaults[], kind: ProviderKind): KindDef
   return kinds.find((k) => k.kind === kind);
 }
 
+/** The kind a new provider starts with. */
+export const NEW_KIND: ProviderKind = "openai_compatible";
+
+/** The fields `kind` has in the form (all of them while the kinds are not read yet). */
+export function fieldsOf(
+  kinds: readonly KindDefaults[],
+  kind: ProviderKind,
+): Pick<KindDefaults, "needsBaseUrl" | "hasKeyField" | "signIn"> {
+  const d = defaultsOf(kinds, kind);
+  return { needsBaseUrl: d?.needsBaseUrl ?? true, hasKeyField: d?.hasKeyField ?? true, signIn: d?.signIn ?? false };
+}
+
 /** The form for `provider` (`undefined`: a new OpenAI-compatible one with its defaults). */
 export function draftOf(provider: Provider | undefined, kinds: readonly KindDefaults[], hasKey = false): Draft {
   if (provider) {
@@ -39,25 +52,25 @@ export function draftOf(provider: Provider | undefined, kinds: readonly KindDefa
       baseUrl: provider.baseUrl,
       model: provider.model,
       apiKey: "",
-      jsonObject: provider.jsonObject,
       isDefault: provider.isDefault,
       hasKey,
+      account: provider.account,
       savedBaseUrl: provider.baseUrl,
       models: [],
       confirmDelete: false,
     };
   }
-  const d = defaultsOf(kinds, "openai");
+  const d = defaultsOf(kinds, NEW_KIND);
   return {
     id: 0,
-    kind: "openai",
-    name: d?.name ?? "OpenAI",
+    kind: NEW_KIND,
+    name: d?.name ?? "Local model",
     baseUrl: d?.baseUrl ?? "",
     model: d?.model ?? "",
     apiKey: "",
-    jsonObject: false,
     isDefault: false,
     hasKey: false,
+    account: null,
     savedBaseUrl: "",
     models: [],
     confirmDelete: false,
@@ -65,7 +78,7 @@ export function draftOf(provider: Provider | undefined, kinds: readonly KindDefa
 }
 
 /** Switch kind; replaces name, address and model only when they still hold the old kind's defaults
- *  (or are empty), so what the user typed stays. */
+ *  (or are empty), so what the user typed stays. A kind with a fixed address always takes it. */
 export function switchKind(draft: Draft, kind: ProviderKind, kinds: readonly KindDefaults[]): Draft {
   if (draft.kind === kind) {
     return draft;
@@ -80,7 +93,7 @@ export function switchKind(draft: Draft, kind: ProviderKind, kinds: readonly Kin
     ...draft,
     kind,
     name: pick(draft.name, from?.name, to?.name),
-    baseUrl: pick(draft.baseUrl, from?.baseUrl, to?.baseUrl),
+    baseUrl: to && !to.needsBaseUrl ? to.baseUrl : pick(draft.baseUrl, from?.baseUrl, to?.baseUrl),
     model: pick(draft.model, from?.model, to?.model),
     models: [],
   };
@@ -95,8 +108,6 @@ export function inputOf(draft: Draft): ProviderInput {
     name: draft.name.trim(),
     baseUrl: draft.baseUrl.trim(),
     model: draft.model.trim(),
-    // Only OpenAI-compatible endpoints have the setting.
-    jsonObject: draft.jsonObject && draft.kind === "openai",
     apiKey: key === "" ? null : key,
   };
 }
@@ -126,6 +137,11 @@ export function deleteLabel(draft: Pick<Draft, "id" | "confirmDelete">): string 
 /** The label of the key field: a saved key stays unless a new one is typed. */
 export function keyLabel(draft: Pick<Draft, "hasKey">): string {
   return draft.hasKey ? "API key (leave empty to keep the saved one)" : "API key";
+}
+
+/** The sign-in line of a Codex provider. */
+export function accountLine(account: string | null): string {
+  return account ? `Signed in as ${account}` : "Not signed in";
 }
 
 /** The tag at the top of the card: which provider generation uses. */
