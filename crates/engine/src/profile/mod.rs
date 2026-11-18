@@ -56,16 +56,6 @@ impl Core {
         self.store.save_profile(&yaml, &self.store.profile_sources_hash()?, left_out)
     }
 
-    /// Delete what an older version kept for the preference chat's CV upload (best effort; the
-    /// documents replaced it).
-    pub fn forget_old_cv_upload(&self) {
-        let file = self.paths.data_dir.join("prefs").join("uploaded-cv.txt");
-        match std::fs::remove_file(&file) {
-            Ok(()) => tracing::info!("removed the old preference-chat CV text"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(error = %e, "removing the old preference-chat CV text failed"),
-        }
-    }
 }
 
 /// `cv` as YAML without empty values (no `url: ''`, `hidden: false`, `bullets: []`), so the

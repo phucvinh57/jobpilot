@@ -291,18 +291,6 @@ fn trend_sources_are_validated_normalised_and_scoped_to_trends() {
 }
 
 #[test]
-fn the_old_search_keys_are_removed_from_the_keyring() {
-    let (_dir, core) = core();
-    core.secrets.set("trends:brave_api_key", "BSA-key-0123456789").unwrap();
-    core.secrets.set("trends:tavily_api_key", "tvly-key-0123456789").unwrap();
-    core.forget_old_search_keys();
-    assert_eq!(core.secrets.get("trends:brave_api_key").unwrap(), None);
-    assert_eq!(core.secrets.get("trends:tavily_api_key").unwrap(), None);
-    // Nothing saved: still fine.
-    core.forget_old_search_keys();
-}
-
-#[test]
 fn the_state_round_trips_and_the_thread_is_named_by_period() {
     assert_eq!(thread_id(&period()), "trends:2026-W46");
     assert_eq!(thread_id(&Period::parse("2026-Q4").unwrap()), "trends:2026-Q4");

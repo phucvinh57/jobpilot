@@ -259,25 +259,6 @@ mod tests {
     }
 
     #[test]
-    fn migration_applies_on_a_database_at_the_previous_version() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("old.db");
-        {
-            let conn = rusqlite::Connection::open(&path).unwrap();
-            conn.execute_batch(super::super::MIGRATIONS[0]).unwrap();
-            conn.pragma_update(None, "user_version", 1).unwrap();
-            conn.execute("INSERT INTO kv (key, value) VALUES ('keep', 'me')", []).unwrap();
-        }
-        let store = Store::open(&path).unwrap();
-        assert_eq!(store.kv_get("keep").unwrap().as_deref(), Some("me"));
-        save(&store, &row("t", 0));
-        assert!(store.graph_thread("t").unwrap().is_some());
-        let version: i64 =
-            store.with_conn(|c| Ok(c.pragma_query_value(None, "user_version", |r| r.get(0))?)).unwrap();
-        assert_eq!(version as usize, super::super::MIGRATIONS.len());
-    }
-
-    #[test]
     fn checkpoints_threads_and_status_round_trip() {
         let store = Store::open_in_memory().unwrap();
         assert!(store.graph_latest_checkpoint("t").unwrap().is_none());

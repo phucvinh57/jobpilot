@@ -88,7 +88,7 @@ pub struct Plan {
 /// An item a collector read: stored by `store_items`, its text already on disk.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Collected {
-    /// `None` only in runs of older versions (their report search had no source row).
+    /// Always set by the collectors (an `Option` so the saved runs keep loading).
     pub source_id: Option<i64>,
     pub url: String,
     pub title: String,
@@ -115,7 +115,7 @@ pub enum SourceStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceOutcome {
     pub source_id: Option<i64>,
-    /// `hackernews`, `yc`, `rss` or `page` (`report_search` in runs of older versions).
+    /// `hackernews`, `yc`, `rss` or `page`.
     pub kind: String,
     pub status: SourceStatus,
     /// New items (not known before this run) the source gave.

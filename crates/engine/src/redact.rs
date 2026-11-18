@@ -14,9 +14,6 @@ use regex::Regex;
 
 /// What replaces a secret.
 pub const MASK: &str = "[REDACTED]";
-/// Bumped whenever the patterns below change, so stored text is scrubbed again with the new ones
-/// (`store::events::scrub_old_events`).
-pub const PATTERNS_VERSION: u32 = 2;
 /// Shorter values are not registered: they would mangle ordinary text.
 const MIN_SECRET_LEN: usize = 8;
 

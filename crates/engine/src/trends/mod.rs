@@ -61,20 +61,7 @@ impl Paths {
     }
 }
 
-/// Keyring entries of the report search an older version had (Brave Search, Tavily).
-const OLD_SEARCH_KEYS: [&str; 2] = ["trends:brave_api_key", "trends:tavily_api_key"];
-
 impl Core {
-    /// Delete the report-search API keys an older version saved (best effort, at startup): nothing
-    /// reads them any more and the app no longer offers a way to remove them.
-    pub fn forget_old_search_keys(&self) {
-        for name in OLD_SEARCH_KEYS {
-            if self.secrets.delete(name).is_err() {
-                tracing::warn!("removing an old search API key from the keyring failed");
-            }
-        }
-    }
-
     // ------------------------------------------------------------ sources
 
     /// The user's trend sources (enabled or not), oldest first.
