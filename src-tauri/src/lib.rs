@@ -35,10 +35,6 @@ pub fn run() -> anyhow::Result<()> {
     );
 
     let core = Arc::new(Core::open_at(paths, Secrets::from_env())?);
-    // Remove the CV text an older version kept for the preference chat (now Profile > About you).
-    core.forget_old_cv_upload();
-    // Remove the report-search API keys (Brave Search, Tavily) an older version kept in the keyring.
-    core.forget_old_search_keys();
     // Sample data for UI work: `JOBPILOT_DEMO=1 cargo run -p jobpilot` (never on by default).
     if std::env::var_os("JOBPILOT_DEMO").is_some() {
         demo::seed(&core)?;
@@ -48,9 +44,6 @@ pub fn run() -> anyhow::Result<()> {
     mail::autostart(&core);
     // The browser bridge: the JobPilot extension in the user's Chrome connects to it.
     core.browser().start();
-    // Older releases ran their own Chrome on profiles under `<data dir>/sessions/` (cookies of old
-    // logins): remove them. Sessions are now sites the user is signed in to in their own Chrome.
-    core.remove_old_browser_profiles();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

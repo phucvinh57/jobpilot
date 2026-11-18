@@ -130,11 +130,11 @@ fn pdf_path(dest: &Path) -> PathBuf {
 
 impl Core {
     /// Render report `report_id` as a PDF at `dest` (`.pdf` is appended when missing) and return
-    /// the path written. Fails for a missing report, for a report saved by a version without its
-    /// data ("rerun it"), and when typst is missing or fails.
+    /// the path written. Fails for a missing report, for a report whose data cannot be read
+    /// ("rerun it"), and when typst is missing or fails.
     pub async fn export_trend_report_pdf(&self, report_id: i64, dest: &Path) -> Result<PathBuf> {
         let Some(digest) = self.trend_digest(report_id)? else { bail!("no such report") };
-        let Some(data) = &digest.data else { bail!("this report was saved by an older version: rerun it to export it") };
+        let Some(data) = &digest.data else { bail!("this report's data cannot be read: rerun it to export it") };
         let json = serde_json::to_vec_pretty(&export_json(&digest.report, data))?;
 
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();

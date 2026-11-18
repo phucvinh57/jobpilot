@@ -453,8 +453,7 @@ pub fn summarize(run: &TrendRun) -> (String, Vec<String>) {
         .outcomes
         .iter()
         .map(|o| {
-            // The only kind without an adapter is `report_search`, in runs of older versions.
-            let name = SourceKind::parse(&o.kind).map_or("Report search", SourceKind::label);
+            let name = SourceKind::parse(&o.kind).map_or(o.kind.clone(), |k| k.label().to_string());
             let status = match &o.status {
                 SourceStatus::Ok => format!("{} new item(s)", o.items),
                 SourceStatus::Skipped { reason } => format!("skipped ({reason})"),
@@ -645,14 +644,6 @@ mod tests {
                 status: SourceStatus::TimedOut,
                 items: 0,
             },
-            SourceOutcome {
-                source_id: None,
-                kind: "report_search".into(),
-                status: SourceStatus::Skipped {
-                    reason: "no search API key saved".into(),
-                },
-                items: 0,
-            },
         ];
         let (headline, lines) = summarize(&run);
         assert_eq!(headline, "Collected 0 new item(s).");
@@ -660,8 +651,7 @@ mod tests {
             lines,
             [
                 "Hacker News: 4 new item(s)",
-                "YC companies: timed out, left out of this run",
-                "Report search: skipped (no search API key saved)"
+                "YC companies: timed out, left out of this run"
             ]
         );
 

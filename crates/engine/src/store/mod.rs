@@ -7,7 +7,7 @@
 //! and the profile read from them), `answers` (remembered application answers) and
 //! `source_suggestions` (job sources the "Suggest sources" search found).
 //!
-//! Schema changes: append a new entry to [`MIGRATIONS`] (never edit an existing one).
+//! Schema changes: append a new entry to [`MIGRATIONS`] (never edit an existing one, nor [`SCHEMA`]).
 
 mod answers;
 mod applications;
@@ -48,23 +48,30 @@ pub use sources::{NewSource, Source, SourcePurpose};
 pub use status::Status;
 pub use trends::{NewReport, NewTrendItem, Report, TrendItem};
 
-/// Ordered migrations; `PRAGMA user_version` holds how many have been applied.
-const MIGRATIONS: &[&str] = &[
-    // 1: initial schema
-    "
+/// The schema version the squashed [`SCHEMA`] stands for: a database at an older version was made
+/// by a release whose migrations are gone, and is refused.
+const BASELINE: usize = 11;
+
+/// The whole schema as of [`BASELINE`] (migrations 1 to 11 of earlier releases, squashed).
+const SCHEMA: &str = "
     CREATE TABLE applications (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        slug          TEXT NOT NULL UNIQUE,
-        company       TEXT NOT NULL DEFAULT '',
-        role          TEXT NOT NULL DEFAULT '',
-        source        TEXT,
-        apply_url     TEXT,
-        status        TEXT NOT NULL DEFAULT 'draft',
-        dir           TEXT NOT NULL,
-        analysis_json TEXT,
-        gaps_json     TEXT,
-        created_at    TEXT NOT NULL,
-        updated_at    TEXT NOT NULL
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug            TEXT NOT NULL UNIQUE,
+        company         TEXT NOT NULL DEFAULT '',
+        role            TEXT NOT NULL DEFAULT '',
+        source          TEXT,
+        apply_url       TEXT,
+        status          TEXT NOT NULL DEFAULT 'draft',
+        dir             TEXT NOT NULL,
+        analysis_json   TEXT,
+        gaps_json       TEXT,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        insight_json    TEXT,
+        interview_round TEXT,
+        dismissed_from  TEXT,
+        dismiss_reason  TEXT,
+        dismissed_at    TEXT
     );
     CREATE TABLE events (
         id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,9 +116,6 @@ const MIGRATIONS: &[&str] = &[
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
-    ",
-    // 2: preferences, discovery leads, market trends, per-application insight
-    "
     CREATE TABLE preferences (
         id         INTEGER PRIMARY KEY CHECK (id = 1),
         json       TEXT NOT NULL,
@@ -136,22 +140,25 @@ const MIGRATIONS: &[&str] = &[
         last_run_at TEXT,
         last_status TEXT
     );
+    -- A `new` lead the saved preferences filter out is hidden (`filtered_reason`), not dismissed.
     CREATE TABLE leads (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_id      INTEGER REFERENCES sources(id) ON DELETE SET NULL,
-        url            TEXT NOT NULL UNIQUE,
-        dedup_key      TEXT NOT NULL DEFAULT '',
-        company        TEXT NOT NULL DEFAULT '',
-        role           TEXT NOT NULL DEFAULT '',
-        location       TEXT NOT NULL DEFAULT '',
-        jd_path        TEXT,
-        score          REAL,
-        score_json     TEXT,
-        insight_json   TEXT,
-        state          TEXT NOT NULL DEFAULT 'new' CHECK (state IN ('new', 'dismissed', 'promoted')),
-        dismiss_reason TEXT,
-        app_id         INTEGER REFERENCES applications(id) ON DELETE SET NULL,
-        found_at       TEXT NOT NULL
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_id       INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+        url             TEXT NOT NULL UNIQUE,
+        dedup_key       TEXT NOT NULL DEFAULT '',
+        company         TEXT NOT NULL DEFAULT '',
+        role            TEXT NOT NULL DEFAULT '',
+        location        TEXT NOT NULL DEFAULT '',
+        jd_path         TEXT,
+        score           REAL,
+        score_json      TEXT,
+        insight_json    TEXT,
+        state           TEXT NOT NULL DEFAULT 'new' CHECK (state IN ('new', 'dismissed', 'promoted')),
+        dismiss_reason  TEXT,
+        app_id          INTEGER REFERENCES applications(id) ON DELETE SET NULL,
+        found_at        TEXT NOT NULL,
+        filtered_reason TEXT,
+        dismissed_at    TEXT
     );
     CREATE INDEX leads_dedup ON leads(dedup_key);
     CREATE INDEX leads_state_score ON leads(state, score DESC);
@@ -164,6 +171,7 @@ const MIGRATIONS: &[&str] = &[
         text_path    TEXT,
         fetched_at   TEXT NOT NULL
     );
+    -- One report per period: a rerun replaces it.
     CREATE TABLE reports (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         kind           TEXT NOT NULL,
@@ -174,11 +182,8 @@ const MIGRATIONS: &[&str] = &[
         created_at     TEXT NOT NULL
     );
     CREATE INDEX reports_kind ON reports(kind, id);
-    ALTER TABLE applications ADD COLUMN insight_json TEXT;
-    ",
-    // 3: graph runtime checkpoints (see `graph`); `status`/`detail_json` of the newest row are the
-    // thread's status
-    "
+    CREATE UNIQUE INDEX reports_period ON reports(kind, period) WHERE period != '';
+    -- Graph runtime checkpoints (`graph`): `status`/`detail_json` of the newest row are the thread's.
     CREATE TABLE graph_checkpoints (
         seq         INTEGER PRIMARY KEY AUTOINCREMENT,
         id          TEXT NOT NULL UNIQUE,
@@ -194,14 +199,7 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX graph_checkpoints_thread ON graph_checkpoints(thread, seq);
     CREATE INDEX graph_checkpoints_status ON graph_checkpoints(status, updated_at);
-    ",
-    // 4: the interview round the user marked (Jobs page, `Store::set_interview_round`)
-    "
-    ALTER TABLE applications ADD COLUMN interview_round TEXT;
-    ",
-    // 5: the profile comes from the user's documents (`profile_sources`), read into one stored
-    // profile (`profile.id = 1`); remembered application answers move out of `profile.yaml`
-    "
+    -- The user's documents and the one profile read from them (`profile.id = 1`).
     CREATE TABLE profile_sources (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         name       TEXT NOT NULL,
@@ -212,11 +210,11 @@ const MIGRATIONS: &[&str] = &[
         created_at TEXT NOT NULL
     );
     CREATE TABLE profile (
-        id             INTEGER PRIMARY KEY CHECK (id = 1),
-        yaml           TEXT NOT NULL,
-        sources_hash   TEXT NOT NULL,
-        left_out_json  TEXT NOT NULL DEFAULT '[]',
-        built_at       TEXT NOT NULL
+        id            INTEGER PRIMARY KEY CHECK (id = 1),
+        yaml          TEXT NOT NULL,
+        sources_hash  TEXT NOT NULL,
+        left_out_json TEXT NOT NULL DEFAULT '[]',
+        built_at      TEXT NOT NULL
     );
     CREATE TABLE application_answers (
         key        TEXT PRIMARY KEY,
@@ -224,29 +222,7 @@ const MIGRATIONS: &[&str] = &[
         answer     TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
-    DELETE FROM kv WHERE key IN ('profile_path', 'prefs_cv_name');
-    ",
-    // 6: a `new` lead the saved preferences filter out is hidden from the queue, not dismissed, so a
-    // later change can show it again (`Store::set_lead_filtered`, `discover::refilter`)
-    "
-    ALTER TABLE leads ADD COLUMN filtered_reason TEXT;
-    ",
-    // 7: dismissed jobs can be listed and restored: when a lead was dismissed (older rows fall back
-    // to `found_at`), and for a dismissed application the status it had, why and when
-    "
-    ALTER TABLE leads ADD COLUMN dismissed_at TEXT;
-    ALTER TABLE applications ADD COLUMN dismissed_from TEXT;
-    ALTER TABLE applications ADD COLUMN dismiss_reason TEXT;
-    ALTER TABLE applications ADD COLUMN dismissed_at TEXT;
-    ",
-    // 8: sessions are sites the user is signed in to in their own Chrome; the logins of the old
-    // app-owned profiles went with those profiles, so every session starts over
-    "
-    UPDATE sessions SET status = 'new', domains_json = '[]', last_verified_at = NULL;
-    ",
-    // 9: job sources the "Suggest sources" search found and checked (`discover::suggest`); an
-    // added or dismissed one is never suggested again
-    "
+    -- Job sources the \"Suggest sources\" search found; an added or dismissed one is never suggested again.
     CREATE TABLE source_suggestions (
         id       INTEGER PRIMARY KEY AUTOINCREMENT,
         kind     TEXT NOT NULL,
@@ -259,27 +235,11 @@ const MIGRATIONS: &[&str] = &[
         found_at TEXT NOT NULL,
         UNIQUE(kind, input)
     );
-    ",
-    // 10: one report per period (`trends`): rerunning a period replaces its report, so keep the
-    // newest row of each (kind, period) and let the unique index hold it from now on (a row
-    // without a period names none, so those are left alone)
-    "
-    DELETE FROM reports WHERE period != ''
-        AND id NOT IN (SELECT MAX(id) FROM reports WHERE period != '' GROUP BY kind, period);
-    CREATE UNIQUE INDEX reports_period ON reports(kind, period) WHERE period != '';
-    ",
-    // 11: provider kinds split into official and compatible: an `openai` / `anthropic` row stays
-    // official only when it points at exactly the official API (an empty base URL meant the
-    // official default); any other address, look-alike hosts included, is a compatible endpoint
-    "
-    UPDATE providers SET kind = 'openai_compatible'
-        WHERE kind = 'openai' AND base_url NOT IN
-            ('', 'https://api.openai.com', 'https://api.openai.com/', 'https://api.openai.com/v1', 'https://api.openai.com/v1/');
-    UPDATE providers SET kind = 'anthropic_compatible'
-        WHERE kind = 'anthropic' AND base_url NOT IN
-            ('', 'https://api.anthropic.com', 'https://api.anthropic.com/', 'https://api.anthropic.com/v1', 'https://api.anthropic.com/v1/');
-    ",
-];
+";
+
+/// Migrations after [`BASELINE`], in order: entry `i` takes the database to version
+/// `BASELINE + i + 1`. `PRAGMA user_version` holds the version.
+const MIGRATIONS: &[&str] = &[];
 
 #[derive(Clone)]
 pub struct Store {
@@ -291,7 +251,7 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        Self::init(conn)
+        Self::init(conn).with_context(|| format!("opening {}", path.display()))
     }
 
     pub fn open_in_memory() -> Result<Self> {
@@ -301,12 +261,6 @@ impl Store {
     fn init(mut conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&mut conn)?;
-        // Best effort: events are masked on read as well, so a failure here never stops the app.
-        match events::scrub_old_events(&mut conn) {
-            Ok(0) => {}
-            Ok(count) => tracing::info!(count, "masked secrets in old events"),
-            Err(error) => tracing::warn!(error = %error, "masking secrets in old events failed"),
-        }
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -330,12 +284,30 @@ impl Store {
 }
 
 fn migrate(conn: &mut Connection) -> Result<()> {
-    let applied: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    let applied = usize::try_from(applied).with_context(|| format!("the database schema version {applied} is invalid"))?;
-    for (i, sql) in MIGRATIONS.iter().enumerate().skip(applied) {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    let mut version =
+        usize::try_from(version).with_context(|| format!("the database schema version {version} is invalid"))?;
+    if version == 0 {
         let tx = conn.transaction()?;
-        tx.execute_batch(sql).with_context(|| format!("migration {}", i + 1))?;
-        tx.pragma_update(None, "user_version", i as i64 + 1)?;
+        tx.execute_batch(SCHEMA).context("creating the schema")?;
+        tx.pragma_update(None, "user_version", BASELINE as i64)?;
+        tx.commit()?;
+        version = BASELINE;
+    }
+    anyhow::ensure!(
+        version >= BASELINE,
+        "the database (schema version {version}) is too old for this release: delete it to start over"
+    );
+    let latest = BASELINE + MIGRATIONS.len();
+    anyhow::ensure!(
+        version <= latest,
+        "the database (schema version {version}) was made by a newer release (this one knows {latest})"
+    );
+    for (i, sql) in MIGRATIONS.iter().enumerate().skip(version - BASELINE) {
+        let to = BASELINE + i + 1;
+        let tx = conn.transaction()?;
+        tx.execute_batch(sql).with_context(|| format!("migration {to}"))?;
+        tx.pragma_update(None, "user_version", to as i64)?;
         tx.commit()?;
     }
     Ok(())
@@ -393,141 +365,36 @@ mod tests {
     }
 
     #[test]
-    fn an_existing_database_is_migrated_and_keeps_its_data() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("old.db");
-        {
-            // A database as the first release left it: only migration 1 applied.
-            let conn = Connection::open(&path).unwrap();
-            conn.execute_batch(MIGRATIONS[0]).unwrap();
-            conn.pragma_update(None, "user_version", 1).unwrap();
-            conn.execute(
-                "INSERT INTO applications (slug, company, role, status, dir, created_at, updated_at)
-                 VALUES ('old-app', 'Acme', 'Dev', 'applied', '/tmp/old-app', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
-                [],
-            )
-            .unwrap();
-            conn.execute("INSERT INTO kv (key, value) VALUES ('profile_path', '/x/profile.yaml')", []).unwrap();
-            conn.execute(
-                "INSERT INTO sessions (name, start_url, domains_json, status, last_verified_at, created_at)
-                 VALUES ('LinkedIn', 'https://www.linkedin.com/', '[\"linkedin.com\"]', 'ok', '2026-01-02T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
-                [],
-            )
-            .unwrap();
-        }
-
-        let store = Store::open(&path).unwrap();
-        let version: i64 = store.with_conn(|c| Ok(c.pragma_query_value(None, "user_version", |r| r.get(0))?)).unwrap();
-        assert_eq!(version as usize, MIGRATIONS.len());
-
-        let app = store.get_application_by_slug("old-app").unwrap().unwrap();
-        assert_eq!((app.company.as_str(), app.status, app.insight_json.as_deref()), ("Acme", Status::Applied, None));
-        assert_eq!(app.interview_round, None);
-        // The profile is no longer a file: its old path setting is forgotten.
-        assert_eq!(store.kv_get("profile_path").unwrap(), None);
-        // The logins of the old app-owned browser profiles are gone: every session starts over.
-        let session = &store.list_sessions().unwrap()[0];
-        assert_eq!((session.name.as_str(), session.status.as_str(), session.domains_json.as_str()), ("LinkedIn", "new", "[]"));
-        assert!(session.last_verified_at.is_none());
-
-        // The new column and tables are usable.
-        store.set_insight_json(app.id, Some(r#"{"domain": "payments"}"#)).unwrap();
-        assert_eq!(store.get_application(app.id).unwrap().unwrap().insight_json.as_deref(), Some(r#"{"domain": "payments"}"#));
-        store.save_preferences(&Default::default()).unwrap();
-        store.add_chat_message("prefs", crate::llm::Role::User, "hi").unwrap();
-        store.add_source(&NewSource { kind: "lever".into(), ..Default::default() }).unwrap();
-        let lead = store.add_lead(&NewLead { url: "https://a.test/1".into(), ..Default::default() }).unwrap();
-        assert_eq!(lead.filtered_reason, None);
-        assert!(store.set_lead_filtered(lead.id, Some("location")).unwrap());
-        store.add_report(&NewReport { kind: "weekly".into(), ..Default::default() }).unwrap();
-        store.add_profile_source(&NewProfileSource::text("Note", "I build APIs."), usize::MAX).unwrap();
-        store.save_profile("basics: {name: A}\n", "hash", &[]).unwrap();
-        store.save_answer("why", "Why us?", "Because.").unwrap();
-        store.upsert_suggestion(&NewSuggestion { kind: "lever".into(), input: "jobs.lever.co/acme".into(), ..Default::default() }).unwrap();
-
-        // Reopening applies nothing twice.
+    fn a_new_database_is_at_the_latest_version_and_reopens() {
+        let (dir, store) = store();
+        let version = |s: &Store| -> usize {
+            s.with_conn(|c| Ok(c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))?)).unwrap() as usize
+        };
+        assert_eq!(version(&store), BASELINE + MIGRATIONS.len());
+        store.kv_set("keep", "me").unwrap();
         drop(store);
-        assert!(Store::open(&path).unwrap().get_application_by_slug("old-app").unwrap().is_some());
+        let again = Store::open(&dir.path().join("t.db")).unwrap();
+        assert_eq!(version(&again), BASELINE + MIGRATIONS.len());
+        assert_eq!(again.kv_get("keep").unwrap().as_deref(), Some("me"));
     }
 
     #[test]
-    fn migration_10_keeps_the_newest_report_of_each_period() {
+    fn a_database_older_than_the_baseline_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("old.db");
-        {
-            // Before migration 10, regenerating a digest added a row per run.
-            let conn = Connection::open(&path).unwrap();
-            for sql in &MIGRATIONS[..9] {
-                conn.execute_batch(sql).unwrap();
-            }
-            conn.pragma_update(None, "user_version", 9).unwrap();
-            for (kind, period, body) in
-                [("weekly", "2026-W46", "old"), ("weekly", "2026-W46", "new"), ("weekly", "2026-W45", "other"), ("quarterly", "2026-Q4", "q")]
-            {
-                conn.execute(
-                    "INSERT INTO reports (kind, period, body_md, created_at) VALUES (?1, ?2, ?3, '2026-11-01T00:00:00+00:00')",
-                    [kind, period, body],
-                )
-                .unwrap();
-            }
-        }
-        let store = Store::open(&path).unwrap();
-        let weekly = store.list_reports("weekly").unwrap();
-        assert_eq!(weekly.iter().map(|r| r.body_md.as_str()).collect::<Vec<_>>(), ["other", "new"]);
-        assert_eq!(store.list_reports("quarterly").unwrap().len(), 1);
-        // From now on a rerun replaces the period's row.
-        let again = store
-            .add_report(&NewReport { kind: "weekly".into(), period: "2026-W46".into(), body_md: "newer".into(), ..Default::default() })
-            .unwrap();
-        assert_eq!(again.id, weekly[1].id);
-        assert_eq!(store.list_reports("weekly").unwrap().len(), 2);
+        Connection::open(&path).unwrap().pragma_update(None, "user_version", 3).unwrap();
+        let error = Store::open(&path).err().unwrap();
+        assert!(format!("{error:#}").contains("too old"), "{error:#}");
+        assert!(format!("{error:#}").contains("old.db"), "names the file: {error:#}");
     }
 
     #[test]
-    fn migration_11_splits_provider_kinds() {
+    fn a_database_from_a_newer_release_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("old.db");
-        {
-            let conn = Connection::open(&path).unwrap();
-            for sql in &MIGRATIONS[..10] {
-                conn.execute_batch(sql).unwrap();
-            }
-            conn.pragma_update(None, "user_version", 10).unwrap();
-            for (name, kind, base) in [
-                ("OpenAI", "openai", "https://api.openai.com/v1"),
-                ("Ollama", "openai", "http://localhost:11434/v1"),
-                ("Lookalike", "openai", "https://api.openai.com.proxy.example/v1"),
-                ("Bare", "openai", "https://api.openai.com/"),
-                ("Claude", "anthropic", "https://api.anthropic.com"),
-                ("ClaudeV1", "anthropic", "https://api.anthropic.com/v1/"),
-                ("Proxy", "anthropic", "https://proxy.example/anthropic"),
-                ("Sub", "anthropic", "https://api.anthropic.com.evil.example"),
-                ("Empty", "anthropic", ""),
-            ] {
-                conn.execute(
-                    "INSERT INTO providers (name, kind, base_url, json_mode) VALUES (?1, ?2, ?3, 'json_object')",
-                    [name, kind, base],
-                )
-                .unwrap();
-            }
-        }
-        let store = Store::open(&path).unwrap();
-        let kinds: Vec<_> = store.list_providers().unwrap().into_iter().map(|p| (p.name, p.kind, p.json_mode)).collect();
-        let mode = || "json_object".to_string();
-        assert_eq!(
-            kinds,
-            [
-                ("OpenAI".into(), ProviderKind::OpenAi, mode()),
-                ("Ollama".into(), ProviderKind::OpenAiCompatible, mode()),
-                ("Lookalike".into(), ProviderKind::OpenAiCompatible, mode()),
-                ("Bare".into(), ProviderKind::OpenAi, mode()),
-                ("Claude".into(), ProviderKind::Anthropic, mode()),
-                ("ClaudeV1".into(), ProviderKind::Anthropic, mode()),
-                ("Proxy".into(), ProviderKind::AnthropicCompatible, mode()),
-                ("Sub".into(), ProviderKind::AnthropicCompatible, mode()),
-                ("Empty".into(), ProviderKind::Anthropic, mode()),
-            ]
-        );
+        let path = dir.path().join("new.db");
+        Connection::open(&path).unwrap().pragma_update(None, "user_version", (BASELINE + MIGRATIONS.len() + 1) as i64).unwrap();
+        let error = Store::open(&path).err().unwrap();
+        assert!(format!("{error:#}").contains("newer release"), "{error:#}");
     }
 
     #[test]

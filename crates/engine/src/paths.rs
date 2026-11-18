@@ -56,9 +56,4 @@ impl Paths {
         self.applications_dir.join(slug)
     }
 
-    /// `sessions/`: the browser profiles of releases that ran their own Chrome (they hold cookies;
-    /// removed at startup, see `Core::remove_old_browser_profiles`).
-    pub fn old_sessions_dir(&self) -> PathBuf {
-        self.data_dir.join("sessions")
-    }
 }

@@ -17,7 +17,7 @@ use super::bridge::Bridge;
 use super::probe;
 use super::tab::{OpenOptions, Profile, Tab};
 use crate::store::{NewSession, Session};
-use crate::{Core, Paths, Secrets, Store};
+use crate::{Paths, Secrets, Store};
 
 /// Login state of a session as stored in the `sessions.status` column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,29 +182,10 @@ fn normalize_start_url(raw: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
-impl Core {
-    /// Delete `<data_dir>/sessions/`, the Chrome profiles of releases that ran their own browser
-    /// (cookies of old logins). Best effort; returns how many profiles were removed.
-    pub fn remove_old_browser_profiles(&self) -> usize {
-        let dir = self.paths.old_sessions_dir();
-        let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
-        let count = entries.count();
-        match std::fs::remove_dir_all(&dir) {
-            Ok(()) => {
-                tracing::info!(count, "removed the old browser profiles");
-                count
-            }
-            Err(e) => {
-                tracing::warn!("removing the old browser profiles failed: {}", e.kind());
-                0
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Core;
 
     #[test]
     fn start_url_is_validated() {
@@ -235,19 +216,6 @@ mod tests {
         assert!(!mgr.login_in_progress(s.id));
         mgr.delete(s.id).unwrap();
         assert!(mgr.get(s.id).is_err());
-    }
-
-    #[test]
-    fn the_old_browser_profiles_are_removed() {
-        let dir = tempfile::tempdir().unwrap();
-        let core = Core::open_at(Paths::new(dir.path().join("jp")), Secrets::memory()).unwrap();
-        assert_eq!(core.remove_old_browser_profiles(), 0, "nothing to remove");
-        let old = core.paths.old_sessions_dir();
-        std::fs::create_dir_all(old.join("1/Default")).unwrap();
-        std::fs::write(old.join("1/Default/Cookies"), "x").unwrap();
-        std::fs::create_dir_all(old.join("2")).unwrap();
-        assert_eq!(core.remove_old_browser_profiles(), 2);
-        assert!(!old.exists());
     }
 
     /// Sessions in a real Chromium with the extension (`testkit`): the check, the login flow and

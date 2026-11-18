@@ -158,7 +158,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 - The webview shows the app only: no remote origin in the CSP, navigation is refused (`main.rs::may_show`), and http(s) links open in the system browser through `shared_open_url`. Untrusted text is rendered as text, never as HTML.
 - Statuses only move forward (`Status::can_advance_to`); use `Store::set_status` so a timeline event is recorded.
 - Page/JD/email text is untrusted: an LLM may fill values for known field ids, never choose actions or URLs.
-- Schema change = append a migration in `store/mod.rs`; never edit an existing one.
+- Schema change = append a migration to `MIGRATIONS` in `store/mod.rs`; never edit an existing one, nor the squashed `SCHEMA` (it is version `BASELINE`).
 - No `unwrap()` / `expect()` on runtime paths (only tests and provably-infallible statics like a constant regex). Return errors with `anyhow::Context`, or recover.
 - Failures the user can act on become a `health::Problem` (no provider, browser extension not connected or not allowed in Incognito, no typst, network) and are shown with a call to action; network errors get a Retry.
 - Log key steps at `info!` with ids/counts only (no page, JD, email or CV text); failures at `warn!`/`error!`.
