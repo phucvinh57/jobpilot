@@ -21,10 +21,11 @@
 //!   that is an item of this digest) and every point whose quote is not in a cited item (a quote
 //!   that is a cited item's whole title always counts). It also enforces the prompt's limits: at
 //!   most 5 citations per point, 4 points per section, 20 in all.
-//! - `save_report` ([`cite`]): one row in `reports` (`weekly` / `quarterly`): `body_md` is the
-//!   readable digest (model-written text is escaped, the only links are the cited items' stored
-//!   http(s) addresses), `citations_json` is [`DigestData`] (cited items, points, skill counts) for
-//!   the view. Regenerating adds a row; the newest wins.
+//! - `save_report` ([`cite`]): one row in `reports` per period (`weekly` / `monthly` /
+//!   `quarterly` / `yearly`): `body_md` is the readable digest (model-written text is escaped, the
+//!   only links are the cited items' stored http(s) addresses), `citations_json` is [`DigestData`]
+//!   (cited items, points, skill counts) for the view. Rerunning a period replaces its report (same
+//!   id). [`crate::trends::pdf`] exports one as a PDF.
 //!
 //! Two graphs share these nodes: `trends` (collection, then the digest when the run was started
 //! with [`Core::collect_trends_and_digest`]) and `trends_digest` ([`Core::build_trends_digest`]),

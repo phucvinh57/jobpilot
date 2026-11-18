@@ -67,7 +67,7 @@ export function Reports({
       cell: (r) => {
         const name = reportName(r);
         return (
-          <span className="flex flex-wrap justify-end gap-2">
+          <span className="flex justify-end gap-2 whitespace-nowrap">
             <Button
               id={`trends-report-${r.id}-open`}
               size="compact"

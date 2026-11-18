@@ -12,7 +12,8 @@
 //!
 //! Layout: [`source`] has one adapter per kind (no store, no disk, only [`http::Http`]), [`collect`]
 //! the graph and its state, [`digest`] the nodes after the collection and the report API,
-//! [`config`] the injectable endpoints and limits, [`period`] the week or quarter a run covers.
+//! [`config`] the injectable endpoints and limits, [`period`] the week, month, quarter or year a run
+//! covers (one report per period), [`pdf`] a saved report as a PDF (`assets/trends.typ`).
 //!
 //! Rules that hold for every adapter: read-only GET,
 //! http(s) only, a minimum gap per host and caps on items and bytes ([`CollectLimits`]), text from a
@@ -25,6 +26,7 @@ pub mod config;
 pub mod digest;
 pub mod frame;
 pub use crate::net::http;
+pub mod pdf;
 pub mod period;
 pub mod source;
 mod text;

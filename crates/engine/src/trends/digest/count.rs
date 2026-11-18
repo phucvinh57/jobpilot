@@ -304,6 +304,15 @@ impl Doc {
     }
 }
 
+/// Months of skill counts for a digest of `period`: a year's own twelve, else [`MONTHS`] (enough
+/// for a direction, even for a week or a month).
+pub(crate) fn window_months(period: &Period) -> usize {
+    match period {
+        Period::Year { .. } => 12,
+        Period::Week { .. } | Period::Month { .. } | Period::Quarter { .. } => MONTHS,
+    }
+}
+
 /// `n` months ending with the month of the period's last day, oldest first (`2026-06` ...).
 pub fn month_window(period: &Period, n: usize) -> Vec<String> {
     let last = (period.end() - Duration::days(1)).date_naive();
@@ -621,7 +630,7 @@ fn month_of(time: DateTime<Utc>) -> String {
 }
 
 pub(super) async fn count(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendRun> {
-    let months = month_window(&s.period, MONTHS);
+    let months = month_window(&s.period, window_months(&s.period));
     let in_window = |month: &str| months.iter().any(|m| m == month);
 
     // A backfilled Hacker News source holds thousands of postings: read a few at a time.
@@ -784,6 +793,11 @@ mod tests {
         assert_eq!(month_window(&w1, 3), ["2025-11", "2025-12", "2026-01"], "W01 ends on 2026-01-04");
         let q4 = Period::parse("2026-Q4").unwrap();
         assert_eq!(month_window(&q4, 6), ["2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12"]);
+        let nov = Period::parse("2026-M11").unwrap();
+        assert_eq!(month_window(&nov, window_months(&nov)), ["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"]);
+        let year = Period::parse("2026").unwrap();
+        let months = month_window(&year, window_months(&year));
+        assert_eq!((months.len(), months[0].as_str(), months[11].as_str()), (12, "2026-01", "2026-12"), "a year counts its own months");
     }
 
     #[test]

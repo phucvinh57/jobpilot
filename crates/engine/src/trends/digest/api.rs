@@ -99,11 +99,19 @@ impl Core {
         self.graphs.resume(&graph, &digest_thread_id(&period), |_| {}).await
     }
 
-    /// Every saved report, newest first.
+    /// Every saved report (weekly, monthly, quarterly and yearly; one per period): the latest
+    /// period first, and for periods starting the same day the shorter one first (`2026-W45`,
+    /// then `2026-M11`, `2026-Q4`). A row whose period cannot be read comes last.
     pub fn trend_reports(&self) -> Result<Vec<Report>> {
-        let mut all = self.store.list_reports("weekly")?;
-        all.extend(self.store.list_reports("quarterly")?);
-        all.sort_by_key(|r| std::cmp::Reverse((r.created_at, r.id)));
+        let mut all = Vec::new();
+        for kind in Period::KINDS {
+            all.extend(self.store.list_reports(kind)?);
+        }
+        all.sort_by_key(|r| {
+            let start = Period::parse(&r.period).map(|p| p.start());
+            let kind = Period::KINDS.iter().position(|k| *k == r.kind).unwrap_or(Period::KINDS.len());
+            (std::cmp::Reverse(start), kind, std::cmp::Reverse(r.id))
+        });
         Ok(all)
     }
 
@@ -112,12 +120,21 @@ impl Core {
         Ok(self.store.get_report(report_id)?.map(Digest::from_report))
     }
 
-    /// The newest report of any kind.
+    /// The report saved last, of any kind.
     pub fn latest_trend_digest(&self) -> Result<Option<Digest>> {
-        Ok(self.trend_reports()?.into_iter().next().map(Digest::from_report))
+        Ok(self.trend_reports()?.into_iter().max_by_key(|r| (r.created_at, r.id)).map(Digest::from_report))
     }
 
-    /// Save `data` as the newest report of `period` (what `save_report` does; for sample data).
+    /// Delete a report (nothing to do when it is already gone).
+    pub fn delete_trend_report(&self, id: i64) -> Result<()> {
+        if self.store.delete_report(id)? {
+            tracing::info!(report = id, "trend report deleted");
+        }
+        Ok(())
+    }
+
+    /// Save `data` as the report of `period`, replacing an earlier one (what `save_report` does;
+    /// for sample data).
     pub fn save_trend_digest(&self, period: &Period, data: &DigestData) -> Result<Report> {
         super::cite::save(&self.store, period, data)
     }

@@ -28,8 +28,8 @@ use crate::shared::{CommandError, CommandResult};
 
 /// Skills drawn in the chart.
 const CHART_ROWS: usize = 10;
-/// Reports listed in the history.
-const HISTORY_ROWS: usize = 30;
+/// Reports listed (every cadence together; the web app filters by cadence).
+const HISTORY_ROWS: usize = 500;
 
 // ------------------------------------------------------------------ overview
 
@@ -45,7 +45,7 @@ pub struct OverviewDto {
     pub digest: Option<DigestDto>,
     /// The skill-frequency chart of that digest (`None` when it has no counts).
     pub chart: Option<ChartDto>,
-    /// Earlier digests, newest first.
+    /// Every saved report of every cadence (one per period), newest period first.
     pub history: Vec<ReportRowDto>,
     /// Collections paused at a login, captcha or block page.
     pub challenges: Vec<ChallengeDto>,
@@ -593,15 +593,31 @@ fn scope_dto(
 pub struct ReportRowDto {
     pub id: i64,
     pub title: String,
+    /// When it was last built (a rerun replaces the report of its period).
     pub when: String,
+    /// `2026-W46` / `2026-M11` / `2026-Q4` / `2026`: what a rerun takes.
+    pub period: String,
+    /// `Week of 9 November` / `November 2026` / `Q4 2026` / `2026`.
+    pub period_title: String,
+    /// `weekly` / `monthly` / `quarterly` / `yearly`.
+    pub cadence: String,
+    /// Points the digest holds (0 for a report this version cannot read back).
+    pub points: usize,
 }
 
 impl ReportRowDto {
     fn new(report: &Report) -> Self {
+        let period = Period::parse(&report.period);
+        let points = serde_json::from_str::<DigestData>(&report.citations_json)
+            .map_or(0, |data| data.points.len());
         Self {
             id: report.id,
             title: report.title.clone(),
             when: when(report),
+            period: report.period.clone(),
+            period_title: period.map_or_else(|| report.period.clone(), period_title),
+            cadence: period.map_or_else(|| report.kind.clone(), |p| Cadence::of(p).as_str().to_string()),
+            points,
         }
     }
 }
@@ -1184,8 +1200,14 @@ mod tests {
             seen.source_kinds.iter().any(|k| k.kind == "rss" && k.added),
             "a feed can be added again"
         );
-        assert_eq!(seen.history.len(), 1);
+        // One report per cadence; the current week is shown first.
+        let mut cadences: Vec<&str> = seen.history.iter().map(|r| r.cadence.as_str()).collect();
+        cadences.sort_unstable();
+        assert_eq!(cadences, ["monthly", "quarterly", "weekly", "weekly", "yearly"]);
+        assert!(seen.history.iter().all(|r| r.points > 0 && !r.period_title.is_empty()));
         let digest = seen.digest.expect("a digest");
+        let shown = seen.history.iter().find(|r| r.id == digest.report_id).expect("the shown report is listed");
+        assert_eq!(shown.period, Period::current_week().label());
         let DigestBodyDto::Data {
             sections,
             dropped,

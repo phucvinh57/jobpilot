@@ -12,7 +12,6 @@ use anyhow::{bail, Context, Result};
 use regex::Regex;
 use tokio::process::Command;
 
-
 /// The Typst renderer (`assets/cv.typ`).
 pub const CV_TEMPLATE: &str = include_str!("../../../../assets/cv.typ");
 /// Env var overriding the `typst` binary.
@@ -93,9 +92,9 @@ pub async fn render(yaml_path: &Path, out_dir: &Path) -> Result<RenderResult> {
 
     // One after the other: the first compile downloads the `@preview` package into the shared cache.
     let bin = typst_binary();
-    typst_compile(&bin, &out_dir, &yaml_name, &[], &pdf).await?;
+    typst_compile(&bin, &out_dir, &template, &yaml_name, &[], &pdf).await?;
     let png_pattern = out_dir.join("page-{p}.png");
-    typst_compile(&bin, &out_dir, &yaml_name, &["--format", "png", "--ppi", PREVIEW_PPI], &png_pattern).await?;
+    typst_compile(&bin, &out_dir, &template, &yaml_name, &["--format", "png", "--ppi", PREVIEW_PPI], &png_pattern).await?;
 
     let pages = list_pages(&out_dir).await?;
     if pages.is_empty() {
@@ -104,15 +103,22 @@ pub async fn render(yaml_path: &Path, out_dir: &Path) -> Result<RenderResult> {
     Ok(RenderResult { pdf, page_count: pages.len(), pages })
 }
 
-async fn typst_compile(bin: &Path, root: &Path, yaml_name: &str, extra: &[&str], output: &Path) -> Result<()> {
+/// Compile `template` (inside `root`) into the PDF `out_pdf`, with `--input data=<data_file_name>`
+/// (a file in `root` the template reads). Errors as for the CV: "typst was not found" (the
+/// no-typst Problem) or a [`TypstError`] with typst's diagnostics.
+pub(crate) async fn compile(root: &Path, template: &Path, data_file_name: &str, out_pdf: &Path) -> Result<()> {
+    typst_compile(&typst_binary(), root, template, data_file_name, &[], out_pdf).await
+}
+
+async fn typst_compile(bin: &Path, root: &Path, template: &Path, data_name: &str, extra: &[&str], output: &Path) -> Result<()> {
     let mut cmd = Command::new(bin);
     cmd.arg("compile")
         .arg("--root")
         .arg(root)
         .arg("--input")
-        .arg(format!("data={yaml_name}"))
+        .arg(format!("data={data_name}"))
         .args(extra)
-        .arg(root.join("cv.typ"))
+        .arg(template)
         .arg(output)
         .current_dir(root)
         .env("NO_COLOR", "1")
@@ -257,6 +263,7 @@ mod tests {
         let err = typst_compile(
             Path::new("/nonexistent/typst-binary"),
             dir.path(),
+            &dir.path().join("cv.typ"),
             "cv.yaml",
             &[],
             &dir.path().join("o.pdf"),

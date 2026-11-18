@@ -12,7 +12,7 @@ use jobpilot_engine::trends::{
 };
 use jobpilot_engine::Core;
 use anyhow::Result;
-use chrono::{Duration, Utc};
+use chrono::{Datelike, Duration, Utc};
 
 /// Insert the sample sources, items and digest when there are none yet.
 pub fn seed_demo(core: &Core) -> Result<()> {
@@ -181,6 +181,18 @@ pub fn seed_demo(core: &Core) -> Result<()> {
         items_read: 6,
         dropped: 1,
     };
+    // One report per cadence, so the Reports list has a row in each; the week is saved last and
+    // is the one shown first.
+    let today = now.date_naive();
+    let last_year = today.with_year(today.year() - 1).unwrap_or(today);
+    for other in [
+        Period::year_of(last_year),
+        Period::quarter_of(today),
+        Period::month_of(today),
+        Period::week_of(today - Duration::days(7)),
+    ] {
+        core.save_trend_digest(&other, &data)?;
+    }
     core.save_trend_digest(&period, &data)?;
     Ok(())
 }
