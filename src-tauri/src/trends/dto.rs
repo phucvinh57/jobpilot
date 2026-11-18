@@ -451,8 +451,8 @@ pub struct ChartDto {
     /// What the counts saw and did not see, one sentence per fact: how many postings were counted
     /// over which months first, then only what applies (empty for a report saved before the tests).
     pub coverage: Vec<String>,
-    /// Something was not seen (postings that could not be read, items or threads a source left
-    /// unread, a month without postings): the screen shows the coverage as a notice.
+    /// The skill counts miss postings (some that could not be read, or a month without any): the
+    /// screen shows the coverage as a notice.
     pub partial: bool,
 }
 
@@ -1271,7 +1271,7 @@ mod tests {
             .expect("a chart");
         assert!(chart.partial);
         assert!(chart.coverage.iter().any(|l| l.starts_with("3 Hacker News items could not be read")));
-        assert!(chart.coverage.iter().any(|l| l == "In this run the sources left 25 items or threads unread."));
+        assert!(chart.coverage.iter().any(|l| l == "In this run the sources left 25 items unread."));
     }
 
     #[test]

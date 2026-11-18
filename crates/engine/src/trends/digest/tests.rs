@@ -957,8 +957,8 @@ fn the_coverage_says_the_counted_line_and_only_the_facts_that_apply() {
     let only = |patch: Coverage| patch.lines(&months)[1..].to_vec();
     assert_eq!(only(Coverage { postings_unreadable: 1, ..complete.clone() }), ["1 Hacker News item could not be read; it may have been a posting."]);
     assert_eq!(only(Coverage { postings_unreadable: 14, ..complete.clone() }), ["14 Hacker News items could not be read; some may have been postings."]);
-    assert_eq!(only(Coverage { left_unread_at_source: Some(1), ..complete.clone() }), ["In this run the sources left 1 item or thread unread."]);
-    assert_eq!(only(Coverage { left_unread_at_source: Some(120), ..complete.clone() }), ["In this run the sources left 120 items or threads unread."]);
+    assert_eq!(only(Coverage { left_unread_at_source: Some(1), ..complete.clone() }), ["In this run the sources left 1 item unread."]);
+    assert_eq!(only(Coverage { left_unread_at_source: Some(120), ..complete.clone() }), ["In this run the sources left 120 items unread."]);
     assert_eq!(only(Coverage { months_without_postings: vec!["2026-07".into()], ..complete.clone() }), ["No hiring postings were counted in 2026-07."]);
     assert_eq!(
         only(Coverage { months_without_postings: vec!["2026-06".into(), "2026-07".into()], ..complete.clone() }),
@@ -983,7 +983,7 @@ fn the_coverage_says_the_counted_line_and_only_the_facts_that_apply() {
         [
             "Counted 310 hiring postings over 2026-06 to 2026-08.",
             "4 Hacker News items could not be read; some may have been postings.",
-            "In this run the sources left 25 items or threads unread.",
+            "In this run the sources left 25 items unread.",
             "No hiring postings were counted in 2026-07.",
             "Not compared with the period before (too few items or too uneven): Hacker News stories.",
         ]
@@ -1022,7 +1022,7 @@ fn the_markdown_shows_the_period_level_with_its_range_and_the_coverage() {
         "| Skill | 2026-10 | 2026-11 | Total | This period (95% range) |\n|---|---|---|---|---|\n",
         "| Rust | 3 | 9 | 12 | 9.4% (7.1% to 12.3%) |\n",
         "| a\\|b | 3 | 9 | 12 | - |\n",
-        "\n\nCoverage: Counted 92 hiring postings over 2026-10 to 2026-11. In this run the sources left 12 items or threads unread.\n\n",
+        "\n\nCoverage: Counted 92 hiring postings over 2026-10 to 2026-11. In this run the sources left 12 items unread.\n\n",
     ] {
         assert!(md.contains(expected), "{expected:?} missing in {md}");
     }
@@ -1160,11 +1160,9 @@ async fn every_item_of_the_period_is_counted_while_the_model_reads_only_its_pick
     // this period either, so no stratum of the period has a side to be compared with.
     assert_eq!(coverage.months_without_postings.len(), 5, "{:?}", coverage.months_without_postings);
     assert_eq!(coverage.not_comparable, [Stratum::HiringPosting, Stratum::HnStory, Stratum::Yc, Stratum::Feed]);
-    // The terms come from all 60 items, not from the 10 the model read: 40 posts name "storage" ...
-    let storage = data.counts.uncatalogued.iter().find(|t| t.stratum == Stratum::Feed && t.term.contains("storage")).expect("a term of the feed");
-    assert_eq!(storage.items, 40, "{:?}", data.counts.uncatalogued);
-    // ... and the collector's own words are nobody's trend.
-    assert!(data.counts.uncatalogued.iter().all(|t| !t.term.contains("hacker") && !t.term.contains("discussion") && !t.term.contains("combinator")), "{:?}", data.counts.uncatalogued);
+    // A kind of item that was not compared lists no term: its frequent words would only be its
+    // common ones.
+    assert!(data.counts.uncatalogued.is_empty(), "{:?}", data.counts.uncatalogued);
 }
 
 #[tokio::test]

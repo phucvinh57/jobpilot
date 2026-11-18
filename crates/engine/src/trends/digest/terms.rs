@@ -18,8 +18,9 @@
 //!   previous period's items against this period's.
 //! - **a stratum that cannot be compared is not tested.** With fewer than [`MIN_STRATUM_DOCS`]
 //!   documents on a side, or a volume (documents per month, per period) that differs by more than
-//!   [`MAX_VOLUME_RATIO`] between the sides, a change of mix is what the test would find: its terms
-//!   are listed by level only (documents of the period naming them), never as risers.
+//!   [`MAX_VOLUME_RATIO`] between the sides, a change of mix is what the test would find: it lists
+//!   no term at all (its most frequent words would only be its most common ones), and the report
+//!   says it was not compared.
 //! - **a term is tested** with at least [`MIN_TERM_DOCS`] documents across both sides, by the log-odds
 //!   test of the skills ([`stats::log_odds_z`]) with an informative prior of [`TERM_PRIOR`]
 //!   documents, so a word seen in a handful of documents cannot win. The tests of a stratum are one
@@ -166,6 +167,7 @@ email experience experienced experiences expertise good great help helping hire 
 includes including interested job jobs join joining knowledge less looking month months opportunity opportunities \
 position positions required requirement requirements resume responsibilities role roles send skill skills strong \
 team teams work worked working works year years \
+aren couldn didn doesn don hasn haven isn ll re shouldn ve wasn weren won wouldn \
 click comment comments cookies privacy read share subscribe";
 
 fn stopwords() -> &'static HashSet<&'static str> {
@@ -333,8 +335,10 @@ impl Corpus {
     }
 
     /// The stratum's terms to show (at most [`MAX_TERMS_PER_STRATUM`]) and whether it was compared.
-    /// A compared stratum shows its tested risers first, by score, then its most frequent terms to
-    /// fill; one that was not compared shows its most frequent terms alone.
+    /// A compared stratum shows its tested risers first, by score, then, to fill, the terms that
+    /// grew most without passing the test (not marked rising). Never the most frequent ones: those
+    /// are the common words of the kind of item ("engineer", "remote"), in every period. A stratum
+    /// that was not compared shows none.
     fn terms(&self, vocab: &Vocabulary) -> (Vec<TermCount>, bool) {
         struct Row {
             term: String,
@@ -350,14 +354,14 @@ impl Corpus {
             let survives = stats::benjamini_hochberg(&z, FALSE_DISCOVERY_RATE);
             candidates.into_iter().zip(z).zip(survives).map(|(((term, k), z), survives)| Row { term, k, z, rising: survives && z > 0.0 }).collect()
         } else {
-            candidates.into_iter().map(|(term, k)| Row { term, k, z: 0.0, rising: false }).collect()
+            Vec::new()
         };
 
         let mut risers: Vec<&Row> = rows.iter().filter(|r| r.rising).collect();
         risers.sort_by(|a, b| b.z.total_cmp(&a.z).then_with(|| a.term.cmp(&b.term)));
         risers.truncate(MAX_TERMS_PER_STRATUM);
-        let mut level: Vec<&Row> = rows.iter().filter(|r| !r.rising && r.k[1] >= MIN_TERM_DOCS).collect();
-        level.sort_by(|a, b| b.k[1].cmp(&a.k[1]).then_with(|| a.term.cmp(&b.term)));
+        let mut level: Vec<&Row> = rows.iter().filter(|r| !r.rising && r.z > 0.0).collect();
+        level.sort_by(|a, b| b.z.total_cmp(&a.z).then_with(|| a.term.cmp(&b.term)));
         let room = MAX_TERMS_PER_STRATUM - risers.len();
         let terms = risers
             .into_iter()
@@ -564,12 +568,11 @@ mod tests {
         assert!(cloud.rising && cloud.z_centi > 0 && cloud.items == 25, "{cloud:?}");
         assert!(first.z_centi > cloud.z_centi, "by score");
 
-        // The same share on both sides is a level, not a rise.
-        let garden = feed_terms.iter().find(|t| t.term == "garden tools").expect("frequent terms fill the list");
-        assert!(!garden.rising && garden.items == 20 && garden.z_centi.abs() < 100, "{garden:?}");
-        // Risers come before what only fills the list.
-        let first_level = feed_terms.iter().position(|t| !t.rising).expect("a level term");
-        assert!(feed_terms[..first_level].iter().all(|t| t.rising) && feed_terms[first_level..].iter().all(|t| !t.rising), "{feed_terms:?}");
+        // The same share on both sides did not move: however frequent, it is not listed.
+        assert!(feed_terms.iter().all(|t| t.term != "garden tools" && t.term != "weekly notes"), "{feed_terms:?}");
+        // Risers come before what only fills the list (terms that grew without passing the test).
+        let first_fill = feed_terms.iter().position(|t| !t.rising).unwrap_or(feed_terms.len());
+        assert!(feed_terms[..first_fill].iter().all(|t| t.rising) && feed_terms[first_fill..].iter().all(|t| !t.rising && t.z_centi > 0), "{feed_terms:?}");
         assert!(feed_terms.len() <= MAX_TERMS_PER_STRATUM);
     }
 
@@ -579,10 +582,10 @@ mod tests {
         fill(&mut corpora, Stratum::Feed, Side::Baseline, 60, |i| feed(i, if i % 2 == 0 { "Edge caching." } else { "" }));
         fill(&mut corpora, Stratum::Feed, Side::Target, 60, |i| feed(i, if i % 2 == 1 { "Edge caching." } else { "" }));
         let report = corpora.report(&vocab());
-        let terms = of(&report, Stratum::Feed);
-        let caching = terms.iter().find(|t| t.term == "edge caching").expect("frequent");
-        assert_eq!((caching.items, caching.rising, caching.z_centi), (30, false, 0), "30 of 60 on both sides");
-        assert!(terms.iter().all(|t| !t.rising), "{terms:?}");
+        let candidates: HashMap<String, [u32; 2]> = corpora.corpora[Stratum::Feed as usize].candidates(&vocab()).into_iter().collect();
+        assert_eq!(candidates.get("edge caching"), Some(&[30, 30]), "30 of 60 on both sides");
+        // Counted, tested, and neither rising nor listed: it did not move.
+        assert!(of(&report, Stratum::Feed).is_empty(), "{report:?}");
     }
 
     #[test]
@@ -608,17 +611,14 @@ mod tests {
 
         // The stories were not compared at all (6.8 times the volume, and 20 documents is the minimum)...
         assert_eq!(b.not_comparable, [Stratum::HnStory]);
-        // ... so the new phrase is listed by level among them, never as a riser.
-        let stories = of(&b, Stratum::HnStory);
-        let level = stories.iter().find(|t| t.term == "event sourcing everywhere").expect("a level term");
-        assert_eq!((level.items, level.rising, level.z_centi), (136, false, 0));
-        assert!(stories.iter().all(|t| !t.rising && t.z_centi == 0));
+        // ... so none of their words is listed, not even the new phrase.
+        assert!(of(&b, Stratum::HnStory).is_empty());
         // Nothing is pooled: the stories' words are not among the postings' terms.
         assert!(of(&b, Stratum::HiringPosting).iter().all(|t| !t.term.contains("everywhere")));
     }
 
     #[test]
-    fn a_stratum_past_the_volume_ratio_or_under_the_minimum_lists_levels_only() {
+    fn a_stratum_past_the_volume_ratio_or_under_the_minimum_lists_no_term() {
         let new_term = |i: usize| feed(i, "Zero trust. ");
         // Volumes 2.5 apart: 20 against 50 documents.
         let mut uneven = Corpora::new(1, 1);
@@ -626,11 +626,7 @@ mod tests {
         fill(&mut uneven, Stratum::Feed, Side::Target, 50, new_term);
         let report = uneven.report(&vocab());
         assert_eq!(report.not_comparable, [Stratum::Feed]);
-        let terms = of(&report, Stratum::Feed);
-        assert!(!terms.is_empty() && terms.iter().all(|t| !t.rising && t.z_centi == 0), "{terms:?}");
-        let zero_trust = terms.iter().find(|t| t.term == "zero trust").expect("listed by level");
-        assert_eq!(zero_trust.items, 50);
-        assert!(terms.windows(2).all(|w| w[0].items >= w[1].items), "by level: the most frequent first: {terms:?}");
+        assert!(of(&report, Stratum::Feed).is_empty());
 
         // Exactly twice the volume is still compared.
         let mut twice = Corpora::new(1, 1);
@@ -708,15 +704,17 @@ mod tests {
         };
         fill(&mut corpora, Stratum::Feed, Side::Baseline, 25, text);
         fill(&mut corpora, Stratum::Feed, Side::Target, 25, text);
-        let report = corpora.report(&vocab());
-        let terms: Vec<&str> = of(&report, Stratum::Feed).iter().map(|t| t.term.as_str()).collect();
+        // The terms that are counted at all (the same on both sides, so none is listed as moving).
+        let feed_corpus = &corpora.corpora[Stratum::Feed as usize];
+        let counted = feed_corpus.candidates(&vocab());
+        let terms: Vec<&str> = counted.iter().map(|(term, _)| term.as_str()).collect();
 
         // A skill of the user's profile is known too: no longer a new term.
         // Unknown to the built-in list it is new (as the longest term that holds it) ...
         assert!(terms.contains(&"gleam is fun"), "unknown to the built-in list: {terms:?}");
         // ... and with it in the profile, neither it nor a term holding it is.
-        let with_profile = corpora.report(&Vocabulary::new(&["Gleam".into()]));
-        assert!(of(&with_profile, Stratum::Feed).iter().all(|t| !t.term.contains("gleam")));
+        let with_profile = feed_corpus.candidates(&Vocabulary::new(&["Gleam".into()]));
+        assert!(with_profile.iter().all(|(term, _)| !term.contains("gleam")));
         // Skills the vocabulary knows (built in, or the user's) are not new, nor is a term holding one.
         for known in ["rust", "kafka", "rust and kafka", "ruby on rails", "rails"] {
             assert!(!terms.contains(&known), "{known} is a known skill: {terms:?}");
@@ -750,13 +748,16 @@ mod tests {
     fn the_report_lists_postings_first_then_the_other_strata_in_order() {
         let mut corpora = Corpora::new(1, 1);
         for stratum in [Stratum::Other, Stratum::Feed, Stratum::HnStory, Stratum::HiringPosting, Stratum::Yc] {
-            let text = |i: usize| match stratum {
-                Stratum::HiringPosting => posting(&format!("Co{i} | Platform engineering")),
-                Stratum::Yc => company(&format!("Co{i}"), "Platform engineering", ""),
-                _ => feed_item(&format!("Item {i}"), "Platform engineering"),
+            let text = |words: &'static str| {
+                move |i: usize| match stratum {
+                    Stratum::HiringPosting => posting(&format!("Co{i} | {words}")),
+                    Stratum::Yc => company(&format!("Co{i}"), words, ""),
+                    _ => feed_item(&format!("Item {i}"), words),
+                }
             };
-            fill(&mut corpora, stratum, Side::Baseline, 25, text);
-            fill(&mut corpora, stratum, Side::Target, 25, text);
+            // New in the period, in every kind of item.
+            fill(&mut corpora, stratum, Side::Baseline, 25, text("Staff"));
+            fill(&mut corpora, stratum, Side::Target, 25, text("Platform engineering"));
         }
         let report = corpora.report(&vocab());
         let order: Vec<Stratum> = report.terms.iter().map(|t| t.stratum).collect();

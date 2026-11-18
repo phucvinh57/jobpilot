@@ -5,7 +5,8 @@
 //!
 //! Nothing is cut silently. The period's stories are read page by page until the last page, up to
 //! `hn_story_pages`; every new posting of a hiring thread is kept. What the page cap or the time
-//! budget leaves unread is counted in [`Hn::cut`].
+//! budget leaves unread of the stories is counted in [`Hn::cut`], the hiring threads not started in
+//! [`Hn::threads_left`].
 //!
 //! A story's item is the story itself (its link, or the HN thread for text posts): the title and
 //! the numbers are the text; the linked article is not fetched.
@@ -72,10 +73,13 @@ pub struct Hn {
     /// and a later run passes them back to [`collect`] so they are not downloaded again while their
     /// comment count stays the same.
     pub settled: Vec<String>,
-    /// What this run left unread, counted: period stories past the page cap or the time budget
-    /// (the hits the answer says are left, else 1), and one for each older hiring thread the time
-    /// budget kept from starting (its postings are unknown; a later run reads it).
+    /// Period stories this run left unread: past the page cap, the time budget or the last page
+    /// the API serves (the hits the answer says are left, else 1).
     pub cut: usize,
+    /// Older hiring threads the time budget kept from starting. They are not part of `cut`: their
+    /// postings are unknown, a later run reads them, and until then their months hold no postings,
+    /// which the digest reports.
+    pub threads_left: usize,
 }
 
 /// How a settled thread is remembered: its id and its comment count when it was read
@@ -106,7 +110,7 @@ pub async fn collect(ctx: &Ctx, settled: &HashSet<String>) -> Result<Hn> {
     let started = Instant::now();
     let mut items = Vec::new();
     let mut failures = Vec::new();
-    let mut cut = 0;
+    let (mut cut, mut threads_left) = (0, 0);
     match front_page(ctx).await {
         Ok(found) => items.extend(found),
         Err(e) => failures.push(e),
@@ -124,7 +128,7 @@ pub async fn collect(ctx: &Ctx, settled: &HashSet<String>) -> Result<Hn> {
         Ok(found) => {
             items.extend(found.items);
             now_settled = found.settled;
-            cut += found.cut;
+            threads_left = found.threads_left;
         }
         Err(e) => failures.push(e),
     }
@@ -132,9 +136,9 @@ pub async fn collect(ctx: &Ctx, settled: &HashSet<String>) -> Result<Hn> {
         Some(first) if items.is_empty() => Err(first),
         Some(_) => {
             tracing::warn!(kept = items.len(), "a Hacker News request failed; the other parts are kept");
-            Ok(Hn { items, settled: now_settled, cut })
+            Ok(Hn { items, settled: now_settled, cut, threads_left })
         }
-        None => Ok(Hn { items, settled: now_settled, cut }),
+        None => Ok(Hn { items, settled: now_settled, cut, threads_left }),
     }
 }
 
@@ -188,7 +192,13 @@ async fn period_stories(ctx: &Ctx, started: Instant) -> Result<(Vec<Item>, usize
         let last = page + 1 >= answer.nb_pages || answer.hits.is_empty();
         items.extend(answer.hits.into_iter().filter_map(story_item));
         if last {
-            return Ok((items, 0));
+            // The API serves only the first hits of a large result: the last page it offers is not
+            // always the end of the result.
+            let cut = total.saturating_sub(read);
+            if cut > 0 {
+                tracing::warn!(read, cut, "the period has more stories than the API serves");
+            }
+            return Ok((items, cut));
         }
     }
     let cut = total.saturating_sub(read).max(1);
@@ -230,7 +240,7 @@ fn story_item(hit: Hit) -> Option<Item> {
 /// An older thread whose [`settled_key`] is in `settled` (same id, same comment count) is not
 /// downloaded: it still takes its place in the window, its postings are already stored. The newest
 /// selected thread is always read, since it still gets new postings. [`Hn::settled`] lists the
-/// older threads read in full this run; [`Hn::cut`] counts the older threads the time budget kept
+/// older threads read in full this run; [`Hn::threads_left`] counts the older threads the time budget kept
 /// from starting.
 async fn hiring_posts(ctx: &Ctx, settled: &HashSet<String>, started: Instant) -> Result<Hn> {
     let l = ctx.limits();
@@ -254,7 +264,7 @@ async fn hiring_posts(ctx: &Ctx, settled: &HashSet<String>, started: Instant) ->
     let is_settled = |t: &Hit| key_of(t).is_some_and(|k| settled.contains(&k));
     let mut items = Vec::new();
     let mut now_settled = Vec::new();
-    let (mut read, mut skipped, mut cut, mut first_error) = (0usize, 0usize, 0usize, None);
+    let (mut read, mut skipped, mut threads_left, mut first_error) = (0usize, 0usize, 0usize, None);
     for (n, thread) in threads.iter().enumerate() {
         let newest = n == 0;
         if !newest && is_settled(thread) {
@@ -262,8 +272,8 @@ async fn hiring_posts(ctx: &Ctx, settled: &HashSet<String>, started: Instant) ->
             continue;
         }
         if !newest && started.elapsed() >= budget {
-            cut = threads[n..].iter().filter(|t| !is_settled(t)).count();
-            tracing::warn!(left = cut, "time is running out: the older hiring threads are left for a later run");
+            threads_left = threads[n..].iter().filter(|t| !is_settled(t)).count();
+            tracing::warn!(left = threads_left, "time is running out: the older hiring threads are left for a later run");
             break;
         }
         match thread_posts(ctx, thread).await {
@@ -280,10 +290,10 @@ async fn hiring_posts(ctx: &Ctx, settled: &HashSet<String>, started: Instant) ->
             }
         }
     }
-    tracing::info!(threads = threads.len(), read, skipped, postings = items.len(), cut, "hiring threads read");
+    tracing::info!(threads = threads.len(), read, skipped, postings = items.len(), threads_left, "hiring threads read");
     match first_error {
         Some(e) if read == 0 => Err(e),
-        _ => Ok(Hn { items, settled: now_settled, cut }),
+        _ => Ok(Hn { items, settled: now_settled, cut: 0, threads_left }),
     }
 }
 
@@ -490,7 +500,7 @@ mod tests {
         let two = ctx_with(&fx, &[], |l| l.hiring_threads = 2);
         let found = hiring_posts(&two, &HashSet::new(), Instant::now()).await.unwrap();
         assert_eq!(found.items.len(), 4);
-        assert_eq!(found.cut, 0, "a thread outside the window is not a cut");
+        assert_eq!(found.threads_left, 0, "a thread outside the window is not left unread");
         assert!(fx.hits_on("/hn/items/904").is_empty(), "the third newest thread is not read");
 
         // A posting that is stored is skipped; every other one is kept.
@@ -561,7 +571,7 @@ mod tests {
         let posts = hiring_posts(&spent, &HashSet::new(), Instant::now()).await.unwrap();
         assert!(!posts.items.is_empty(), "the newest thread is always read");
         assert!(fx.hits_on("/hn/items/903").is_empty(), "the older threads are left for a later run");
-        assert_eq!(posts.cut, 2, "October and September were left unread, and that is counted");
+        assert_eq!((posts.cut, posts.threads_left), (0, 2), "October and September were left unread, and that is counted");
         assert!(posts.settled.is_empty(), "a thread not read is not settled: {:?}", posts.settled);
     }
 
@@ -733,6 +743,11 @@ mod tests {
         let single = Paged::start(vec![stories_page(0, 2, 0, 0), stories_page(2, 2, 0, 0)]).await;
         let (stories, cut) = period_stories(&paged_ctx(&single, |_| {}).await, Instant::now()).await.unwrap();
         assert_eq!((stories.len(), cut, single.targets().len()), (2, 0, 1));
+
+        // The API serves only the first pages of a large result: its last page is not the end.
+        let capped = Paged::start(story_pages(3, 3, 50)).await;
+        let (stories, cut) = period_stories(&paged_ctx(&capped, |_| {}).await, Instant::now()).await.unwrap();
+        assert_eq!((stories.len(), cut), (6, 44), "50 hits, 6 served");
     }
 
     #[tokio::test]

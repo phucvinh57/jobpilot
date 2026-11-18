@@ -295,15 +295,14 @@ pub fn coverage_lines(counts: &SkillCounts) -> Vec<String> {
     counts.coverage.lines(&counts.months)
 }
 
-/// Is the coverage worth a warning, not only a line: postings that could not be read, items or
-/// threads a source left unread in the run, or a month without postings? (A kind of item that was
-/// too thin to compare is the usual case and does not count.)
+/// Is the coverage worth a warning, not only a line: do the skill counts miss postings (some that
+/// could not be read, or a month without any)? What a source left unread in the run are stories
+/// and feed entries, which the skill counts never read, and a kind of item too thin to compare is
+/// the usual case: both are said in a line, neither is a warning.
 pub fn coverage_is_partial(counts: &SkillCounts) -> bool {
     let coverage = &counts.coverage;
     counts.target_months > 0
-        && (coverage.postings_unreadable > 0
-            || coverage.left_unread_at_source.is_some_and(|n| n > 0)
-            || !coverage.months_without_postings.is_empty())
+        && (coverage.postings_unreadable > 0 || !coverage.months_without_postings.is_empty())
 }
 
 /// The kind of item a term was found in, in words. Empty for a report saved before the tests: its
@@ -1056,13 +1055,17 @@ mod tests {
             left_unread_at_source: None,
             ..complete.clone()
         })));
+        // Stories a source left unread are said in a line; the skill counts never read stories.
+        let stories_left = counts(Coverage {
+            left_unread_at_source: Some(12),
+            ..complete.clone()
+        });
+        assert!(!coverage_is_partial(&stories_left));
+        assert!(coverage_lines(&stories_left)
+            .contains(&"In this run the sources left 12 items unread.".to_string()));
         for partial in [
             Coverage {
                 postings_unreadable: 3,
-                ..complete.clone()
-            },
-            Coverage {
-                left_unread_at_source: Some(12),
                 ..complete.clone()
             },
             Coverage {

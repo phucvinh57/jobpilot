@@ -833,34 +833,47 @@ fn left_unread_at_source(s: &TrendRun) -> Option<u32> {
     (!s.outcomes.is_empty()).then(|| u32::try_from(s.outcomes.iter().map(|o| o.cut).sum::<usize>()).unwrap_or(u32::MAX))
 }
 
-/// Add every item of `period` that is not a posting to its stratum's target side, and those of the
-/// period before (that are not the period's) to the baseline side; the postings are counted from
-/// the window, not from here. Returns how many items of the period were counted: its postings, and
-/// the other items whose text could be read.
+/// Add every item of `period` that is not a posting to its stratum, and those of the period before
+/// to the baseline side; the postings are counted from the window, not from here. An item's side
+/// is decided by when it was published (when it was fetched, if it does not say): an entry of last
+/// week that a feed added today brings is last week's, and one older than both periods is on no
+/// side. Returns how many items of the period were read: its postings, and the other items whose
+/// text could be read.
 async fn add_period_items(store: &Store, period: &Period, corpora: &mut Corpora) -> Result<u32> {
     let target = period_items_all(store, period).await?;
     let in_target: HashSet<i64> = target.iter().map(|(item, _)| item.id).collect();
-    let before = period_items_all(store, &period.previous()).await?;
+    let previous = period.previous();
+    let before = period_items_all(store, &previous).await?;
+    let side_of = |item: &TrendItem| {
+        let at = item.published_at.unwrap_or(item.fetched_at);
+        let within = |p: &Period| at >= p.start() && at < p.end();
+        if within(period) {
+            Some(Side::Target)
+        } else if within(&previous) {
+            Some(Side::Baseline)
+        } else {
+            None
+        }
+    };
 
     let mut counted = target.iter().filter(|(_, stratum)| *stratum == Stratum::HiringPosting).count();
-    let work: Vec<(Side, Stratum, TrendItem)> = target
+    // `(of the period, side, stratum, item)`, each item once.
+    let work: Vec<(bool, Option<Side>, Stratum, TrendItem)> = target
         .into_iter()
-        .filter(|(_, stratum)| *stratum != Stratum::HiringPosting)
-        .map(|(item, stratum)| (Side::Target, stratum, item))
-        .chain(
-            before
-                .into_iter()
-                .filter(|(item, stratum)| *stratum != Stratum::HiringPosting && !in_target.contains(&item.id))
-                .map(|(item, stratum)| (Side::Baseline, stratum, item)),
-        )
+        .map(|(item, stratum)| (true, item, stratum))
+        .chain(before.into_iter().filter(|(item, _)| !in_target.contains(&item.id)).map(|(item, stratum)| (false, item, stratum)))
+        .filter(|(_, _, stratum)| *stratum != Stratum::HiringPosting)
+        .map(|(of_period, item, stratum)| (of_period, side_of(&item), stratum, item))
         .collect();
     let mut texts = futures::stream::iter(work)
-        .map(|(side, stratum, item)| async move { (side, stratum, try_read_text(&item).await) })
+        .map(|(of_period, side, stratum, item)| async move { (of_period, side, stratum, try_read_text(&item).await) })
         .buffered(TEXT_READS);
-    while let Some((side, stratum, text)) = texts.next().await {
+    while let Some((of_period, side, stratum, text)) = texts.next().await {
         let Some(text) = text else { continue };
-        corpora.add(stratum, side, &text);
-        if side == Side::Target {
+        if let Some(side) = side {
+            corpora.add(stratum, side, &text);
+        }
+        if of_period {
             counted += 1;
         }
     }

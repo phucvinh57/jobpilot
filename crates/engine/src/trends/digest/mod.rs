@@ -430,7 +430,7 @@ impl Coverage {
     /// the markdown, the PDF and the view) says, so they never disagree. `months` are the months of
     /// the window, oldest first. The first sentence always comes: how many hiring postings were
     /// counted, over which months. Each other fact comes only when it applies: postings that could
-    /// not be read, what the sources left unread in this run (items or threads, not postings), months
+    /// not be read, what the sources left unread in this run (stories and feed entries, not postings), months
     /// without postings, and the kinds of item that were not compared with the period before.
     pub fn lines(&self, months: &[String]) -> Vec<String> {
         let over = match (months.first(), months.last()) {
@@ -449,8 +449,8 @@ impl Coverage {
             n => lines.push(format!("{n} Hacker News items could not be read; some may have been postings.")),
         }
         match self.left_unread_at_source {
-            Some(1) => lines.push("In this run the sources left 1 item or thread unread.".to_string()),
-            Some(n) if n > 1 => lines.push(format!("In this run the sources left {n} items or threads unread.")),
+            Some(1) => lines.push("In this run the sources left 1 item unread.".to_string()),
+            Some(n) if n > 1 => lines.push(format!("In this run the sources left {n} items unread.")),
             _ => {}
         }
         // When no posting was counted at all, the first sentence has said it.

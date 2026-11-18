@@ -289,7 +289,7 @@ export function chartFixture(patch: Partial<Chart> = {}): Chart {
 export const PARTIAL_COVERAGE = [
   "Counted 2106 hiring postings over 2026-06 to 2026-11.",
   "14 Hacker News items could not be read; some may have been postings.",
-  "In this run the sources left 120 items or threads unread.",
+  "In this run the sources left 120 items unread.",
   "Not compared with the period before (too few items or too uneven): YC companies.",
 ];
 

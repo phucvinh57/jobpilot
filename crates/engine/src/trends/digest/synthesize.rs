@@ -568,7 +568,7 @@ mod tests {
             market.contains(
                 "\nCoverage of these numbers, from the app: Counted 92 hiring postings over 2026-10 to 2026-11. \
                  3 Hacker News items could not be read; some may have been postings. \
-                 In this run the sources left 12 items or threads unread. \
+                 In this run the sources left 12 items unread. \
                  Not compared with the period before (too few items or too uneven): Hacker News stories, YC companies.\n"
             ),
             "{market}"
