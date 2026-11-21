@@ -135,6 +135,8 @@ await click(byText("Light"));
 await shot("settings-light");
 ```
 
+On a headless Linux box (no display, e.g. a cloud session), wrap the command in `xvfb-run -a -s "-screen 0 1440x960x24"`. Wait about 1.5 s (`await sleep(1500)`) after opening a dialog or drawer before `shot()`: a capture mid-animation comes out translucent.
+
 Page errors, unhandled rejections and CSP violations are written to the app log (`ui script: ...`). Every interactive element has an `id` or an accessible name, so a script (or assistive technology) can reach it.
 
 For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobpilot.db` that points at a local fake OpenAI-compatible server (`/v1/chat/completions`), and apply against the local fixture form. Discovery refuses loopback hosts by design (`net::http`, `browser::guard`), and the GUI needs the extension paired in a real Chrome,, so a fake job board cannot be driven from the GUI: that path is covered by `crates/engine/tests/e2e_discovery.rs`, and the GUI check of the Jobs page (Leads and a lead drawer), Trends and Settings > Job sources uses `JOBPILOT_DEMO=1` data (it also seeds job sources and scored leads).
@@ -144,7 +146,7 @@ For an end-to-end run without real keys, seed a provider row in `<data_dir>/jobp
 - **One worktree per change** (`claude -w <name>`, in `.claude/worktrees/`). If the user explicitly requests a hotfix, work directly in the current branch without creating a new worktree.
 - **Docs-only changes skip all of that.** A change that touches only `docs/` (except `docs/REVIEW.md`) is committed on `main` and pushed directly: no worktree, no PR, no `/pre-pr`.
 - **Execute an approved plan with subagents.** Split it into independent tasks, each a `general-purpose` subagent with a self-contained brief (goal, files, steps, checks). The main session checks their results, then runs `/pre-pr`.
-- **Show the result, don't claim it.** Report the output of `scripts/check.sh`. Never use `--no-verify`.
+- **Show the result, don't claim it.** Report the output of `scripts/check.sh`. A UI change shows screenshots of each changed state in the PR description (`docs/pr-media/<topic>/`, see `/pre-pr`). Never use `--no-verify`.
 - **Finish with `/pre-pr` without asking.** Low and Medium PRs are merged by `/pre-pr` once `scripts/check.sh` and `scripts/risk.sh` pass on the PR's final commit. High PRs wait for a human.
 
 ## Rules
