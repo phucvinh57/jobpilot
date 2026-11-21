@@ -1,13 +1,26 @@
 //! The `Core` methods of "Suggest sources".
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use super::graph::{graph, SuggestState, SUGGEST_GRAPH, SUGGEST_THREAD};
+use super::queries::{build_queries_for, SuggestTerms};
 use super::SuggestDeps;
 use crate::discover::handoff;
 use crate::graph::{Outcome, ThreadStatus, WaitReason, Waiting};
 use crate::store::{Source, SourceSuggestion, SuggestionState};
 use crate::Core;
+
+/// The kv key of the terms the user last picked for "Suggest sources" (JSON of [`SuggestTerms`]).
+pub const SUGGEST_TERMS_KEY: &str = "discover.suggest.terms";
+
+/// What the "Suggest sources" dialog shows: the values the user can pick, and the ones picked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SuggestOptions {
+    /// What the preferences (or the profile's roles) offer ([`SuggestTerms::available`]).
+    pub available: SuggestTerms,
+    /// The remembered pick within `available`, or [`SuggestTerms::default_pick`] without one.
+    pub picked: SuggestTerms,
+}
 
 /// How a suggestion search ended this time.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,24 +37,82 @@ impl Core {
     /// "Suggest sources": search the web for job boards and careers pages that fit the wanted roles,
     /// check them, and store the ones with jobs as suggestions. A search paused at a challenge is
     /// continued; a failed one starts over. Long work (minutes): run it on the global runtime and
-    /// follow `core.graphs.subscribe()` (graph [`SUGGEST_GRAPH`]). `Err` (classified by
-    /// `health::classify`) when there is nothing to search for (no roles, no profile), the browser
-    /// cannot be used or the network is down.
-    pub async fn suggest_sources(&self) -> Result<SuggestOutcome> {
-        self.suggest_sources_with(SuggestDeps::live(self)?).await
+    /// follow `core.graphs.subscribe()` (graph [`SUGGEST_GRAPH`]). `terms`: the values the user
+    /// picked (kept only within what the preferences offer, and remembered for next time); `None`:
+    /// the default pick. A paused search continues with the terms it started with. `Err`
+    /// (classified by `health::classify`) when there is nothing to search for (no roles, no
+    /// profile, an empty pick), the browser cannot be used or the network is down.
+    pub async fn suggest_sources(&self, terms: Option<SuggestTerms>) -> Result<SuggestOutcome> {
+        self.suggest_sources_with(SuggestDeps::live(self)?, terms).await
     }
 
     /// [`suggest_sources`](Self::suggest_sources) with explicit [`SuggestDeps`].
-    pub async fn suggest_sources_with(&self, deps: SuggestDeps) -> Result<SuggestOutcome> {
+    pub async fn suggest_sources_with(&self, deps: SuggestDeps, terms: Option<SuggestTerms>) -> Result<SuggestOutcome> {
         match self.graphs.status(SUGGEST_THREAD)?.map(|t| t.status) {
             Some(ThreadStatus::Running) => bail!("a search for sources is running already"),
             Some(ThreadStatus::Waiting(_)) => return self.suggest_resume_with(deps).await,
             Some(ThreadStatus::Failed(_)) => self.suggest_cancel()?,
             Some(ThreadStatus::Done) | None => {}
         }
-        tracing::info!("source suggestion search started");
-        let outcome = self.graphs.run(&graph(self, deps), SUGGEST_THREAD, SuggestState::default()).await?;
+        let terms = match terms {
+            Some(terms) => {
+                // An empty pick fails here, before it is remembered (the dialog would open empty).
+                build_queries_for(&terms.within(&self.suggest_available()?))?;
+                Some(self.remember_suggest_terms(&terms)?)
+            }
+            None => None,
+        };
+        tracing::info!(picked = terms.is_some(), "source suggestion search started");
+        let start = SuggestState { terms, ..SuggestState::default() };
+        let outcome = self.graphs.run(&graph(self, deps), SUGGEST_THREAD, start).await?;
         outcome_of(outcome)
+    }
+
+    /// What the "Suggest sources" dialog offers and has picked (see [`SuggestOptions`]). A
+    /// remembered pick that cannot be read counts as none.
+    pub fn suggest_options(&self) -> Result<SuggestOptions> {
+        let available = self.suggest_available()?;
+        let picked = match self.remembered_suggest_terms()? {
+            Some(terms) => terms.within(&available),
+            None => SuggestTerms::default_pick(&available),
+        };
+        Ok(SuggestOptions { available, picked })
+    }
+
+    /// Remember the user's pick for the next "Suggest sources", without the values the preferences
+    /// no longer offer. Returns what was remembered.
+    pub fn remember_suggest_terms(&self, terms: &SuggestTerms) -> Result<SuggestTerms> {
+        let picked = terms.within(&self.suggest_available()?);
+        let json = serde_json::to_string(&picked).context("writing the picked search terms")?;
+        self.store.kv_set(SUGGEST_TERMS_KEY, &json)?;
+        tracing::info!(
+            roles = picked.roles.len(),
+            domains = picked.domains.len(),
+            skills = picked.skills.len(),
+            places = picked.places.len(),
+            remote = picked.remote,
+            "source suggestion terms remembered"
+        );
+        Ok(picked)
+    }
+
+    /// What the preferences (or, without roles, the profile) offer to search for.
+    fn suggest_available(&self) -> Result<SuggestTerms> {
+        let prefs = self.store.preferences()?;
+        let cv = self.profile()?.map(|p| p.cv);
+        Ok(SuggestTerms::available(&prefs, cv.as_ref()))
+    }
+
+    /// The remembered pick, if there is one that can be read.
+    fn remembered_suggest_terms(&self) -> Result<Option<SuggestTerms>> {
+        let Some(json) = self.store.kv_get(SUGGEST_TERMS_KEY)? else { return Ok(None) };
+        match serde_json::from_str(&json) {
+            Ok(terms) => Ok(Some(terms)),
+            Err(e) => {
+                tracing::warn!(error = %e, "the remembered source suggestion terms could not be read, ignored");
+                Ok(None)
+            }
+        }
     }
 
     /// "Continue" after the user dealt with the page the search waits at (and "Retry" after a

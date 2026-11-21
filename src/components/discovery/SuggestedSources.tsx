@@ -1,12 +1,14 @@
 // Settings > Job sources, "Suggested sources": JobPilot searches the web in the user's Chrome for job
-// boards and pages that fit their roles, checks each one, and lists those with jobs here to add or
-// dismiss. Every button here is plain: the section's main action stays where it is.
+// boards and pages that fit the roles, domains or skills they pick in a dialog, checks each one, and
+// lists those with jobs here to add or dismiss. Every button here is plain: the section's main
+// action stays where it is (the dialog's "Search" is its own screen's primary).
 
 import { Banner, Button, Caption, SectionLabel } from "@/components/ui/kit";
 
 import { useSourceSuggestions } from "@/hooks/discovery/useSourceSuggestions";
 import { suggestionLine, suggestionName } from "@/lib/discovery/suggestions";
 import type { JobSources, SourceSuggestion } from "@/types/discovery";
+import { SuggestTermsDialog } from "./SuggestTermsDialog";
 
 function SuggestionRow({
   suggestion,
@@ -62,7 +64,8 @@ export function SuggestedSources({ data }: { data: JobSources | undefined }) {
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <SectionLabel>Suggested sources</SectionLabel>
           <Caption>
-            JobPilot searches the web in your Chrome for job boards and pages that fit your roles, and checks each one.
+            JobPilot searches the web in your Chrome for job boards and pages that fit the roles, domains or skills you
+            pick, and checks each one.
           </Caption>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -120,6 +123,17 @@ export function SuggestedSources({ data }: { data: JobSources | undefined }) {
           ))}
         </ul>
       )}
+      <SuggestTermsDialog
+        open={v.dialogOpen}
+        options={v.options}
+        terms={v.terms}
+        loadError={v.optionsError}
+        onRetry={v.reloadOptions}
+        onToggle={v.toggle}
+        onToggleRemote={v.toggleRemote}
+        onClose={v.closeDialog}
+        onSearch={v.start}
+      />
       {v.foundNothing && !running && !waiting && suggestions.length === 0 && (
         <p className="text-body text-muted">No new sources found. Try again later or add one yourself.</p>
       )}

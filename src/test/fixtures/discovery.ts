@@ -10,6 +10,7 @@ import type {
   Queue,
   Source,
   SourceSuggestion,
+  SuggestOptions,
   Waiting,
 } from "@/types/discovery";
 
@@ -80,6 +81,20 @@ export function suggestions(): SourceSuggestion[] {
     { id: 12, kind: "lever", label: "Lever", name: "Demo Health", host: "jobs.lever.co", jobs: 6, matching: 2 },
     { id: 13, kind: "career_page", label: "Job page", name: "example.com", host: "example.com", jobs: 4, matching: 4 },
   ];
+}
+
+/** The "What to search for" dialog's options: the preferences' terms, the last pick = roles, places and Remote. */
+export function suggestOptions(): SuggestOptions {
+  return {
+    available: {
+      roles: ["Rust Engineer"],
+      domains: ["fintech", "climate"],
+      skills: ["Rust", "Tokio"],
+      places: ["Berlin"],
+      remote: true,
+    },
+    picked: { roles: ["Rust Engineer"], domains: [], skills: [], places: ["Berlin"], remote: true },
+  };
 }
 
 export const WAITING: Waiting = {

@@ -6,8 +6,9 @@
 //!                          `-> verify -> save -> END      (every query searched)
 //! ```
 //!
-//! - `plan`: the queries ([`build_queries`]); fails with the "no profile" problem when there is
-//!   nothing to search for.
+//! - `plan`: the queries: of the user's pick (`terms`, [`build_queries_for`]), or without one of
+//!   the preferences ([`build_queries`]); fails with the "no profile" problem (or
+//!   [`NO_TERMS`](super::queries::NO_TERMS)) when there is nothing to search for.
 //! - `search`: one query per visit, the results page rendered in a Private tab. Its new candidates
 //!   join `found` and the query index moves on; a [`ChallengeFound`] leaves the index where it is
 //!   and raises `challenge`, so `wait_human` pauses the thread and "Continue" (which clears it)
@@ -28,7 +29,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::queries::build_queries;
+use super::queries::{build_queries, build_queries_for, SuggestTerms};
 use super::results::{new_sources, Found, Known};
 use super::verify::Verified;
 use super::{refused, SuggestDeps};
@@ -60,6 +61,10 @@ const NO_SOURCE: i64 = 0;
 pub struct SuggestState {
     /// The searches to run, in order.
     pub queries: Vec<String>,
+    /// The terms the user picked for this search (already within what the preferences offer);
+    /// `None`: the default pick of the preferences.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terms: Option<SuggestTerms>,
     /// The index of the next query to search.
     pub next: usize,
     /// Candidates the searches found, new to the user, each once (with its query).
@@ -135,13 +140,19 @@ fn after_search(s: &SuggestState) -> &'static str {
     }
 }
 
-/// `plan`: the queries from the preferences (or the profile's roles).
-async fn plan(sh: Arc<Shared>, _s: SuggestState) -> Result<SuggestState> {
-    let prefs = sh.core.store.preferences()?;
-    let cv = sh.core.profile()?.map(|p| p.cv);
-    let queries = build_queries(&prefs, cv.as_ref())?;
-    tracing::info!(queries = queries.len(), "source suggestion search planned");
-    Ok(SuggestState { queries, ..SuggestState::default() })
+/// `plan`: the queries of the picked terms, or without a pick of the preferences (or the
+/// profile's roles).
+async fn plan(sh: Arc<Shared>, s: SuggestState) -> Result<SuggestState> {
+    let queries = match &s.terms {
+        Some(terms) => build_queries_for(terms)?,
+        None => {
+            let prefs = sh.core.store.preferences()?;
+            let cv = sh.core.profile()?.map(|p| p.cv);
+            build_queries(&prefs, cv.as_ref())?
+        }
+    };
+    tracing::info!(queries = queries.len(), picked = s.terms.is_some(), "source suggestion search planned");
+    Ok(SuggestState { queries, terms: s.terms, ..SuggestState::default() })
 }
 
 /// The transient source a results page is rendered for: no session, so a Private tab.

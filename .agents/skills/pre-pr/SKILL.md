@@ -20,7 +20,11 @@ There is no CI (no GitHub Actions): this skill is the review and the checks, and
 ## 2. Verify
 
 - Run `scripts/check.sh` (Rust: clippy + test; web: tsc, Biome, vitest, build; `assets/`: a Typst render), fix failures and keep its output for the PR body.
-- For a UI change, check it visually (AGENTS.md, "Check the UI visually").
+- For a UI change, check it visually (CLAUDE.md, "Check the UI visually") and keep screenshots for the PR:
+  - Drive each changed state with the dev-tools script on demo data (`JOBPILOT_DEMO=1`, throwaway `JOBPILOT_DATA_DIR`). On a headless Linux box, run it under `xvfb-run -a -s "-screen 0 1440x960x24"`.
+  - Wait about 1.5 s after opening a dialog or drawer before `shot()`: one caught mid-animation comes out translucent.
+  - Look at every shot before using it (the state it claims, nothing cut off), and drop the ones that don't show it.
+  - Save them as `docs/pr-media/<topic>/<n>-<state>.png` (1×, under about 150 KB each) and commit them with the change.
 
 ## 3. Review
 
@@ -39,6 +43,7 @@ Review with fresh context against `docs/REVIEW.md`. In a stack, review each laye
 - Never use `--no-verify`, because the pre-push hook re-runs `check.sh`.
 - Write each PR body to a scratchpad file following `.github/pull_request_template.md`:
   - **What changed:** the content, not the file list.
+  - **Screenshots:** for a UI change, each image from step 2 with a one-line caption, linked by the pushed commit's SHA (`https://github.com/<owner>/<repo>/blob/<sha>/docs/pr-media/<topic>/<name>.png?raw=true`; push first, then write or edit the body). Otherwise "No UI change".
   - **Testing:** the commands actually run and their results.
   - **Risk:** the tier and what could break.
   - **How to revert:** `git revert` is enough unless data was removed. Then say what to restore.
@@ -73,7 +78,8 @@ No CI runs on the PR, so check the exact commit that will merge, on each PR's br
 
 1. `git fetch origin main` and make sure the branch contains the latest `origin/main` (merge it in if not, then push).
 2. Run `scripts/check.sh` and `scripts/risk.sh --label <tier>` on the pushed head, with a clean `git status`, where `<tier>` is read from the PR itself: `gh pr view <pr> --json labels` must show exactly one `risk: ` label. Keep both outputs for the report (and the PR body if they changed since).
-3. On a failure, fix on the branch, push, and repeat from step 1. Stop and ask after 3 failed rounds, or when a failure is flaky or comes from the environment (missing tool, network).
+3. If a fix since the PR was opened changed the UI, retake the affected screenshots and update the body.
+4. On a failure, fix on the branch, push, and repeat from step 1. Stop and ask after 3 failed rounds, or when a failure is flaky or comes from the environment (missing tool, network).
 
 If a failure isn't caused by the PR (it fails on `main` too), fix it separately and merge `main` in.
 

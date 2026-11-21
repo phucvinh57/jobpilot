@@ -3,10 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { GraphProgress } from "@/api/events";
-import { CommandError } from "@/lib/problem";
+import { CommandError, OTHER } from "@/lib/problem";
 
 import * as api from "@/api/discovery";
-import { jobSources, SOURCE, suggestions } from "@/test/fixtures/discovery";
+import { jobSources, SOURCE, suggestOptions, suggestions } from "@/test/fixtures/discovery";
 import { renderWithToasts } from "@/test/render";
 import type { SuggestRun } from "@/types/discovery";
 import { JobSourcesSection } from "./JobSourcesSection";
@@ -25,6 +25,20 @@ vi.mock("@/api/events", () => ({
 
 const mocked = vi.mocked(api);
 
+/** Press "Suggest sources" and wait for the dialog's options. */
+async function openDialog(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "Suggest sources" }));
+  const dialog = await screen.findByRole("dialog", { name: "What to search for" });
+  await within(dialog).findByRole("button", { name: "Rust Engineer" });
+  return dialog;
+}
+
+/** Press "Suggest sources", then "Search" with the last pick. */
+async function searchWithLastPick(user: ReturnType<typeof userEvent.setup>) {
+  const dialog = await openDialog(user);
+  await user.click(within(dialog).getByRole("button", { name: "Search" }));
+}
+
 function emit(text: string) {
   act(() => {
     for (const handler of progress) {
@@ -39,6 +53,7 @@ beforeEach(() => {
   mocked.dismissSuggestion.mockResolvedValue(undefined);
   mocked.cancelSuggest.mockResolvedValue(undefined);
   mocked.openSuggestBrowser.mockResolvedValue(undefined);
+  mocked.readSuggestOptions.mockResolvedValue(suggestOptions());
 });
 
 afterEach(() => {
@@ -53,7 +68,7 @@ describe("Settings > Job sources: suggested sources", () => {
     const block = await screen.findByRole("region", { name: "Suggested sources" });
     expect(
       within(block).getByText(
-        "JobPilot searches the web in your Chrome for job boards and pages that fit your roles, and checks each one.",
+        "JobPilot searches the web in your Chrome for job boards and pages that fit the roles, domains or skills you pick, and checks each one.",
       ),
     ).toBeTruthy();
     const rows = await within(block).findAllByRole("listitem");
@@ -145,7 +160,7 @@ describe("Settings > Job sources: suggested sources", () => {
     const button = await screen.findByRole("button", { name: "Suggest sources" });
     expect(button.id).toBe("suggest-sources");
     expect(button.className).not.toContain("bg-accent");
-    await user.click(button);
+    await searchWithLastPick(user);
     expect(mocked.suggestSources).toHaveBeenCalledTimes(1);
     const running = screen.getByRole("button", { name: "Searching…" });
     expect((running as HTMLButtonElement).disabled).toBe(true);
@@ -175,17 +190,103 @@ describe("Settings > Job sources: suggested sources", () => {
     mocked.suggestSources.mockResolvedValue({ suggestions: [], waiting: false });
     renderWithToasts(<JobSourcesSection />);
     expect(screen.queryByText(/No new sources found/)).toBeNull();
-    await user.click(await screen.findByRole("button", { name: "Suggest sources" }));
+    await searchWithLastPick(user);
     expect(await screen.findByText("No new sources found. Try again later or add one yourself.")).toBeTruthy();
   });
 
   it("reports a search that failed as a toast with a Retry", async () => {
     const user = userEvent.setup();
-    mocked.suggestSources.mockRejectedValue(new CommandError("network is unreachable"));
+    mocked.suggestSources.mockRejectedValue(
+      new CommandError("network is unreachable", { ...OTHER, kind: "network", retryable: true }),
+    );
     renderWithToasts(<JobSourcesSection />);
-    await user.click(await screen.findByRole("button", { name: "Suggest sources" }));
+    await searchWithLastPick(user);
     const toast = await screen.findByRole("alert", { name: "The search for sources failed" });
     expect(within(toast).getByText("network is unreachable")).toBeTruthy();
+    // Retry searches again with the same terms, without the dialog.
+    await user.click(within(toast).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(mocked.suggestSources).toHaveBeenCalledTimes(2));
+    expect(mocked.suggestSources.mock.calls[1]).toEqual(mocked.suggestSources.mock.calls[0]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens What to search for with the last pick pressed", async () => {
+    const user = userEvent.setup();
+    renderWithToasts(<JobSourcesSection />);
+    const dialog = await openDialog(user);
+    expect(mocked.readSuggestOptions).toHaveBeenCalledTimes(1);
+    expect(mocked.suggestSources).not.toHaveBeenCalled();
+    const pressed = (name: string) => within(dialog).getByRole("button", { name }).getAttribute("aria-pressed");
+    expect(pressed("Rust Engineer")).toBe("true");
+    expect(pressed("fintech")).toBe("false");
+    expect(pressed("Tokio")).toBe("false");
+    expect(pressed("Berlin")).toBe("true");
+    expect(within(dialog).getByRole("button", { name: "Rust Engineer" }).id).toBe("suggest-term-roles-0");
+    expect(within(dialog).getByRole("button", { name: "climate" }).id).toBe("suggest-term-domains-1");
+    const remote = within(dialog).getByRole("checkbox", { name: "Remote" }) as HTMLInputElement;
+    expect(remote.id).toBe("suggest-term-remote");
+    expect(remote.checked).toBe(true);
+    expect(within(dialog).getByText("1 term picked: up to 8 searches.")).toBeTruthy();
+    const search = within(dialog).getByRole("button", { name: "Search" });
+    expect(search.id).toBe("suggest-terms-search");
+    expect(search.className).toContain("bg-accent");
+  });
+
+  it("searches with the terms picked in the dialog and closes it", async () => {
+    const user = userEvent.setup();
+    mocked.suggestSources.mockResolvedValue({ suggestions: suggestions(), waiting: false });
+    renderWithToasts(<JobSourcesSection />);
+    const dialog = await openDialog(user);
+    await user.click(within(dialog).getByRole("button", { name: "Rust Engineer" }));
+    await user.click(within(dialog).getByRole("button", { name: "fintech" }));
+    expect(within(dialog).getByRole("button", { name: "fintech" }).getAttribute("aria-pressed")).toBe("true");
+    await user.click(within(dialog).getByRole("button", { name: "Search" }));
+    expect(mocked.suggestSources).toHaveBeenCalledWith({
+      roles: [],
+      domains: ["fintech"],
+      skills: [],
+      places: ["Berlin"],
+      remote: true,
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("keeps Search disabled while no role, domain or skill is picked", async () => {
+    const user = userEvent.setup();
+    renderWithToasts(<JobSourcesSection />);
+    const dialog = await openDialog(user);
+    await user.click(within(dialog).getByRole("button", { name: "Rust Engineer" }));
+    const search = within(dialog).getByRole("button", { name: "Search" }) as HTMLButtonElement;
+    expect(search.disabled).toBe(true);
+    expect(within(dialog).getByText("Pick at least one role, domain or skill.")).toBeTruthy();
+    await user.click(search);
+    expect(mocked.suggestSources).not.toHaveBeenCalled();
+  });
+
+  it("says when a list of the preferences is empty", async () => {
+    const user = userEvent.setup();
+    const options = suggestOptions();
+    mocked.readSuggestOptions.mockResolvedValue({
+      ...options,
+      available: { ...options.available, domains: [], remote: false },
+    });
+    renderWithToasts(<JobSourcesSection />);
+    const dialog = await openDialog(user);
+    expect(
+      within(dialog).getByText("No domains in your preferences yet: add them in Profile > Preferences."),
+    ).toBeTruthy();
+    expect(within(dialog).queryByRole("checkbox", { name: "Remote" })).toBeNull();
+  });
+
+  it("closes the dialog on Cancel without searching", async () => {
+    const user = userEvent.setup();
+    renderWithToasts(<JobSourcesSection />);
+    const dialog = await openDialog(user);
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    expect(cancel.id).toBe("suggest-terms-cancel");
+    await user.click(cancel);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(mocked.suggestSources).not.toHaveBeenCalled();
   });
 
   it("keeps Suggest sources disabled for a search started before the screen was shown", async () => {

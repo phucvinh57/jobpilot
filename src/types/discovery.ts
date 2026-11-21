@@ -207,6 +207,23 @@ export interface SourceSuggestion {
   matching: number;
 }
 
+/** The preference terms a "Suggest sources" search uses, picked value by value. Each picked role,
+ *  domain or skill is searched on its own, combined with up to 2 places (Remote counts as one). */
+export interface SuggestTerms {
+  roles: string[];
+  domains: string[];
+  skills: string[];
+  places: string[];
+  remote: boolean;
+}
+
+/** What the "What to search for" dialog offers: every term in the preferences (`available`; its
+ *  `remote` says whether Remote can be picked) and the last pick, preselected (`picked`). */
+export interface SuggestOptions {
+  available: SuggestTerms;
+  picked: SuggestTerms;
+}
+
 /** How "Suggest sources" (or its "Continue") ended this time. */
 export interface SuggestRun {
   suggestions: SourceSuggestion[];
