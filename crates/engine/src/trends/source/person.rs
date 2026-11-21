@@ -6,8 +6,11 @@
 //! 1. **Stories that name them.** The Hacker News search (Algolia) for stories whose title carries
 //!    the person's name, newest first, from a month before the period to its end. The story's link
 //!    is the interview, the talk or the article; its page is fetched so the digest reads the words,
-//!    not only the headline. A page that cannot be read (a video, a paywall) leaves an item with
-//!    the title alone: the link is kept, and the page is not asked for again. A run fetches at most
+//!    not only the headline. A YouTube video is read by its transcript, in the user's Chrome
+//!    ([`youtube`]); one that cannot be read now (no browser connected, a consent or robot check)
+//!    is left for the next run and counted as cut. A page that cannot be read (a paywall, a video
+//!    without a transcript) leaves an item with the title alone: the link is kept, and the page
+//!    is not asked for again. A run fetches at most
 //!    `person_fetches` pages and stops starting them once [`FETCH_SHARE`] of the source's time is
 //!    spent: the stories it did not get to are left for the next run and counted as cut, like the
 //!    hits past the search's first page. Nothing is cut silently.
@@ -26,7 +29,7 @@ use anyhow::Result;
 use chrono::Duration;
 
 use super::page::{self, fetch_text, make_item};
-use super::{hackernews, normalize_url, rss, take_new, Ctx, Item};
+use super::{hackernews, normalize_url, rss, take_new, youtube, Ctx, Item};
 use crate::trends::http::{public_http_url, FetchError};
 
 /// Stories this long before the period start are still read (an interview from last month is
@@ -107,11 +110,28 @@ async fn stories(ctx: &Ctx, name: &str, started: Instant) -> Result<(Vec<Item>, 
                 cut += 1;
                 continue;
             }
-            fetched += 1;
-            match fetch_text(ctx, &item.url).await {
-                Ok(page) => item = make_item(item.url, Some(&item.title), item.published_at, page.text),
-                // The headline and the link are still worth keeping.
-                Err(_) => tracing::debug!("a story's page could not be read; its title is kept"),
+            if let Some(id) = youtube::video_id(&item.url) {
+                match youtube::transcript(ctx, &id, started).await {
+                    youtube::Read::Text(said) => {
+                        fetched += 1;
+                        item = make_item(item.url, Some(&item.title), item.published_at, said);
+                    }
+                    // The headline and the link are what there is.
+                    youtube::Read::NoTranscript => fetched += 1,
+                    // Not stored with its title alone: the next run reads it. It took no fetch
+                    // from the pages after it.
+                    youtube::Read::Later => {
+                        cut += 1;
+                        continue;
+                    }
+                }
+            } else {
+                fetched += 1;
+                match fetch_text(ctx, &item.url).await {
+                    Ok(page) => item = make_item(item.url, Some(&item.title), item.published_at, page.text),
+                    // The headline and the link are still worth keeping.
+                    Err(_) => tracing::debug!("a story's page could not be read; its title is kept"),
+                }
             }
         }
         items.push(item);
@@ -173,6 +193,27 @@ mod tests {
         assert!(query.contains("points%3E%3D10"), "{query}");
         let paths: Vec<String> = fx.hits().iter().map(|h| h.path().to_string()).collect();
         assert_eq!(paths, ["/hn/search_by_date", "/interview", "/video"], "the HN thread and the known page are not fetched");
+    }
+
+    #[tokio::test]
+    async fn a_video_is_never_fetched_over_http_and_waits_for_the_browser() {
+        let fx = Fixtures::start().await;
+        let hits = json!({"hits": [
+            hit("1", "Ada Example interview (video)", Some("https://www.youtube.com/watch?v=cdiD-9MMpb0".into())),
+            hit("2", "Ask HN: what did Ada Example mean?", None),
+        ]});
+        fx.route("/hn/search_by_date", 200, "application/json", hits.to_string());
+        let mut c = ctx(&fx, &[]);
+        let mut config = (*c.config).clone();
+        config.limits.allow_private_hosts = false;
+        c.config = std::sync::Arc::new(config);
+        c.http = crate::trends::http::Http::new(&crate::trends::config::CollectLimits { host_delay: std::time::Duration::ZERO, allow_private_hosts: true, ..Default::default() }.http()).unwrap();
+
+        // No browser: the video is not stored with its title alone, so a later run reads it.
+        let (items, cut) = collect(&c, "Ada Example", "").await.unwrap();
+        assert_eq!(items.iter().map(|i| i.url.as_str()).collect::<Vec<_>>(), ["https://news.ycombinator.com/item?id=2"]);
+        assert_eq!(cut, 1);
+        assert_eq!(fx.hits().iter().map(|h| h.path().to_string()).collect::<Vec<_>>(), ["/hn/search_by_date"]);
     }
 
     #[tokio::test]

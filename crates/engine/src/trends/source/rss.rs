@@ -12,7 +12,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 
 use super::page::{fetch_text, make_item};
-use super::{normalize_url, Ctx, Item};
+use super::{normalize_url, youtube, Ctx, Item};
 use crate::trends::http::public_http_url;
 use crate::trends::text::{cap, decode_entities, html_to_text, parse_date};
 
@@ -179,6 +179,7 @@ pub fn parse_feed(xml: &str) -> Result<Vec<Entry>> {
 /// title both turn out empty is not an item, so the count can be one or two high.
 pub async fn collect(ctx: &Ctx, feed_url: &str) -> Result<(Vec<Item>, usize)> {
     let l = ctx.limits();
+    let started = std::time::Instant::now();
     let resp = ctx.http.get(feed_url, &[("Accept", ACCEPT)]).await?;
     let base = url::Url::parse(&resp.url)?;
     let mut entries = parse_feed(&resp.text())?;
@@ -204,12 +205,29 @@ pub async fn collect(ctx: &Ctx, feed_url: &str) -> Result<(Vec<Item>, usize)> {
             continue;
         }
         let mut body = html_to_text(&entry.body);
-        if body.chars().count() < TEASER_CHARS && fetched < l.article_fetches && public_http_url(&url, l.allow_private_hosts).is_ok() {
-            fetched += 1;
-            match fetch_text(ctx, &url).await {
-                Ok(page) => body = page.text,
-                // The teaser is still a usable item.
-                Err(_) => tracing::debug!("a feed entry's page could not be read; the feed's own text is kept"),
+        if body.chars().count() < TEASER_CHARS && public_http_url(&url, l.allow_private_hosts).is_ok() {
+            if let Some(id) = youtube::video_id(&url) {
+                // A video is never stored with its teaser: past the cap, or when it cannot be
+                // read now, the next run reads it.
+                let read = if fetched < l.article_fetches { youtube::transcript(ctx, &id, started).await } else { youtube::Read::Later };
+                match read {
+                    youtube::Read::Text(said) => {
+                        fetched += 1;
+                        body = said;
+                    }
+                    youtube::Read::NoTranscript => fetched += 1,
+                    youtube::Read::Later => {
+                        cut += 1;
+                        continue;
+                    }
+                }
+            } else if fetched < l.article_fetches {
+                fetched += 1;
+                match fetch_text(ctx, &url).await {
+                    Ok(page) => body = page.text,
+                    // The teaser is still a usable item.
+                    Err(_) => tracing::debug!("a feed entry's page could not be read; the feed's own text is kept"),
+                }
             }
         }
         if body.is_empty() && entry.title.is_empty() {

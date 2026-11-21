@@ -26,6 +26,7 @@ pub(super) fn config(fx: &Fixtures) -> TrendConfig {
         endpoints: Endpoints {
             hackernews: format!("{}/hn", fx.base()),
             yc: format!("{}/yc", fx.base()),
+            youtube: format!("{}/yt", fx.base()),
         },
         limits: CollectLimits {
             host_delay: Duration::ZERO,

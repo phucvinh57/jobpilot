@@ -170,7 +170,7 @@ impl Core {
         config: TrendConfig,
         digest: DigestConfig,
     ) -> Result<Outcome<TrendRun>> {
-        let graph = graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config, self.with_profile(digest))?;
+        let graph = graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config, self.with_profile(digest), Some(self.browser()))?;
         self.graphs.resume(&graph, &thread_id(&period), |s| s.challenge = None).await
     }
 }

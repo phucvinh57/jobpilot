@@ -99,6 +99,7 @@ pub fn ctx(fx: &Fixtures, known: &[&str]) -> Ctx {
         endpoints: Endpoints {
             hackernews: format!("{}/hn", fx.base()),
             yc: format!("{}/yc", fx.base()),
+            youtube: format!("{}/yt", fx.base()),
         },
         limits,
     };
@@ -107,5 +108,6 @@ pub fn ctx(fx: &Fixtures, known: &[&str]) -> Ctx {
         config: Arc::new(config),
         known: Arc::new(known.iter().map(|s| s.to_string()).collect::<HashSet<_>>()),
         period: Period::parse("2026-W46").expect("period"),
+        videos: None,
     }
 }

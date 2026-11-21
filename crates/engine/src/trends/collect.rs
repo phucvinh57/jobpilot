@@ -29,7 +29,9 @@
 //!   meets a login or bot wall sets `challenge`; the items of the other sources are stored first,
 //!   then the thread pauses until the user continues
 //!   ([`Core::resume_trends_collection`](crate::Core)). Only the `page` adapter can detect one,
-//!   by status code ([`detect_challenge`]); trends never opens a browser.
+//!   by status code ([`detect_challenge`]). The one thing read in a browser is a video's
+//!   transcript (`source::youtube`): a wall there never pauses the run, the video is left for a
+//!   later one.
 //!
 //! # The digest
 //!
@@ -53,8 +55,10 @@ use super::config::TrendConfig;
 use super::digest::{self, DigestConfig, DigestEnv, DigestState};
 use super::http::{FetchError, Http};
 use super::period::Period;
+use super::source::youtube::Videos;
 use super::source::{hackernews, page, person, rss, yc, Ctx, Item, SourceKind};
 use super::text::truncate;
+use crate::browser::Bridge;
 use crate::graph::nodes::{self, Challenge, ChallengeKind, Challenged};
 use crate::graph::{GraphDef, END, START};
 use crate::redact::redact;
@@ -199,11 +203,12 @@ struct Env {
     paths: Paths,
     config: Arc<TrendConfig>,
     http: Http,
+    videos: Option<Videos>,
 }
 
 impl Env {
     fn ctx(&self, known: &Arc<HashSet<String>>, period: Period) -> Ctx {
-        Ctx { http: self.http.clone(), config: self.config.clone(), known: known.clone(), period }
+        Ctx { http: self.http.clone(), config: self.config.clone(), known: known.clone(), period, videos: self.videos.clone() }
     }
 }
 
@@ -214,11 +219,12 @@ pub fn graph(
     paths: Paths,
     config: TrendConfig,
     digest: DigestConfig,
+    browser: Option<Bridge>,
 ) -> Result<GraphDef<TrendRun>> {
     let http = Http::new(&config.limits.http())?;
     let collector_timeout = config.limits.collector_budget + NODE_MARGIN;
     let digest_env = Arc::new(DigestEnv { store: store.clone(), secrets, config: digest });
-    let env = Arc::new(Env { store, paths, config: Arc::new(config), http });
+    let env = Arc::new(Env { store, paths, config: Arc::new(config), http, videos: browser.map(Videos::new) });
     let mut graph = GraphDef::new(GRAPH).append("items").append("outcomes").append("hn_settled").node("plan", {
         let env = env.clone();
         move |s| plan(env.clone(), s)

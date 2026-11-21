@@ -59,7 +59,7 @@ If you installed Typst to a custom location, set `$env:JOBPILOT_TYPST` to the fu
 - **Prepare CV** turns a lead into an application with a CV for that posting. Nothing is written automatically. **Dismiss** removes a lead (optionally the whole company).
 - **When a site stops the search** (login, captcha, block page), JobPilot never tries to get past it: the source pauses, you get a notification, **Open browser** shows the page in a tab of your Chrome so you can deal with it, then **Continue** or **Skip**. Other sources keep going.
 - **Preferences** (Profile > Preferences): a chat that asks what you want and saves it; every field can also be edited directly.
-- **Trends**: a digest of market signals from sources you add, every statement linked to its source. Follow people (a founder, a CEO) to read what they say in interviews and talks: the report's Outlook section quotes them and links each conversation.
+- **Trends**: a digest of market signals from sources you add, every statement linked to its source. Follow people (a founder, a CEO) to read what they say in interviews and talks: the report's Outlook section quotes them and links each conversation. YouTube interviews are read by their transcript in a private tab of your Chrome (the extension must be connected).
 
 ## Package
 

@@ -199,7 +199,7 @@ impl Core {
         digest: DigestConfig,
         with_digest: bool,
     ) -> Result<Outcome<TrendRun>> {
-        let graph = collect::graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config, self.with_profile(digest))?;
+        let graph = collect::graph(self.store.clone(), self.secrets.clone(), self.paths.clone(), config, self.with_profile(digest), Some(self.browser()))?;
         let mut input = TrendRun::new(period);
         input.digest.enabled = with_digest;
         self.start_trends_thread(&graph, &thread_id(&period), input).await

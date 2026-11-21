@@ -87,7 +87,7 @@ fn challenge_text(kind: ChallengeKind) -> &'static str {
 }
 
 /// Closes the tab when dropped (a render whose future is dropped half way leaves no tab behind).
-struct CloseOnDrop(Tab);
+pub(super) struct CloseOnDrop(pub(super) Tab);
 
 impl Drop for CloseOnDrop {
     fn drop(&mut self) {
