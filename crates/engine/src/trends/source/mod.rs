@@ -5,6 +5,7 @@
 
 pub mod hackernews;
 pub mod page;
+pub mod person;
 pub mod rss;
 pub mod yc;
 
@@ -29,10 +30,13 @@ pub enum SourceKind {
     Rss,
     /// A single page or PDF at `url`, read like a job description.
     Page,
+    /// A person the user follows (`name`): Hacker News stories that name them, with the linked
+    /// interview, talk or article read, and, when `url` is set, a feed or page of their own.
+    Person,
 }
 
 impl SourceKind {
-    pub const ALL: [SourceKind; 4] = [SourceKind::HackerNews, SourceKind::Yc, SourceKind::Rss, SourceKind::Page];
+    pub const ALL: [SourceKind; 5] = [SourceKind::HackerNews, SourceKind::Yc, SourceKind::Rss, SourceKind::Page, SourceKind::Person];
 
     /// As stored in `sources.kind`.
     pub fn as_str(self) -> &'static str {
@@ -41,6 +45,7 @@ impl SourceKind {
             SourceKind::Yc => "yc",
             SourceKind::Rss => "rss",
             SourceKind::Page => "page",
+            SourceKind::Person => "person",
         }
     }
 
@@ -55,12 +60,18 @@ impl SourceKind {
             SourceKind::Yc => "YC companies",
             SourceKind::Rss => "RSS / Atom feed",
             SourceKind::Page => "Web page",
+            SourceKind::Person => "Person to follow",
         }
     }
 
     /// Whether the user gives an address (feeds and pages) or the adapter knows where to look.
     pub fn needs_url(self) -> bool {
         matches!(self, SourceKind::Rss | SourceKind::Page)
+    }
+
+    /// Whether the user names who to follow (a person; an address of their own is optional).
+    pub fn needs_name(self) -> bool {
+        matches!(self, SourceKind::Person)
     }
 }
 

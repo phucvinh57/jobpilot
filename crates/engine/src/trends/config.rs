@@ -60,6 +60,13 @@ pub struct CollectLimits {
     pub yc_batches: usize,
     /// Feed entries per run whose page is fetched because the feed carries only a teaser.
     pub article_fetches: usize,
+    /// Stories naming a followed person asked for per run (one page of the Algolia search, newest
+    /// first, `points >= person_min_points`).
+    pub person_stories: usize,
+    pub person_min_points: u32,
+    /// Stories per person and run whose linked page (the interview, talk or article) is fetched;
+    /// the stories past it are kept with their title only.
+    pub person_fetches: usize,
     /// One source (a feed, an API) may take this long; past it the source is left out of the run.
     /// Hacker News is the slowest: up to `hn_story_pages` + 2 + `hiring_threads_for` requests one
     /// `host_delay` apart, and a whole hiring thread is a few megabytes. It stops starting pages and
@@ -88,6 +95,9 @@ impl Default for CollectLimits {
             hiring_threads: 6,
             yc_batches: 2,
             article_fetches: 20,
+            person_stories: 30,
+            person_min_points: 10,
+            person_fetches: 12,
             source_timeout: Duration::from_secs(180),
             collector_budget: Duration::from_secs(240),
             allow_private_hosts: false,

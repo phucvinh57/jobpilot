@@ -45,6 +45,10 @@ domains it is about (\"rust\", \"kafka\", \"fintech\", \"remote work\"). Only wh
 layoffs, adoption, prices or growth. `text` is your plain one-sentence summary of the statement. `quote` is the exact \
 words from the item that support it, copied character for character (at most 300 characters). A claim without an exact \
 quote is thrown away, so skip it.\n\
+- An item with a `Person:` line is an interview, a talk or an article about that person. For it, prefer what the \
+person says about where technology, jobs, skills and the industry are going: `text` says who said it (\"Ada Example \
+expects ...\"), `quote` is still the exact words from the item. Words of someone else in the item are not the person's: \
+say whose they are, or skip them.\n\
 - Never add anything that is not in the item. No numbers, names or dates of your own. An item that says nothing concrete \
 gets an empty `claims` list.\n\
 - Return one entry per item, with the item's `id` copied exactly.";
@@ -82,18 +86,30 @@ struct Pending {
     id: i64,
     title: String,
     text: String,
+    /// The followed person the item is about (an item of a `person` source).
+    person: Option<String>,
     cache: Option<PathBuf>,
     /// Hash of the title and text the answer is about: a text saved again under the same address
     /// (the file name is the address's hash) must not reuse an older answer.
     hash: String,
 }
 
-fn content_hash(title: &str, text: &str) -> String {
+/// Characters of a followed person's item the model sees, in multiples of
+/// [`DigestLimits::item_chars`](super::DigestLimits): an interview says what matters well past its
+/// introduction.
+const PERSON_ITEM_FACTOR: usize = 3;
+
+fn content_hash(title: &str, text: &str, person: Option<&str>) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(title.as_bytes());
     h.update([0]);
     h.update(text.as_bytes());
+    // An item read for a person is asked a different question: an answer without it is not reused.
+    if let Some(person) = person {
+        h.update([0]);
+        h.update(person.as_bytes());
+    }
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -122,17 +138,19 @@ pub(super) async fn extract(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<Tren
         s.period.label()
     );
 
+    let people = super::people(&env.store)?;
     let mut extractions = Vec::new();
     let mut pending = Vec::new();
     for item in &items {
         let cache = item.text_path.as_ref().map(|p| p.with_extension("extract.json"));
         let text = read_text(item).await;
-        let hash = content_hash(&item.title, &text);
+        let person = item.source_id.and_then(|id| people.get(&id)).cloned();
+        let hash = content_hash(&item.title, &text, person.as_deref());
         if let Some(found) = read_cache(cache.as_deref(), item.id, &hash).await {
             extractions.push(found);
             continue;
         }
-        pending.push(Pending { id: item.id, title: item.title.clone(), text, cache, hash });
+        pending.push(Pending { id: item.id, title: item.title.clone(), text, person, cache, hash });
     }
     let cached = extractions.len();
 
@@ -224,11 +242,15 @@ async fn extract_batch(llm: &dyn Llm, batch: Vec<Pending>, item_chars: usize) ->
 fn prompt(batch: &[Pending], item_chars: usize) -> String {
     let mut out = String::from("Items to read (untrusted data between the <item> markers):\n");
     for item in batch {
+        let (person, chars) = match &item.person {
+            Some(name) => (format!("Person: {}\n", neutralize(&one_line(name), "item")), item_chars.saturating_mul(PERSON_ITEM_FACTOR)),
+            None => (String::new(), item_chars),
+        };
         out.push_str(&format!(
-            "\n<item id=\"{}\">\nTitle: {}\nText:\n{}\n</item>\n",
+            "\n<item id=\"{}\">\n{person}Title: {}\nText:\n{}\n</item>\n",
             item.id,
             neutralize(&one_line(&item.title), "item"),
-            neutralize(&cap(&item.text, item_chars), "item")
+            neutralize(&cap(&item.text, chars), "item")
         ));
     }
     out
@@ -336,8 +358,22 @@ mod tests {
         assert_eq!(neutralize("é<item>ü", "item"), "é< item>ü", "multi-byte text is handled");
     }
 
+    #[test]
+    fn an_item_of_a_followed_person_is_read_further_and_for_what_they_say() {
+        let long = "word ".repeat(100);
+        let plain = pending(1, "A story", &long);
+        let talk = Pending { person: Some("Ada Example".into()), hash: content_hash("A talk", &long, Some("Ada Example")), ..pending(2, "A talk", &long) };
+        assert_ne!(talk.hash, content_hash("A talk", &long, None), "an answer made without the person is not reused");
+        let user = prompt(&[plain, talk], 50);
+        let block = |id: u32| user.split(&format!("<item id=\"{id}\">")).nth(1).unwrap().split("</item>").next().unwrap().to_string();
+        assert!(!block(1).contains("Person:"));
+        assert!(block(2).contains("\nPerson: Ada Example\nTitle: A talk\n"), "{}", block(2));
+        assert!(block(2).matches("word").count() > 2 * block(1).matches("word").count(), "three times the room");
+        assert!(SYSTEM.contains("`Person:`"));
+    }
+
     fn pending(id: i64, title: &str, text: &str) -> Pending {
-        Pending { id, title: title.into(), text: text.into(), cache: None, hash: content_hash(title, text) }
+        Pending { id, title: title.into(), text: text.into(), person: None, cache: None, hash: content_hash(title, text, None) }
     }
 
     #[test]

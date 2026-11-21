@@ -107,6 +107,7 @@ pub fn overview(core: &Core, selected: Option<i64>, cadence: Cadence) -> Result<
                 kind: kind.as_str(),
                 label: kind.label(),
                 needs_url: kind.needs_url(),
+                needs_name: kind.needs_name(),
                 added: sources.iter().any(|s| s.kind == kind.as_str()),
             })
             .collect(),
@@ -736,11 +737,13 @@ impl SourceDto {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceKindDto {
-    /// `hackernews` / `yc` / `rss` / `page`.
+    /// `hackernews` / `yc` / `rss` / `page` / `person`.
     pub kind: &'static str,
     pub label: &'static str,
     /// A feed or page needs an address; Hacker News and YC do not.
     pub needs_url: bool,
+    /// A person to follow needs a name; an address of their own is optional.
+    pub needs_name: bool,
     /// Already a source (Hacker News and YC can be added once).
     pub added: bool,
 }
@@ -1374,12 +1377,16 @@ mod tests {
         let empty = overview(&core, None, Cadence::Weekly).expect("an empty overview");
         assert!(empty.digest.is_none() && empty.chart.is_none() && empty.history.is_empty());
         assert!(empty.summary.starts_with("No digest yet"));
-        assert_eq!(empty.source_kinds.len(), 4);
+        assert_eq!(empty.source_kinds.len(), 5);
         assert!(empty.source_kinds.iter().all(|k| !k.added));
 
         demo::seed_demo(&core).expect("the demo data");
         let seen = overview(&core, None, Cadence::Weekly).expect("an overview");
-        assert_eq!(seen.sources.len(), 4);
+        assert_eq!(seen.sources.len(), 5);
+        assert!(
+            seen.source_kinds.iter().any(|k| k.kind == "person" && k.needs_name && !k.needs_url),
+            "a person to follow is added by name"
+        );
         assert!(seen
             .source_kinds
             .iter()
@@ -1405,7 +1412,9 @@ mod tests {
             panic!("the demo digest has data")
         };
         assert_eq!(dropped, 1);
-        assert_eq!(sections.len(), 7, "every section has a point");
+        assert_eq!(sections.len(), 8, "every section has a point");
+        let outlook = sections.iter().find(|s| s.key == "outlook").expect("the demo follows a person");
+        assert_eq!(outlook.points.len(), 1);
         assert!(!uncatalogued.is_empty());
         let gap = sections
             .iter()

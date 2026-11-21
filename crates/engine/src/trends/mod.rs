@@ -1,10 +1,12 @@
-//! Market trends. Collection: sources the user adds (Hacker News, the YC directory, feeds, pages),
+//! Market trends. Collection: sources the user adds (Hacker News, the YC directory, feeds, pages,
+//! people to follow),
 //! collected into `trend_items` by the `trends` graph ([`collect`]). The digest ([`digest`]): what the items say, with skill counts
 //! and checked citations, saved as a report.
 //!
 //! ```text
 //! core.add_trend_source(SourceKind::HackerNews, "", "")?;
 //! core.add_trend_source(SourceKind::Rss, "Eng blog", "https://blog.example.com/feed.xml")?;
+//! core.add_trend_source(SourceKind::Person, "Jensen Huang", "")?;      // interviews and talks
 //! let outcome = core.collect_trends(Period::current_week()).await?; // Outcome<TrendRun>
 //! let outcome = core.collect_trends_and_digest(Period::current_week()).await?; // and the digest
 //! let latest = core.latest_trend_digest()?;                         // Option<Digest>
@@ -54,6 +56,9 @@ use crate::graph::Outcome;
 use crate::store::{NewSource, Source, SourcePurpose};
 use crate::{Core, Paths};
 
+/// Longest name of a person to follow.
+pub const MAX_PERSON_NAME_CHARS: usize = 80;
+
 impl Paths {
     /// `trends/`: the text of collected items, one `<hash of the URL>.txt` each.
     pub fn trends_dir(&self) -> PathBuf {
@@ -70,15 +75,33 @@ impl Core {
     }
 
     /// Add a trend source. Hacker News and YC need no address (`url` is ignored); a feed or page
-    /// needs an http(s) one. An empty `name` becomes the kind's label or the address's host. Adding
-    /// what is already there is an error.
+    /// needs an http(s) one. An empty `name` becomes the kind's label or the address's host. A
+    /// person to follow needs a name (one line, at most [`MAX_PERSON_NAME_CHARS`] characters); an
+    /// address of their own (a feed or a page of their interviews) is optional. Adding what is
+    /// already there is an error.
     pub fn add_trend_source(&self, kind: SourceKind, name: &str, url: &str) -> Result<Source> {
-        let url = if kind.needs_url() {
-            source::normalize_url(url).with_context(|| format!("{} needs an http(s) address", kind.label()))?
+        let url = if kind.needs_url() || (kind.needs_name() && !url.trim().is_empty()) {
+            source::normalize_url(url).with_context(|| {
+                if kind.needs_name() {
+                    "the address of their interviews must be an http(s) address (or leave it empty)".to_string()
+                } else {
+                    format!("{} needs an http(s) address", kind.label())
+                }
+            })?
         } else {
             String::new()
         };
         let existing = self.trend_sources()?;
+        if kind.needs_name() {
+            let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+            ensure!(!name.is_empty(), "type the name of the person to follow");
+            ensure!(name.chars().count() <= MAX_PERSON_NAME_CHARS, "that name is too long (at most {MAX_PERSON_NAME_CHARS} characters)");
+            ensure!(
+                !existing.iter().any(|s| s.kind == kind.as_str() && s.name.to_lowercase() == name.to_lowercase()),
+                "you already follow {name}"
+            );
+            return self.store.add_source(&NewSource { kind: kind.as_str().into(), name, url, purpose: SourcePurpose::Trends, session_id: None });
+        }
         ensure!(
             !existing.iter().any(|s| s.kind == kind.as_str() && s.url == url),
             "{} is already a trend source",

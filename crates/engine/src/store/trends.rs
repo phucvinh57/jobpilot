@@ -104,6 +104,32 @@ impl Store {
         id.map(|id| self.get_trend_item(id)?.context("trend item vanished after insert")).transpose()
     }
 
+    /// Hand the stored item at `new.url` to the source of a followed person: its source, and the
+    /// text that source read (a story another source stored with its title alone is the same
+    /// address as the interview it links). `false` when there is no such item, or it already
+    /// belongs to a person's source (the first one keeps it).
+    pub fn claim_trend_item_for_person(&self, new: &NewTrendItem) -> Result<bool> {
+        self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE trend_items SET source_id = ?1, text_path = COALESCE(?2, text_path)
+                 WHERE url = ?3
+                   AND (source_id IS NULL OR source_id NOT IN (SELECT id FROM sources WHERE kind = 'person'))",
+                params![new.source_id, new.text_path.as_ref().map(|p| p.to_string_lossy().into_owned()), new.url],
+            )?;
+            Ok(n == 1)
+        })
+    }
+
+    /// The addresses of the items collected by the sources of followed people.
+    pub fn person_item_urls(&self) -> Result<Vec<String>> {
+        self.with_conn(|c| {
+            let mut stmt =
+                c.prepare("SELECT url FROM trend_items WHERE source_id IN (SELECT id FROM sources WHERE kind = 'person')")?;
+            let rows = stmt.query_map([], |r| r.get(0))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
     pub fn get_trend_item(&self, id: i64) -> Result<Option<TrendItem>> {
         self.with_conn(|c| {
             Ok(c.query_row(&format!("SELECT {ITEM_COLS} FROM trend_items WHERE id = ?1"), [id], TrendItem::from_row)
@@ -223,6 +249,26 @@ mod tests {
 
         store.delete_source(src.id).unwrap();
         assert_eq!(store.get_trend_item(recent.id).unwrap().unwrap().source_id, None, "items outlive their source");
+    }
+
+    #[test]
+    fn a_person_source_claims_a_stored_item_once() {
+        let store = Store::open_in_memory().unwrap();
+        let source = |kind: &str| store.add_source(&NewSource { kind: kind.into(), purpose: SourcePurpose::Trends, ..Default::default() }).unwrap();
+        let (hn, ada, bob) = (source("hackernews"), source("person"), source("person"));
+        let story = store.add_trend_item(&NewTrendItem { source_id: Some(hn.id), ..item("https://x.test/interview", None) }).unwrap().unwrap();
+        assert!(store.person_item_urls().unwrap().is_empty());
+
+        let path = std::path::PathBuf::from("/tmp/trends/full.txt");
+        let claim = |source: i64| NewTrendItem { source_id: Some(source), text_path: Some(path.clone()), ..item("https://x.test/interview", None) };
+        assert!(store.claim_trend_item_for_person(&claim(ada.id)).unwrap());
+        let claimed = store.get_trend_item(story.id).unwrap().unwrap();
+        assert_eq!((claimed.source_id, claimed.text_path.as_deref()), (Some(ada.id), Some(path.as_path())));
+        assert_eq!(claimed.title, story.title, "the title it was stored under stays");
+        assert_eq!(store.person_item_urls().unwrap(), ["https://x.test/interview"]);
+
+        assert!(!store.claim_trend_item_for_person(&claim(bob.id)).unwrap(), "the first person keeps it");
+        assert!(!store.claim_trend_item_for_person(&NewTrendItem { source_id: Some(ada.id), ..item("https://x.test/none", None) }).unwrap());
     }
 
     #[test]

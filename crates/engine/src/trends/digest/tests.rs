@@ -428,6 +428,50 @@ async fn enforce_citations_keeps_only_points_a_reader_can_check() {
 }
 
 #[tokio::test]
+async fn an_outlook_point_names_a_followed_person_cites_their_item_and_quotes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let follow = |name: &str| store.add_source(&NewSource { kind: "person".into(), name: name.into(), purpose: SourcePurpose::Trends, ..Default::default() }).unwrap().id;
+    let (ada, bob) = (follow("Ada Example"), follow("Bob Sample"));
+    let talk = stored_from(&store, dir.path(), Some(ada), "https://talks.test/ada", "Ada Example at the summit", "# Ada Example at the summit\n\nI think every company will run an AI factory within five years.", None);
+    let chat = stored_from(&store, dir.path(), Some(bob), "https://talks.test/bob", "Bob Sample fireside", "# Bob Sample fireside\n\nRobots will need more technicians than we can train.", None);
+    let news = stored_item(&store, dir.path(), "https://news.test/1", "Chips", "# Chips\n\nEvery company will run an AI factory within five years, analysts say.", None);
+    let mut state = TrendRun::new(period());
+    state.digest.items = vec![talk, chat, news];
+    let point = |topic: &str, text: &str, quote: &str, citations: &[i64]| Point {
+        section: Section::Outlook,
+        topic: topic.into(),
+        text: text.into(),
+        quote: quote.into(),
+        citations: citations.to_vec(),
+    };
+    state.digest.points = vec![
+        point("ada example", "good: expects AI factories everywhere", "every company will run an AI factory within five years", &[news, talk]),
+        point("Ada Example", "no quote", "", &[talk]),
+        point("Ada Example", "the words are in another person's item", "Robots will need more technicians", &[talk, chat]),
+        point("Ada Example", "cites no item of hers", "every company will run an AI factory within five years", &[news]),
+        point("Grace Nobody", "nobody the user follows", "every company will run an AI factory within five years", &[talk]),
+        point("", "no person named", "every company will run an AI factory within five years", &[talk]),
+        point("Bob Sample", "good: expects a shortage of technicians", "Robots will need more technicians than we can train", &[chat]),
+    ];
+
+    let state = cite::enforce_citations(env_with(store), state).await.unwrap();
+
+    let kept: Vec<(&str, &str, &[i64])> = state.digest.points.iter().map(|p| (p.topic.as_str(), p.text.as_str(), p.citations.as_slice())).collect();
+    assert_eq!(
+        kept,
+        [
+            ("Ada Example", "good: expects AI factories everywhere", &[talk][..]),
+            ("Bob Sample", "good: expects a shortage of technicians", &[chat][..]),
+        ],
+        "the name as the user wrote it, and only that person's items"
+    );
+    assert_eq!(state.digest.dropped, 5);
+    assert!(Section::ALL.contains(&Section::Outlook) && Section::parse("outlook") == Some(Section::Outlook));
+    assert!(!Section::Outlook.is_suggestible(), "a person is not a skill to add to the preferences");
+}
+
+#[tokio::test]
 async fn a_quote_that_is_the_whole_title_proves_even_when_it_is_short() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_in_memory().unwrap();
@@ -461,9 +505,11 @@ async fn enforce_citations_applies_the_limits_of_the_prompt() {
         wishes: vec![WishSignal { wish: "Rust".into(), kind: WishKind::Skill, avoided: false, direction: Direction::Unclear, mentions: 0 }],
         ..SkillCounts::default()
     });
-    // Five valid points in each section, each citing all eight items.
+    // Five valid points in each section, each citing all eight items (`outlook` has rules of its
+    // own, and its own test).
     state.digest.points = Section::ALL
         .iter()
+        .filter(|section| **section != Section::Outlook)
         .flat_map(|section| {
             let topic = if *section == Section::WishesCheck { "Rust" } else { "" };
             let ids = &ids;

@@ -230,6 +230,50 @@ fn story_item(hit: Hit) -> Option<Item> {
     Some(Item { url, title, published_at: timestamp(hit.created_at_i), text })
 }
 
+/// A story whose title names someone (for the [`person`](super::person) adapter).
+pub(super) struct Story {
+    /// The story as [`story_item`] makes it: the title and the numbers are the text.
+    pub item: Item,
+    /// The item's address is the page the story links (not the Hacker News thread of a text post).
+    pub linked: bool,
+}
+
+/// The stories from `since` to the period's end whose title names `name` (the whole name, as a
+/// phrase, whatever its case), newest first: one page of `person_stories` hits with
+/// `points >= person_min_points`. The search is asked for the phrase in titles only, and the title
+/// is checked again here, so a search that matches loosely adds nothing.
+pub(super) async fn stories_naming(ctx: &Ctx, name: &str, since: DateTime<Utc>) -> Result<Vec<Story>> {
+    let l = ctx.limits();
+    let name = name.replace('"', " ").split_whitespace().collect::<Vec<_>>().join(" ");
+    anyhow::ensure!(!name.is_empty(), "a person to follow needs a name");
+    let filters = format!(
+        "created_at_i>={},created_at_i<{},points>={}",
+        since.timestamp(),
+        ctx.period.end().timestamp(),
+        l.person_min_points
+    );
+    let url = api_url(
+        ctx,
+        "search_by_date",
+        &[
+            ("query", &format!("\"{name}\"")),
+            ("tags", "story"),
+            ("restrictSearchableAttributes", "title"),
+            ("numericFilters", &filters),
+            ("hitsPerPage", &l.person_stories.to_string()),
+        ],
+    )?;
+    let hits = search(ctx, &url).await?.hits;
+    Ok(hits
+        .into_iter()
+        .filter_map(|hit| {
+            let linked = hit.url.as_deref().is_some_and(|u| normalize_url(u).is_ok());
+            let item = story_item(hit)?;
+            crate::discover::source::mentions(&item.title, &name).then_some(Story { item, linked })
+        })
+        .collect())
+}
+
 /// The newest "Who is hiring" threads that started before the period ended (at most
 /// [`CollectLimits::hiring_threads_for`](crate::trends::CollectLimits) the period, newest first),
 /// one item per posting. Reading several monthly threads fills the skill window on the first run;

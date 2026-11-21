@@ -88,6 +88,31 @@ describe("Sources", () => {
     expect((page.getByLabelText("Address") as HTMLInputElement).value).toBe("");
   });
 
+  it("follows a person by name, with an optional address of their interviews", async () => {
+    const user = await shown();
+    await user.click(sources().getByRole("button", { name: "Person to follow" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Follow a person" }));
+    expect(dialog.getByText(/quotes what they say and\s+links the conversation/)).toBeTruthy();
+
+    await user.type(dialog.getByLabelText("Name"), "Jensen Huang");
+    await user.click(dialog.getByRole("button", { name: "Follow" }));
+    expect(mocks.api.addSource).toHaveBeenCalledWith("person", "Jensen Huang", "");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const note = await screen.findByRole("status", { name: "Now following" });
+    expect(within(note).getByText("Jensen Huang")).toBeTruthy();
+
+    // More than one person can be followed: the button stays, and the address is passed on.
+    await user.click(sources().getByRole("button", { name: "Person to follow" }));
+    const again = within(await screen.findByRole("dialog", { name: "Follow a person" }));
+    await user.type(again.getByLabelText("Name"), "Elon Musk");
+    await user.type(
+      again.getByLabelText("Feed or page of their interviews (optional)"),
+      "https://talks.example.com/feed.xml",
+    );
+    await user.click(again.getByRole("button", { name: "Follow" }));
+    expect(mocks.api.addSource).toHaveBeenLastCalledWith("person", "Elon Musk", "https://talks.example.com/feed.xml");
+  });
+
   it("adds a feed with Enter and keeps the dialog open with the reason when it is refused", async () => {
     mocks.api.addSource.mockRejectedValueOnce(new CommandError("RSS / Atom feed needs an http(s) address"));
     const user = await shown();

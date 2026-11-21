@@ -257,13 +257,15 @@ export interface Source {
   tag: { label: string; tone: Tone };
 }
 
-export type SourceKind = "hackernews" | "yc" | "rss" | "page";
+export type SourceKind = "hackernews" | "yc" | "rss" | "page" | "person";
 
 export interface SourceKindInfo {
   kind: SourceKind;
   label: string;
   /** A feed or page needs an address; Hacker News and YC do not. */
   needsUrl: boolean;
+  /** A person to follow needs a name; an address of their own is optional. */
+  needsName: boolean;
   /** Already a source (Hacker News and YC can be added once). */
   added: boolean;
 }

@@ -2,7 +2,7 @@
 //! ([`super::digest`]).
 //!
 //! ```text
-//! START -> plan -> { hackernews, yc, feeds } -> store_items -> wait_human
+//! START -> plan -> { hackernews, yc, feeds, people } -> store_items -> wait_human
 //!       -> END                                                        (collection only)
 //!       -> count -> extract -> synthesize -> enforce_citations -> save_report -> END   (with the digest)
 //! ```
@@ -15,8 +15,12 @@
 //! - A slow or failing source never fails the run. Every source gets its own timeout and every
 //!   collector a total budget (`CollectLimits`); what runs out is left out of this run and shows up
 //!   as [`SourceStatus::TimedOut`] in `outcomes` (and in the source's `last_status`), so
-//!   `store_items`, which the library runs once all three collectors are done, waits at most one
+//!   `store_items`, which the library runs once all the collectors are done, waits at most one
 //!   budget.
+//! - `people` reads the sources of followed people (`source::person`). A story that names a
+//!   person is often stored already, by the Hacker News source, with its title alone: for this
+//!   collector only the items of people's sources count as known, so the linked interview is read
+//!   once, and `store_items` hands the stored item to the person's source (with the fuller text).
 //! - `store_items` deduplicates by URL into `trend_items`, then adds the Hacker News hiring
 //!   threads read in full (`hn_settled`) to kv [`HN_SETTLED_KEY`], which the next run's
 //!   `hackernews` node reads: those threads are not downloaded again. A run that fails or is
@@ -49,7 +53,7 @@ use super::config::TrendConfig;
 use super::digest::{self, DigestConfig, DigestEnv, DigestState};
 use super::http::{FetchError, Http};
 use super::period::Period;
-use super::source::{hackernews, page, rss, yc, Ctx, Item, SourceKind};
+use super::source::{hackernews, page, person, rss, yc, Ctx, Item, SourceKind};
 use super::text::truncate;
 use crate::graph::nodes::{self, Challenge, ChallengeKind, Challenged};
 use crate::graph::{GraphDef, END, START};
@@ -83,6 +87,8 @@ pub struct Plan {
     pub hackernews: Vec<i64>,
     pub yc: Vec<i64>,
     pub feeds: Vec<i64>,
+    /// `sources` ids of kind `person`.
+    pub people: Vec<i64>,
 }
 
 /// An item a collector read: stored by `store_items`, its text already on disk.
@@ -115,7 +121,7 @@ pub enum SourceStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceOutcome {
     pub source_id: Option<i64>,
-    /// `hackernews`, `yc`, `rss` or `page`.
+    /// `hackernews`, `yc`, `rss`, `page` or `person`.
     pub kind: String,
     pub status: SourceStatus,
     /// New items (not known before this run) the source gave.
@@ -226,18 +232,23 @@ pub fn graph(
             let env = env.clone();
             move |s| group(env.clone(), s, SourceKind::Rss)
         })
+        .node("people", {
+            let env = env.clone();
+            move |s| group(env.clone(), s, SourceKind::Person)
+        })
         .node("store_items", {
             let env = env.clone();
             move |s| store_items(env.clone(), s)
         })
         .wait("wait_human", nodes::challenge::<TrendRun>)
         .edge(START, "plan")
-        .parallel("plan", &["hackernews", "yc", "feeds"], "store_items")
+        .parallel("plan", &["hackernews", "yc", "feeds", "people"], "store_items")
         .edge("store_items", "wait_human")
         .route("wait_human", |s| if s.digest.enabled { "count" } else { END }, &["count", END])
         .node_timeout("hackernews", collector_timeout)
         .node_timeout("yc", collector_timeout)
-        .node_timeout("feeds", collector_timeout);
+        .node_timeout("feeds", collector_timeout)
+        .node_timeout("people", collector_timeout);
     Ok(digest::add_nodes(graph, digest_env))
 }
 
@@ -250,6 +261,7 @@ async fn plan(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
             Some(SourceKind::HackerNews) => plan.hackernews.push(source.id),
             Some(SourceKind::Yc) => plan.yc.push(source.id),
             Some(SourceKind::Rss | SourceKind::Page) => plan.feeds.push(source.id),
+            Some(SourceKind::Person) => plan.people.push(source.id),
             None => tracing::warn!(source_id = source.id, "a trend source of an unknown kind is ignored"),
         }
     }
@@ -258,6 +270,7 @@ async fn plan(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
         hackernews = plan.hackernews.len(),
         yc = plan.yc.len(),
         feeds = plan.feeds.len(),
+        people = plan.people.len(),
         "trend collection planned"
     );
     s.plan = plan;
@@ -266,19 +279,22 @@ async fn plan(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
 
 // ---------------------------------------------------------------- collectors
 
-/// The `hackernews`, `yc` and `feeds` nodes: run every planned source of the group, one after the
+/// The `hackernews`, `yc`, `feeds` and `people` nodes: run every planned source of the group, one after the
 /// other (they share the per-host delay), each with its own timeout.
 async fn group(env: Arc<Env>, mut s: TrendRun, group: SourceKind) -> Result<TrendRun> {
     let ids = match group {
         SourceKind::HackerNews => s.plan.hackernews.clone(),
         SourceKind::Yc => s.plan.yc.clone(),
         SourceKind::Rss | SourceKind::Page => s.plan.feeds.clone(),
+        SourceKind::Person => s.plan.people.clone(),
     };
     if ids.is_empty() {
         return Ok(s);
     }
     let deadline = Instant::now() + env.config.limits.collector_budget;
-    let known = Arc::new(known_urls(&env.store)?);
+    // A person's source reads again what another source stored with a title alone (module docs).
+    let known = if group == SourceKind::Person { env.store.person_item_urls()?.into_iter().collect() } else { known_urls(&env.store)? };
+    let known = Arc::new(known);
     let ctx = env.ctx(&known, s.period);
     let saved_settled = if group == SourceKind::HackerNews { settled_threads(&env.store) } else { HashSet::new() };
     for id in ids {
@@ -299,6 +315,7 @@ async fn group(env: Arc<Env>, mut s: TrendRun, group: SourceKind) -> Result<Tren
                 SourceKind::Yc => yc::collect(&ctx).await,
                 SourceKind::Rss => rss::collect(&ctx, &source.url).await,
                 SourceKind::Page => page::collect(&ctx, &source.url).await.map(|items| (items, 0)),
+                SourceKind::Person => person::collect(&ctx, &source.name, &source.url).await,
             }
         };
         let done = attempt(&env, deadline, &source, kind.as_str(), work).await;
@@ -436,7 +453,7 @@ fn known_urls(store: &Store) -> Result<HashSet<String>> {
     Ok(store.list_trend_items(None)?.into_iter().map(|i| i.url).collect())
 }
 
-/// `<trends dir>/<32 hex of sha256(url)>.txt`: the same address always lands in the same file.
+/// `<trends dir>/<32 hex of sha256(key)>.txt`: the same address always lands in the same file.
 fn text_path(paths: &Paths, url: &str) -> PathBuf {
     let digest = Sha256::digest(url.as_bytes());
     let name: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
@@ -449,8 +466,11 @@ async fn write_items(env: &Env, source: &Source, found: Vec<Item>) -> Result<Vec
     tokio::fs::create_dir_all(&dir).await.with_context(|| format!("creating {}", dir.display()))?;
     let max = env.config.limits.max_text_chars;
     let mut written = Vec::with_capacity(found.len());
+    // A person's source keeps its own file per address: the same story may be written at the same
+    // moment by the Hacker News collector, with its title alone.
+    let person = source.kind == SourceKind::Person.as_str();
     for item in found {
-        let path = text_path(&env.paths, &item.url);
+        let path = if person { text_path(&env.paths, &format!("person:{}", item.url)) } else { text_path(&env.paths, &item.url) };
         let tmp = path.with_extension("txt.tmp");
         tokio::fs::write(&tmp, super::text::cap(&item.text, max)).await.with_context(|| format!("writing {}", tmp.display()))?;
         tokio::fs::rename(&tmp, &path).await.with_context(|| format!("saving {}", path.display()))?;
@@ -468,24 +488,26 @@ async fn write_items(env: &Env, source: &Source, found: Vec<Item>) -> Result<Vec
 // ---------------------------------------------------------------- store_items
 
 /// Deduplicate by URL into `trend_items`. Items of a source deleted during the run are stored
-/// without a source.
+/// without a source. An item a person's source read that is stored already goes to that source
+/// (`Store::claim_trend_item_for_person`); it still counts as a duplicate.
 async fn store_items(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
     let mut stored = Stored::default();
-    let mut live: std::collections::HashMap<i64, bool> = std::collections::HashMap::new();
+    // Per source of the run: is it still there, and is it a person's.
+    let mut live: std::collections::HashMap<i64, Option<bool>> = std::collections::HashMap::new();
     for item in &s.items {
-        let source_id = match item.source_id {
+        let (source_id, person) = match item.source_id {
             Some(id) => {
-                let exists = match live.get(&id) {
+                let found = match live.get(&id) {
                     Some(known) => *known,
                     None => {
-                        let exists = env.store.get_source(id)?.is_some();
-                        live.insert(id, exists);
-                        exists
+                        let found = env.store.get_source(id)?.map(|source| source.kind == SourceKind::Person.as_str());
+                        live.insert(id, found);
+                        found
                     }
                 };
-                exists.then_some(id)
+                (found.map(|_| id), found == Some(true))
             }
-            None => None,
+            None => (None, false),
         };
         let new = NewTrendItem {
             source_id,
@@ -496,7 +518,12 @@ async fn store_items(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
         };
         match env.store.add_trend_item(&new)? {
             Some(_) => stored.new += 1,
-            None => stored.duplicates += 1,
+            None => {
+                stored.duplicates += 1;
+                if person {
+                    env.store.claim_trend_item_for_person(&new)?;
+                }
+            }
         }
     }
     tracing::info!(period = %s.period.label(), new = stored.new, duplicates = stored.duplicates, "trend items stored");
