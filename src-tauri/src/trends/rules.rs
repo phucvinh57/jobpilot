@@ -472,16 +472,23 @@ pub fn status_tag(source: &Source) -> (&'static str, Tone) {
 }
 
 /// `Hacker News` or `RSS / Atom feed · blog.example.com`: the kind, and the host of its address
-/// (never the whole address: a feed address may carry a token).
+/// (never the whole address: a feed address may carry a token). A person to follow also says
+/// where their interviews are looked for.
 pub fn describe_source(source: &Source) -> String {
-    let label = SourceKind::parse(&source.kind)
-        .map_or_else(|| source.kind.clone(), |k| k.label().to_string());
-    match url::Url::parse(&source.url)
+    let kind = SourceKind::parse(&source.kind);
+    let label = kind.map_or_else(|| source.kind.clone(), |k| k.label().to_string());
+    let host = url::Url::parse(&source.url)
         .ok()
-        .and_then(|u| u.host_str().map(str::to_string))
-    {
-        Some(host) => format!("{label} \u{b7} {host}"),
-        None => label,
+        .and_then(|u| u.host_str().map(str::to_string));
+    match (kind, host) {
+        (Some(SourceKind::Person), Some(host)) => {
+            format!("{label} \u{b7} stories that name them on Hacker News, and {host}")
+        }
+        (Some(SourceKind::Person), None) => {
+            format!("{label} \u{b7} stories that name them on Hacker News")
+        }
+        (_, Some(host)) => format!("{label} \u{b7} {host}"),
+        (_, None) => label,
     }
 }
 
@@ -1209,6 +1216,18 @@ mod tests {
         feed.url = "https://blog.example.com/feed.xml?token=secret".into();
         let line = describe_source(&feed);
         assert_eq!(line, format!("RSS / Atom feed {DOT} blog.example.com"));
+        assert!(!line.contains("secret"));
+
+        let mut person = source(None);
+        person.kind = "person".into();
+        person.name = "Ada Example".into();
+        assert_eq!(
+            describe_source(&person),
+            format!("Person to follow {DOT} stories that name them on Hacker News")
+        );
+        person.url = "https://talks.example.com/feed.xml?token=secret".into();
+        let line = describe_source(&person);
+        assert!(line.ends_with("Hacker News, and talks.example.com"), "{line}");
         assert!(!line.contains("secret"));
     }
 

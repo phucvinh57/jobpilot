@@ -775,7 +775,9 @@ describe("the Trends screen", () => {
     expect(await reports.findByText("No yearly reports yet. Press New research and choose Yearly.")).toBeTruthy();
 
     await user.click(screen.getByRole("tab", { name: "Sources" }));
-    expect(screen.getByText("No sources yet: add Hacker News, the YC companies, a feed or a page.")).toBeTruthy();
+    expect(
+      screen.getByText(/No sources yet: add Hacker News, the YC companies, a feed, a page or a person/),
+    ).toBeTruthy();
   });
 
   it("shows a report this version cannot read back as its saved text", async () => {

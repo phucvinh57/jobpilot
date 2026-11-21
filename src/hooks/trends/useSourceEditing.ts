@@ -1,4 +1,4 @@
-// The sources of the digest: add (Hacker News and YC at once, a feed or page from a dialog),
+// The sources of the digest: add (Hacker News and YC at once; a feed, a page or a person to follow from a dialog),
 // enable or disable for the next run, remove. A failed add from the dialog stays in the dialog;
 // a failed change of the list (an add at once, the switch, Remove) is reported as a toast.
 
@@ -32,8 +32,12 @@ export function useSourceEditing() {
     return change.run(work).then(() => undefined);
   };
 
+  // A closed dialog forgets what was typed: the fields mean different things per kind (an address
+  // typed for a page must not become a person's own address).
   const close = useCallback(() => {
     setAdding(undefined);
+    setName("");
+    setUrl("");
     clearAddError();
   }, [clearAddError]);
 
@@ -50,9 +54,9 @@ export function useSourceEditing() {
     listErrorTitle: what,
     clearListError: change.clearError,
     busy: change.busy || add.busy,
-    /** A kind that needs an address opens its dialog; the others are added at once. */
+    /** A kind that needs an address or a name opens its dialog; the others are added at once. */
     choose: (kind: SourceKindInfo) => {
-      if (kind.needsUrl) {
+      if (kind.needsUrl || kind.needsName) {
         clearAddError();
         setAdding(kind.kind);
         return Promise.resolve();
@@ -60,6 +64,7 @@ export function useSourceEditing() {
       return listChange(`Could not add ${kind.label}`, () => api.addSource(kind.kind, "", ""));
     },
     /** Add the kind of the open dialog with the typed name and address, then close and clear it. */
+    // (A person is announced by name; a feed or page by its name, else its address.)
     submit: async (kind: SourceKindInfo) => {
       const typedName = name.trim();
       const typedUrl = url.trim();
@@ -68,7 +73,7 @@ export function useSourceEditing() {
         setAdding(undefined);
         setName("");
         setUrl("");
-        toast.ok("Source added", typedName || typedUrl || kind.label);
+        toast.ok(kind.needsName ? "Now following" : "Source added", typedName || typedUrl || kind.label);
       }
     },
     cancel: close,

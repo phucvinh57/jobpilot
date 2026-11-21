@@ -291,6 +291,89 @@ fn trend_sources_are_validated_normalised_and_scoped_to_trends() {
 }
 
 #[test]
+fn a_person_to_follow_needs_a_name_and_takes_an_optional_address() {
+    let (_dir, core) = core();
+    let huang = core.add_trend_source(SourceKind::Person, "  Jensen   Huang ", "").unwrap();
+    assert_eq!((huang.kind.as_str(), huang.name.as_str(), huang.url.as_str()), ("person", "Jensen Huang", ""));
+    let musk = core.add_trend_source(SourceKind::Person, "Elon Musk", " https://talks.example.com/feed.xml#latest ").unwrap();
+    assert_eq!(musk.url, "https://talks.example.com/feed.xml");
+
+    assert!(core.add_trend_source(SourceKind::Person, "  ", "").unwrap_err().to_string().contains("name"));
+    assert!(core.add_trend_source(SourceKind::Person, "jensen huang", "").unwrap_err().to_string().contains("already follow"));
+    assert!(core.add_trend_source(SourceKind::Person, &"x".repeat(MAX_PERSON_NAME_CHARS + 1), "").unwrap_err().to_string().contains("too long"));
+    assert!(core.add_trend_source(SourceKind::Person, "Ada Example", "ftp://x.test/feed").is_err(), "a typed address must be http(s)");
+    assert_eq!(MAX_PERSON_NAME_CHARS, 60, "a name fits the topic of a point, which is how `outlook` names the person");
+    assert_eq!(core.trend_sources().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_followed_person_reads_the_interview_a_story_links_and_takes_the_stored_story() {
+    let (_dir, core) = core();
+    let fx = Fixtures::start().await;
+    let story = format!(
+        r#"{{"hits": [{{"objectID": "77", "title": "Ada Example: every company will run an AI factory", "url": "{}/interview", "points": 320, "num_comments": 90, "created_at_i": 1794312000}}]}}"#,
+        fx.base()
+    );
+    fx.route("/hn/search", 200, "application/json", story.clone());
+    fx.route("/hn/search_by_date", 200, "application/json", story);
+    let page = "<html><head><title>Interview</title></head><body><article><h1>Interview</h1>".to_string()
+        + &"<p>I think every company will run an AI factory within five years, and the people who learn to direct agents will be in demand.</p>".repeat(5)
+        + "</article></body></html>";
+    fx.route("/interview", 200, "text/html", page);
+    core.add_trend_source(SourceKind::HackerNews, "", "").unwrap();
+    let ada = core.add_trend_source(SourceKind::Person, "Ada Example", "").unwrap();
+
+    let state = run(&core, &fx).await;
+    assert_eq!(state.plan.people, [ada.id]);
+    assert_eq!(status_of(&state, "person"), &SourceStatus::Ok, "{:?}", state.outcomes);
+    assert_eq!(state.outcomes_of("person").next().unwrap().items, 1);
+    assert_eq!(state.stored, Stored { new: 1, duplicates: 1 }, "one address, read by both collectors");
+
+    let url = format!("{}/interview", fx.base());
+    let items = core.store.list_trend_items(None).unwrap();
+    let item = items.iter().find(|i| i.url == url).expect("the interview is stored under its own address");
+    assert_eq!(item.source_id, Some(ada.id), "the person's source has it, whichever collector stored it first");
+    let text = std::fs::read_to_string(item.text_path.as_ref().unwrap()).unwrap();
+    assert!(text.contains("the people who learn to direct agents will be in demand"), "the interview's words, not only the headline: {text}");
+
+    // The next run knows it: the interview is not fetched again.
+    let before = fx.hits_on("/interview").len();
+    let state = run(&core, &fx).await;
+    assert_eq!(state.outcomes_of("person").next().unwrap().items, 0);
+    assert_eq!(fx.hits_on("/interview").len(), before);
+}
+
+#[tokio::test]
+async fn a_headline_never_replaces_the_article_another_source_stored() {
+    let (dir, core) = core();
+    let fx = Fixtures::start().await;
+    let url = format!("{}/post", fx.base());
+    let story = format!(
+        r#"{{"hits": [{{"objectID": "78", "title": "Ada Example on hiring", "url": "{url}", "points": 50, "num_comments": 9, "created_at_i": 1794312000}}]}}"#
+    );
+    fx.route("/hn/search_by_date", 200, "application/json", story);
+    fx.route("/post", 500, "text/plain", "boom");
+    // A feed stored the article in full, weeks ago.
+    let feed = core.add_trend_source(SourceKind::Rss, "Blog", "https://blog.example.com/feed.xml").unwrap();
+    core.set_trend_source_enabled(feed.id, false).unwrap();
+    let full = dir.path().join("full.txt");
+    std::fs::write(&full, "# Ada Example on hiring\n\n".to_string() + &"We will hire people who can direct agents. ".repeat(20)).unwrap();
+    let stored = core
+        .store
+        .add_trend_item(&crate::store::NewTrendItem { source_id: Some(feed.id), url: url.clone(), title: "Ada Example on hiring".into(), published_at: None, text_path: Some(full.clone()) })
+        .unwrap()
+        .unwrap();
+    let ada = core.add_trend_source(SourceKind::Person, "Ada Example", "").unwrap();
+
+    let state = run(&core, &fx).await;
+    assert_eq!(state.stored, Stored { new: 0, duplicates: 1 });
+    let item = core.store.get_trend_item(stored.id).unwrap().unwrap();
+    assert_eq!(item.source_id, Some(ada.id), "the person's source has it");
+    assert_eq!(item.text_path.as_deref(), Some(full.as_path()), "with the article, not the headline the failed fetch left");
+    assert!(item.fetched_at >= stored.fetched_at, "and it is an item of the period that collected it for the person");
+}
+
+#[test]
 fn the_state_round_trips_and_the_thread_is_named_by_period() {
     assert_eq!(thread_id(&period()), "trends:2026-W46");
     assert_eq!(thread_id(&Period::parse("2026-Q4").unwrap()), "trends:2026-Q4");

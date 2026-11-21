@@ -33,6 +33,8 @@ pub fn seed_demo(core: &Core) -> Result<()> {
         "https://reports.example.com/annual-2026.html",
     )?;
 
+    let person = core.add_trend_source(SourceKind::Person, "Ada Example", "")?;
+
     let now = Utc::now();
     let samples = [
         (
@@ -70,6 +72,12 @@ pub fn seed_demo(core: &Core) -> Result<()> {
             "https://reports.example.com/fintech-2026.pdf",
             "Fintech outlook 2026",
             5,
+        ),
+        (
+            Some(person.id),
+            "https://talks.example.com/ada-example-fireside",
+            "Ada Example: fireside chat at the Example Summit",
+            2,
         ),
     ];
     let mut ids = Vec::new();
@@ -112,6 +120,13 @@ pub fn seed_demo(core: &Core) -> Result<()> {
         point(Section::Domains, "developer tools", "A new YC batch company builds hiring tools for startups.", "hiring tools for startups", &[3]),
         point(Section::Funding, "", "The fintech outlook expects fewer but larger rounds this year.", "", &[5]),
         point(Section::Hiring, "", "Remote Rust roles are posted in the monthly hiring thread.", "Senior Rust Engineer", &[0]),
+        point(
+            Section::Outlook,
+            "Ada Example",
+            "Ada Example expects most backend teams to run agents next to their services within two years, and says the engineers in demand will be the ones who can review what agents write.",
+            "the engineers who can review what agents write will be the ones in demand",
+            &[6],
+        ),
         point(
             Section::ForYou,
             "Kubernetes",

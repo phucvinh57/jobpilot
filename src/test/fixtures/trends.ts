@@ -153,10 +153,11 @@ export function overviewFixture(patch: Partial<Overview> = {}): Overview {
       },
     ],
     sourceKinds: [
-      { kind: "hackernews", label: "Hacker News", needsUrl: false, added: true },
-      { kind: "yc", label: "YC companies", needsUrl: false, added: false },
-      { kind: "rss", label: "RSS / Atom feed", needsUrl: true, added: true },
-      { kind: "page", label: "Web page", needsUrl: true, added: false },
+      { kind: "hackernews", label: "Hacker News", needsUrl: false, needsName: false, added: true },
+      { kind: "yc", label: "YC companies", needsUrl: false, needsName: false, added: false },
+      { kind: "rss", label: "RSS / Atom feed", needsUrl: true, needsName: false, added: true },
+      { kind: "page", label: "Web page", needsUrl: true, needsName: false, added: false },
+      { kind: "person", label: "Person to follow", needsUrl: false, needsName: true, added: false },
     ],
     ...patch,
   };

@@ -88,7 +88,7 @@ fn node_label(graph: &str, node: &str) -> Option<&'static str> {
         (INSIGHT_GRAPH, "extract") => "Writing the brief",
 
         (TRENDS_GRAPH, "plan") => "Planning the sources",
-        (TRENDS_GRAPH, "hackernews" | "yc" | "feeds") => "Reading the sources",
+        (TRENDS_GRAPH, "hackernews" | "yc" | "feeds" | "people") => "Reading the sources",
         (TRENDS_GRAPH, "store_items") => "Storing the items",
         (TRENDS_GRAPH, "wait_human") => "Checking for sources that need you",
         (TRENDS_GRAPH | TRENDS_DIGEST_GRAPH, "extract") => "Reading the items with your AI provider",
@@ -417,6 +417,7 @@ mod tests {
             ("hackernews", "Reading the sources"),
             ("yc", "Reading the sources"),
             ("feeds", "Reading the sources"),
+            ("people", "Reading the sources"),
             ("store_items", "Storing the items"),
             ("wait_human", "Checking for sources that need you"),
             ("extract", "Reading the items with your AI provider"),

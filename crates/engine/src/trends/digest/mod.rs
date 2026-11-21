@@ -23,13 +23,16 @@
 //!   are cached next to the item's text, so regenerating a digest asks the model only about new
 //!   items.
 //! - `synthesize` ([`synthesize`]): one model call: rising and falling skills, active domains,
-//!   funding and hiring signals, and what it means for the user's preferences. Each point carries
+//!   funding and hiring signals, what the people the user follows say about where things are going
+//!   (`outlook`: items of `person` sources, each marked with the person's name), and what it means
+//!   for the user's preferences. Each point carries
 //!   `citations[]` of item ids and may carry one verbatim `quote`. The evidence in the prompt stays
 //!   within [`DigestLimits::evidence_chars`] (fewer claims per item, then fewer items), and only the
 //!   items shown can be cited.
 //! - `enforce_citations` ([`cite`]): in code, drops every point without a valid citation (an id
 //!   that is an item of this digest) and every point whose quote is not in a cited item (a quote
-//!   that is a cited item's whole title always counts). It also enforces the prompt's limits: at
+//!   that is a cited item's whole title always counts). An `outlook` point must name a followed
+//!   person, cite an item of that person's source and carry a quote found in it. It also enforces the prompt's limits: at
 //!   most 5 citations per point, 4 points per section, 20 in all.
 //! - `save_report` ([`cite`]): one row in `reports` per period (`weekly` / `monthly` /
 //!   `quarterly` / `yearly`): `body_md` is the readable digest (model-written text is escaped, the
@@ -88,6 +91,7 @@ use crate::store::{SourcePurpose, TrendItem};
 use crate::{Secrets, Store};
 
 pub use api::{Digest, TrendChallenge};
+pub(crate) use synthesize::MAX_TOPIC_CHARS;
 pub use count::{is_hiring_posting, month_window, Vocabulary};
 /// The statistics behind the counts, for the sample data of the shell to make real numbers with.
 pub use stats::{centi, log_odds_z, trend_z, wilson};
@@ -131,6 +135,9 @@ pub enum Section {
     Domains,
     Funding,
     Hiring,
+    /// What a person the user follows says about where things are going: an opinion, attributed
+    /// and quoted, never a measurement.
+    Outlook,
     /// The gap: what the market means for this user's background (build on, learn next, at risk).
     ForYou,
     /// The user's wishes against the market, applied last.
@@ -139,12 +146,13 @@ pub enum Section {
 
 impl Section {
     /// In display order.
-    pub const ALL: [Section; 7] = [
+    pub const ALL: [Section; 8] = [
         Section::RisingSkills,
         Section::FallingSkills,
         Section::Domains,
         Section::Funding,
         Section::Hiring,
+        Section::Outlook,
         Section::ForYou,
         Section::WishesCheck,
     ];
@@ -157,6 +165,7 @@ impl Section {
             Section::Domains => "domains",
             Section::Funding => "funding",
             Section::Hiring => "hiring",
+            Section::Outlook => "outlook",
             Section::ForYou => "for_you",
             Section::WishesCheck => "wishes_check",
         }
@@ -174,6 +183,7 @@ impl Section {
             Section::Domains => "Active domains",
             Section::Funding => "Funding and launches",
             Section::Hiring => "Hiring signals",
+            Section::Outlook => "Outlook: what the people you follow say",
             Section::ForYou => "Your gap: build on, learn next, at risk",
             Section::WishesCheck => "Your wishes vs the market",
         }
@@ -776,6 +786,17 @@ fn source_kinds(store: &Store) -> Result<HashMap<i64, SourceKind>> {
     Ok(store.list_sources(SourcePurpose::Trends)?.into_iter().filter_map(|s| Some((s.id, SourceKind::parse(&s.kind)?))).collect())
 }
 
+/// The person each source of kind `person` follows, by source id. An item of such a source is an
+/// interview, a talk or a story about that person; an item whose source is gone has no person.
+pub(crate) fn people(store: &Store) -> Result<HashMap<i64, String>> {
+    Ok(store
+        .list_sources(SourcePurpose::Trends)?
+        .into_iter()
+        .filter(|s| SourceKind::parse(&s.kind) == Some(SourceKind::Person) && !s.name.trim().is_empty())
+        .map(|s| (s.id, s.name))
+        .collect())
+}
+
 /// The kind of an item: a posting by its header, any other by the adapter of its source.
 fn stratum_of(item: &TrendItem, posting: bool, kinds: &HashMap<i64, SourceKind>) -> Stratum {
     if posting {
@@ -784,7 +805,8 @@ fn stratum_of(item: &TrendItem, posting: bool, kinds: &HashMap<i64, SourceKind>)
     match item.source_id.and_then(|id| kinds.get(&id)) {
         Some(SourceKind::HackerNews) => Stratum::HnStory,
         Some(SourceKind::Yc) => Stratum::Yc,
-        Some(SourceKind::Rss | SourceKind::Page) => Stratum::Feed,
+        // An interview or a talk is prose like a feed entry.
+        Some(SourceKind::Rss | SourceKind::Page | SourceKind::Person) => Stratum::Feed,
         None => Stratum::Other,
     }
 }

@@ -3,7 +3,9 @@
 //!
 //! Besides the citations, a point must agree with what the app counted ([`CodeFacts`]): a rising
 //! or falling skill must not contradict the direction code computed, a `for_you` point is about a
-//! skill of the gap, a `wishes_check` point about one of the user's wishes.
+//! skill of the gap, a `wishes_check` point about one of the user's wishes. An `outlook` point is
+//! an opinion, so it is tied to who said it: its topic is a person the user follows, it cites
+//! items of that person's source only, and it carries a quote found in one of them.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -135,7 +137,8 @@ impl CodeFacts {
             Section::FallingSkills => !self.contradicts(topic, Direction::Falling),
             Section::ForYou => topic.is_empty() || self.keys(topic).iter().any(|k| self.gap.contains(k)),
             Section::WishesCheck => self.wishes.contains(&key(topic)),
-            Section::Domains | Section::Funding | Section::Hiring => true,
+            // Checked against the cited items ([`outlook_citations`]).
+            Section::Domains | Section::Funding | Section::Hiring | Section::Outlook => true,
         }
     }
 }
@@ -144,19 +147,43 @@ fn key(text: &str) -> String {
     one_line(text).to_lowercase()
 }
 
+/// The citations an `outlook` point may keep: the items (of `ids`) of the followed person its
+/// topic names, with that person's name as the user wrote it. `None` when the topic names nobody
+/// the user follows, none of the items is that person's, or the point has no quote: what somebody
+/// "expects" is only shown with their item's own words under it.
+fn outlook_citations(store: &Store, people: &HashMap<i64, String>, point: &Point, ids: &[i64]) -> Result<Option<(String, Vec<i64>)>> {
+    let wanted = key(&point.topic);
+    if wanted.is_empty() || point.quote.is_empty() {
+        return Ok(None);
+    }
+    let mut name = None;
+    let mut own = Vec::new();
+    for id in ids {
+        let person = store.get_trend_item(*id)?.and_then(|item| item.source_id).and_then(|source| people.get(&source));
+        if let Some(person) = person.filter(|person| key(person) == wanted) {
+            name = Some(person.clone());
+            own.push(*id);
+        }
+    }
+    Ok(name.map(|name| (name, own)))
+}
+
 /// Drop every point without a valid citation (an id of an item this digest was built from), every
 /// point whose quote is in none of its cited items, and every point that contradicts the counts
-/// ([`CodeFacts::agree`]). Invalid ids are removed from the points that stay, at most
+/// ([`CodeFacts::agree`]), and every `outlook` point that is not tied to a followed person
+/// ([`outlook_citations`]). Invalid ids are removed from the points that stay, at most
 /// [`MAX_CITATIONS`] are kept. Then the first [`MAX_POINTS_PER_SECTION`] points of a section and
-/// the first [`MAX_POINTS`] in all stay. Points dropped for the first three reasons are counted in
+/// the first [`MAX_POINTS`] in all stay. Points dropped for the first four reasons are counted in
 /// `dropped`.
 pub(super) async fn enforce_citations(env: Arc<DigestEnv>, mut s: TrendRun) -> Result<TrendRun> {
     let valid: HashSet<i64> = s.digest.items.iter().copied().collect();
     let facts = CodeFacts::new(&s.digest.counts.clone().unwrap_or_default());
+    let people = super::people(&env.store)?;
     let drafted = std::mem::take(&mut s.digest.points);
     let total = drafted.len();
     let mut searchable: HashMap<i64, Searchable> = HashMap::new();
     let (mut uncited, mut fake_quotes, mut empty, mut contradicts, mut over_limit) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut unattributed = 0usize;
     let mut kept: Vec<Point> = Vec::new();
 
     for mut point in drafted {
@@ -180,6 +207,18 @@ pub(super) async fn enforce_citations(env: Arc<DigestEnv>, mut s: TrendRun) -> R
         if ids.is_empty() {
             uncited += 1;
             continue;
+        }
+        if point.section == Section::Outlook {
+            match outlook_citations(&env.store, &people, &point, &ids)? {
+                Some((name, own)) => {
+                    point.topic = name;
+                    ids = own;
+                }
+                None => {
+                    unattributed += 1;
+                    continue;
+                }
+            }
         }
         if !point.quote.is_empty() {
             let mut found = false;
@@ -216,8 +255,8 @@ pub(super) async fn enforce_citations(env: Arc<DigestEnv>, mut s: TrendRun) -> R
     }
     kept.sort_by_key(|p| Section::ALL.iter().position(|s| *s == p.section));
 
-    tracing::info!(drafted = total, kept = kept.len(), uncited, fake_quotes, empty, contradicts, over_limit, "digest citations enforced");
-    s.digest.dropped = u32::try_from(uncited + fake_quotes + empty + contradicts).unwrap_or(u32::MAX);
+    tracing::info!(drafted = total, kept = kept.len(), uncited, fake_quotes, empty, contradicts, unattributed, over_limit, "digest citations enforced");
+    s.digest.dropped = u32::try_from(uncited + fake_quotes + empty + contradicts + unattributed).unwrap_or(u32::MAX);
     s.digest.points = kept;
     Ok(s)
 }

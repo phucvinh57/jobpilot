@@ -101,7 +101,7 @@ pub async fn trends_add_source(
     let kind = kind_of(&kind)?;
     let core = core.inner().clone();
     run_sync(move || {
-        let (name, url) = if kind.needs_url() {
+        let (name, url) = if kind.needs_url() || kind.needs_name() {
             (name.trim().to_string(), url.trim().to_string())
         } else {
             (String::new(), String::new())

@@ -51,9 +51,12 @@ crates/engine/  (package `jobpilot-engine`, lib `jobpilot_engine`)   no UI, no T
              `manual` (`Core::add_lead`: pasted link/file -> scored lead), `check` (`Core::check_job_source`: a new source is read
              once and refused unless it lists jobs), `suggest/` (graph `source_suggest`: searches in the user's Chrome, Private
              tab -> results parsed in code -> checked -> `source_suggestions`; a captcha/consent page pauses it, never solved)
-  trends     collection (hackernews, yc, rss, page; graph `trends` -> `trend_items`), `period` (week / month / quarter / year;
+  trends     collection (hackernews, yc, rss, page, person; graph `trends` -> `trend_items`), `period` (week / month / quarter / year;
              one report per period, a rerun replaces it), `frame` (MarketFrame: background + place, never wishes; decides what is counted),
-             `digest/` (extract, count, synthesize, cite: every point cites stored items), `pdf` (report -> PDF via `assets/trends.typ`)
+             `digest/` (extract, count, synthesize, cite: every point cites stored items), `pdf` (report -> PDF via `assets/trends.typ`);
+             `source::person` = a person to follow (stories that name them, the linked interview read, an optional feed or page of
+             their own); the report's `outlook` section quotes them: a point there names the person, cites only their items and
+             carries a quote found in one (`digest::cite`), an opinion that never touches the counted numbers
 src-tauri/ (package `jobpilot`, lib `jobpilot_lib`)   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |
              profile (About you: the documents the profile is read from; preferences) | integrations (AI Providers, Gmail, Browser: extension pairing + signed-in sites) | trends (Digest, trend sources)
