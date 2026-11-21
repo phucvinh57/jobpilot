@@ -114,8 +114,10 @@ export function SourcesSection({ sources, kinds }: { sources: readonly Source[];
         {person && (
           <Caption>
             Each run looks for Hacker News stories that name this person and reads the interview, talk or article they
-            link. A podcast feed or a transcript page of their own is read too. The report quotes what they say and
-            links the conversation; it is their opinion, never counted in the market numbers.
+            link. A podcast feed, a YouTube channel feed or a transcript page of their own is read too. A YouTube video
+            is read by its transcript, in a private tab of your Chrome: that needs the JobPilot extension connected, and
+            a video that could not be read waits for the next run. The report quotes what they say and links the
+            conversation; it is their opinion, never counted in the market numbers.
           </Caption>
         )}
         {editing.formError && <FormMessage id="trends-source-error">{editing.formError}</FormMessage>}

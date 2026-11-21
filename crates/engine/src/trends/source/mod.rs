@@ -8,6 +8,7 @@ pub mod page;
 pub mod person;
 pub mod rss;
 pub mod yc;
+pub mod youtube;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -94,6 +95,9 @@ pub struct Ctx {
     /// URLs already in `trend_items`: not fetched or collected again.
     pub known: Arc<HashSet<String>>,
     pub period: Period,
+    /// Reads what plain HTTP cannot (a video's transcript) in the user's Chrome. `None`: videos
+    /// are left for a later run.
+    pub videos: Option<youtube::Videos>,
 }
 
 impl Ctx {

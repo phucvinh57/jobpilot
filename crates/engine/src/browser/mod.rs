@@ -29,6 +29,7 @@ pub mod probe;
 pub mod render;
 pub mod session;
 pub mod tab;
+pub mod transcript;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -15,6 +15,9 @@ pub struct Endpoints {
     /// YC publishes no JSON API of its own; the default is the community `yc-oss` mirror
     /// (static files, refreshed daily from the directory).
     pub yc: String,
+    /// Root of the video site whose transcripts are read for followed people: a video is opened
+    /// at `<root>/watch?v=<id>`.
+    pub youtube: String,
 }
 
 impl Default for Endpoints {
@@ -22,6 +25,7 @@ impl Default for Endpoints {
         Self {
             hackernews: "https://hn.algolia.com/api/v1".into(),
             yc: "https://yc-oss.github.io/api".into(),
+            youtube: "https://www.youtube.com".into(),
         }
     }
 }

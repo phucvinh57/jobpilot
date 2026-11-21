@@ -34,7 +34,7 @@ crates/engine/  (package `jobpilot-engine`, lib `jobpilot_engine`)   no UI, no T
              pairing token in the keyring; `Core::browser()`), `tab` (`Tab`: navigate, eval, content, click, type, keys, files, screenshots;
              `Profile::Private` = incognito JobPilot window, `Profile::Signed` = the user's signed-in profile), `session` (sites the user is
              signed in to; no profiles, never touches cookies), `challenge` (detect login/captcha/block, never solve), `render`/`fetch`
-             (discovery pages), `guard` (`Policy`: which hosts a guarded tab may reach; every request is checked by the app)
+             (discovery pages), `transcript` (a video's transcript panel, read in a Private tab), `guard` (`Policy`: which hosts a guarded tab may reach; every request is checked by the app)
   apply      review -> confirm -> submit, dry run, manual hand-off
   mail       Gmail sync, reply classification
   graph      flows as graphs (`GraphDef` facade over adk-graph, the only code that names it): run/resume/cancel/waiting/subscribe,
@@ -55,7 +55,8 @@ crates/engine/  (package `jobpilot-engine`, lib `jobpilot_engine`)   no UI, no T
              one report per period, a rerun replaces it), `frame` (MarketFrame: background + place, never wishes; decides what is counted),
              `digest/` (extract, count, synthesize, cite: every point cites stored items), `pdf` (report -> PDF via `assets/trends.typ`);
              `source::person` = a person to follow (stories that name them, the linked interview read, an optional feed or page of
-             their own); the report's `outlook` section quotes them: a point there names the person, cites only their items and
+             their own); `source::youtube` = a linked video is read by its transcript in a Private tab of the user's Chrome
+             (`browser::transcript`; never over HTTP, never posing as the site's app; no browser or a wall = left for the next run); the report's `outlook` section quotes them: a point there names the person, cites only their items and
              carries a quote found in one (`digest::cite`), an opinion that never touches the counted numbers
 src-tauri/ (package `jobpilot`, lib `jobpilot_lib`)   Tauri v2 shell, split by bounded context (never by technical layer)
   contexts   discovery (Leads, job Sources) | applications (stages CVs/Applied/In progress/Done, Application: JD/CV/apply/timeline) |
