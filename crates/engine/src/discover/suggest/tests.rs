@@ -148,7 +148,7 @@ async fn a_captcha_pauses_the_search_and_continue_searches_the_same_query_then_s
             .fails("jobs.lever.co/broken", "no such board on Lever"),
     );
 
-    let outcome = core.suggest_sources_with(h.deps(verify.clone())).await.unwrap();
+    let outcome = core.suggest_sources_with(h.deps(verify.clone()), None).await.unwrap();
     let SuggestOutcome::Waiting { thread, reason } = outcome else { panic!("expected a pause, got {outcome:?}") };
     assert_eq!(thread, SUGGEST_THREAD);
     assert_eq!(reason, WaitReason::Captcha { source_id: 0, url: h.url(1) });
@@ -187,7 +187,7 @@ async fn a_captcha_pauses_the_search_and_continue_searches_the_same_query_then_s
         "https://careers.acme-co.example/",
         Verified { kind: "greenhouse".into(), url: "boards.greenhouse.io/acme".into(), name: "Acme".into(), jobs: 12, matching: 6 },
     ));
-    let outcome = core.suggest_sources_with(h.deps(verify.clone())).await.unwrap();
+    let outcome = core.suggest_sources_with(h.deps(verify.clone()), None).await.unwrap();
     assert_eq!(outcome, SuggestOutcome::Done { saved: 0 });
     assert_eq!(
         verify.asked(),
@@ -207,7 +207,7 @@ async fn excluded_companies_are_not_suggested_even_when_the_check_names_them() {
     let h = Harness::new(Preferences { roles: vec!["Rust Engineer".into()], exclude_companies: vec!["MegaCorp".into(), "Omega".into()], ..Preferences::default() });
     h.pages.page(&h.url(0), r#"<a href="https://boards.greenhouse.io/megacorp">M</a> <a href="https://jobs.lever.co/o-labs">O</a>"#);
     let verify = Arc::new(FakeVerify::new().ok("lever", "jobs.lever.co/o-labs", "Omega", 4, 4));
-    let outcome = h.core.suggest_sources_with(h.deps(verify.clone())).await.unwrap();
+    let outcome = h.core.suggest_sources_with(h.deps(verify.clone()), None).await.unwrap();
     assert_eq!(outcome, SuggestOutcome::Done { saved: 0 });
     assert_eq!(verify.asked(), ["jobs.lever.co/o-labs"], "the board named after an excluded company is not even checked");
 }
@@ -219,7 +219,7 @@ async fn at_most_twelve_candidates_are_checked() {
     h.pages.page(&h.url(0), &html);
     let verify = (0..15).fold(FakeVerify::new(), |v, i| v.ok("lever", &format!("jobs.lever.co/c{i}"), &format!("C{i}"), 2, 1));
     let verify = Arc::new(verify);
-    let outcome = h.core.suggest_sources_with(h.deps(verify.clone())).await.unwrap();
+    let outcome = h.core.suggest_sources_with(h.deps(verify.clone()), None).await.unwrap();
     assert_eq!(outcome, SuggestOutcome::Done { saved: MAX_VERIFY });
     assert_eq!(verify.asked().len(), MAX_VERIFY);
 }
@@ -227,14 +227,14 @@ async fn at_most_twelve_candidates_are_checked() {
 #[tokio::test]
 async fn no_roles_and_no_profile_is_the_no_profile_problem_and_the_next_search_starts_over() {
     let h = Harness::new(Preferences::default());
-    let err = h.core.suggest_sources_with(h.deps(Arc::new(FakeVerify::new()))).await.unwrap_err();
+    let err = h.core.suggest_sources_with(h.deps(Arc::new(FakeVerify::new())), None).await.unwrap_err();
     assert_eq!(classify(&format!("{err:#}")), Problem::NoProfile, "{err:#}");
     assert!(h.core.suggest_waiting().unwrap().is_none());
     assert!(matches!(h.core.graphs.status(SUGGEST_THREAD).unwrap().map(|t| t.status), Some(ThreadStatus::Failed(_))));
 
     // The user sets a role: the failed search is replaced by a new one.
     h.core.store.save_preferences(&Preferences { roles: vec!["Rust Engineer".into()], ..Preferences::default() }).unwrap();
-    let outcome = h.core.suggest_sources_with(h.deps(Arc::new(FakeVerify::new()))).await.unwrap();
+    let outcome = h.core.suggest_sources_with(h.deps(Arc::new(FakeVerify::new())), None).await.unwrap();
     assert_eq!(outcome, SuggestOutcome::Done { saved: 0 });
 }
 
@@ -245,7 +245,7 @@ async fn a_network_failure_fails_the_search_retry_goes_on_and_an_unreadable_page
     h.pages.fail(&h.url(2), Some("the page ended on an address that is not a public web page"));
     h.pages.page(&h.url(1), r#"<a href="https://jobs.ashbyhq.com/beta">Beta</a>"#);
     let verify = Arc::new(FakeVerify::new().ok("ashby", "jobs.ashbyhq.com/beta", "Beta", 3, 2));
-    let err = h.core.suggest_sources_with(h.deps(verify.clone())).await.unwrap_err();
+    let err = h.core.suggest_sources_with(h.deps(verify.clone()), None).await.unwrap_err();
     assert_eq!(classify(&format!("{err:#}")), Problem::Network, "{err:#}");
     assert!(h.core.suggest_resume_with(h.deps(verify.clone())).await.is_err(), "still down");
 
@@ -260,7 +260,7 @@ async fn the_search_reports_its_progress_and_can_be_cancelled_while_it_waits() {
     let h = Harness::rust_in_berlin();
     let mut progress = h.core.graphs.subscribe();
     h.pages.block(&h.url(2), true);
-    let outcome = h.core.suggest_sources_with(h.deps(Arc::new(FakeVerify::new()))).await.unwrap();
+    let outcome = h.core.suggest_sources_with(h.deps(Arc::new(FakeVerify::new())), None).await.unwrap();
     assert!(matches!(outcome, SuggestOutcome::Waiting { .. }));
     let mut details = Vec::new();
     while let Ok(p) = progress.try_recv() {
@@ -305,7 +305,7 @@ async fn a_check_that_fails_for_the_network_fails_the_search_instead_of_finding_
     let h = Harness::rust_in_berlin();
     h.pages.page(&h.url(0), r#"<a href="https://jobs.ashbyhq.com/beta">Beta</a><a href="https://jobs.lever.co/gone">Gone</a>"#);
     let down = Arc::new(FakeVerify::new().fails("jobs.ashbyhq.com/beta", "network error: net::ERR_CONNECTION_REFUSED at <page>"));
-    let err = h.core.suggest_sources_with(h.deps(down)).await.unwrap_err();
+    let err = h.core.suggest_sources_with(h.deps(down), None).await.unwrap_err();
     assert_eq!(classify(&format!("{err:#}")), Problem::Network, "{err:#}");
     assert!(h.core.source_suggestions().unwrap().is_empty());
 
@@ -314,4 +314,79 @@ async fn a_check_that_fails_for_the_network_fails_the_search_instead_of_finding_
     let outcome = h.core.suggest_resume_with(h.deps(up.clone())).await.unwrap();
     assert_eq!(outcome, SuggestOutcome::Done { saved: 1 });
     assert_eq!(up.asked(), ["jobs.ashbyhq.com/beta", "jobs.lever.co/gone"]);
+}
+
+/// The results page address of `query`.
+fn search_url(query: &str) -> String {
+    SuggestConfig { search_url: SEARCH.into() }.url_for(query).unwrap().to_string()
+}
+
+fn rust_fintech_prefs() -> Preferences {
+    Preferences {
+        roles: vec!["Rust Engineer".into()],
+        domains: vec!["Fintech".into(), "Health".into()],
+        must_skills: vec!["Rust".into()],
+        locations: vec!["Berlin".into()],
+        remote: Remote::Any,
+        ..Preferences::default()
+    }
+}
+
+#[tokio::test]
+async fn a_search_of_picked_domains_searches_only_them_and_the_pick_is_remembered() {
+    let h = Harness::new(rust_fintech_prefs());
+    let picked = SuggestTerms { domains: vec!["fintech".into()], places: vec!["Berlin".into(), "Tokyo".into()], ..SuggestTerms::default() };
+    let expected = SuggestTerms { domains: vec!["Fintech".into()], places: vec!["Berlin".into()], ..SuggestTerms::default() };
+    let queries = build_queries_for(&expected).unwrap();
+    assert_eq!(queries[0], "\"Fintech\" Berlin site:boards.greenhouse.io");
+    h.pages.page(&search_url(&queries[0]), r#"<a href="https://jobs.lever.co/payco">PayCo</a>"#);
+    let verify = Arc::new(FakeVerify::new().ok("lever", "jobs.lever.co/payco", "PayCo", 6, 3));
+
+    let outcome = h.core.suggest_sources_with(h.deps(verify), Some(picked)).await.unwrap();
+    assert_eq!(outcome, SuggestOutcome::Done { saved: 1 });
+    let asked: Vec<String> = queries.iter().map(|q| search_url(q)).collect();
+    assert_eq!(h.pages.asked(), asked, "only the domain's searches, no role's");
+    assert_eq!(h.core.source_suggestions().unwrap()[0].query, queries[0]);
+
+    let options = h.core.suggest_options().unwrap();
+    assert_eq!(options.picked, expected, "remembered within what the preferences offer");
+    assert_eq!(options.available, SuggestTerms::available(&rust_fintech_prefs(), None));
+    assert_eq!(options.available.domains, ["Fintech", "Health"]);
+}
+
+#[tokio::test]
+async fn an_empty_pick_is_refused_with_a_plain_message() {
+    let h = Harness::new(rust_fintech_prefs());
+    let err = h.core.suggest_sources_with(h.deps(Arc::new(FakeVerify::new())), Some(SuggestTerms::default())).await.unwrap_err();
+    assert!(format!("{err:#}").contains(NO_TERMS), "{err:#}");
+    assert_eq!(classify(&format!("{err:#}")), Problem::Other);
+    assert!(h.pages.asked().is_empty());
+    // Not remembered: the dialog still opens with the default pick.
+    assert_eq!(h.core.store.kv_get(SUGGEST_TERMS_KEY).unwrap(), None);
+}
+
+#[test]
+fn a_value_removed_from_the_preferences_drops_out_of_the_pick() {
+    let h = Harness::new(rust_fintech_prefs());
+    let picked = SuggestTerms { roles: vec!["Rust Engineer".into()], domains: vec!["Fintech".into(), "Health".into()], skills: vec!["Rust".into()], ..SuggestTerms::default() };
+    h.core.remember_suggest_terms(&picked).unwrap();
+    assert_eq!(h.core.suggest_options().unwrap().picked, picked);
+
+    h.core.store.save_preferences(&Preferences { domains: vec!["Health".into()], ..rust_fintech_prefs() }).unwrap();
+    let options = h.core.suggest_options().unwrap();
+    assert_eq!(options.picked.domains, ["Health"]);
+    assert_eq!(options.picked.roles, ["Rust Engineer"]);
+}
+
+#[test]
+fn without_a_remembered_pick_the_default_pick_is_offered() {
+    let h = Harness::new(Preferences { locations: vec!["Berlin".into(), "Hanoi".into(), "Tokyo".into()], remote: Remote::Remote, ..rust_fintech_prefs() });
+    let options = h.core.suggest_options().unwrap();
+    assert_eq!(options.picked, SuggestTerms::default_pick(&options.available));
+    assert_eq!(options.picked.places, ["Berlin", "Hanoi"]);
+    assert!(options.picked.remote && options.picked.domains.is_empty());
+
+    // A pick that cannot be read counts as none.
+    h.core.store.kv_set(SUGGEST_TERMS_KEY, "{not json").unwrap();
+    assert_eq!(h.core.suggest_options().unwrap().picked, SuggestTerms::default_pick(&options.available));
 }

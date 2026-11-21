@@ -6,6 +6,7 @@
 use jobpilot_engine::discover::promote::FailedPrepare;
 use jobpilot_engine::discover::queue::{criteria_rows, QueueItem, QueueSnapshot};
 use jobpilot_engine::discover::source::BoardHint;
+use jobpilot_engine::discover::suggest::{SuggestOptions, SuggestTerms};
 use jobpilot_engine::discover::{DismissedJob, RunSummary, WaitingSource};
 use jobpilot_engine::graph::WaitReason;
 use jobpilot_engine::health;
@@ -493,6 +494,45 @@ impl From<&SourceSuggestion> for SourceSuggestionDto {
     }
 }
 
+/// Search terms of "Suggest sources": the values offered, or the ones the user picked (what
+/// `discovery_suggest_sources` takes as `terms`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SuggestTermsDto {
+    pub roles: Vec<String>,
+    pub domains: Vec<String>,
+    pub skills: Vec<String>,
+    pub places: Vec<String>,
+    pub remote: bool,
+}
+
+impl From<&SuggestTerms> for SuggestTermsDto {
+    fn from(t: &SuggestTerms) -> Self {
+        Self { roles: t.roles.clone(), domains: t.domains.clone(), skills: t.skills.clone(), places: t.places.clone(), remote: t.remote }
+    }
+}
+
+impl From<SuggestTermsDto> for SuggestTerms {
+    fn from(t: SuggestTermsDto) -> Self {
+        Self { roles: t.roles, domains: t.domains, skills: t.skills, places: t.places, remote: t.remote }
+    }
+}
+
+/// The "Suggest sources" dialog: what the preferences offer, and what is picked (the remembered
+/// pick, or the default one).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestOptionsDto {
+    pub available: SuggestTermsDto,
+    pub picked: SuggestTermsDto,
+}
+
+impl From<&SuggestOptions> for SuggestOptionsDto {
+    fn from(o: &SuggestOptions) -> Self {
+        Self { available: (&o.available).into(), picked: (&o.picked).into() }
+    }
+}
+
 /// How "Suggest sources" (or its "Continue") ended this time: the suggestions waiting for the user
 /// now, and whether the search is paused at a page the user must deal with.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -538,6 +578,21 @@ mod tests {
         let hint = super::BoardHint { kind: "smartrecruiters", input: "jobs.smartrecruiters.com/Acme".into() };
         let json = serde_json::to_value(super::BoardHintDto::from(&hint)).unwrap();
         assert_eq!(json, serde_json::json!({ "kind": "smartrecruiters", "label": "SmartRecruiters", "input": "jobs.smartrecruiters.com/Acme" }));
+    }
+
+    #[test]
+    fn suggest_terms_go_both_ways_in_camel_case() {
+        let json = serde_json::json!({ "roles": ["Rust Engineer"], "domains": ["Fintech"], "skills": [], "places": ["Berlin"], "remote": true });
+        let dto: super::SuggestTermsDto = serde_json::from_value(json.clone()).unwrap();
+        let terms = super::SuggestTerms::from(dto);
+        assert_eq!(terms.domains, ["Fintech"]);
+        assert!(terms.remote);
+        let options = super::SuggestOptions { available: terms.clone(), picked: super::SuggestTerms::default() };
+        let out = serde_json::to_value(super::SuggestOptionsDto::from(&options)).unwrap();
+        assert_eq!(out["available"], json);
+        assert_eq!(out["picked"], serde_json::json!({ "roles": [], "domains": [], "skills": [], "places": [], "remote": false }));
+        let partial: super::SuggestTermsDto = serde_json::from_value(serde_json::json!({ "skills": ["Rust"] })).unwrap();
+        assert_eq!(partial.skills, ["Rust"], "missing fields are empty");
     }
 
     use chrono::{TimeZone, Utc};

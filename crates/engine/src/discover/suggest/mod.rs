@@ -1,9 +1,10 @@
 //! "Suggest sources": search the web through the user's Chrome for job boards and careers pages that
-//! fit the wanted roles, check each one, and keep the ones with jobs as suggestions the user can add
-//! or dismiss (Settings > Job sources).
+//! fit the terms the user picked (roles, domains, skills, places, remote), check each one, and keep
+//! the ones with jobs as suggestions the user can add or dismiss (Settings > Job sources).
 //!
 //! ```text
-//! match core.suggest_sources().await? {                  // "Suggest sources"
+//! let options = core.suggest_options()?;                 // what the dialog offers and has picked
+//! match core.suggest_sources(Some(options.picked)).await? { // "Search" (the pick is remembered)
 //!     SuggestOutcome::Done { saved } => { .. }            // saved new suggestions
 //!     SuggestOutcome::Waiting { .. } => { .. }            // the search engine asks the user to confirm
 //! }
@@ -25,7 +26,7 @@
 //! never solved: the search pauses (`graph::nodes::challenge`) and the user deals with it in a
 //! focused tab, then continues.
 //!
-//! - [`queries`]: up to eight searches from the preferences (or the profile's roles).
+//! - [`queries`]: the terms offered and picked ([`SuggestTerms`]), and up to eight searches of them.
 //! - [`results`]: a results page -> job board / careers page candidates, minus what is known.
 //! - [`verify`]: the check seam ([`VerifySource`]) and its live wiring point.
 //! - `graph`: the `source_suggest` graph. `api`: the `Core` methods.
@@ -44,9 +45,9 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use url::Url;
 
-pub use api::SuggestOutcome;
+pub use api::{SuggestOptions, SuggestOutcome, SUGGEST_TERMS_KEY};
 pub use graph::{Checked, SuggestState, MAX_VERIFY, SUGGEST_GRAPH, SUGGEST_THREAD};
-pub use queries::{build_queries, MAX_QUERIES};
+pub use queries::{build_queries, build_queries_for, SuggestTerms, MAX_QUERIES, NO_TERMS};
 pub use results::Found;
 pub use verify::{matching_titles, Verified, VerifySource};
 

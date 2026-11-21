@@ -21,7 +21,9 @@ import type {
   RunSummary,
   SearchFinished,
   Source,
+  SuggestOptions,
   SuggestRun,
+  SuggestTerms,
 } from "@/types/discovery";
 
 // ------------------------------------------------------------------ Leads: reading
@@ -218,11 +220,17 @@ interface AddAllDto {
   error: { problem: unknown; message: string } | null;
 }
 
-/** "Suggest sources": search the web in the user's Chrome for job boards and pages that fit the
- *  wanted roles and check each one. Takes minutes (progress through graph `source_suggest`). */
-export async function suggestSources(): Promise<SuggestRun> {
+/** The terms "Suggest sources" can search with, and the last pick (preselected in its dialog). */
+export function readSuggestOptions(): Promise<SuggestOptions> {
+  return invoke<SuggestOptions>("discovery_suggest_options");
+}
+
+/** "Search" in the "What to search for" dialog: search the web in the user's Chrome for job boards
+ *  and pages that fit the picked terms and check each one (the shell remembers the pick). Takes
+ *  minutes (progress through graph `source_suggest`). */
+export async function suggestSources(terms: SuggestTerms): Promise<SuggestRun> {
   try {
-    return await invoke<SuggestRun>("discovery_suggest_sources");
+    return await invoke<SuggestRun>("discovery_suggest_sources", { terms });
   } finally {
     notifyChanged("sources");
   }

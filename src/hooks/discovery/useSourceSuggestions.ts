@@ -1,18 +1,21 @@
-// Settings > Job sources, "Suggested sources" as the screen needs it: run the search (minutes, with
-// its progress line), continue or stop a paused one, and add or dismiss what it found. The list and
+// Settings > Job sources, "Suggested sources" as the screen needs it: pick what to search for in a
+// dialog (the preference terms, the last pick preselected), run the search (minutes, with its
+// progress line), continue or stop a paused one, and add or dismiss what it found. The list and
 // the paused flag come with the job sources (`JobSources`); every change reads them again through the
 // `sources` notification the api layer sends. Failures are toasts.
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
-import { useAction } from "@/hooks/useAsync";
+import { useAction, useQuery } from "@/hooks/useAsync";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import { useGraphProgress } from "@/hooks/useGraphProgress";
 
 import * as api from "@/api/discovery";
 import { addedText, suggestionName, suggestNote } from "@/lib/discovery/suggestions";
+import { type TermKind, toggleTerm } from "@/lib/discovery/suggestTerms";
+import type { CommandError } from "@/lib/problem";
 import { toast } from "@/stores/toast";
-import type { JobSources, SourceSuggestion, SuggestRun } from "@/types/discovery";
+import type { JobSources, SourceSuggestion, SuggestOptions, SuggestRun, SuggestTerms } from "@/types/discovery";
 
 export interface SourceSuggestionsView {
   /** The suggestions waiting for the user, most matching postings first. */
@@ -27,7 +30,22 @@ export interface SourceSuggestionsView {
   foundNothing: boolean;
   /** An Add, Add all or Dismiss is running (the row buttons wait for it). */
   changing: boolean;
+  /** The "What to search for" dialog is open. */
+  dialogOpen: boolean;
+  /** What the dialog offers; `undefined` while it is read (or the dialog is closed). */
+  options: SuggestOptions | undefined;
+  /** Reading the options failed. */
+  optionsError: CommandError | undefined;
+  /** The dialog's current pick (seeded from the last pick); `undefined` until the options are read. */
+  terms: SuggestTerms | undefined;
+  /** "Suggest sources": open the dialog (the options are read again each time). */
   suggest: () => void;
+  reloadOptions: () => void;
+  toggle: (kind: TermKind, value: string) => void;
+  toggleRemote: () => void;
+  closeDialog: () => void;
+  /** "Search": close the dialog and search with the pick. */
+  start: () => void;
   resume: () => void;
   cancel: () => void;
   openBrowser: () => void;
@@ -39,6 +57,21 @@ export interface SourceSuggestionsView {
 export function useSourceSuggestions(data: JobSources | undefined): SourceSuggestionsView {
   const [note, setNote] = useState<string>();
   const [foundNothing, setFoundNothing] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  /** Bumped on every open, so the options are read again (new preferences show). */
+  const [opened, setOpened] = useState(0);
+  /** The user's changes to the pick since the dialog opened; `undefined` = the last pick as read. */
+  const [edited, setEdited] = useState<SuggestTerms>();
+  /** The terms of the last search, for the Retry of its error toast. */
+  const lastTerms = useRef<SuggestTerms | undefined>(undefined);
+
+  const optionsQuery = useQuery<SuggestOptions | undefined>(
+    () => (dialogOpen ? api.readSuggestOptions() : Promise.resolve(undefined)),
+    [dialogOpen, opened],
+  );
+  const options = dialogOpen ? optionsQuery.data : undefined;
+  const optionsError = dialogOpen ? optionsQuery.error : undefined;
+  const terms = options === undefined ? undefined : (edited ?? options.picked);
 
   const search = useAction(api.suggestSources);
   const resumeSearch = useAction(api.resumeSuggest);
@@ -68,10 +101,52 @@ export function useSourceSuggestions(data: JobSources | undefined): SourceSugges
 
   const { run: runSuggest } = search;
   const { run: runResume } = resumeSearch;
-  const suggest = useCallback(() => void runSearch(() => runSuggest()), [runSearch, runSuggest]);
   const resume = useCallback(() => void runSearch(() => runResume()), [runSearch, runResume]);
+  const searchWith = useCallback(
+    (picked: SuggestTerms) => {
+      lastTerms.current = picked;
+      void runSearch(() => runSuggest(picked));
+    },
+    [runSearch, runSuggest],
+  );
+  const retrySearch = useCallback(() => {
+    if (lastTerms.current !== undefined) {
+      searchWith(lastTerms.current);
+    }
+  }, [searchWith]);
 
-  useErrorToast(search.error, { title: "The search for sources failed", onRetry: suggest, clear: search.clearError });
+  const suggest = useCallback(() => {
+    setEdited(undefined);
+    setOpened((n) => n + 1);
+    setDialogOpen(true);
+  }, []);
+  const closeDialog = useCallback(() => setDialogOpen(false), []);
+  const toggle = useCallback(
+    (kind: TermKind, value: string) => {
+      if (terms !== undefined) {
+        setEdited(toggleTerm(terms, kind, value));
+      }
+    },
+    [terms],
+  );
+  const toggleRemote = useCallback(() => {
+    if (terms !== undefined) {
+      setEdited({ ...terms, remote: !terms.remote });
+    }
+  }, [terms]);
+  const start = useCallback(() => {
+    if (terms === undefined) {
+      return;
+    }
+    setDialogOpen(false);
+    searchWith(terms);
+  }, [terms, searchWith]);
+
+  useErrorToast(search.error, {
+    title: "The search for sources failed",
+    onRetry: retrySearch,
+    clear: search.clearError,
+  });
   useErrorToast(resumeSearch.error, {
     title: "The search for sources failed",
     onRetry: resume,
@@ -123,7 +198,16 @@ export function useSourceSuggestions(data: JobSources | undefined): SourceSugges
     note,
     foundNothing,
     changing: addOne.busy || addEvery.busy || dismissOne.busy,
+    dialogOpen,
+    options,
+    optionsError,
+    terms,
     suggest,
+    reloadOptions: optionsQuery.reload,
+    toggle,
+    toggleRemote,
+    closeDialog,
+    start,
     resume,
     cancel: () => void runStop(),
     openBrowser: () => void runOpen(),

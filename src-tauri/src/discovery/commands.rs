@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use jobpilot_engine::discover::suggest::SuggestOutcome;
+use jobpilot_engine::discover::suggest::{SuggestOutcome, SuggestTerms};
 use jobpilot_engine::discover::DismissedKind;
 use jobpilot_engine::Core;
 use tauri::ipc::Invoke;
@@ -17,7 +17,7 @@ use tauri::{AppHandle, State};
 use super::dto::{
     AddAllDto, AddedLeadDto, BoardHintDto, DismissedJobDto, JobSourcesDto, LeadInput, PrepareOutcomeDto,
     QueueDto, RunSummaryDto, SessionOptionDto, SourceDto, SourceKindDto, SourceSuggestionDto,
-    SuggestRunDto,
+    SuggestOptionsDto, SuggestRunDto, SuggestTermsDto,
 };
 use super::rules;
 use crate::shared::events::Scope;
@@ -347,23 +347,34 @@ fn suggest_run(core: &Core, outcome: SuggestOutcome) -> anyhow::Result<SuggestRu
     Ok(SuggestRunDto { suggestions: suggestion_dtos(core)?, waiting })
 }
 
-/// "Suggest sources": search the web in the user's Chrome for job boards and pages that fit the
-/// wanted roles, check each one and keep those with jobs as suggestions. Takes minutes; the steps
-/// go out as graph progress (`source_suggest`). A search paused at a page the user must deal with
-/// returns `waiting`. In demo mode three canned suggestions are stored without any search.
+/// The "Suggest sources" dialog: the terms the preferences offer and the ones picked (remembered
+/// from the last search, or the default pick).
 #[tauri::command]
-pub async fn discovery_suggest_sources(core: State<'_, Arc<Core>>) -> CommandResult<SuggestRunDto> {
+pub async fn discovery_suggest_options(core: State<'_, Arc<Core>>) -> CommandResult<SuggestOptionsDto> {
     let core = core.inner().clone();
+    run_sync(move || Ok(SuggestOptionsDto::from(&core.suggest_options()?))).await
+}
+
+/// "Suggest sources": search the web in the user's Chrome for job boards and pages that fit the
+/// picked `terms` (remembered for next time), check each one and keep those with jobs as
+/// suggestions. Takes minutes; the steps go out as graph progress (`source_suggest`). A search
+/// paused at a page the user must deal with returns `waiting` (and continues with its own terms).
+/// In demo mode the pick is remembered and three canned suggestions are stored without any search.
+#[tauri::command]
+pub async fn discovery_suggest_sources(core: State<'_, Arc<Core>>, terms: SuggestTermsDto) -> CommandResult<SuggestRunDto> {
+    let core = core.inner().clone();
+    let terms: SuggestTerms = terms.into();
     run(async move {
         let outcome = match super::demo::suggestions() {
             Some(canned) => {
+                core.remember_suggest_terms(&terms)?;
                 let mut saved = 0;
                 for suggestion in &canned {
                     saved += usize::from(core.store.upsert_suggestion(suggestion)?.is_some());
                 }
                 SuggestOutcome::Done { saved }
             }
-            None => core.suggest_sources().await?,
+            None => core.suggest_sources(Some(terms)).await?,
         };
         suggest_run(&core, outcome)
     })
@@ -449,6 +460,7 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         discovery_set_source_session,
         discovery_remove_source,
         discovery_set_daily,
+        discovery_suggest_options,
         discovery_suggest_sources,
         discovery_suggest_resume,
         discovery_suggest_cancel,
