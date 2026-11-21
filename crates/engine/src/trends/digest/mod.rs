@@ -91,6 +91,7 @@ use crate::store::{SourcePurpose, TrendItem};
 use crate::{Secrets, Store};
 
 pub use api::{Digest, TrendChallenge};
+pub(crate) use synthesize::MAX_TOPIC_CHARS;
 pub use count::{is_hiring_posting, month_window, Vocabulary};
 /// The statistics behind the counts, for the sample data of the shell to make real numbers with.
 pub use stats::{centi, log_odds_z, trend_z, wilson};

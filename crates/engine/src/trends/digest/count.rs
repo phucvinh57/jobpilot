@@ -838,12 +838,15 @@ fn left_unread_at_source(s: &TrendRun) -> Option<u32> {
 /// is decided by when it was published (when it was fetched, if it does not say): an entry of last
 /// week that a feed added today brings is last week's, and one older than both periods is on no
 /// side. Returns how many items of the period were read: its postings, and the other items whose
-/// text could be read.
+/// text could be read. The items of followed people are left out altogether: what a person says in
+/// an interview is an opinion the digest quotes (`outlook`), never part of the market's numbers.
 async fn add_period_items(store: &Store, period: &Period, corpora: &mut Corpora) -> Result<u32> {
-    let target = period_items_all(store, period).await?;
+    let people = super::people(store)?;
+    let of_market = |(item, _): &(TrendItem, Stratum)| !item.source_id.is_some_and(|id| people.contains_key(&id));
+    let target: Vec<_> = period_items_all(store, period).await?.into_iter().filter(of_market).collect();
     let in_target: HashSet<i64> = target.iter().map(|(item, _)| item.id).collect();
     let previous = period.previous();
-    let before = period_items_all(store, &previous).await?;
+    let before: Vec<_> = period_items_all(store, &previous).await?.into_iter().filter(of_market).collect();
     let side_of = |item: &TrendItem| {
         let at = item.published_at.unwrap_or(item.fetched_at);
         let within = |p: &Period| at >= p.start() && at < p.end();

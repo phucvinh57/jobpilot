@@ -489,7 +489,8 @@ async fn write_items(env: &Env, source: &Source, found: Vec<Item>) -> Result<Vec
 
 /// Deduplicate by URL into `trend_items`. Items of a source deleted during the run are stored
 /// without a source. An item a person's source read that is stored already goes to that source
-/// (`Store::claim_trend_item_for_person`); it still counts as a duplicate.
+/// (`Store::claim_trend_item_for_person`), with the longer of the two texts; it still counts as a
+/// duplicate.
 async fn store_items(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
     let mut stored = Stored::default();
     // Per source of the run: is it still there, and is it a person's.
@@ -521,7 +522,15 @@ async fn store_items(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
             None => {
                 stored.duplicates += 1;
                 if person {
-                    env.store.claim_trend_item_for_person(&new)?;
+                    // The stored text stays unless the person's source read more of the address (a
+                    // story kept with its title alone must not replace an article a feed stored).
+                    let stored = env.store.trend_item_by_url(&new.url)?.and_then(|item| item.text_path);
+                    let fuller = match stored {
+                        Some(stored) => text_len(&item.text_path).await > text_len(&stored).await,
+                        None => true,
+                    };
+                    let claim = NewTrendItem { text_path: new.text_path.clone().filter(|_| fuller), ..new };
+                    env.store.claim_trend_item_for_person(&claim)?;
                 }
             }
         }
@@ -534,6 +543,11 @@ async fn store_items(env: Arc<Env>, mut s: TrendRun) -> Result<TrendRun> {
         tracing::warn!("could not record the hiring threads read in full; they are read again next run");
     }
     Ok(s)
+}
+
+/// The size of a saved text; 0 when there is none.
+async fn text_len(path: &std::path::Path) -> u64 {
+    tokio::fs::metadata(path).await.map_or(0, |meta| meta.len())
 }
 
 /// Merge `new` into kv [`HN_SETTLED_KEY`]: one key per thread (a new key replaces the saved one of

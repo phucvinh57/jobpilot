@@ -56,8 +56,9 @@ use crate::graph::Outcome;
 use crate::store::{NewSource, Source, SourcePurpose};
 use crate::{Core, Paths};
 
-/// Longest name of a person to follow.
-pub const MAX_PERSON_NAME_CHARS: usize = 80;
+/// Longest name of a person to follow: what a point of the digest can carry as its topic, so an
+/// `outlook` point can always name them in full.
+pub const MAX_PERSON_NAME_CHARS: usize = digest::MAX_TOPIC_CHARS;
 
 impl Paths {
     /// `trends/`: the text of collected items, one `<hash of the URL>.txt` each.

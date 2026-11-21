@@ -113,6 +113,20 @@ describe("Sources", () => {
     expect(mocks.api.addSource).toHaveBeenLastCalledWith("person", "Elon Musk", "https://talks.example.com/feed.xml");
   });
 
+  it("starts the person dialog empty after another dialog was cancelled", async () => {
+    const user = await shown();
+    await user.click(sources().getByRole("button", { name: "Web page" }));
+    const page = within(await screen.findByRole("dialog", { name: "Add Web page" }));
+    await user.type(page.getByLabelText("Address"), "https://reports.example.com/annual.html");
+    await user.click(page.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click(sources().getByRole("button", { name: "Person to follow" }));
+    const person = within(await screen.findByRole("dialog", { name: "Follow a person" }));
+    const address = person.getByLabelText("Feed or page of their interviews (optional)") as HTMLInputElement;
+    expect(address.value, "an address typed for a page is not a person's").toBe("");
+  });
+
   it("adds a feed with Enter and keeps the dialog open with the reason when it is refused", async () => {
     mocks.api.addSource.mockRejectedValueOnce(new CommandError("RSS / Atom feed needs an http(s) address"));
     const user = await shown();

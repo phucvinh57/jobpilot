@@ -472,6 +472,21 @@ async fn an_outlook_point_names_a_followed_person_cites_their_item_and_quotes_it
 }
 
 #[tokio::test]
+async fn what_a_followed_person_says_is_never_counted_in_the_market() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let feed = trend_source(&store, "rss");
+    let ada = store.add_source(&NewSource { kind: "person".into(), name: "Ada Example".into(), purpose: SourcePurpose::Trends, ..Default::default() }).unwrap().id;
+    let now = Some(Utc::now());
+    stored_from(&store, dir.path(), Some(feed), "https://blog.test/1", "Post", "# Post\n\nWe moved the platform to Postgres and Kafka this year.", now);
+    stored_from(&store, dir.path(), Some(ada), "https://talks.test/ada", "Talk", "# Talk\n\nEvery company will run an AI factory within five years.", now);
+
+    let state = count::count(env_with(store), TrendRun::new(period())).await.unwrap();
+    let counts = state.digest.counts.expect("counts");
+    assert_eq!(counts.coverage.items_counted, 1, "the feed's post, not the talk");
+}
+
+#[tokio::test]
 async fn a_quote_that_is_the_whole_title_proves_even_when_it_is_short() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open_in_memory().unwrap();

@@ -32,8 +32,12 @@ export function useSourceEditing() {
     return change.run(work).then(() => undefined);
   };
 
+  // A closed dialog forgets what was typed: the fields mean different things per kind (an address
+  // typed for a page must not become a person's own address).
   const close = useCallback(() => {
     setAdding(undefined);
+    setName("");
+    setUrl("");
     clearAddError();
   }, [clearAddError]);
 

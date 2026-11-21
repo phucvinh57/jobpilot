@@ -241,8 +241,10 @@ pub(super) struct Story {
 /// The stories from `since` to the period's end whose title names `name` (the whole name, as a
 /// phrase, whatever its case), newest first: one page of `person_stories` hits with
 /// `points >= person_min_points`. The search is asked for the phrase in titles only, and the title
-/// is checked again here, so a search that matches loosely adds nothing.
-pub(super) async fn stories_naming(ctx: &Ctx, name: &str, since: DateTime<Utc>) -> Result<Vec<Story>> {
+/// is checked again here, so a search that matches loosely adds nothing. The number that comes
+/// second is how many more hits the search has past this page (what the answer says, `nbHits`):
+/// they are left unread, and counted.
+pub(super) async fn stories_naming(ctx: &Ctx, name: &str, since: DateTime<Utc>) -> Result<(Vec<Story>, usize)> {
     let l = ctx.limits();
     let name = name.replace('"', " ").split_whitespace().collect::<Vec<_>>().join(" ");
     anyhow::ensure!(!name.is_empty(), "a person to follow needs a name");
@@ -263,15 +265,18 @@ pub(super) async fn stories_naming(ctx: &Ctx, name: &str, since: DateTime<Utc>) 
             ("hitsPerPage", &l.person_stories.to_string()),
         ],
     )?;
-    let hits = search(ctx, &url).await?.hits;
-    Ok(hits
+    let answer = search(ctx, &url).await?;
+    let cut = answer.nb_hits.saturating_sub(answer.hits.len());
+    let stories = answer
+        .hits
         .into_iter()
         .filter_map(|hit| {
             let linked = hit.url.as_deref().is_some_and(|u| normalize_url(u).is_ok());
             let item = story_item(hit)?;
             crate::discover::source::mentions(&item.title, &name).then_some(Story { item, linked })
         })
-        .collect())
+        .collect();
+    Ok((stories, cut))
 }
 
 /// The newest "Who is hiring" threads that started before the period ended (at most

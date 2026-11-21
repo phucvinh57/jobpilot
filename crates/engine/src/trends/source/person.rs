@@ -5,9 +5,12 @@
 //!
 //! 1. **Stories that name them.** The Hacker News search (Algolia) for stories whose title carries
 //!    the person's name, newest first, from a month before the period to its end. The story's link
-//!    is the interview, the talk or the article; its page is fetched (up to
-//!    `person_fetches` per run) so the digest reads the words, not only the headline. A page that
-//!    cannot be read (a video, a paywall) leaves an item with the title alone: the link is kept.
+//!    is the interview, the talk or the article; its page is fetched so the digest reads the words,
+//!    not only the headline. A page that cannot be read (a video, a paywall) leaves an item with
+//!    the title alone: the link is kept, and the page is not asked for again. A run fetches at most
+//!    `person_fetches` pages and stops starting them once [`FETCH_SHARE`] of the source's time is
+//!    spent: the stories it did not get to are left for the next run and counted as cut, like the
+//!    hits past the search's first page. Nothing is cut silently.
 //! 2. **An address of their own**, when the user gave one: a feed (a podcast, a blog, a channel)
 //!    or a page (a transcript). Every entry of the feed counts as theirs.
 //!
@@ -17,21 +20,26 @@
 //! (`digest::cite`), and the reader can open the link.
 
 use std::collections::HashSet;
+use std::time::Instant;
 
 use anyhow::Result;
 use chrono::Duration;
 
 use super::page::{self, fetch_text, make_item};
-use super::{hackernews, rss, take_new, Ctx, Item};
+use super::{hackernews, normalize_url, rss, take_new, Ctx, Item};
 use crate::trends::http::{public_http_url, FetchError};
 
 /// Stories this long before the period start are still read (an interview from last month is
 /// still what the person thinks).
 const BACKLOG_DAYS: i64 = 30;
+/// The share of the source's time after which no more pages are started: what is in hand is kept
+/// instead of losing all of it to the timeout.
+const FETCH_SHARE: f64 = 2.0 / 3.0;
 
 /// The new items about `name`, and how many more a cap cut. A part that fails (the search, the
 /// person's own address) is left out; the adapter fails only when nothing was read.
 pub async fn collect(ctx: &Ctx, name: &str, url: &str) -> Result<(Vec<Item>, usize)> {
+    let started = Instant::now();
     let mut items = Vec::new();
     let mut cut = 0;
     let mut failures = Vec::new();
@@ -44,8 +52,11 @@ pub async fn collect(ctx: &Ctx, name: &str, url: &str) -> Result<(Vec<Item>, usi
             Err(e) => failures.push(e),
         }
     }
-    match stories(ctx, name).await {
-        Ok(found) => items.extend(found),
+    match stories(ctx, name, started).await {
+        Ok((found, unread)) => {
+            items.extend(found);
+            cut += unread;
+        }
         Err(e) => failures.push(e),
     }
     let (items, more) = take_new(ctx, items, ctx.limits().max_items);
@@ -61,8 +72,12 @@ pub async fn collect(ctx: &Ctx, name: &str, url: &str) -> Result<(Vec<Item>, usi
 }
 
 /// The person's own address: a feed, else a page. A feed that cannot be fetched is an error (the
-/// page would fail the same way); an address that is not a feed is read as a page.
+/// page would fail the same way); an address that is not a feed is read as a page. A page
+/// already collected is not asked for again (a feed's own address is never an item).
 async fn own_address(ctx: &Ctx, url: &str) -> Result<(Vec<Item>, usize)> {
+    if ctx.is_known(&normalize_url(url)?) {
+        return Ok((Vec::new(), 0));
+    }
     match rss::collect(ctx, url).await {
         Ok(found) => Ok(found),
         Err(e) if e.chain().any(|cause| cause.downcast_ref::<FetchError>().is_some()) => Err(e),
@@ -70,11 +85,14 @@ async fn own_address(ctx: &Ctx, url: &str) -> Result<(Vec<Item>, usize)> {
     }
 }
 
-/// The stories naming the person, each with the text of the page it links when that can be read.
-async fn stories(ctx: &Ctx, name: &str) -> Result<Vec<Item>> {
+/// The stories naming the person, each with the text of the page it links when that can be read,
+/// and how many stories were left unread: the hits past the search's page, and the new stories
+/// whose page this run did not get to (the fetch cap, the time).
+async fn stories(ctx: &Ctx, name: &str, started: Instant) -> Result<(Vec<Item>, usize)> {
     let l = ctx.limits();
+    let budget = l.source_timeout.mul_f64(FETCH_SHARE);
     let since = ctx.period.start() - Duration::days(BACKLOG_DAYS);
-    let found = hackernews::stories_naming(ctx, name, since).await?;
+    let (found, mut cut) = hackernews::stories_naming(ctx, name, since).await?;
     let mut items = Vec::new();
     let mut seen = HashSet::new();
     let mut fetched = 0;
@@ -83,7 +101,12 @@ async fn stories(ctx: &Ctx, name: &str) -> Result<Vec<Item>> {
         if ctx.is_known(&item.url) || !seen.insert(item.url.clone()) {
             continue;
         }
-        if story.linked && fetched < l.person_fetches && public_http_url(&item.url, l.allow_private_hosts).is_ok() {
+        if story.linked && public_http_url(&item.url, l.allow_private_hosts).is_ok() {
+            // Not stored with its title alone: it would be known, and its page never read.
+            if fetched >= l.person_fetches || started.elapsed() >= budget {
+                cut += 1;
+                continue;
+            }
             fetched += 1;
             match fetch_text(ctx, &item.url).await {
                 Ok(page) => item = make_item(item.url, Some(&item.title), item.published_at, page.text),
@@ -93,7 +116,10 @@ async fn stories(ctx: &Ctx, name: &str) -> Result<Vec<Item>> {
         }
         items.push(item);
     }
-    Ok(items)
+    if cut > 0 {
+        tracing::info!(read = items.len(), cut, "a followed person has more stories than this run read");
+    }
+    Ok((items, cut))
 }
 
 #[cfg(test)]
@@ -162,10 +188,28 @@ mod tests {
         config.limits.person_fetches = 1;
         c.config = std::sync::Arc::new(config);
 
-        let (items, _) = collect(&c, "ada example", "").await.unwrap();
-        assert_eq!(items.len(), 3, "the name matches whatever its case");
+        let (items, cut) = collect(&c, "ada example", "").await.unwrap();
+        assert_eq!(items.len(), 1, "the name matches whatever its case");
         assert!(items[0].text.contains("direct agents"));
-        assert!(!items[1].text.contains("direct agents") && !items[2].text.contains("direct agents"));
+        assert_eq!(cut, 2, "the talks not read are left for the next run, and counted");
+
+        // No time left: nothing is fetched, the story of a text post is still kept.
+        let mut config = (*c.config).clone();
+        config.limits.person_fetches = 12;
+        config.limits.source_timeout = std::time::Duration::ZERO;
+        c.config = std::sync::Arc::new(config);
+        let before = fx.hits().len();
+        let (items, cut) = collect(&c, "Ada Example", "").await.unwrap();
+        assert_eq!((items.len(), cut), (0, 3));
+        assert_eq!(fx.hits().len(), before + 1, "only the search");
+    }
+
+    #[tokio::test]
+    async fn hits_past_the_first_page_are_counted() {
+        let fx = Fixtures::start().await;
+        fx.route("/hn/search_by_date", 200, "application/json", json!({"hits": [hit("9", "Ada Example on chips", None)], "nbHits": 41}).to_string());
+        let (items, cut) = collect(&ctx(&fx, &[]), "Ada Example", "").await.unwrap();
+        assert_eq!((items.len(), cut), (1, 40));
     }
 
     #[tokio::test]
@@ -189,6 +233,13 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].url, format!("{}/transcript", fx.base()));
         assert!(items[0].text.contains("electricians and plumbers"));
+
+        // A transcript already collected is not downloaded again.
+        let known = format!("{}/transcript", fx.base());
+        let before = fx.hits_on("/transcript").len();
+        let (items, _) = collect(&crate::trends::testutil::ctx(&fx, &[&known]), "Ada Example", &known).await.unwrap();
+        assert!(items.is_empty());
+        assert_eq!(fx.hits_on("/transcript").len(), before);
     }
 
     #[tokio::test]

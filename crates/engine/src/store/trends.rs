@@ -104,19 +104,27 @@ impl Store {
         id.map(|id| self.get_trend_item(id)?.context("trend item vanished after insert")).transpose()
     }
 
-    /// Hand the stored item at `new.url` to the source of a followed person: its source, and the
-    /// text that source read (a story another source stored with its title alone is the same
-    /// address as the interview it links). `false` when there is no such item, or it already
-    /// belongs to a person's source (the first one keeps it).
+    /// Hand the stored item at `new.url` to the source of a followed person: its source, the text
+    /// that source read when `new.text_path` is set (a story another source stored with its title
+    /// alone is the same address as the interview it links; `None` keeps the stored text), and
+    /// now as the time it was fetched, so it is an item of the period that collected it for the
+    /// person. `false` when there is no such item, or it already belongs to a person's source
+    /// (the first one keeps it).
     pub fn claim_trend_item_for_person(&self, new: &NewTrendItem) -> Result<bool> {
         self.with_conn(|c| {
             let n = c.execute(
-                "UPDATE trend_items SET source_id = ?1, text_path = COALESCE(?2, text_path)
+                "UPDATE trend_items SET source_id = ?1, text_path = COALESCE(?2, text_path), fetched_at = ?4
                  WHERE url = ?3
                    AND (source_id IS NULL OR source_id NOT IN (SELECT id FROM sources WHERE kind = 'person'))",
-                params![new.source_id, new.text_path.as_ref().map(|p| p.to_string_lossy().into_owned()), new.url],
+                params![new.source_id, new.text_path.as_ref().map(|p| p.to_string_lossy().into_owned()), new.url, now()],
             )?;
             Ok(n == 1)
+        })
+    }
+
+    pub fn trend_item_by_url(&self, url: &str) -> Result<Option<TrendItem>> {
+        self.with_conn(|c| {
+            Ok(c.query_row(&format!("SELECT {ITEM_COLS} FROM trend_items WHERE url = ?1"), [url], TrendItem::from_row).optional()?)
         })
     }
 
@@ -265,9 +273,22 @@ mod tests {
         let claimed = store.get_trend_item(story.id).unwrap().unwrap();
         assert_eq!((claimed.source_id, claimed.text_path.as_deref()), (Some(ada.id), Some(path.as_path())));
         assert_eq!(claimed.title, story.title, "the title it was stored under stays");
+        assert!(claimed.fetched_at >= story.fetched_at);
+        assert_eq!(store.trend_item_by_url("https://x.test/interview").unwrap().unwrap().id, story.id);
+        assert!(store.trend_item_by_url("https://x.test/none").unwrap().is_none());
         assert_eq!(store.person_item_urls().unwrap(), ["https://x.test/interview"]);
 
         assert!(!store.claim_trend_item_for_person(&claim(bob.id)).unwrap(), "the first person keeps it");
+
+        // Without a text of its own the claim keeps the stored one.
+        let feed = source("rss");
+        let post = store
+            .add_trend_item(&NewTrendItem { source_id: Some(feed.id), text_path: Some("/tmp/trends/post.txt".into()), ..item("https://x.test/post", None) })
+            .unwrap()
+            .unwrap();
+        assert!(store.claim_trend_item_for_person(&NewTrendItem { source_id: Some(ada.id), text_path: None, ..item("https://x.test/post", None) }).unwrap());
+        let kept = store.get_trend_item(post.id).unwrap().unwrap();
+        assert_eq!((kept.source_id, kept.text_path), (Some(ada.id), post.text_path));
         assert!(!store.claim_trend_item_for_person(&NewTrendItem { source_id: Some(ada.id), ..item("https://x.test/none", None) }).unwrap());
     }
 

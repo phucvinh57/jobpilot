@@ -30,7 +30,9 @@ pub const SYSTEM: &str = include_str!("../../../../../assets/prompts/trends.md")
 /// Points read from one answer (before `enforce_citations` applies the real limits).
 const MAX_POINTS: usize = 3 * super::cite::MAX_POINTS;
 const MAX_TEXT_CHARS: usize = 500;
-const MAX_TOPIC_CHARS: usize = 60;
+/// Longest topic kept. A followed person's name is a topic (`outlook`), so it is the longest name
+/// too ([`crate::trends::MAX_PERSON_NAME_CHARS`]).
+pub(crate) const MAX_TOPIC_CHARS: usize = 60;
 const MAX_QUOTE_CHARS: usize = 300;
 /// Claims per item shown to the model when the evidence fits; fewer when it does not.
 const CLAIMS_PER_ITEM: usize = 3;

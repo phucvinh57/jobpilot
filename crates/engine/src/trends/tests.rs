@@ -302,6 +302,7 @@ fn a_person_to_follow_needs_a_name_and_takes_an_optional_address() {
     assert!(core.add_trend_source(SourceKind::Person, "jensen huang", "").unwrap_err().to_string().contains("already follow"));
     assert!(core.add_trend_source(SourceKind::Person, &"x".repeat(MAX_PERSON_NAME_CHARS + 1), "").unwrap_err().to_string().contains("too long"));
     assert!(core.add_trend_source(SourceKind::Person, "Ada Example", "ftp://x.test/feed").is_err(), "a typed address must be http(s)");
+    assert_eq!(MAX_PERSON_NAME_CHARS, 60, "a name fits the topic of a point, which is how `outlook` names the person");
     assert_eq!(core.trend_sources().unwrap().len(), 2);
 }
 
@@ -340,6 +341,36 @@ async fn a_followed_person_reads_the_interview_a_story_links_and_takes_the_store
     let state = run(&core, &fx).await;
     assert_eq!(state.outcomes_of("person").next().unwrap().items, 0);
     assert_eq!(fx.hits_on("/interview").len(), before);
+}
+
+#[tokio::test]
+async fn a_headline_never_replaces_the_article_another_source_stored() {
+    let (dir, core) = core();
+    let fx = Fixtures::start().await;
+    let url = format!("{}/post", fx.base());
+    let story = format!(
+        r#"{{"hits": [{{"objectID": "78", "title": "Ada Example on hiring", "url": "{url}", "points": 50, "num_comments": 9, "created_at_i": 1794312000}}]}}"#
+    );
+    fx.route("/hn/search_by_date", 200, "application/json", story);
+    fx.route("/post", 500, "text/plain", "boom");
+    // A feed stored the article in full, weeks ago.
+    let feed = core.add_trend_source(SourceKind::Rss, "Blog", "https://blog.example.com/feed.xml").unwrap();
+    core.set_trend_source_enabled(feed.id, false).unwrap();
+    let full = dir.path().join("full.txt");
+    std::fs::write(&full, "# Ada Example on hiring\n\n".to_string() + &"We will hire people who can direct agents. ".repeat(20)).unwrap();
+    let stored = core
+        .store
+        .add_trend_item(&crate::store::NewTrendItem { source_id: Some(feed.id), url: url.clone(), title: "Ada Example on hiring".into(), published_at: None, text_path: Some(full.clone()) })
+        .unwrap()
+        .unwrap();
+    let ada = core.add_trend_source(SourceKind::Person, "Ada Example", "").unwrap();
+
+    let state = run(&core, &fx).await;
+    assert_eq!(state.stored, Stored { new: 0, duplicates: 1 });
+    let item = core.store.get_trend_item(stored.id).unwrap().unwrap();
+    assert_eq!(item.source_id, Some(ada.id), "the person's source has it");
+    assert_eq!(item.text_path.as_deref(), Some(full.as_path()), "with the article, not the headline the failed fetch left");
+    assert!(item.fetched_at >= stored.fetched_at, "and it is an item of the period that collected it for the person");
 }
 
 #[test]
